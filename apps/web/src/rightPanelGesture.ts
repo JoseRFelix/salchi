@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-export type RightPanelKind = "diff" | "file" | "plan";
+export type RightPanelKind = "diff" | "file" | "plan" | "source-control";
 
 export interface RightPanelRegistration {
   readonly close?: () => void;

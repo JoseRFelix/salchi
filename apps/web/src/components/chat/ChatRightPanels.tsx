@@ -14,6 +14,7 @@ import { WorkspaceFilesPanel } from "../WorkspaceFilesPanel";
 import { Sidebar, SidebarProvider, SidebarRail } from "../ui/sidebar";
 
 const DiffPanel = lazy(() => import("../DiffPanel"));
+const SourceControlPanel = lazy(() => import("../SourceControlPanel"));
 
 const DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_diff_sidebar_width";
 const FILE_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_file_preview_sidebar_width";
@@ -172,8 +173,57 @@ const WorkspaceFilesInlineSidebar = (props: {
   );
 };
 
+const SourceControlInlineSidebar = (props: {
+  open: boolean;
+  onClose: () => void;
+  onOpen: () => void;
+  renderContent: boolean;
+}) => {
+  const { open, onClose, onOpen, renderContent } = props;
+  const onOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (nextOpen) {
+        onOpen();
+        return;
+      }
+      onClose();
+    },
+    [onClose, onOpen],
+  );
+
+  return (
+    <SidebarProvider
+      defaultOpen={false}
+      open={open}
+      onOpenChange={onOpenChange}
+      className="w-auto min-h-0 flex-none bg-transparent"
+      style={rightPanelSidebarStyle}
+    >
+      <Sidebar
+        side="right"
+        collapsible="offcanvas"
+        className="border-l border-border bg-card text-foreground"
+        resizable={{
+          maxWidth: RIGHT_INLINE_PANEL_MAX_WIDTH,
+          minWidth: RIGHT_INLINE_PANEL_MIN_WIDTH,
+          storageKey: SOURCE_CONTROL_INLINE_SIDEBAR_WIDTH_STORAGE_KEY,
+        }}
+      >
+        {renderContent ? <SourceControlPanel mode="sidebar" onClose={onClose} /> : null}
+        <SidebarRail />
+      </Sidebar>
+    </SidebarProvider>
+  );
+};
+
 export function ChatRightPanels(props: {
   diff?: {
+    readonly open: boolean;
+    readonly onClose: () => void;
+    readonly onOpen: () => void;
+    readonly renderContent: boolean;
+  };
+  sourceControl?: {
     readonly open: boolean;
     readonly onClose: () => void;
     readonly onOpen: () => void;
@@ -184,7 +234,8 @@ export function ChatRightPanels(props: {
   readonly renderFileContent: boolean;
   readonly useSheet: boolean;
 }) {
-  const { diff, fileOpen, onReturnFromFileToDiff, renderFileContent, useSheet } = props;
+  const { diff, sourceControl, fileOpen, onReturnFromFileToDiff, renderFileContent, useSheet } =
+    props;
   const shouldRenderCodePanelProvider = Boolean(diff?.renderContent) || renderFileContent;
 
   const panels = useSheet ? (
@@ -192,6 +243,13 @@ export function ChatRightPanels(props: {
       {diff ? (
         <RightPanelSheet open={diff.open} onClose={diff.onClose}>
           {diff.renderContent ? <LazyDiffPanel mode="sheet" /> : null}
+        </RightPanelSheet>
+      ) : null}
+      {sourceControl ? (
+        <RightPanelSheet open={sourceControl.open} onClose={sourceControl.onClose}>
+          {sourceControl.renderContent ? (
+            <SourceControlPanel mode="sheet" onClose={sourceControl.onClose} />
+          ) : null}
         </RightPanelSheet>
       ) : null}
       <RightPanelSheet open={fileOpen} onClose={closeWorkspaceFilePreview}>
@@ -212,6 +270,14 @@ export function ChatRightPanels(props: {
           onCloseDiff={diff.onClose}
           onOpenDiff={diff.onOpen}
           renderDiffContent={diff.renderContent}
+        />
+      ) : null}
+      {sourceControl ? (
+        <SourceControlInlineSidebar
+          open={sourceControl.open}
+          onClose={sourceControl.onClose}
+          onOpen={sourceControl.onOpen}
+          renderContent={sourceControl.renderContent}
         />
       ) : null}
       <WorkspaceFilesInlineSidebar
