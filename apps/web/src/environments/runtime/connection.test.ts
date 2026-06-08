@@ -10,6 +10,7 @@ function createTestClient() {
   const terminalListeners = new Set<(event: any) => void>();
   const shellListeners = new Set<(event: any) => void>();
   let shellResubscribe: (() => void) | undefined;
+  let terminalUnsubscribeCount = 0;
 
   const client = {
     dispose: vi.fn(async () => undefined),
@@ -72,10 +73,14 @@ function createTestClient() {
       clear: vi.fn(async () => undefined),
       restart: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
-      onEvent: (listener: (event: any) => void) => {
+      onEvent: vi.fn((listener: (event: any) => void) => {
         terminalListeners.add(listener);
-        return () => terminalListeners.delete(listener);
-      },
+        return () => {
+          if (terminalListeners.delete(listener)) {
+            terminalUnsubscribeCount += 1;
+          }
+        };
+      }),
     },
     projects: {
       searchEntries: vi.fn(async () => []),
@@ -138,7 +143,15 @@ function createTestClient() {
         });
       }
     },
+    emitTerminalEvent: (event: any) => {
+      for (const listener of terminalListeners) {
+        listener(event);
+      }
+    },
     getShellListenerCount: () => shellListeners.size,
+    getTerminalListenerCount: () => terminalListeners.size,
+    getTerminalListeners: () => [...terminalListeners],
+    getTerminalUnsubscribeCount: () => terminalUnsubscribeCount,
   };
 }
 
@@ -564,6 +577,87 @@ describe("createEnvironmentConnection", () => {
     expect(client.reconnect).toHaveBeenCalledTimes(1);
 
     await connection.dispose();
+  });
+
+  it("recovers terminal event streams without reconnecting or running projection recovery", async () => {
+    const environmentId = EnvironmentId.make("env-1");
+    const {
+      client,
+      emitTerminalEvent,
+      getTerminalListenerCount,
+      getTerminalListeners,
+      getTerminalUnsubscribeCount,
+    } = createTestClient();
+    const applyTerminalEvent = vi.fn();
+    const catchUpProjection = vi.fn(async () => undefined);
+
+    const connection = createEnvironmentConnection({
+      kind: "saved",
+      knownEnvironment: {
+        id: "env-1",
+        label: "Remote env",
+        source: "manual",
+        target: {
+          httpBaseUrl: "http://example.test",
+          wsBaseUrl: "ws://example.test",
+        },
+        environmentId,
+      },
+      client,
+      applyShellEvent: vi.fn(),
+      syncShellSnapshot: vi.fn(),
+      applyTerminalEvent,
+      catchUpProjection,
+    });
+
+    await connection.ensureBootstrapped();
+
+    expect(client.terminal.onEvent).toHaveBeenCalledTimes(1);
+    expect(getTerminalListenerCount()).toBe(1);
+
+    const [firstListener] = getTerminalListeners();
+    expect(firstListener).toBeDefined();
+
+    const firstEvent = {
+      type: "activity",
+      threadId: "thread-1",
+      terminalId: "terminal",
+      createdAt: "2026-04-12T00:00:00.000Z",
+      hasRunningSubprocess: false,
+    };
+    emitTerminalEvent(firstEvent);
+    expect(applyTerminalEvent).toHaveBeenCalledWith(firstEvent, environmentId);
+
+    connection.recoverTerminalEventStream({ reason: "terminal-write-stall" });
+
+    expect(client.reconnect).not.toHaveBeenCalled();
+    expect(catchUpProjection).not.toHaveBeenCalled();
+    expect(client.terminal.onEvent).toHaveBeenCalledTimes(2);
+    expect(getTerminalUnsubscribeCount()).toBe(1);
+    expect(getTerminalListenerCount()).toBe(1);
+
+    const [secondListener] = getTerminalListeners();
+    expect(secondListener).toBeDefined();
+    expect(secondListener).not.toBe(firstListener);
+
+    firstListener?.({
+      ...firstEvent,
+      createdAt: "2026-04-12T00:00:01.000Z",
+    });
+    expect(applyTerminalEvent).toHaveBeenCalledTimes(1);
+
+    const secondEvent = {
+      ...firstEvent,
+      createdAt: "2026-04-12T00:00:02.000Z",
+    };
+    secondListener?.(secondEvent);
+    expect(applyTerminalEvent).toHaveBeenCalledTimes(2);
+    expect(applyTerminalEvent).toHaveBeenLastCalledWith(secondEvent, environmentId);
+
+    await connection.dispose();
+
+    expect(getTerminalUnsubscribeCount()).toBe(2);
+    expect(getTerminalListenerCount()).toBe(0);
   });
 
   it("skips primary lifecycle/config subscriptions when no handlers are registered", async () => {

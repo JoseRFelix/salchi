@@ -155,7 +155,12 @@ describe("SidebarUsageIndicator.logic", () => {
 
   it("falls back to default driver instance ids when activity payload metadata is unavailable", () => {
     const rows = deriveSidebarUsageProviderRows({
-      providerInstances: [],
+      providerInstances: [
+        {
+          instanceId: ProviderInstanceId.make("codex"),
+          driverKind: ProviderDriverKind.make("codex"),
+        },
+      ],
       threads: [
         {
           id: "thread-codex",
@@ -181,7 +186,75 @@ describe("SidebarUsageIndicator.logic", () => {
 
     expect(rows[0]?.windows.fiveHour?.usedPercent).toBe(12);
     expect(rows[0]?.windows.fiveHour?.remainingPercent).toBe(88);
-    expect(rows[1]?.windows.fiveHour).toBeNull();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.driverId).toBe("codex");
+  });
+
+  it("omits an uninstalled supported provider while keeping installed provider usage", () => {
+    const rows = deriveSidebarUsageProviderRows({
+      providerInstances: [
+        {
+          instanceId: ProviderInstanceId.make("codex"),
+          driverKind: ProviderDriverKind.make("codex"),
+          installed: true,
+        },
+        {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+          installed: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-codex",
+          title: "Codex",
+          modelSelectionInstanceId: ProviderInstanceId.make("codex"),
+          activities: [
+            makeRateLimitActivity({
+              id: "activity-codex-installed",
+              createdAt: "2026-05-01T00:00:00.000Z",
+              payload: {
+                provider: "codex",
+                providerInstanceId: "codex",
+                rateLimits: {
+                  primary: {
+                    usedPercent: 12,
+                    windowDurationMins: 300,
+                    resetsAt: FUTURE_RESET_SECONDS,
+                  },
+                },
+              },
+            }),
+          ],
+        },
+        {
+          id: "thread-claude",
+          title: "Claude",
+          modelSelectionInstanceId: ProviderInstanceId.make("claudeAgent"),
+          activities: [
+            makeRateLimitActivity({
+              id: "activity-claude-uninstalled",
+              createdAt: "2026-05-02T00:00:00.000Z",
+              payload: {
+                provider: "claudeAgent",
+                providerInstanceId: "claudeAgent",
+                rateLimits: {
+                  primary: {
+                    usedPercent: 91,
+                    windowDurationMins: 300,
+                    resetsAt: FUTURE_RESET_SECONDS,
+                  },
+                },
+              },
+            }),
+          ],
+        },
+      ],
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.driverId).toBe("codex");
+    expect(rows[0]?.windows.fiveHour?.usedPercent).toBe(12);
   });
 
   it("ignores thread cost and context usage when no account limit data is available", () => {
@@ -528,17 +601,46 @@ describe("SidebarUsageIndicator.logic", () => {
     expect(claudeRow?.threadId).toBe("thread-claude");
   });
 
-  it("ignores account-level limits for unknown provider drivers", () => {
+  it("omits usage rows when no supported provider drivers are installed", () => {
     const rows = deriveSidebarUsageProviderRows({
       providerInstances: [
         {
-          instanceId: ProviderInstanceId.make("opencode"),
-          driverKind: ProviderDriverKind.make("opencode"),
+          instanceId: ProviderInstanceId.make("codex"),
+          driverKind: ProviderDriverKind.make("codex"),
+          installed: false,
+        },
+        {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+          installed: false,
         },
       ],
-      threads: [],
+      threads: [
+        {
+          id: "thread-codex",
+          title: "Codex",
+          modelSelectionInstanceId: ProviderInstanceId.make("codex"),
+          activities: [
+            makeRateLimitActivity({
+              id: "activity-codex-uninstalled",
+              createdAt: "2026-05-01T00:00:00.000Z",
+              payload: {
+                provider: "codex",
+                providerInstanceId: "codex",
+                rateLimits: {
+                  primary: {
+                    usedPercent: 99,
+                    windowDurationMins: 300,
+                    resetsAt: FUTURE_RESET_SECONDS,
+                  },
+                },
+              },
+            }),
+          ],
+        },
+      ],
       accountRateLimitsByInstanceId: {
-        opencode: {
+        codex: {
           updatedAt: "2026-05-01T00:00:00.000Z",
           rateLimits: {
             primary: { usedPercent: 99, windowDurationMins: 300, resetsAt: FUTURE_RESET_SECONDS },
@@ -547,9 +649,7 @@ describe("SidebarUsageIndicator.logic", () => {
       },
     });
 
-    expect(rows.every((row) => row.windows.fiveHour === null && row.windows.weekly === null)).toBe(
-      true,
-    );
+    expect(rows).toEqual([]);
   });
 
   describe("deriveSidebarUsageProviderRows merge tightening", () => {

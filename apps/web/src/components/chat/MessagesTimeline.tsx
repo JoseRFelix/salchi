@@ -793,7 +793,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
       <div className="space-y-0.5">
         {visibleEntries.map((workEntry) => (
           <SimpleWorkEntryRow
-            key={`work-row:${workEntry.id}`}
+            key={`work-row:${workEntry.stableId ?? workEntry.id}`}
             workEntry={workEntry}
             workspaceRoot={workspaceRoot}
           />
@@ -1281,8 +1281,11 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
   const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
   const [isNewEntry] = useState(() => {
-    if (seenWorkEntryIds.has(workEntry.id)) return false;
-    seenWorkEntryIds.add(workEntry.id);
+    // Track by the lifecycle-stable identity, not `id` (which changes on every
+    // tool update), so the fade-in animation plays once per tool call.
+    const seenKey = workEntry.stableId ?? workEntry.id;
+    if (seenWorkEntryIds.has(seenKey)) return false;
+    seenWorkEntryIds.add(seenKey);
     return true;
   });
 

@@ -10,6 +10,8 @@ export type SidebarUsageWindowId = "fiveHour" | "weekly";
 export interface SidebarUsageProviderInstanceInput {
   readonly instanceId: ProviderInstanceId | string;
   readonly driverKind: ProviderDriverKind | string;
+  readonly installed?: boolean;
+  readonly availability?: "available" | "unavailable" | undefined;
 }
 
 export interface SidebarUsageThreadInput {
@@ -343,6 +345,10 @@ function isSidebarUsageDriverId(value: string | null | undefined): value is Side
   return value === "codex" || value === "claudeAgent";
 }
 
+function isUsageProviderIncluded(instance: SidebarUsageProviderInstanceInput): boolean {
+  return instance.installed !== false && instance.availability !== "unavailable";
+}
+
 function resolveThreadDriverId(
   thread: SidebarUsageThreadInput,
   driverIdByInstanceId: ReadonlyMap<string, SidebarUsageDriverId>,
@@ -461,11 +467,17 @@ export function deriveSidebarUsageProviderRows(input: {
   >;
 }): ReadonlyArray<SidebarUsageProviderRow> {
   const driverIdByInstanceId = new Map<string, SidebarUsageDriverId>();
+  const includedDriverIds = new Set<SidebarUsageDriverId>();
   for (const instance of input.providerInstances) {
     const driverId = String(instance.driverKind);
-    if (isSidebarUsageDriverId(driverId)) {
+    if (isSidebarUsageDriverId(driverId) && isUsageProviderIncluded(instance)) {
       driverIdByInstanceId.set(String(instance.instanceId), driverId);
+      includedDriverIds.add(driverId);
     }
+  }
+
+  if (includedDriverIds.size === 0) {
+    return [];
   }
 
   const latestByDriverId = new Map<
@@ -519,7 +531,7 @@ export function deriveSidebarUsageProviderRows(input: {
       }
 
       const driverId = resolveActivityDriverId(activity, thread, driverIdByInstanceId);
-      if (!driverId) {
+      if (!driverId || !includedDriverIds.has(driverId)) {
         continue;
       }
 
@@ -548,21 +560,23 @@ export function deriveSidebarUsageProviderRows(input: {
     }
   }
 
-  return SIDEBAR_USAGE_PROVIDER_ROWS.map((row) => {
-    const latest = latestByDriverId.get(row.driverId);
-    const windows = latest?.windows ?? emptyWindows();
-    const latestWindow = getLatestWindow(windows);
+  return SIDEBAR_USAGE_PROVIDER_ROWS.filter((row) => includedDriverIds.has(row.driverId)).map(
+    (row) => {
+      const latest = latestByDriverId.get(row.driverId);
+      const windows = latest?.windows ?? emptyWindows();
+      const latestWindow = getLatestWindow(windows);
 
-    return {
-      driverId: row.driverId,
-      driverKind: row.driverKind,
-      label: row.label,
-      windows,
-      updatedAt: latestWindow?.updatedAt ?? null,
-      threadId: latest?.threadId ?? null,
-      threadTitle: latest?.threadTitle ?? null,
-    } satisfies SidebarUsageProviderRow;
-  });
+      return {
+        driverId: row.driverId,
+        driverKind: row.driverKind,
+        label: row.label,
+        windows,
+        updatedAt: latestWindow?.updatedAt ?? null,
+        threadId: latest?.threadId ?? null,
+        threadTitle: latest?.threadTitle ?? null,
+      } satisfies SidebarUsageProviderRow;
+    },
+  );
 }
 
 export function getSidebarUsageSummary(

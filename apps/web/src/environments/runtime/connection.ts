@@ -18,6 +18,7 @@ export interface EnvironmentConnection {
   readonly knownEnvironment: KnownEnvironment;
   readonly client: WsRpcClient;
   readonly ensureBootstrapped: () => Promise<void>;
+  readonly recoverTerminalEventStream: (input: { readonly reason: string }) => void;
   readonly reconnect: (options?: EnvironmentReconnectOptions) => Promise<void>;
   readonly dispose: () => Promise<void>;
 }
@@ -136,6 +137,8 @@ export function createEnvironmentConnection(
   }
 
   let disposed = false;
+  let terminalStreamGeneration = 0;
+  let unsubscribeTerminalEventStream: () => void = () => undefined;
   const bootstrapGate = createBootstrapGate();
   const shouldObserveLifecycle = input.kind === "saved" || input.onWelcome !== undefined;
   const shouldObserveConfig = input.kind === "saved" || input.onConfigSnapshot !== undefined;
@@ -197,16 +200,70 @@ export function createEnvironmentConnection(
     },
   );
 
-  const unsubTerminalEvent = input.client.terminal.onEvent(
-    (event: Parameters<Parameters<WsRpcClient["terminal"]["onEvent"]>[0]>[0]) => {
-      input.applyTerminalEvent(event, environmentId);
-    },
-  );
+  const startTerminalEventStream = (reason: string) => {
+    const generation = terminalStreamGeneration + 1;
+    terminalStreamGeneration = generation;
+    unsubscribeTerminalEventStream = input.client.terminal.onEvent(
+      (event: Parameters<Parameters<WsRpcClient["terminal"]["onEvent"]>[0]>[0]) => {
+        if (disposed || generation !== terminalStreamGeneration) {
+          return;
+        }
+        input.applyTerminalEvent(event, environmentId);
+      },
+      {
+        onLifecycle: (event) => {
+          if (disposed || generation !== terminalStreamGeneration) {
+            return;
+          }
+          const lifecycleKind =
+            event.type === "attempt-failed"
+              ? "failed"
+              : event.type === "value-received"
+                ? "value-received"
+                : event.type === "retry-scheduled"
+                  ? "retry-scheduled"
+                  : event.type;
+          recordResumeDiagnostic(`terminal-event-stream:${lifecycleKind}`, {
+            reason,
+            env: environmentId,
+            data: {
+              attempt: event.attempt,
+              generation,
+              ...("delayMs" in event ? { delayMs: event.delayMs } : {}),
+              ...("error" in event ? { error: event.error } : {}),
+              ...("receivedValue" in event ? { receivedValue: event.receivedValue } : {}),
+              ...("retryable" in event ? { retryable: event.retryable } : {}),
+              ...("reason" in event ? { lifecycleReason: event.reason } : {}),
+              ...("tag" in event ? { tag: event.tag } : {}),
+            },
+          });
+        },
+      },
+    );
+  };
+
+  const recoverTerminalEventStream = (recoveryInput: { readonly reason: string }) => {
+    if (disposed) {
+      return;
+    }
+    recordResumeDiagnostic("terminal-event-stream:manual-restart", {
+      reason: recoveryInput.reason,
+      env: environmentId,
+      data: {
+        generation: terminalStreamGeneration,
+      },
+    });
+    unsubscribeTerminalEventStream();
+    unsubscribeTerminalEventStream = () => undefined;
+    startTerminalEventStream(recoveryInput.reason);
+  };
+
+  startTerminalEventStream("initial");
 
   const cleanup = () => {
     disposed = true;
     unsubShell();
-    unsubTerminalEvent();
+    unsubscribeTerminalEventStream();
     unsubLifecycle();
     unsubConfig();
   };
@@ -217,6 +274,7 @@ export function createEnvironmentConnection(
     knownEnvironment: input.knownEnvironment,
     client: input.client,
     ensureBootstrapped: () => bootstrapGate.wait(),
+    recoverTerminalEventStream,
     reconnect: async (options) => {
       const startedAt = Date.now();
       type ReconnectPhase =

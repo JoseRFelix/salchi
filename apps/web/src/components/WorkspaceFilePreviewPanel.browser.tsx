@@ -506,6 +506,17 @@ function latestFileUnsafeCss(): string {
   return fileRenderCalls.at(-1)?.options?.unsafeCSS ?? "";
 }
 
+// The panel toggles the inline diff from a pointer tap (pointerdown + pointerup) on the
+// gutter rather than a `click`, so taps must be simulated with pointer events.
+function tapElement(element: Element | null | undefined): void {
+  if (!element) {
+    return;
+  }
+  const init = { bubbles: true, composed: true, pointerId: 1, clientX: 0, clientY: 0 };
+  element.dispatchEvent(new PointerEvent("pointerdown", init));
+  element.dispatchEvent(new PointerEvent("pointerup", init));
+}
+
 async function waitForAnimationFrames(count: number): Promise<void> {
   for (let index = 0; index < count; index += 1) {
     await new Promise<void>((resolve) => {
@@ -652,9 +663,15 @@ describe("WorkspaceFilePreviewPanel", () => {
       await waitForMarkerCss(2);
       const unsafeCSS = latestFileUnsafeCss();
       expect(fileRenderCalls.at(-1)?.options?.lineHoverHighlight).toBe("number");
+      // The inline diff toggles from a pointer tap on the gutter (handled by the panel),
+      // so the renderer's own line click callbacks stay unwired.
       expect(fileRenderCalls.at(-1)?.options?.onLineClick).toBeUndefined();
       expect(fileRenderCalls.at(-1)?.options?.onLineNumberClick).toBeUndefined();
       expect(unsafeCSS).toContain("cursor: pointer !important;");
+      // The marked gutter must be tappable on touch: manipulation removes the tap delay
+      // and the grow-on-hover is gated to hover pointers so a tap is not swallowed.
+      expect(unsafeCSS).toContain("touch-action: manipulation !important;");
+      expect(unsafeCSS).toContain("@media (hover: hover) {");
       expect(unsafeCSS).toContain(
         "background-image: linear-gradient(var(--warning), var(--warning)) !important;",
       );
@@ -667,28 +684,15 @@ describe("WorkspaceFilePreviewPanel", () => {
       expect(unsafeCSS).not.toContain("pointer-events: auto");
       expect(unsafeCSS).not.toContain(`[data-line]:has([data-column-number="2"])`);
 
-      document.querySelector<HTMLElement>('[data-line="1"]')?.click();
+      // Tapping the code content of a changed line must not toggle the inline diff;
+      // only the line-number gutter badge does.
+      tapElement(document.querySelector('[data-line="2"] code'));
       expect(document.querySelector("[data-testid='workspace-file-render-annotation']")).toBeNull();
 
-      document.querySelector<HTMLElement>('[data-line="2"]')?.click();
-      await vi.waitFor(() => {
-        expect(
-          document.querySelectorAll("[data-testid='workspace-file-render-annotation']"),
-        ).toHaveLength(1);
-        expect(document.querySelector("[data-testid='workspace-inline-file-diff']")).not.toBeNull();
-      });
-
-      document.querySelector<HTMLElement>('[data-line="2"]')?.click();
-      await vi.waitFor(() => {
-        expect(
-          document.querySelector("[data-testid='workspace-file-render-annotation']"),
-        ).toBeNull();
-      });
-
-      document.querySelector<HTMLElement>('[data-column-number="1"]')?.click();
+      tapElement(document.querySelector('[data-column-number="1"]'));
       expect(document.querySelector("[data-testid='workspace-file-render-annotation']")).toBeNull();
 
-      document.querySelector<HTMLElement>('[data-column-number="2"]')?.click();
+      tapElement(document.querySelector('[data-column-number="2"]'));
       await vi.waitFor(() => {
         expect(
           document.querySelectorAll("[data-testid='workspace-file-render-annotation']"),
@@ -705,7 +709,7 @@ describe("WorkspaceFilePreviewPanel", () => {
         inlineDiffElement?.querySelector('button[aria-label="Close inline diff"]'),
       ).not.toBeNull();
 
-      document.querySelector<HTMLElement>('[data-column-number="2"]')?.click();
+      tapElement(document.querySelector('[data-column-number="2"]'));
       await vi.waitFor(() => {
         expect(
           document.querySelector("[data-testid='workspace-file-render-annotation']"),
@@ -740,7 +744,7 @@ describe("WorkspaceFilePreviewPanel", () => {
       expect(unsafeCSS).not.toContain("::before");
       expect(unsafeCSS).not.toContain("pointer-events: auto");
 
-      document.querySelector<HTMLElement>('[data-column-number="2"]')?.click();
+      tapElement(document.querySelector('[data-column-number="2"]'));
       await vi.waitFor(() => {
         expect(
           document.querySelectorAll("[data-testid='workspace-file-render-annotation']"),
@@ -766,7 +770,7 @@ describe("WorkspaceFilePreviewPanel", () => {
       await waitForMarkerCss(1);
       await waitForMarkerCss(6);
 
-      document.querySelector<HTMLElement>('[data-column-number="1"]')?.click();
+      tapElement(document.querySelector('[data-column-number="1"]'));
       await vi.waitFor(() => {
         expect(
           document.querySelector<HTMLElement>("[data-testid='workspace-inline-file-diff']")?.dataset
@@ -778,7 +782,7 @@ describe("WorkspaceFilePreviewPanel", () => {
           ?.textContent,
       ).toContain("Working tree change 1 of 2");
 
-      document.querySelector<HTMLElement>('[data-column-number="6"]')?.click();
+      tapElement(document.querySelector('[data-column-number="6"]'));
       await vi.waitFor(() => {
         expect(
           document.querySelectorAll("[data-testid='workspace-file-render-annotation']"),
@@ -811,7 +815,7 @@ describe("WorkspaceFilePreviewPanel", () => {
       await waitForMarkerCss(1);
       await waitForMarkerCss(6);
 
-      document.querySelector<HTMLElement>('[data-column-number="1"]')?.click();
+      tapElement(document.querySelector('[data-column-number="1"]'));
       await vi.waitFor(() => {
         expect(
           document.querySelector<HTMLElement>("[data-testid='workspace-inline-file-diff']")?.dataset
@@ -873,7 +877,7 @@ describe("WorkspaceFilePreviewPanel", () => {
       await waitForMarkerCss(1);
       await waitForMarkerCss(5);
 
-      document.querySelector<HTMLElement>('[data-column-number="1"]')?.click();
+      tapElement(document.querySelector('[data-column-number="1"]'));
       await vi.waitFor(() => {
         expect(
           document.querySelectorAll("[data-testid='workspace-file-render-annotation']"),

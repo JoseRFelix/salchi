@@ -17,14 +17,16 @@ import * as Stream from "effect/Stream";
 
 import { type WsRpcProtocolClient } from "./protocol";
 import { resetWsReconnectBackoff } from "./wsConnectionState";
-import { WsTransport } from "./wsTransport";
+import { WsTransport, type WsSubscriptionLifecycleEvent } from "./wsTransport";
 
 type RpcTag = keyof WsRpcProtocolClient & string;
 type RpcMethod<TTag extends RpcTag> = WsRpcProtocolClient[TTag];
 type RpcInput<TTag extends RpcTag> = Parameters<RpcMethod<TTag>>[0];
 
 interface StreamSubscriptionOptions {
+  readonly onLifecycle?: (event: WsSubscriptionLifecycleEvent) => void;
   readonly onResubscribe?: () => void;
+  readonly retryNonTransportErrors?: boolean;
 }
 
 type RpcUnaryMethod<TTag extends RpcTag> =
@@ -312,6 +314,7 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
       onEvent: (listener, options) =>
         transport.subscribe((client) => client[WS_METHODS.subscribeTerminalEvents]({}), listener, {
           ...options,
+          retryNonTransportErrors: options?.retryNonTransportErrors ?? true,
           tag: WS_METHODS.subscribeTerminalEvents,
         }),
     },

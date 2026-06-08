@@ -4,6 +4,7 @@ import {
   hasActiveTextSelection,
   isMobileEdgeSwipeStart,
   MOBILE_EDGE_SWIPE_OPEN_INTENT_TIMEOUT_MS,
+  resolveHorizontalScrollOwnerSwipeDecision,
   resolveMobileEdgeSwipeDecision,
 } from "./useMobileEdgeSwipe";
 
@@ -160,6 +161,73 @@ describe("resolveMobileEdgeSwipeDecision", () => {
         x: 195,
       }),
     ).toBe(true);
+  });
+});
+
+describe("resolveHorizontalScrollOwnerSwipeDecision", () => {
+  it("cancels a right-panel close gesture when the scroll owner started away from the left edge", () => {
+    expect(
+      resolveHorizontalScrollOwnerSwipeDecision({
+        action: "close",
+        deltaX: 28,
+        side: "right",
+        startMaxScrollLeft: 400,
+        startScrollLeft: 100,
+        startSurface: "panel",
+      }),
+    ).toBe("cancel-panel-swipe");
+  });
+
+  it("allows a right-panel close gesture when the scroll owner started at the left edge", () => {
+    expect(
+      resolveHorizontalScrollOwnerSwipeDecision({
+        action: "close",
+        deltaX: 28,
+        side: "right",
+        startMaxScrollLeft: 400,
+        startScrollLeft: 0,
+        startSurface: "panel",
+      }),
+    ).toBe("allow-panel-swipe");
+  });
+
+  it("uses the starting scroll position rather than handing off after a drag reaches the edge", () => {
+    expect(
+      resolveHorizontalScrollOwnerSwipeDecision({
+        action: "close",
+        deltaX: 96,
+        side: "right",
+        startMaxScrollLeft: 400,
+        startScrollLeft: 2,
+        startSurface: "panel",
+      }),
+    ).toBe("cancel-panel-swipe");
+  });
+
+  it("does not let open gestures take over horizontally scrollable content", () => {
+    expect(
+      resolveHorizontalScrollOwnerSwipeDecision({
+        action: "open",
+        deltaX: -64,
+        side: "right",
+        startMaxScrollLeft: 400,
+        startScrollLeft: 0,
+        startSurface: "outside-panels",
+      }),
+    ).toBe("cancel-panel-swipe");
+  });
+
+  it("waits when movement over a scroll owner is opposite the close direction", () => {
+    expect(
+      resolveHorizontalScrollOwnerSwipeDecision({
+        action: "close",
+        deltaX: -28,
+        side: "right",
+        startMaxScrollLeft: 400,
+        startScrollLeft: 0,
+        startSurface: "panel",
+      }),
+    ).toBe("pending");
   });
 });
 

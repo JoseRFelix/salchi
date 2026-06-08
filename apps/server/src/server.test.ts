@@ -14,6 +14,7 @@ import {
   ExternalLauncherError,
   type OrchestrationThreadShell,
   TerminalNotRunningError,
+  type TerminalEvent,
   type OrchestrationCommand,
   type OrchestrationEvent,
   ORCHESTRATION_WS_METHODS,
@@ -4435,6 +4436,67 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           }),
         ),
       );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket rpc subscribeTerminalEvents through TerminalManager", () =>
+    Effect.gen(function* () {
+      let activeListener: ((event: TerminalEvent) => Effect.Effect<void>) | null = null;
+      let subscribeCount = 0;
+      let unsubscribeCount = 0;
+      const terminalEvent: TerminalEvent = {
+        type: "started",
+        threadId: "thread-1",
+        terminalId: "default",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        snapshot: {
+          threadId: "thread-1",
+          terminalId: "default",
+          cwd: "/tmp/project",
+          worktreePath: null,
+          status: "running",
+          pid: 1234,
+          history: "ready\r\n",
+          exitCode: null,
+          exitSignal: null,
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          terminalManager: {
+            subscribe: (listener) =>
+              Effect.gen(function* () {
+                subscribeCount += 1;
+                activeListener = listener;
+                yield* listener(terminalEvent);
+                return () => {
+                  if (activeListener === listener) {
+                    activeListener = null;
+                  }
+                  unsubscribeCount += 1;
+                };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+
+      const events = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.subscribeTerminalEvents]({}).pipe(Stream.take(1), Stream.runCollect),
+        ),
+      );
+      const received = Array.from(events)[0];
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      assert.deepEqual(received, terminalEvent);
+      assert.equal(subscribeCount, 1);
+      assert.equal(unsubscribeCount, 1);
+      assert.equal(activeListener, null);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

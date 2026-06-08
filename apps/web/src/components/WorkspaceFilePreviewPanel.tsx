@@ -69,6 +69,8 @@ import { Toggle } from "./ui/toggle";
 const FILE_PREVIEW_LINE_HEIGHT = 20;
 const FILE_PREVIEW_VIRTUALIZER_CLASS_NAME = "workspace-file-preview-virtualizer";
 const FILE_PREVIEW_INLINE_DIFF_SELECTOR = '[data-workspace-file-inline-diff="true"]';
+// A tap counts as a click as long as the finger barely moves; anything larger is a scroll.
+const FILE_PREVIEW_GUTTER_TAP_SLOP_PX = 10;
 
 const FILE_PREVIEW_RENDER_STYLE = {
   "--diffs-bg": "var(--background)",
@@ -189,6 +191,7 @@ function buildFilePreviewMarkerUnsafeCss(
       return `
 ${numberSelector} {
   cursor: pointer !important;
+  touch-action: manipulation !important;
   background-image: linear-gradient(${color}, ${color}) !important;
   background-position: left top !important;
   background-repeat: no-repeat !important;
@@ -196,97 +199,33 @@ ${numberSelector} {
   transition: background-size 120ms ease;
 }
 
-${numberSelector}:hover {
-  background-size: 6px 100% !important;
+/* Gate the grow-on-hover behind a real hover pointer. On touch the first tap would
+   otherwise only apply :hover (the badge "protrudes") and the browser withholds the
+   click, so the inline diff never opens. */
+@media (hover: hover) {
+  ${numberSelector}:hover {
+    background-size: 6px 100% !important;
+  }
 }
 `;
     })
     .join("\n");
 }
 
-function parsePreviewLineNumber(value: string | null | undefined): number | null {
-  if (!value) {
-    return null;
-  }
-  const lineNumber = Number(value);
-  return Number.isInteger(lineNumber) && lineNumber > 0 ? lineNumber : null;
-}
-
-function findPreviewShadowHost(path: readonly EventTarget[]): HTMLElement | null {
-  for (const target of path) {
-    if (
-      target instanceof HTMLElement &&
-      target.classList.contains("workspace-file-preview-render")
-    ) {
-      return target;
-    }
-  }
-  return null;
-}
-
-function findPreviewGutterLineNumberFromPoint(host: HTMLElement, event: MouseEvent): number | null {
-  const shadowRoot = host.shadowRoot;
-  if (!shadowRoot) {
-    return null;
-  }
-
-  const pointElements = shadowRoot.elementsFromPoint(event.clientX, event.clientY);
-  for (const element of pointElements) {
-    if (!(element instanceof HTMLElement)) {
-      continue;
-    }
-    const lineNumber = parsePreviewLineNumber(element.getAttribute("data-column-number"));
-    if (lineNumber !== null) {
-      return lineNumber;
-    }
-  }
-
-  const gutterHitSlopPx = 12;
-  const isInGutterRow = [...shadowRoot.querySelectorAll<HTMLElement>("[data-gutter]")].some(
-    (element) => {
-      const rect = element.getBoundingClientRect();
-      return (
-        rect.width > 0 &&
-        rect.height > 0 &&
-        event.clientY >= rect.top &&
-        event.clientY <= rect.bottom &&
-        event.clientX >= rect.left - gutterHitSlopPx &&
-        event.clientX <= rect.right + gutterHitSlopPx
-      );
-    },
-  );
-  if (!isInGutterRow) {
-    return null;
-  }
-
-  for (const element of shadowRoot.querySelectorAll<HTMLElement>("[data-column-number]")) {
-    const rect = element.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) {
-      continue;
-    }
-    if (event.clientY < rect.top || event.clientY > rect.bottom) {
-      continue;
-    }
-
-    const lineNumber = parsePreviewLineNumber(element.getAttribute("data-column-number"));
-    if (lineNumber !== null) {
-      return lineNumber;
-    }
-  }
-
-  return null;
-}
-
-function findPreviewClickLineNumber(event: MouseEvent): number | null {
+// Resolves the line number of the line-number gutter cell (where the change badge is
+// painted) under a pointer event, piercing the renderer's shadow DOM via composedPath.
+// Returns null for taps on the code content or anywhere outside the gutter.
+function resolveGutterLineNumberFromEvent(event: PointerEvent): number | null {
   const path = event.composedPath();
 
   for (const target of path) {
-    if (!(target instanceof HTMLElement)) {
-      continue;
-    }
-    const lineNumber = parsePreviewLineNumber(target.getAttribute("data-column-number"));
-    if (lineNumber !== null) {
-      return lineNumber;
+    if (
+      target instanceof Element &&
+      (target.matches(FILE_PREVIEW_INLINE_DIFF_SELECTOR) ||
+        target.closest(FILE_PREVIEW_INLINE_DIFF_SELECTOR) !== null)
+    ) {
+      // Taps inside an expanded inline diff carry their own gutter; ignore them.
+      return null;
     }
   }
 
@@ -294,23 +233,17 @@ function findPreviewClickLineNumber(event: MouseEvent): number | null {
     if (!(target instanceof HTMLElement)) {
       continue;
     }
-    const lineNumber = parsePreviewLineNumber(target.getAttribute("data-line"));
-    if (lineNumber !== null) {
+    const value = target.getAttribute("data-column-number");
+    if (value === null) {
+      continue;
+    }
+    const lineNumber = Number(value);
+    if (Number.isInteger(lineNumber) && lineNumber > 0) {
       return lineNumber;
     }
   }
 
-  const host = findPreviewShadowHost(path);
-  return host ? findPreviewGutterLineNumberFromPoint(host, event) : null;
-}
-
-function isInlineDiffClick(path: readonly EventTarget[]): boolean {
-  return path.some(
-    (target) =>
-      target instanceof Element &&
-      (target.matches(FILE_PREVIEW_INLINE_DIFF_SELECTOR) ||
-        target.closest(FILE_PREVIEW_INLINE_DIFF_SELECTOR) !== null),
-  );
+  return null;
 }
 
 function buildWorkingTreeSignature(
@@ -843,49 +776,63 @@ export function WorkspaceFilePreviewPanel(props: {
   ]);
 
   const toggleInlineDiffForLineNumber = useCallback(
-    (lineNumber: number): boolean => {
+    (lineNumber: number): void => {
       const marker = diffMarkers.markersByLine.get(lineNumber);
       if (!marker) {
-        return false;
+        return;
       }
 
       setExpandedDiffHunkId((currentHunkId) =>
         currentHunkId === marker.hunkId ? null : marker.hunkId,
       );
-      return true;
     },
     [diffMarkers.markersByLine],
   );
 
-  const handlePreviewClickCapture = useCallback(
-    (event: MouseEvent) => {
-      const path = event.composedPath();
-      if (isInlineDiffClick(path)) {
-        return;
-      }
-
-      const lineNumber = findPreviewClickLineNumber(event);
-      if (lineNumber === null || !toggleInlineDiffForLineNumber(lineNumber)) {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-    },
-    [toggleInlineDiffForLineNumber],
-  );
-
+  // Toggle the inline diff from a pointer tap on the gutter badge. We deliberately use
+  // pointerdown/pointerup instead of the renderer's `onLineNumberClick` (a `click`
+  // listener): on touch a synthesized `click` is unreliable, so the badge would protrude
+  // on tap but never open the diff. Pointer events fire consistently for mouse and touch.
   useEffect(() => {
     const element = scrollRootRef.current;
     if (!element) {
       return;
     }
 
-    element.addEventListener("click", handlePreviewClickCapture, { capture: true });
-    return () => {
-      element.removeEventListener("click", handlePreviewClickCapture, { capture: true });
+    let pending: { x: number; y: number; lineNumber: number } | null = null;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const lineNumber = resolveGutterLineNumberFromEvent(event);
+      pending = lineNumber === null ? null : { x: event.clientX, y: event.clientY, lineNumber };
     };
-  }, [handlePreviewClickCapture]);
+
+    const handlePointerUp = (event: PointerEvent) => {
+      const start = pending;
+      pending = null;
+      if (
+        start === null ||
+        Math.abs(event.clientX - start.x) > FILE_PREVIEW_GUTTER_TAP_SLOP_PX ||
+        Math.abs(event.clientY - start.y) > FILE_PREVIEW_GUTTER_TAP_SLOP_PX ||
+        resolveGutterLineNumberFromEvent(event) !== start.lineNumber
+      ) {
+        return;
+      }
+      toggleInlineDiffForLineNumber(start.lineNumber);
+    };
+
+    const handlePointerCancel = () => {
+      pending = null;
+    };
+
+    element.addEventListener("pointerdown", handlePointerDown);
+    element.addEventListener("pointerup", handlePointerUp);
+    element.addEventListener("pointercancel", handlePointerCancel);
+    return () => {
+      element.removeEventListener("pointerdown", handlePointerDown);
+      element.removeEventListener("pointerup", handlePointerUp);
+      element.removeEventListener("pointercancel", handlePointerCancel);
+    };
+  }, [toggleInlineDiffForLineNumber]);
 
   const sortedDiffHunks = useMemo(
     () => [...diffMarkers.hunksById.values()].toSorted((a, b) => a.position - b.position),

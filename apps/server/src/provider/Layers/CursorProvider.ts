@@ -403,6 +403,61 @@ export function buildCursorDiscoveredModelsFromAvailableModelsResponse(
   );
 }
 
+export function buildCursorDiscoveredModelsFromSessionModelState(
+  modelState: EffectAcpSchema.SessionModelState | null | undefined,
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
+): ReadonlyArray<ServerProviderModel> {
+  const availableModels = modelState?.availableModels ?? [];
+  if (availableModels.length === 0) {
+    return [];
+  }
+
+  const currentModelId = modelState?.currentModelId.trim() ?? "";
+  const currentModelCapabilities = buildCursorCapabilitiesFromConfigOptions(configOptions ?? []);
+  return buildCursorDiscoveredModels(
+    availableModels.map((model) => {
+      const slug = model.modelId.trim();
+      return {
+        slug,
+        name: model.name.trim(),
+        capabilities:
+          currentModelId && slug === currentModelId ? currentModelCapabilities : EMPTY_CAPABILITIES,
+      };
+    }),
+  );
+}
+
+export function buildCursorDiscoveredModelsFromConfigOptions(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
+): ReadonlyArray<ServerProviderModel> {
+  if (!configOptions || configOptions.length === 0) {
+    return [];
+  }
+
+  const modelOption = configOptions.find((option) => option.category === "model");
+  const modelChoices = flattenSessionConfigSelectOptions(modelOption);
+  if (!modelOption || modelChoices.length === 0) {
+    return [];
+  }
+
+  const currentModelValue =
+    modelOption.type === "select" ? modelOption.currentValue?.trim() || undefined : undefined;
+  const currentModelCapabilities = buildCursorCapabilitiesFromConfigOptions(configOptions);
+  return buildCursorDiscoveredModels(
+    modelChoices.map((modelChoice) => {
+      const slug = modelChoice.value.trim();
+      return {
+        slug,
+        name: modelChoice.name.trim(),
+        capabilities:
+          currentModelValue && slug === currentModelValue
+            ? currentModelCapabilities
+            : EMPTY_CAPABILITIES,
+      };
+    }),
+  );
+}
+
 const makeCursorAcpProbeRuntime = (
   cursorSettings: CursorSettings,
   environment: NodeJS.ProcessEnv = process.env,
@@ -559,10 +614,39 @@ export const discoverCursorModelsViaAcp = (
     cursorSettings,
     (acp) =>
       Effect.gen(function* () {
-        yield* acp.start();
-        const response = yield* acp.request("cursor/list_available_models", {});
-        const decoded = yield* decodeCursorListAvailableModelsResponse(response);
-        return buildCursorDiscoveredModelsFromAvailableModelsResponse(decoded);
+        const started = yield* acp.start();
+        const discoveredFromExtension = yield* acp
+          .request("cursor/list_available_models", {})
+          .pipe(
+            Effect.flatMap(decodeCursorListAvailableModelsResponse),
+            Effect.map(buildCursorDiscoveredModelsFromAvailableModelsResponse),
+            Effect.exit,
+          );
+        if (Exit.isSuccess(discoveredFromExtension)) {
+          return discoveredFromExtension.value;
+        }
+
+        yield* Effect.logDebug(
+          "Cursor ACP list_available_models failed; falling back to session model state",
+          { cause: Cause.pretty(discoveredFromExtension.cause) },
+        );
+
+        const discoveredFromModelState = buildCursorDiscoveredModelsFromSessionModelState(
+          started.sessionSetupResult.models,
+          started.sessionSetupResult.configOptions ?? [],
+        );
+        if (discoveredFromModelState.length > 0) {
+          return discoveredFromModelState;
+        }
+
+        const discoveredFromConfigOptions = buildCursorDiscoveredModelsFromConfigOptions(
+          started.sessionSetupResult.configOptions ?? [],
+        );
+        if (discoveredFromConfigOptions.length > 0) {
+          return discoveredFromConfigOptions;
+        }
+
+        return yield* Effect.failCause(discoveredFromExtension.cause);
       }),
     environment,
   );

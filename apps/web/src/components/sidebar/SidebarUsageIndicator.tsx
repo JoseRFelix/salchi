@@ -256,18 +256,21 @@ export function SidebarUsageIndicator() {
         providerInstances: providers.map((provider) => ({
           instanceId: provider.instanceId,
           driverKind: provider.driver,
+          installed: provider.installed,
+          availability: provider.availability,
         })),
         threads,
         accountRateLimitsByInstanceId,
       }),
     [accountRateLimitsByInstanceId, providers, threads],
   );
+  const hasUsageProviders = rows.length > 0;
   const summary = useMemo(() => getSidebarUsageSummary(rows), [rows]);
 
   useEffect(() => {
     const previousSidebarVisible = previousSidebarVisibleRef.current;
     previousSidebarVisibleRef.current = sidebarVisible;
-    if (!sidebarVisible || (previousSidebarVisible && !expanded)) {
+    if (!hasUsageProviders || !sidebarVisible || (previousSidebarVisible && !expanded)) {
       return;
     }
 
@@ -279,9 +282,13 @@ export function SidebarUsageIndicator() {
         );
       })
       .catch(() => undefined);
-  }, [expanded, setAccountRateLimitsByInstanceId, sidebarVisible]);
+  }, [expanded, hasUsageProviders, setAccountRateLimitsByInstanceId, sidebarVisible]);
 
   useEffect(() => {
+    if (!hasUsageProviders) {
+      return;
+    }
+
     void ensureLocalApi()
       .server.refreshUsageLimits()
       .then((result) => {
@@ -290,7 +297,11 @@ export function SidebarUsageIndicator() {
         );
       })
       .catch(() => undefined);
-  }, [setAccountRateLimitsByInstanceId]);
+  }, [hasUsageProviders, setAccountRateLimitsByInstanceId]);
+
+  if (!hasUsageProviders) {
+    return null;
+  }
 
   return (
     <Collapsible open={expanded} onOpenChange={setExpanded}>

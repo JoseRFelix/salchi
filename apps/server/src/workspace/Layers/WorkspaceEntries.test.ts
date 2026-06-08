@@ -348,7 +348,60 @@ it.layer(TestLayer)("WorkspaceEntriesLive", (it) => {
       }),
     );
 
-    it.effect("returns gitignored root children with ignored markers", () =>
+    it.effect("returns files in non-git workspaces after a prior empty listing", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-list-non-git-cache-" });
+
+        const emptyResult = yield* listWorkspaceDirectoryEntries({ cwd, limit: 100 });
+        expect(emptyResult.entries).toEqual([]);
+
+        yield* writeTextFile(cwd, "src/index.ts", "export {};\n");
+
+        const result = yield* listWorkspaceDirectoryEntries({ cwd, limit: 100 });
+        expect(result.entries.map((entry) => `${entry.kind}:${entry.path}`)).toContain(
+          "directory:src",
+        );
+      }),
+    );
+
+    it.effect("returns nested non-git entries without waiting for index cache expiry", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-list-non-git-nested-" });
+
+        const emptyResult = yield* listWorkspaceDirectoryEntries({ cwd, limit: 100 });
+        expect(emptyResult.entries).toEqual([]);
+
+        yield* writeTextFile(cwd, "src/App.tsx", "export {};\n");
+
+        const result = yield* listWorkspaceDirectoryEntries({
+          cwd,
+          directoryPath: "src",
+          limit: 100,
+        });
+        expect(result.entries.map((entry) => `${entry.kind}:${entry.path}`)).toEqual([
+          "file:src/App.tsx",
+        ]);
+      }),
+    );
+
+    it.effect("lists git repository directories without invoking VCS indexing", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir({
+          prefix: "t3code-workspace-list-git-no-index-",
+          git: true,
+        });
+        yield* writeTextFile(cwd, "README.md", "# Readme\n");
+        const process = yield* VcsProcess.VcsProcess;
+        const runSpy = vi.spyOn(process, "run");
+
+        const result = yield* listWorkspaceDirectoryEntries({ cwd, limit: 100 });
+
+        expect(result.entries).toContainEqual({ kind: "file", path: "README.md" });
+        expect(runSpy).not.toHaveBeenCalled();
+      }),
+    );
+
+    it.effect("returns gitignored root children without ignored markers", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTempDir({ prefix: "t3code-workspace-list-gitignore-", git: true });
         yield* writeTextFile(cwd, ".gitignore", "websocket-diagnostics*\n");
@@ -360,7 +413,7 @@ it.layer(TestLayer)("WorkspaceEntriesLive", (it) => {
         expect(result.entries).toEqual([
           { kind: "file", path: ".gitignore" },
           { kind: "file", path: "README.md" },
-          { kind: "file", path: "websocket-diagnostics1.md", ignored: true },
+          { kind: "file", path: "websocket-diagnostics1.md" },
         ]);
       }),
     );
