@@ -1,4 +1,5 @@
 import { DEFAULT_SERVER_SETTINGS, ServerSettings, WS_METHODS } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -711,6 +712,82 @@ describe("WsTransport", () => {
     await transport.dispose();
   });
 
+  it("emits subscription lifecycle events in stream attempt order", async () => {
+    const transport = createTransport("ws://localhost:3020");
+    const listener = vi.fn();
+    const lifecycle: string[] = [];
+
+    const unsubscribe = transport.subscribe(
+      (client) => client[WS_METHODS.subscribeServerLifecycle]({}),
+      listener,
+      {
+        onLifecycle: (event) => {
+          lifecycle.push(event.type);
+        },
+      },
+    );
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+    });
+
+    const socket = getSocket();
+    socket.open();
+
+    await waitFor(() => {
+      expect(socket.sent).toHaveLength(1);
+    });
+
+    const requestMessage = JSON.parse(socket.sent[0] ?? "{}") as { id: string };
+    const welcomeEvent = {
+      version: 1,
+      sequence: 1,
+      type: "welcome",
+      payload: {
+        environment: {
+          environmentId: "environment-local",
+          label: "Local environment",
+          platform: { os: "darwin", arch: "arm64" },
+          serverVersion: "0.0.0-test",
+          capabilities: { repositoryIdentity: true },
+        },
+        cwd: "/tmp/workspace",
+        projectName: "workspace",
+      },
+    };
+
+    socket.serverMessage(
+      JSON.stringify({
+        _tag: "Chunk",
+        requestId: requestMessage.id,
+        values: [welcomeEvent],
+      }),
+    );
+    socket.serverMessage(
+      JSON.stringify({
+        _tag: "Exit",
+        requestId: requestMessage.id,
+        exit: {
+          _tag: "Success",
+          value: null,
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(lifecycle.slice(0, 5)).toEqual([
+        "attempt-started",
+        "request-started",
+        "value-received",
+        "attempt-completed",
+        "retry-scheduled",
+      ]);
+    });
+
+    unsubscribe();
+    expect(lifecycle.at(-1)).toBe("unsubscribed");
+    await transport.dispose();
+  });
+
   it("re-subscribes stream listeners after the stream exits", async () => {
     const transport = createTransport("ws://localhost:3020");
     const listener = vi.fn();
@@ -1099,6 +1176,7 @@ describe("WsTransport", () => {
     const transport = createTransport("ws://localhost:3020");
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     let attempts = 0;
+    const lifecycle: Array<{ retryable?: boolean; type: string }> = [];
 
     const unsubscribe = transport.subscribe(
       () =>
@@ -1107,7 +1185,15 @@ describe("WsTransport", () => {
           return Stream.fail(new Error("Git command failed in GitCore.statusDetails"));
         }),
       vi.fn(),
-      { retryDelay: 10 },
+      {
+        onLifecycle: (event) => {
+          lifecycle.push({
+            type: event.type,
+            ...("retryable" in event ? { retryable: event.retryable } : {}),
+          });
+        },
+        retryDelay: 10,
+      },
     );
 
     await waitFor(() => {
@@ -1122,6 +1208,11 @@ describe("WsTransport", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(attempts).toBe(1);
+    expect(lifecycle).toContainEqual({
+      retryable: false,
+      type: "attempt-failed",
+    });
+    expect(lifecycle.some((event) => event.type === "retry-scheduled")).toBe(false);
     expect(warnSpy).toHaveBeenCalledWith("WebSocket RPC subscription failed", {
       error: "Git command failed in GitCore.statusDetails",
     });
@@ -1129,6 +1220,62 @@ describe("WsTransport", () => {
       "WebSocket RPC subscription disconnected",
       expect.anything(),
     );
+
+    unsubscribe();
+    await transport.dispose();
+  });
+
+  it("retries non-transport stream errors when explicitly opted in", async () => {
+    const transport = createTransport("ws://localhost:3020");
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let attempts = 0;
+    const lifecycle: Array<{
+      delayMs?: number;
+      reason?: string;
+      retryable?: boolean;
+      type: string;
+    }> = [];
+
+    const unsubscribe = transport.subscribe(
+      () =>
+        Stream.suspend(() => {
+          attempts += 1;
+          return Stream.fail(new Error("terminal event stream decoder failed"));
+        }),
+      vi.fn(),
+      {
+        onLifecycle: (event) => {
+          lifecycle.push({
+            type: event.type,
+            ...("delayMs" in event ? { delayMs: event.delayMs } : {}),
+            ...("reason" in event ? { reason: event.reason } : {}),
+            ...("retryable" in event ? { retryable: event.retryable } : {}),
+          });
+        },
+        retryDelay: 10,
+        retryNonTransportErrors: true,
+      },
+    );
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+    });
+
+    getSocket().open();
+
+    await waitFor(() => {
+      expect(attempts).toBeGreaterThanOrEqual(2);
+    });
+
+    expect(lifecycle).toContainEqual({
+      retryable: true,
+      type: "attempt-failed",
+    });
+    expect(lifecycle).toContainEqual({
+      delayMs: 10,
+      reason: "non-transport-error",
+      type: "retry-scheduled",
+    });
 
     unsubscribe();
     await transport.dispose();
@@ -1164,6 +1311,59 @@ describe("WsTransport", () => {
     });
 
     unsubscribe();
+    await transport.dispose();
+  });
+
+  it("unsubscribe interrupts the active subscription stream and prevents future retries", async () => {
+    const transport = createTransport("ws://localhost:3020");
+    let attempts = 0;
+    let finalized = 0;
+    const lifecycle: string[] = [];
+
+    const unsubscribe = transport.subscribe(
+      () =>
+        Stream.fromEffect(
+          Effect.sync(() => {
+            attempts += 1;
+          }).pipe(
+            Effect.flatMap(() => Effect.never),
+            Effect.ensuring(
+              Effect.sync(() => {
+                finalized += 1;
+              }),
+            ),
+          ),
+        ),
+      vi.fn(),
+      {
+        onLifecycle: (event) => {
+          lifecycle.push(event.type);
+        },
+        retryDelay: 10,
+        retryNonTransportErrors: true,
+      },
+    );
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+    });
+
+    getSocket().open();
+
+    await waitFor(() => {
+      expect(attempts).toBe(1);
+    });
+
+    unsubscribe();
+
+    await waitFor(() => {
+      expect(finalized).toBe(1);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(attempts).toBe(1);
+    expect(lifecycle).toContain("unsubscribed");
+
     await transport.dispose();
   });
 

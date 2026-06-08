@@ -50,6 +50,11 @@ export const PROVIDER_OPTIONS: Array<{
 
 export interface WorkLogEntry {
   id: string;
+  /** Identity that stays fixed across a tool call's lifecycle (started →
+   *  updated → completed), unlike `id`, which tracks the latest event so it
+   *  changes on every update. Used for React keys and the one-shot appearance
+   *  animation so a single tool call doesn't re-mount and re-animate per tick. */
+  stableId?: string;
   createdAt: string;
   label: string;
   detail?: string;
@@ -576,6 +581,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const toolCallId = isTaskActivity ? null : extractToolCallId(payload);
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
+    stableId: activity.id,
     createdAt: activity.createdAt,
     label: activity.kind === "runtime.warning" ? "Provider warning" : taskLabel || activity.summary,
     tone:
@@ -675,6 +681,9 @@ function mergeDerivedWorkLogEntries(
   return {
     ...previous,
     ...next,
+    // Keep the first event's identity so the collapsed entry stays stable as
+    // later lifecycle events merge in (`id` intentionally follows `next`).
+    stableId: previous.stableId ?? next.stableId ?? previous.id,
     ...(detail ? { detail } : {}),
     ...(command ? { command } : {}),
     ...(rawCommand ? { rawCommand } : {}),

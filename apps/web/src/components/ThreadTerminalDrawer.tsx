@@ -88,8 +88,17 @@ const TOUCH_LONG_PRESS_MOVE_TOLERANCE_PX = 10;
 const TERMINAL_OPEN_RETRY_DELAYS_MS = [250, 500, 1_000] as const;
 const TERMINAL_OPEN_RETRY_MAX_DELAY_MS = 2_000;
 const TERMINAL_RETRY_BOOTSTRAP_WAIT_MS = 5_000;
+const TERMINAL_WRITE_STALL_RECOVERY_DELAY_MS = 1_500;
+const TERMINAL_WRITE_STALL_RECOVERY_COOLDOWN_MS = 10_000;
+const TERMINAL_WRITE_STALL_RECOVERY_MIN_WRITES = 5;
+const TERMINAL_WRITE_STALL_RECOVERY_MIN_BYTES = 8;
 
-type TerminalOpenReason = "manual-resync" | "mount" | "retry" | "user-restart";
+type TerminalOpenReason =
+  | "auto-stream-recovery"
+  | "manual-resync"
+  | "mount"
+  | "retry"
+  | "user-restart";
 
 interface TerminalSize {
   readonly cols: number;
@@ -336,6 +345,29 @@ function writeTerminalSnapshot(terminal: Terminal, snapshot: TerminalSessionSnap
   if (snapshot.history.length > 0) {
     terminal.write(snapshot.history);
   }
+}
+
+function terminalInputByteLength(data: string): number {
+  if (typeof TextEncoder !== "undefined") {
+    return new TextEncoder().encode(data).byteLength;
+  }
+  return data.length;
+}
+
+function isTerminalInputRecoveryCandidate(data: string): boolean {
+  for (const character of data) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint === undefined) {
+      continue;
+    }
+    if (character === "\n" || character === "\r" || character === "\t") {
+      return true;
+    }
+    if (codePoint >= 0x20 && codePoint !== 0x7f) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -610,6 +642,13 @@ export function TerminalViewport({
   const requestTerminalResizeRef = useRef<((reason: string) => void) | null>(null);
   const resyncTerminalRef = useRef<(() => void) | null>(null);
   const restartTerminalRef = useRef<(() => void) | null>(null);
+  const writeStallRecoveryTimerRef = useRef<number | null>(null);
+  const lastAppliedTerminalEventAtRef = useRef<number | null>(null);
+  const lastWriteSuccessAtRef = useRef<number | null>(null);
+  const writesSinceLastTerminalEventRef = useRef(0);
+  const writeBytesSinceLastTerminalEventRef = useRef(0);
+  const autoStreamRecoveryInFlightRef = useRef(false);
+  const lastAutoStreamRecoveryAtRef = useRef(0);
   const openGenerationRef = useRef(0);
   const openRetryAttemptRef = useRef(0);
   const openRetryTimerRef = useRef<number | null>(null);
@@ -742,6 +781,37 @@ export function TerminalViewport({
       };
     };
 
+    const clearWriteStallRecoveryTimer = () => {
+      if (writeStallRecoveryTimerRef.current !== null) {
+        window.clearTimeout(writeStallRecoveryTimerRef.current);
+        writeStallRecoveryTimerRef.current = null;
+      }
+    };
+
+    const resetWriteStallTracking = () => {
+      writesSinceLastTerminalEventRef.current = 0;
+      writeBytesSinceLastTerminalEventRef.current = 0;
+      clearWriteStallRecoveryTimer();
+    };
+
+    const scheduleWriteStallRecoveryAfterWrite = (
+      data: string,
+      source: "custom-key-handler" | "paste" | "xterm-on-data",
+    ) => {
+      if (!isTerminalInputRecoveryCandidate(data)) {
+        return;
+      }
+      const writeSucceededAt = Date.now();
+      lastWriteSuccessAtRef.current = writeSucceededAt;
+      writesSinceLastTerminalEventRef.current += 1;
+      writeBytesSinceLastTerminalEventRef.current += terminalInputByteLength(data);
+      clearWriteStallRecoveryTimer();
+      writeStallRecoveryTimerRef.current = window.setTimeout(() => {
+        writeStallRecoveryTimerRef.current = null;
+        void runAutomaticTerminalStreamRecovery(writeSucceededAt, source);
+      }, TERMINAL_WRITE_STALL_RECOVERY_DELAY_MS);
+    };
+
     const sendTerminalInput = async (
       data: string,
       fallbackError: string,
@@ -768,6 +838,7 @@ export function TerminalViewport({
           terminalId,
           threadRef,
         });
+        scheduleWriteStallRecoveryAfterWrite(data, source);
       } catch (error) {
         recordTerminalWriteError({
           attempt,
@@ -1070,6 +1141,7 @@ export function TerminalViewport({
             terminalId,
             threadRef,
           });
+          scheduleWriteStallRecoveryAfterWrite(payload, "xterm-on-data");
         },
         (err) => {
           recordTerminalWriteError({
@@ -1405,8 +1477,30 @@ export function TerminalViewport({
       sendTerminalResize(reason);
     };
 
+    const focusTerminal = (reason: string) => {
+      const activeTerminal = terminalRef.current;
+      if (!activeTerminal) {
+        return;
+      }
+      recordTerminalDiagnostic(threadRef, terminalId, "focus-requested", {
+        reason,
+      });
+      window.requestAnimationFrame(() => {
+        if (disposed || terminalRef.current !== activeTerminal) {
+          return;
+        }
+        activeTerminal.focus();
+        recordTerminalDiagnostic(threadRef, terminalId, "focus-applied", {
+          dom: readTerminalDomDiagnostics(containerRef.current),
+          reason,
+        });
+      });
+    };
+
     const recordAppliedTerminalEvent = (event: TerminalEvent, entryId: number | null) => {
       const appliedAt = Date.now();
+      lastAppliedTerminalEventAtRef.current = appliedAt;
+      resetWriteStallTracking();
       recordTerminalDiagnostic(threadRef, terminalId, "terminal-event-applied", {
         entryId,
         eventAppliedAt: appliedAt,
@@ -1540,6 +1634,7 @@ export function TerminalViewport({
       }
       lastAppliedTerminalEventIdRef.current = bufferedEntries.at(-1)?.id ?? 0;
       terminalHydratedRef.current = true;
+      resetWriteStallTracking();
       recordTerminalDiagnostic(threadRef, terminalId, "hydration-complete", {
         lastAppliedTerminalEventId: lastAppliedTerminalEventIdRef.current,
         reason,
@@ -1593,19 +1688,79 @@ export function TerminalViewport({
       clearOpenRetryTimer();
       flushDeferredResize();
       if (autoFocus && (reason === "mount" || reason === "retry")) {
-        recordTerminalDiagnostic(threadRef, terminalId, "focus-requested", {
-          reason: "open-terminal",
-        });
-        window.requestAnimationFrame(() => {
-          activeTerminal.focus();
-          recordTerminalDiagnostic(threadRef, terminalId, "focus-applied", {
-            dom: readTerminalDomDiagnostics(containerRef.current),
-            reason: "open-terminal",
-          });
-        });
+        focusTerminal("open-terminal");
       }
       return snapshot;
     };
+
+    async function runAutomaticTerminalStreamRecovery(
+      observedWriteSuccessAt: number,
+      source: "custom-key-handler" | "paste" | "xterm-on-data",
+    ) {
+      if (disposed || !terminalHydratedRef.current) {
+        return;
+      }
+      if (lastWriteSuccessAtRef.current !== observedWriteSuccessAt) {
+        return;
+      }
+      if (
+        lastAppliedTerminalEventAtRef.current !== null &&
+        lastAppliedTerminalEventAtRef.current >= observedWriteSuccessAt
+      ) {
+        return;
+      }
+      if (autoStreamRecoveryInFlightRef.current) {
+        return;
+      }
+      const now = Date.now();
+      if (now - lastAutoStreamRecoveryAtRef.current < TERMINAL_WRITE_STALL_RECOVERY_COOLDOWN_MS) {
+        return;
+      }
+      const writeCount = writesSinceLastTerminalEventRef.current;
+      const byteCount = writeBytesSinceLastTerminalEventRef.current;
+      if (
+        writeCount < TERMINAL_WRITE_STALL_RECOVERY_MIN_WRITES &&
+        byteCount < TERMINAL_WRITE_STALL_RECOVERY_MIN_BYTES
+      ) {
+        return;
+      }
+
+      autoStreamRecoveryInFlightRef.current = true;
+      lastAutoStreamRecoveryAtRef.current = now;
+      const generation = ++openGenerationRef.current;
+      clearOpenRetryTimer();
+      recordTerminalDiagnostic(threadRef, terminalId, "terminal-stream-recovery-started", {
+        byteCount,
+        generation,
+        reason: "terminal-write-stall",
+        source,
+        writeCount,
+      });
+      try {
+        readEnvironmentConnection(environmentId)?.recoverTerminalEventStream({
+          reason: "terminal-write-stall",
+        });
+        const snapshot = await performTerminalOpen("auto-stream-recovery", generation);
+        if (!snapshot) {
+          return;
+        }
+        recordTerminalDiagnostic(threadRef, terminalId, "terminal-stream-recovery-success", {
+          snapshot: summarizeTerminalSnapshot(snapshot),
+        });
+        focusTerminal("auto-stream-recovery");
+      } catch (error) {
+        if (disposed || generation !== openGenerationRef.current) {
+          return;
+        }
+        const message = errorMessage(error, "Terminal stream recovery failed");
+        recordTerminalDiagnostic(threadRef, terminalId, "terminal-stream-recovery-failed", {
+          message,
+          transientTransport: isTransportConnectionError(error),
+        });
+      } finally {
+        autoStreamRecoveryInFlightRef.current = false;
+      }
+    }
 
     function scheduleTerminalOpen(reason: "mount" | "retry") {
       if (disposed) {
@@ -1696,6 +1851,7 @@ export function TerminalViewport({
         recordTerminalDiagnostic(threadRef, terminalId, "terminal-resync-success", {
           snapshot: summarizeTerminalSnapshot(snapshot),
         });
+        focusTerminal("manual-resync");
       } catch (error) {
         if (disposed || generation !== openGenerationRef.current) {
           return;
@@ -1743,6 +1899,7 @@ export function TerminalViewport({
           snapshot: summarizeTerminalSnapshot(snapshot),
         });
         flushDeferredResize();
+        focusTerminal("user-restart");
       } catch (error) {
         if (disposed || generation !== openGenerationRef.current) {
           return;
@@ -1779,6 +1936,7 @@ export function TerminalViewport({
       unsubscribeTerminalEvents();
       cancelLongPress();
       clearOpenRetryTimer();
+      clearWriteStallRecoveryTimer();
       window.clearTimeout(fitTimer);
       requestTerminalResizeRef.current = null;
       resyncTerminalRef.current = null;

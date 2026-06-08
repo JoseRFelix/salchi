@@ -11,8 +11,11 @@ export const MOBILE_EDGE_SWIPE_VERTICAL_CANCEL_DISTANCE_PX = 18;
 export const MOBILE_EDGE_SWIPE_HORIZONTAL_DOMINANCE_RATIO = 1.25;
 export const MOBILE_EDGE_SWIPE_OPEN_INTENT_TIMEOUT_MS = 350;
 export const MOBILE_EDGE_SWIPE_PANEL_ATTRIBUTE = "data-mobile-edge-swipe-panel";
-// Mark a subtree where a horizontal drag should scroll/select content (e.g.
-// markdown code blocks and inline code) instead of opening or dismissing a panel.
+// Mark a subtree where a horizontal drag should scroll content (e.g. markdown
+// code blocks and inline code) instead of opening or dismissing a panel. The
+// swipe is only suppressed while the marked element can actually scroll
+// horizontally — a snippet that fits lets the edge swipe through (see
+// isBlockedTarget).
 export const MOBILE_EDGE_SWIPE_BLOCK_ATTRIBUTE = "data-mobile-edge-swipe-block";
 
 // A quick horizontal flick can trigger the action well before the sustained
@@ -23,8 +26,17 @@ export const MOBILE_EDGE_SWIPE_BLOCK_ATTRIBUTE = "data-mobile-edge-swipe-block";
 // vertical scrolls.
 export const MOBILE_EDGE_SWIPE_FLICK_DISTANCE_PX = 24;
 export const MOBILE_EDGE_SWIPE_FLICK_VELOCITY_PX_PER_MS = 0.5;
+export const MOBILE_EDGE_SWIPE_SCROLL_EDGE_EPSILON_PX = 1;
 
 export type MobileEdgeSwipeDecision = "cancel" | MobileEdgeSwipeAction | "pending";
+export type MobileEdgeSwipeBlocker =
+  | { readonly kind: "none" }
+  | { readonly element: Element; readonly kind: "hard-block" }
+  | { readonly element: HTMLElement; readonly kind: "horizontal-scroll-owner" };
+export type HorizontalScrollOwnerSwipeDecision =
+  | "allow-panel-swipe"
+  | "cancel-panel-swipe"
+  | "pending";
 
 export interface MobileEdgeSwipeDelta {
   readonly action?: MobileEdgeSwipeAction;
@@ -37,6 +49,36 @@ export interface MobileEdgeSwipeDelta {
    * from the most recent move. Used to recognize quick flicks.
    */
   readonly velocityX?: number;
+}
+
+function getOpeningDistance(side: MobileEdgeSwipeSide, deltaX: number): number {
+  return side === "left" ? deltaX : -deltaX;
+}
+
+function getActionDistance({
+  action = "open",
+  deltaX,
+  side,
+}: {
+  readonly action?: MobileEdgeSwipeAction;
+  readonly deltaX: number;
+  readonly side: MobileEdgeSwipeSide;
+}): number {
+  const openingDistance = getOpeningDistance(side, deltaX);
+  return action === "open" ? openingDistance : -openingDistance;
+}
+
+function getActionVelocity({
+  action = "open",
+  side,
+  velocityX,
+}: {
+  readonly action?: MobileEdgeSwipeAction;
+  readonly side: MobileEdgeSwipeSide;
+  readonly velocityX: number;
+}): number {
+  const openingVelocity = side === "left" ? velocityX : -velocityX;
+  return action === "open" ? openingVelocity : -openingVelocity;
 }
 
 export function isMobileEdgeSwipeStart({
@@ -69,10 +111,8 @@ export function resolveMobileEdgeSwipeDecision({
 }: MobileEdgeSwipeDelta): MobileEdgeSwipeDecision {
   const horizontalDistance = Math.abs(deltaX);
   const verticalDistance = Math.abs(deltaY);
-  const openingDistance = side === "left" ? deltaX : -deltaX;
-  const actionDistance = action === "open" ? openingDistance : -openingDistance;
-  const openingVelocity = side === "left" ? velocityX : -velocityX;
-  const actionVelocity = action === "open" ? openingVelocity : -openingVelocity;
+  const actionDistance = getActionDistance({ action, deltaX, side });
+  const actionVelocity = getActionVelocity({ action, side, velocityX });
   const isHorizontallyDominant =
     horizontalDistance >= verticalDistance * MOBILE_EDGE_SWIPE_HORIZONTAL_DOMINANCE_RATIO;
 
@@ -113,30 +153,123 @@ export function hasActiveTextSelection(
   return Boolean(selection && selection.rangeCount > 0 && !selection.isCollapsed);
 }
 
-function isBlockedTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) {
-    return false;
+function isDomNode(value: EventTarget | null | undefined): value is Node {
+  return typeof Node !== "undefined" && value instanceof Node;
+}
+
+function isShadowRoot(value: unknown): value is ShadowRoot {
+  return typeof ShadowRoot !== "undefined" && value instanceof ShadowRoot;
+}
+
+function pushElementPath(elements: Element[], seen: Set<Element>, element: Element | null): void {
+  let current: Element | null = element;
+  while (current) {
+    if (!seen.has(current)) {
+      elements.push(current);
+      seen.add(current);
+    }
+
+    if (current.parentElement) {
+      current = current.parentElement;
+      continue;
+    }
+
+    const root = current.getRootNode();
+    current = isShadowRoot(root) && root.host instanceof Element ? root.host : null;
+  }
+}
+
+function getElementPath(
+  target: EventTarget | null,
+  composedPath?: readonly EventTarget[],
+): Element[] {
+  const elements: Element[] = [];
+  const seen = new Set<Element>();
+
+  for (const pathTarget of composedPath ?? []) {
+    if (pathTarget instanceof Element && !seen.has(pathTarget)) {
+      elements.push(pathTarget);
+      seen.add(pathTarget);
+    }
   }
 
-  return Boolean(
-    target.closest(
-      [
-        "input",
-        "textarea",
-        "select",
-        "[contenteditable='true']",
-        `[${MOBILE_EDGE_SWIPE_BLOCK_ATTRIBUTE}='true']`,
-        ".xterm",
-      ].join(","),
-    ),
-  );
+  if (target instanceof Element) {
+    pushElementPath(elements, seen, target);
+  } else if (isDomNode(target) && target.parentElement) {
+    pushElementPath(elements, seen, target.parentElement);
+  }
+
+  return elements;
+}
+
+// An element owns the horizontal axis for a touch when it can actually scroll
+// horizontally: its content overflows and overflow-x permits scrolling. A drag
+// that starts here should scroll the content, never open or close a panel — the
+// same intent the diff/chip CSS already expresses with overscroll-behavior-x.
+function isHorizontallyScrollable(el: Element): el is HTMLElement {
+  if (!(el instanceof HTMLElement)) {
+    return false;
+  }
+  if (el.scrollWidth <= el.clientWidth) {
+    return false;
+  }
+  if (el.getAttribute(MOBILE_EDGE_SWIPE_BLOCK_ATTRIBUTE) === "true") {
+    return true;
+  }
+  const overflowX = getComputedStyle(el).overflowX;
+  return overflowX === "auto" || overflowX === "scroll" || overflowX === "overlay";
+}
+
+export function resolveMobileEdgeSwipeBlocker(
+  target: EventTarget | null,
+  composedPath?: readonly EventTarget[],
+): MobileEdgeSwipeBlocker {
+  for (const el of getElementPath(target, composedPath)) {
+    // Inputs, terminals, and editable regions always swallow a horizontal drag.
+    if (el.matches("input, textarea, select, [contenteditable='true'], .xterm")) {
+      return { element: el, kind: "hard-block" };
+    }
+    // Anything that can scroll horizontally (diffs, code blocks, chip strips,
+    // explicitly marked snippets) owns the gesture so a fast scroll is never
+    // mistaken for a panel swipe. Content that fits has nothing to scroll, so
+    // the edge swipe passes through and opens/closes the panel as usual.
+    if (isHorizontallyScrollable(el)) {
+      return { element: el, kind: "horizontal-scroll-owner" };
+    }
+  }
+
+  return { kind: "none" };
+}
+
+export function isBlockedTarget(target: EventTarget | null): boolean {
+  return resolveMobileEdgeSwipeBlocker(target).kind !== "none";
+}
+
+function findSwipePanel(
+  target: EventTarget | null,
+  composedPath?: readonly EventTarget[],
+): HTMLElement | null {
+  for (const el of getElementPath(target, composedPath)) {
+    if (el instanceof HTMLElement && el.getAttribute(MOBILE_EDGE_SWIPE_PANEL_ATTRIBUTE) !== null) {
+      return el;
+    }
+
+    const panel = el.closest<HTMLElement>(`[${MOBILE_EDGE_SWIPE_PANEL_ATTRIBUTE}]`);
+    if (panel) {
+      return panel;
+    }
+  }
+
+  return null;
 }
 
 function isAcceptedStartSurface({
+  composedPath,
   side,
   startSurface,
   target,
 }: {
+  readonly composedPath?: readonly EventTarget[];
   readonly side: MobileEdgeSwipeSide;
   readonly startSurface: MobileEdgeSwipeStartSurface;
   readonly target: EventTarget | null;
@@ -145,16 +278,46 @@ function isAcceptedStartSurface({
     return true;
   }
 
-  if (!(target instanceof Element)) {
-    return startSurface === "outside-panels";
-  }
-
-  const panel = target.closest<HTMLElement>(`[${MOBILE_EDGE_SWIPE_PANEL_ATTRIBUTE}]`);
+  const panel = findSwipePanel(target, composedPath);
   if (startSurface === "outside-panels") {
     return panel === null;
   }
 
   return panel?.getAttribute(MOBILE_EDGE_SWIPE_PANEL_ATTRIBUTE) === side;
+}
+
+export function resolveHorizontalScrollOwnerSwipeDecision({
+  action = "open",
+  deltaX,
+  edgeEpsilon = MOBILE_EDGE_SWIPE_SCROLL_EDGE_EPSILON_PX,
+  side,
+  startMaxScrollLeft,
+  startScrollLeft,
+  startSurface = "any",
+}: {
+  readonly action?: MobileEdgeSwipeAction;
+  readonly deltaX: number;
+  readonly edgeEpsilon?: number;
+  readonly side: MobileEdgeSwipeSide;
+  readonly startMaxScrollLeft: number;
+  readonly startScrollLeft: number;
+  readonly startSurface?: MobileEdgeSwipeStartSurface;
+}): HorizontalScrollOwnerSwipeDecision {
+  if (action !== "close" || startSurface !== "panel") {
+    return "cancel-panel-swipe";
+  }
+
+  if (getActionDistance({ action, deltaX, side }) <= 0) {
+    return "pending";
+  }
+
+  if (side === "right") {
+    return startScrollLeft <= edgeEpsilon ? "allow-panel-swipe" : "cancel-panel-swipe";
+  }
+
+  return startScrollLeft >= startMaxScrollLeft - edgeEpsilon
+    ? "allow-panel-swipe"
+    : "cancel-panel-swipe";
 }
 
 function hasOpenSwipePanel(side: MobileEdgeSwipeSide): boolean {
@@ -193,6 +356,10 @@ export function useMobileEdgeSwipe({
     let activeSwipe: {
       id: number;
       source: "pointer" | "touch";
+      horizontalScrollOwner?: {
+        readonly startMaxScrollLeft: number;
+        readonly startScrollLeft: number;
+      };
       startTime: number;
       startX: number;
       startY: number;
@@ -202,12 +369,16 @@ export function useMobileEdgeSwipe({
     let ignorePointerUntil = 0;
 
     const startSwipe = ({
+      blocker,
+      composedPath,
       id,
       source,
       startX,
       startY,
       target,
     }: {
+      readonly blocker: MobileEdgeSwipeBlocker;
+      readonly composedPath?: readonly EventTarget[];
       readonly id: number;
       readonly source: "pointer" | "touch";
       readonly startX: number;
@@ -217,7 +388,12 @@ export function useMobileEdgeSwipe({
       if (
         hasActiveTextSelection(window.getSelection()) ||
         (blockedByOpenPanelSide !== undefined && hasOpenSwipePanel(blockedByOpenPanelSide)) ||
-        !isAcceptedStartSurface({ side, startSurface, target }) ||
+        !isAcceptedStartSurface({
+          ...(composedPath ? { composedPath } : {}),
+          side,
+          startSurface,
+          target,
+        }) ||
         !isMobileEdgeSwipeStart({
           edgeWidth,
           side,
@@ -230,7 +406,26 @@ export function useMobileEdgeSwipe({
       }
 
       const now = performance.now();
-      activeSwipe = { id, source, startTime: now, startX, startY, lastTime: now, lastX: startX };
+      activeSwipe = {
+        id,
+        source,
+        ...(blocker.kind === "horizontal-scroll-owner"
+          ? {
+              horizontalScrollOwner: {
+                startMaxScrollLeft: Math.max(
+                  0,
+                  blocker.element.scrollWidth - blocker.element.clientWidth,
+                ),
+                startScrollLeft: blocker.element.scrollLeft,
+              },
+            }
+          : {}),
+        startTime: now,
+        startX,
+        startY,
+        lastTime: now,
+        lastX: startX,
+      };
     };
 
     const updateSwipe = ({
@@ -252,14 +447,32 @@ export function useMobileEdgeSwipe({
       }
 
       const now = performance.now();
+      const deltaX = clientX - activeSwipe.startX;
+      const deltaY = clientY - activeSwipe.startY;
+
+      if (activeSwipe.horizontalScrollOwner) {
+        const scrollOwnerDecision = resolveHorizontalScrollOwnerSwipeDecision({
+          action,
+          deltaX,
+          side,
+          startMaxScrollLeft: activeSwipe.horizontalScrollOwner.startMaxScrollLeft,
+          startScrollLeft: activeSwipe.horizontalScrollOwner.startScrollLeft,
+          startSurface,
+        });
+        if (scrollOwnerDecision === "cancel-panel-swipe") {
+          activeSwipe = null;
+          return;
+        }
+      }
+
       const sampleMs = now - activeSwipe.lastTime;
       const velocityX = sampleMs > 0 ? (clientX - activeSwipe.lastX) / sampleMs : 0;
       activeSwipe.lastTime = now;
       activeSwipe.lastX = clientX;
 
       const decision = resolveMobileEdgeSwipeDecision({
-        deltaX: clientX - activeSwipe.startX,
-        deltaY: clientY - activeSwipe.startY,
+        deltaX,
+        deltaY,
         elapsedMs: now - activeSwipe.startTime,
         action,
         side,
@@ -282,7 +495,17 @@ export function useMobileEdgeSwipe({
     };
 
     const handleTouchStart = (event: TouchEvent) => {
-      if (event.touches.length !== 1 || isBlockedTarget(event.target)) {
+      if (event.touches.length !== 1) {
+        return;
+      }
+
+      const composedPath = event.composedPath();
+      const blocker = resolveMobileEdgeSwipeBlocker(event.target, composedPath);
+      if (
+        blocker.kind === "hard-block" ||
+        (blocker.kind === "horizontal-scroll-owner" &&
+          (action !== "close" || startSurface !== "panel"))
+      ) {
         return;
       }
 
@@ -293,6 +516,8 @@ export function useMobileEdgeSwipe({
 
       ignorePointerUntil = performance.now() + 700;
       startSwipe({
+        blocker,
+        composedPath,
         id: touch.identifier,
         source: "touch",
         startX: touch.clientX,
@@ -322,16 +547,22 @@ export function useMobileEdgeSwipe({
     };
 
     const handlePointerDown = (event: PointerEvent) => {
+      const composedPath = event.composedPath();
+      const blocker = resolveMobileEdgeSwipeBlocker(event.target, composedPath);
       if (
         performance.now() < ignorePointerUntil ||
         event.pointerType !== "touch" ||
         event.isPrimary === false ||
-        isBlockedTarget(event.target)
+        blocker.kind === "hard-block" ||
+        (blocker.kind === "horizontal-scroll-owner" &&
+          (action !== "close" || startSurface !== "panel"))
       ) {
         return;
       }
 
       startSwipe({
+        blocker,
+        composedPath,
         id: event.pointerId,
         source: "pointer",
         startX: event.clientX,

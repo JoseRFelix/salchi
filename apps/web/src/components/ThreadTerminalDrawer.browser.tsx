@@ -14,7 +14,9 @@ const {
   fitAddonFitSpy,
   fitAddonLoadSpy,
   environmentApiById,
+  environmentConnectionById,
   readEnvironmentApiMock,
+  readEnvironmentConnectionMock,
   readLocalApiMock,
 } = vi.hoisted(() => ({
   terminalConstructorSpy: vi.fn(),
@@ -41,7 +43,16 @@ const {
       };
     }
   >(),
+  environmentConnectionById: new Map<
+    string,
+    {
+      recoverTerminalEventStream: ReturnType<typeof vi.fn>;
+    }
+  >(),
   readEnvironmentApiMock: vi.fn((environmentId: string) => environmentApiById.get(environmentId)),
+  readEnvironmentConnectionMock: vi.fn((environmentId: string) =>
+    environmentConnectionById.get(environmentId),
+  ),
   readLocalApiMock: vi.fn<
     () =>
       | {
@@ -189,6 +200,10 @@ vi.mock("~/environmentApi", () => ({
     return api;
   }),
   readEnvironmentApi: readEnvironmentApiMock,
+}));
+
+vi.mock("~/environments/runtime", () => ({
+  readEnvironmentConnection: readEnvironmentConnectionMock,
 }));
 
 vi.mock("~/localApi", () => ({
@@ -422,9 +437,11 @@ describe("TerminalViewport", () => {
   afterEach(() => {
     vi.useRealTimers();
     environmentApiById.clear();
+    environmentConnectionById.clear();
     terminalInstances.length = 0;
     terminalLineTextByRow.clear();
     readEnvironmentApiMock.mockClear();
+    readEnvironmentConnectionMock.mockClear();
     readLocalApiMock.mockClear();
     useTerminalStateStore.setState({
       nextTerminalEventId: 1,
@@ -550,7 +567,7 @@ describe("TerminalViewport", () => {
     }
   });
 
-  it("does not resync the terminal snapshot when writes succeed but no output arrives", async () => {
+  it("does not resync the terminal snapshot after one low-signal write without output", async () => {
     vi.useFakeTimers();
     const environment = createEnvironmentApi();
     environmentApiById.set("environment-a", environment);
@@ -573,6 +590,139 @@ describe("TerminalViewport", () => {
       await vi.advanceTimersByTimeAsync(2_000);
 
       expect(environment.terminal.open).toHaveBeenCalledTimes(1);
+      expect(environment.terminal.restart).not.toHaveBeenCalled();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("successful writes with no terminal events trigger auto stream recovery and snapshot open", async () => {
+    vi.useFakeTimers();
+    const environment = createEnvironmentApi();
+    const recoverTerminalEventStream = vi.fn();
+    environmentApiById.set("environment-a", environment);
+    environmentConnectionById.set("environment-a", { recoverTerminalEventStream });
+
+    const mounted = await mountTerminalViewport({
+      threadRef: scopeThreadRef("environment-a" as never, THREAD_ID),
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(environment.terminal.open).toHaveBeenCalledTimes(1);
+      });
+
+      terminalInstances[0]?.emitData("echo hi\n");
+
+      await vi.waitFor(() => {
+        expect(environment.terminal.write).toHaveBeenCalledWith(
+          expect.objectContaining({ data: "echo hi\n" }),
+        );
+      });
+
+      await vi.advanceTimersByTimeAsync(1_499);
+      expect(recoverTerminalEventStream).not.toHaveBeenCalled();
+      expect(environment.terminal.open).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      await vi.waitFor(() => {
+        expect(recoverTerminalEventStream).toHaveBeenCalledWith({
+          reason: "terminal-write-stall",
+        });
+        expect(environment.terminal.open).toHaveBeenCalledTimes(2);
+      });
+      expect(environment.terminal.restart).not.toHaveBeenCalled();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("terminal output before the recovery delay cancels auto stream recovery", async () => {
+    vi.useFakeTimers();
+    const environment = createEnvironmentApi();
+    const recoverTerminalEventStream = vi.fn();
+    environmentApiById.set("environment-a", environment);
+    environmentConnectionById.set("environment-a", { recoverTerminalEventStream });
+    const threadRef = scopeThreadRef("environment-a" as never, THREAD_ID);
+
+    const mounted = await mountTerminalViewport({ threadRef });
+
+    try {
+      await vi.waitFor(() => {
+        expect(environment.terminal.open).toHaveBeenCalledTimes(1);
+      });
+
+      terminalInstances[0]?.emitData("echo hi\n");
+
+      await vi.waitFor(() => {
+        expect(environment.terminal.write).toHaveBeenCalledWith(
+          expect.objectContaining({ data: "echo hi\n" }),
+        );
+      });
+
+      useTerminalStateStore.getState().applyTerminalEvent(threadRef, {
+        createdAt: "2026-04-07T00:00:01.000Z",
+        data: "echo hi\r\n",
+        terminalId: "default",
+        threadId: THREAD_ID,
+        type: "output",
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(recoverTerminalEventStream).not.toHaveBeenCalled();
+      expect(environment.terminal.open).toHaveBeenCalledTimes(1);
+      expect(environment.terminal.restart).not.toHaveBeenCalled();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("repeated writes coalesce into one recovery during cooldown", async () => {
+    vi.useFakeTimers();
+    const environment = createEnvironmentApi();
+    const recoverTerminalEventStream = vi.fn();
+    environmentApiById.set("environment-a", environment);
+    environmentConnectionById.set("environment-a", { recoverTerminalEventStream });
+
+    const mounted = await mountTerminalViewport({
+      threadRef: scopeThreadRef("environment-a" as never, THREAD_ID),
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(environment.terminal.open).toHaveBeenCalledTimes(1);
+      });
+
+      terminalInstances[0]?.emitData("echo one\n");
+      await vi.waitFor(() => {
+        expect(environment.terminal.write).toHaveBeenCalledTimes(1);
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      terminalInstances[0]?.emitData("echo two\n");
+      await vi.waitFor(() => {
+        expect(environment.terminal.write).toHaveBeenCalledTimes(2);
+      });
+
+      await vi.advanceTimersByTimeAsync(1_499);
+      expect(recoverTerminalEventStream).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => {
+        expect(recoverTerminalEventStream).toHaveBeenCalledTimes(1);
+        expect(environment.terminal.open).toHaveBeenCalledTimes(2);
+      });
+
+      terminalInstances[0]?.emitData("echo three\n");
+      await vi.waitFor(() => {
+        expect(environment.terminal.write).toHaveBeenCalledTimes(3);
+      });
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(recoverTerminalEventStream).toHaveBeenCalledTimes(1);
+      expect(environment.terminal.open).toHaveBeenCalledTimes(2);
       expect(environment.terminal.restart).not.toHaveBeenCalled();
     } finally {
       await mounted.cleanup();

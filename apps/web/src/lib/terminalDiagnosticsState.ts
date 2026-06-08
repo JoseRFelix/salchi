@@ -35,6 +35,9 @@ export type TerminalDiagnosticKind =
   | "terminal-restart-confirmed"
   | "terminal-restart-failed"
   | "terminal-restart-success"
+  | "terminal-stream-recovery-failed"
+  | "terminal-stream-recovery-started"
+  | "terminal-stream-recovery-success"
   | "viewport-mounted"
   | "viewport-unmounted"
   | "write-error"
@@ -97,6 +100,7 @@ export interface TerminalWriteDiagnosticAttempt {
 }
 
 export type TerminalRecoveryDiagnosticsState =
+  | "auto-stream-recovering"
   | "idle"
   | "manual-resyncing"
   | "manual-restarting"
@@ -435,6 +439,11 @@ function recoveryStateAfterEvent(
       return "manual-restarting";
     case "terminal-restart-failed":
     case "terminal-restart-success":
+      return "idle";
+    case "terminal-stream-recovery-started":
+      return "auto-stream-recovering";
+    case "terminal-stream-recovery-failed":
+    case "terminal-stream-recovery-success":
       return "idle";
     case "terminal-event-applied":
       return event.data?.eventType === "activity" ||

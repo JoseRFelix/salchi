@@ -1,7 +1,12 @@
 import "../index.css";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { EnvironmentId, type EnvironmentApi, type ProjectEntry } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  type EnvironmentApi,
+  type ProjectEntry,
+  type VcsStatusResult,
+} from "@t3tools/contracts";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -133,6 +138,24 @@ vi.mock("@pierre/diffs/react", async () => {
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-files-panel-browser");
 const WORKSPACE_ROOT = "/repo/project";
+const NON_REPOSITORY_STATUS: VcsStatusResult = {
+  aheadCount: 0,
+  behindCount: 0,
+  hasPrimaryRemote: false,
+  hasUpstream: false,
+  hasWorkingTreeChanges: false,
+  isDefaultRef: false,
+  isRepo: false,
+  pr: null,
+  refName: null,
+  workingTree: {
+    deletions: 0,
+    files: [],
+    insertions: 0,
+    staged: { files: [], insertions: 0, deletions: 0 },
+    unstaged: { files: [], insertions: 0, deletions: 0 },
+  },
+};
 
 function createMockEnvironmentApi(
   input: {
@@ -393,14 +416,38 @@ describe("WorkspaceFilesPanel", () => {
     }
   });
 
-  it("mutes gitignored explorer entries", async () => {
+  it("renders explorer entries when git status reports a non-repository", async () => {
+    const api = createMockEnvironmentApi();
+    __setEnvironmentApiOverrideForTests(ENVIRONMENT_ID, api);
+    useGitStatusMock.mockReturnValue({
+      data: NON_REPOSITORY_STATUS,
+      error: null,
+      cause: null,
+      isPending: false,
+    });
+    const mounted = await renderFilesPanel();
+    try {
+      await expect.element(page.getByRole("button", { name: /^src$/ })).toBeVisible();
+      await expect.element(page.getByRole("button", { name: /^README\.md$/ })).toBeVisible();
+      await vi.waitFor(() => {
+        expect(api.projects.listDirectoryEntries).toHaveBeenCalledWith({
+          cwd: WORKSPACE_ROOT,
+          limit: 500,
+        });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("renders gitignored-looking explorer entries normally when they are not marked ignored", async () => {
     __setEnvironmentApiOverrideForTests(
       ENVIRONMENT_ID,
       createMockEnvironmentApi({
         rootEntries: [
           { kind: "directory", path: "src" },
           { kind: "file", path: "README.md" },
-          { kind: "file", path: "websocket-diagnostics1.md", ignored: true },
+          { kind: "file", path: "websocket-diagnostics1.md" },
         ],
       }),
     );
@@ -412,7 +459,7 @@ describe("WorkspaceFilesPanel", () => {
       expect(
         document.querySelector('button[title="websocket-diagnostics1.md"] span.truncate')
           ?.className,
-      ).toContain("text-muted-foreground/55");
+      ).toContain("text-foreground/88");
       expect(
         document.querySelector('button[title="README.md"] span.truncate')?.className,
       ).toContain("text-foreground/88");

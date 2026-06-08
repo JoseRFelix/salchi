@@ -15,6 +15,7 @@ import {
   type FilesystemBrowseInput,
   type ProjectEntry,
   type ProjectListDirectoryEntriesInput,
+  type ProjectListDirectoryEntriesResult,
 } from "@t3tools/contracts";
 import { isExplicitRelativePath, isWindowsAbsolutePath } from "@t3tools/shared/path";
 import {
@@ -472,6 +473,48 @@ export const makeWorkspaceEntries = Effect.gen(function* () {
     };
   });
 
+  const listDirectoryFromFilesystem = Effect.fn("WorkspaceEntries.listDirectoryFromFilesystem")(
+    function* (
+      cwd: string,
+      directoryPath: string | undefined,
+      limit: number,
+    ): Effect.fn.Return<ProjectListDirectoryEntriesResult, WorkspaceEntriesError> {
+      const { dirents } = yield* readDirectoryEntries(cwd, directoryPath ?? "");
+      const entries: ProjectEntry[] = [];
+
+      if (dirents) {
+        for (const dirent of dirents) {
+          if (!dirent.name || dirent.name === "." || dirent.name === "..") {
+            continue;
+          }
+          if (dirent.isDirectory() && IGNORED_DIRECTORY_NAMES.has(dirent.name)) {
+            continue;
+          }
+          if (!dirent.isDirectory() && !dirent.isFile()) {
+            continue;
+          }
+
+          const relativePath = toPosixPath(
+            directoryPath ? path.join(directoryPath, dirent.name) : dirent.name,
+          );
+          if (isPathInIgnoredDirectory(relativePath)) {
+            continue;
+          }
+
+          entries.push(
+            makeProjectEntry(relativePath, dirent.isDirectory() ? "directory" : "file", false),
+          );
+        }
+      }
+
+      const sortedEntries = entries.toSorted(compareWorkspaceEntries);
+      return {
+        entries: sortedEntries.slice(0, limit).map(projectEntryForOutput),
+        truncated: sortedEntries.length > limit,
+      };
+    },
+  );
+
   const buildWorkspaceIndex = Effect.fn("WorkspaceEntries.buildWorkspaceIndex")(function* (
     cwd: string,
   ): Effect.fn.Return<WorkspaceIndex, WorkspaceEntriesError> {
@@ -570,20 +613,7 @@ export const makeWorkspaceEntries = Effect.gen(function* () {
       input.directoryPath,
     );
     const limit = Math.max(1, Math.floor(input.limit));
-
-    return yield* Cache.get(workspaceIndexCache, normalizedCwd).pipe(
-      Effect.map((index) => {
-        const entries = index.entries
-          .filter((entry) => entry.parentPath === directoryPath)
-          .map(projectEntryForOutput)
-          .toSorted(compareWorkspaceEntries);
-
-        return {
-          entries: entries.slice(0, limit),
-          truncated: index.truncated || entries.length > limit,
-        };
-      }),
-    );
+    return yield* listDirectoryFromFilesystem(normalizedCwd, directoryPath, limit);
   });
 
   const search: WorkspaceEntriesShape["search"] = Effect.fn("WorkspaceEntries.search")(

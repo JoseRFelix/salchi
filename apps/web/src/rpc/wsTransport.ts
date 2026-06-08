@@ -22,6 +22,8 @@ import { isTransportConnectionErrorMessage } from "./transportError";
 
 interface SubscribeOptions {
   readonly retryDelay?: Duration.Input;
+  readonly retryNonTransportErrors?: boolean;
+  readonly onLifecycle?: (event: WsSubscriptionLifecycleEvent) => void;
   readonly onResubscribe?: () => void;
   readonly tag?: string;
 }
@@ -31,7 +33,54 @@ interface RequestOptions {
 }
 
 const DEFAULT_SUBSCRIPTION_RETRY_DELAY_MS = Duration.millis(250);
+const MAX_NON_TRANSPORT_SUBSCRIPTION_RETRY_DELAY_MS = 5_000;
 const NOOP: () => void = () => undefined;
+
+export type WsSubscriptionLifecycleEvent =
+  | {
+      readonly type: "attempt-started";
+      readonly attempt: number;
+      readonly tag?: string;
+    }
+  | {
+      readonly type: "request-started";
+      readonly attempt: number;
+      readonly tag?: string;
+    }
+  | {
+      readonly type: "value-received";
+      readonly attempt: number;
+      readonly tag?: string;
+    }
+  | {
+      readonly type: "attempt-completed";
+      readonly attempt: number;
+      readonly receivedValue: boolean;
+      readonly tag?: string;
+    }
+  | {
+      readonly type: "attempt-failed";
+      readonly attempt: number;
+      readonly error: string;
+      readonly retryable: boolean;
+      readonly tag?: string;
+    }
+  | {
+      readonly type: "retry-scheduled";
+      readonly attempt: number;
+      readonly delayMs: number;
+      readonly reason:
+        | "completed-after-value"
+        | "completed-before-value"
+        | "non-transport-error"
+        | "transport-error";
+      readonly tag?: string;
+    }
+  | {
+      readonly type: "unsubscribed";
+      readonly attempt: number;
+      readonly tag?: string;
+    };
 
 interface TransportSession {
   readonly clientPromise: Promise<WsRpcProtocolClient>;
@@ -124,7 +173,23 @@ export class WsTransport {
     const retryDelayMs = Duration.toMillis(
       Duration.fromInputUnsafe(options?.retryDelay ?? DEFAULT_SUBSCRIPTION_RETRY_DELAY_MS),
     );
+    let attempt = 0;
+    let consecutiveNonTransportFailures = 0;
     let cancelCurrentStream: () => void = NOOP;
+    const emitLifecycle = (event: WsSubscriptionLifecycleEvent) => {
+      try {
+        options?.onLifecycle?.(event);
+      } catch {
+        // Lifecycle hooks are diagnostic-only and must not affect stream health.
+      }
+    };
+    const delayForNonTransportFailure = () => {
+      const delay = Math.min(
+        retryDelayMs * 2 ** Math.max(0, consecutiveNonTransportFailures - 1),
+        MAX_NON_TRANSPORT_SUBSCRIPTION_RETRY_DELAY_MS,
+      );
+      return Number.isFinite(delay) && delay > 0 ? delay : retryDelayMs;
+    };
 
     void (async () => {
       for (;;) {
@@ -134,6 +199,12 @@ export class WsTransport {
 
         const session = this.session;
         let attemptReceivedValue = false;
+        attempt += 1;
+        emitLifecycle({
+          type: "attempt-started",
+          attempt,
+          ...(options?.tag === undefined ? {} : { tag: options.tag }),
+        });
         try {
           const runningStream = this.runStreamOnSession(
             session,
@@ -141,28 +212,54 @@ export class WsTransport {
             listener,
             {
               ...(options?.tag === undefined ? {} : { tag: options.tag }),
-              ...(hasReceivedValue
-                ? {
-                    onStarted: () => {
-                      try {
-                        options?.onResubscribe?.();
-                      } catch {
-                        // Swallow reconnect hook errors so the stream can recover.
-                      }
-                    },
-                  }
-                : {}),
+              onStarted: () => {
+                emitLifecycle({
+                  type: "request-started",
+                  attempt,
+                  ...(options?.tag === undefined ? {} : { tag: options.tag }),
+                });
+                if (!hasReceivedValue) {
+                  return;
+                }
+                try {
+                  options?.onResubscribe?.();
+                } catch {
+                  // Swallow reconnect hook errors so the stream can recover.
+                }
+              },
             },
             () => active,
             () => {
               attemptReceivedValue = true;
               this.hasReportedTransportDisconnect = false;
               hasReceivedValue = true;
+              consecutiveNonTransportFailures = 0;
+              emitLifecycle({
+                type: "value-received",
+                attempt,
+                ...(options?.tag === undefined ? {} : { tag: options.tag }),
+              });
             },
           );
           cancelCurrentStream = runningStream.cancel;
           await runningStream.completed;
           cancelCurrentStream = NOOP;
+          emitLifecycle({
+            type: "attempt-completed",
+            attempt,
+            receivedValue: attemptReceivedValue,
+            ...(options?.tag === undefined ? {} : { tag: options.tag }),
+          });
+          if (active && !this.disposed) {
+            const delayMs = attemptReceivedValue ? 0 : retryDelayMs;
+            emitLifecycle({
+              type: "retry-scheduled",
+              attempt,
+              delayMs,
+              reason: attemptReceivedValue ? "completed-after-value" : "completed-before-value",
+              ...(options?.tag === undefined ? {} : { tag: options.tag }),
+            });
+          }
           if (!attemptReceivedValue && active && !this.disposed) {
             await sleep(retryDelayMs);
           }
@@ -178,18 +275,54 @@ export class WsTransport {
 
           const formattedError = formatErrorMessage(error);
           if (!isTransportConnectionErrorMessage(formattedError)) {
+            consecutiveNonTransportFailures += 1;
+            const retryable = options?.retryNonTransportErrors === true;
+            emitLifecycle({
+              type: "attempt-failed",
+              attempt,
+              error: formattedError,
+              retryable,
+              ...(options?.tag === undefined ? {} : { tag: options.tag }),
+            });
             console.warn("WebSocket RPC subscription failed", {
               error: formattedError,
             });
-            return;
+            if (!retryable) {
+              return;
+            }
+            const delayMs = delayForNonTransportFailure();
+            emitLifecycle({
+              type: "retry-scheduled",
+              attempt,
+              delayMs,
+              reason: "non-transport-error",
+              ...(options?.tag === undefined ? {} : { tag: options.tag }),
+            });
+            await sleep(delayMs);
+            continue;
           }
 
+          consecutiveNonTransportFailures = 0;
+          emitLifecycle({
+            type: "attempt-failed",
+            attempt,
+            error: formattedError,
+            retryable: true,
+            ...(options?.tag === undefined ? {} : { tag: options.tag }),
+          });
           if (!this.hasReportedTransportDisconnect) {
             console.warn("WebSocket RPC subscription disconnected", {
               error: formattedError,
             });
           }
           this.hasReportedTransportDisconnect = true;
+          emitLifecycle({
+            type: "retry-scheduled",
+            attempt,
+            delayMs: retryDelayMs,
+            reason: "transport-error",
+            ...(options?.tag === undefined ? {} : { tag: options.tag }),
+          });
           await sleep(retryDelayMs);
         }
       }
@@ -197,6 +330,11 @@ export class WsTransport {
 
     return () => {
       active = false;
+      emitLifecycle({
+        type: "unsubscribed",
+        attempt,
+        ...(options?.tag === undefined ? {} : { tag: options.tag }),
+      });
       cancelCurrentStream();
     };
   }

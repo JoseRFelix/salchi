@@ -30,6 +30,7 @@ import {
 } from "../terminalStateStore";
 
 const MAX_RECENT_TERMINAL_EVENTS = 20;
+const MAX_RECENT_TERMINAL_STREAM_LIFECYCLE_EVENTS = 30;
 const MAX_RESUME_DIAGNOSTIC_ENTRIES = 500;
 const REDACTED = "<redacted>";
 
@@ -631,11 +632,42 @@ function summarizeResumeDiagnostics() {
   return getResumeDiagnosticsEntries().slice(-MAX_RESUME_DIAGNOSTIC_ENTRIES);
 }
 
+function summarizeTerminalEventStreamLifecycle(
+  resumeDiagnostics: ReturnType<typeof summarizeResumeDiagnostics>,
+  activeEnvironmentId: EnvironmentId,
+) {
+  const recentEntries = resumeDiagnostics
+    .filter(
+      (entry) =>
+        entry.kind.startsWith("terminal-event-stream:") &&
+        (entry.env === undefined || entry.env === activeEnvironmentId),
+    )
+    .slice(-MAX_RECENT_TERMINAL_STREAM_LIFECYCLE_EVENTS);
+  const countsByKind: Record<string, number> = {};
+  for (const entry of recentEntries) {
+    countsByKind[entry.kind] = (countsByKind[entry.kind] ?? 0) + 1;
+  }
+  const recentRecoveryEntries = recentEntries.filter(
+    (entry) =>
+      entry.kind === "terminal-event-stream:failed" ||
+      entry.kind === "terminal-event-stream:manual-restart" ||
+      entry.kind === "terminal-event-stream:retry-scheduled",
+  );
+
+  return {
+    countsByKind,
+    recentEntries,
+    recentRecoveryEntries,
+    returnedEventCount: recentEntries.length,
+  };
+}
+
 function buildInterpretation(input: {
   readonly pendingRequestCount: number;
   readonly slowRequestCount: number;
   readonly status: ReturnType<typeof getWsConnectionStatus>;
   readonly terminalClientDiagnostics: ReturnType<typeof getTerminalDiagnosticsSnapshot>;
+  readonly terminalEventStreamLifecycle: ReturnType<typeof summarizeTerminalEventStreamLifecycle>;
   readonly terminalRunningCount: number;
   readonly uiState: string;
 }): string[] {
@@ -706,6 +738,7 @@ function buildInterpretation(input: {
       `${input.terminalClientDiagnostics.pendingWrites.length.toString()} terminal write request(s) are still pending.`,
     );
   }
+  let hasWriteWithoutNewerTerminalEvent = false;
   for (const recovery of Object.values(input.terminalClientDiagnostics.terminalRecoveryById)) {
     if (recovery.writesSinceLastOutput > 0) {
       notes.push(
@@ -717,6 +750,7 @@ function buildInterpretation(input: {
       (recovery.lastTerminalEventAt === null ||
         recovery.lastWriteSuccessAt > recovery.lastTerminalEventAt)
     ) {
+      hasWriteWithoutNewerTerminalEvent = true;
       notes.push(
         `Terminal ${recovery.terminalId} has no applied terminal event newer than its latest successful write.`,
       );
@@ -727,6 +761,23 @@ function buildInterpretation(input: {
       );
     }
   }
+  const terminalStreamRecoveryCount =
+    input.terminalEventStreamLifecycle.recentRecoveryEntries.length;
+  if (terminalStreamRecoveryCount > 0) {
+    notes.push(
+      `${terminalStreamRecoveryCount.toString()} recent terminal event stream failure/retry/restart lifecycle record(s) were captured.`,
+    );
+  }
+  if (
+    hasWriteWithoutNewerTerminalEvent &&
+    (input.terminalClientDiagnostics.countsByKind["write-success"] ?? 0) > 0
+  ) {
+    notes.push(
+      terminalStreamRecoveryCount > 0
+        ? "Successful terminal writes plus no newer terminal events and recent stream lifecycle recovery records point to a stalled terminal event subscription, not a failed write path."
+        : "Successful terminal writes plus no newer terminal events point to a possible terminal event stream stall.",
+    );
+  }
   return notes.length > 0 ? notes : ["No immediate client-side WebSocket anomaly is flagged."];
 }
 
@@ -736,6 +787,11 @@ export function buildWebSocketDiagnosticsReport(context: WebSocketDiagnosticsCon
   const status = getWsConnectionStatus();
   const uiState = getWsConnectionUiState(status);
   const terminalDiagnostics = summarizeTerminalDiagnostics(context);
+  const resumeDiagnostics = summarizeResumeDiagnostics();
+  const terminalEventStreamLifecycle = summarizeTerminalEventStreamLifecycle(
+    resumeDiagnostics,
+    context.activeThreadEnvironmentId,
+  );
   const rpcRequests = summarizeRpcRequests(nowMs);
   const redactedStatus = {
     ...status,
@@ -752,6 +808,7 @@ export function buildWebSocketDiagnosticsReport(context: WebSocketDiagnosticsCon
     slowRequestCount: rpcRequests.slow.length,
     status,
     terminalClientDiagnostics: terminalDiagnostics.clientDiagnostics,
+    terminalEventStreamLifecycle,
     terminalRunningCount,
     uiState,
   });
@@ -764,11 +821,14 @@ export function buildWebSocketDiagnosticsReport(context: WebSocketDiagnosticsCon
       descriptor: readPrimaryDescriptorForDiagnostics(),
       knownEnvironment: summarizeKnownEnvironment(readPrimaryKnownEnvironmentForDiagnostics()),
     },
-    resumeDiagnostics: summarizeResumeDiagnostics(),
+    resumeDiagnostics,
     rpcRequests,
     serverConfig: summarizeServerConfig(),
     serverConfigUpdatedNotification: getServerConfigUpdatedNotification(),
-    terminal: terminalDiagnostics,
+    terminal: {
+      ...terminalDiagnostics,
+      terminalEventStreamLifecycle,
+    },
     websocket: {
       msSinceConnected: msSinceIso(status.connectedAt, nowMs),
       msSinceDisconnected: msSinceIso(status.disconnectedAt, nowMs),
@@ -844,6 +904,13 @@ export function buildWebSocketDiagnosticsReport(context: WebSocketDiagnosticsCon
       terminalDiagnostics.clientDiagnostics.countsByKind["open-error"] ?? 0,
     )} failed`,
     `- Terminal recovery state: ${activeTerminalRecovery?.currentRecoveryState ?? "unknown"}`,
+    `- Terminal event stream lifecycle: ${terminalEventStreamLifecycle.returnedEventCount.toString()} recent record(s), failed=${String(
+      terminalEventStreamLifecycle.countsByKind["terminal-event-stream:failed"] ?? 0,
+    )}, retry-scheduled=${String(
+      terminalEventStreamLifecycle.countsByKind["terminal-event-stream:retry-scheduled"] ?? 0,
+    )}, manual-restart=${String(
+      terminalEventStreamLifecycle.countsByKind["terminal-event-stream:manual-restart"] ?? 0,
+    )}`,
     `- Last terminal event: ${
       activeTerminalRecovery?.lastTerminalEventAt
         ? new Date(activeTerminalRecovery.lastTerminalEventAt).toISOString()
