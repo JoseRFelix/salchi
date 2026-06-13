@@ -11,6 +11,18 @@ describe("isWheelScrollAwayIntent", () => {
     expect(isWheelScrollAwayIntent(12)).toBe(false);
     expect(isWheelScrollAwayIntent(0)).toBe(false);
   });
+
+  it("treats a delta of -1 (minimal upward wheel) as scroll-away intent", () => {
+    expect(isWheelScrollAwayIntent(-1)).toBe(true);
+  });
+
+  it("treats large upward wheel deltas as scroll-away intent", () => {
+    expect(isWheelScrollAwayIntent(-300)).toBe(true);
+  });
+
+  it("treats large downward wheel deltas as not scroll-away intent", () => {
+    expect(isWheelScrollAwayIntent(300)).toBe(false);
+  });
 });
 
 describe("createTouchScrollIntentTracker", () => {
@@ -41,5 +53,43 @@ describe("createTouchScrollIntentTracker", () => {
     tracker.touchStart(100);
     // First move after reset compares against the new start position.
     expect(tracker.touchMove(80)).toBe(false);
+  });
+
+  it("does not report intent when the finger stays at the same position (zero delta)", () => {
+    const tracker = createTouchScrollIntentTracker();
+    tracker.touchStart(150);
+    expect(tracker.touchMove(150)).toBe(false);
+  });
+
+  it("tracks state incrementally across consecutive moves", () => {
+    const tracker = createTouchScrollIntentTracker();
+    tracker.touchStart(100);
+    // First move: downward
+    expect(tracker.touchMove(110)).toBe(true);
+    // Second move: upward relative to previous position
+    expect(tracker.touchMove(95)).toBe(false);
+    // Third move: downward again relative to previous position
+    expect(tracker.touchMove(105)).toBe(true);
+  });
+
+  it("seeds lastClientY from the first touchMove when no touchStart occurred", () => {
+    const tracker = createTouchScrollIntentTracker();
+    // First call with no start seeds the position without reporting intent.
+    expect(tracker.touchMove(200)).toBe(false);
+    // Moving upward from 200 (finger moves up the screen).
+    expect(tracker.touchMove(180)).toBe(false);
+    // Moving downward from 180 (finger moves down the screen = scroll-away).
+    expect(tracker.touchMove(220)).toBe(true);
+  });
+
+  it("touchStart with a new position changes the reference for the next move", () => {
+    const tracker = createTouchScrollIntentTracker();
+    tracker.touchStart(500);
+    // Move upward (finger moves up = scroll down = not scroll-away).
+    expect(tracker.touchMove(450)).toBe(false);
+    // A new touchStart re-anchors.
+    tracker.touchStart(50);
+    // Move downward from 50 (scroll-away).
+    expect(tracker.touchMove(90)).toBe(true);
   });
 });

@@ -45,4 +45,36 @@ describe("shouldShowOpenInPicker", () => {
       }),
     ).toBe(false);
   });
+
+  it("hides the picker when activeProjectName is an empty string", () => {
+    // Empty string is falsy — treated the same as no project.
+    expect(
+      shouldShowOpenInPicker({
+        activeProjectName: "",
+        activeThreadEnvironmentId: primaryEnvironmentId,
+        primaryEnvironmentId,
+      }),
+    ).toBe(false);
+  });
+
+  it("hides the picker when both primaryEnvironmentId is null and there is no project", () => {
+    expect(
+      shouldShowOpenInPicker({
+        activeProjectName: undefined,
+        activeThreadEnvironmentId: EnvironmentId.make("environment-x"),
+        primaryEnvironmentId: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("shows the picker when the thread environment matches the primary environment exactly", () => {
+    const env = EnvironmentId.make("environment-exact");
+    expect(
+      shouldShowOpenInPicker({
+        activeProjectName: "my-project",
+        activeThreadEnvironmentId: env,
+        primaryEnvironmentId: env,
+      }),
+    ).toBe(true);
+  });
 });
