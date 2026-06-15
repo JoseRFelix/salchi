@@ -26,6 +26,8 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
+const GLOBAL_REMOTE_BROWSER_THREAD_ID = "__global_remote_browser__";
+
 export interface PreviewAutomationInvokeInput {
   readonly scope: McpInvocationContext.McpInvocationScope;
   readonly operation: PreviewAutomationOperation;
@@ -230,7 +232,8 @@ const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       .filter(
         (owner) =>
           owner.environmentId === input.scope.environmentId &&
-          owner.threadId === input.scope.threadId &&
+          (owner.threadId === input.scope.threadId ||
+            owner.threadId === GLOBAL_REMOTE_BROWSER_THREAD_ID) &&
           owner.supportsAutomation,
       )
       .sort((left, right) => right.focusedAt.localeCompare(left.focusedAt));

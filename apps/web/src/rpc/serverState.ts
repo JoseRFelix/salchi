@@ -1,5 +1,6 @@
 import { useAtomSubscribe, useAtomValue } from "@effect/atom-react";
 import {
+  DEFAULT_REMOTE_BROWSER_STATUS,
   DEFAULT_SERVER_SETTINGS,
   type EditorId,
   type ServerConfig,
@@ -9,6 +10,7 @@ import {
   type ServerProvider,
   type ServerProviderUpdatedPayload,
   type ServerSettings,
+  type RemoteBrowserStatus,
 } from "@t3tools/contracts";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { Atom } from "effect/unstable/reactivity";
@@ -27,7 +29,11 @@ export interface ServerConfigUpdatedNotification {
 
 type ServerStateClient = Pick<
   WsRpcClient["server"],
-  "getConfig" | "subscribeConfig" | "subscribeLifecycle"
+  | "getConfig"
+  | "getRemoteBrowserStatus"
+  | "subscribeConfig"
+  | "subscribeLifecycle"
+  | "subscribeRemoteBrowserStatus"
 >;
 
 function makeStateAtom<A>(label: string, initialValue: A) {
@@ -70,9 +76,17 @@ export const providersUpdatedAtom = makeStateAtom<ServerProviderUpdatedPayload |
   "server-providers-updated",
   null,
 );
+export const remoteBrowserStatusAtom = makeStateAtom<RemoteBrowserStatus>(
+  "remote-browser-status",
+  DEFAULT_REMOTE_BROWSER_STATUS,
+);
 
 export function getServerConfig(): ServerConfig | null {
   return appAtomRegistry.get(serverConfigAtom);
+}
+
+export function getRemoteBrowserStatus(): RemoteBrowserStatus {
+  return appAtomRegistry.get(remoteBrowserStatusAtom);
 }
 
 export function getServerKeybindings(): ServerConfig["keybindings"] {
@@ -183,6 +197,9 @@ export function startServerStateSync(client: ServerStateClient): () => void {
     client.subscribeConfig((event) => {
       applyServerConfigEvent(event);
     }),
+    client.subscribeRemoteBrowserStatus((status) => {
+      appAtomRegistry.set(remoteBrowserStatusAtom, status);
+    }),
   ];
 
   if (getServerConfig() === null) {
@@ -196,6 +213,15 @@ export function startServerStateSync(client: ServerStateClient): () => void {
       })
       .catch(() => undefined);
   }
+
+  void client
+    .getRemoteBrowserStatus()
+    .then((status) => {
+      if (!disposed) {
+        appAtomRegistry.set(remoteBrowserStatusAtom, status);
+      }
+    })
+    .catch(() => undefined);
 
   return () => {
     disposed = true;
@@ -266,6 +292,10 @@ function useLatestAtomSubscription<A>(
 
 export function useServerConfig(): ServerConfig | null {
   return useAtomValue(serverConfigAtom);
+}
+
+export function useRemoteBrowserStatus(): RemoteBrowserStatus {
+  return useAtomValue(remoteBrowserStatusAtom);
 }
 
 export function useServerSettings(): ServerSettings {

@@ -1,6 +1,7 @@
 import "../index.css";
 
 import {
+  DEFAULT_REMOTE_BROWSER_CONFIG,
   DEFAULT_SERVER_SETTINGS,
   EMPTY_ORCHESTRATION_THREAD_DETAIL_PAGE_INFO,
   EnvironmentId,
@@ -102,6 +103,7 @@ function createBaseServerConfig(): ServerConfig {
       otlpTracesEnabled: false,
       otlpMetricsEnabled: false,
     },
+    remoteBrowser: DEFAULT_REMOTE_BROWSER_CONFIG,
     settings: {
       ...DEFAULT_SERVER_SETTINGS,
       enableAssistantStreaming: false,

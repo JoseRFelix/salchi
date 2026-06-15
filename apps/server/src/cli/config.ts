@@ -136,7 +136,41 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  browserProvider: Config.string("T3CODE_BROWSER_PROVIDER").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  browserPrewarm: Config.boolean("T3CODE_BROWSER_PREWARM").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  remoteBrowserUrl: Config.url("T3CODE_REMOTE_BROWSER_URL").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  browserCdpUrl: Config.url("T3CODE_BROWSER_CDP_URL").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  nekoImage: Config.string("T3CODE_NEKO_IMAGE").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  nekoContainerName: Config.string("T3CODE_NEKO_CONTAINER_NAME").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  nekoHttpPort: Config.port("T3CODE_NEKO_HTTP_PORT").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  nekoScreen: Config.string("T3CODE_NEKO_SCREEN").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
 });
+
+const NEKO_SCREEN_PATTERN = /^[1-9][0-9]{2,4}x[1-9][0-9]{2,4}@[1-9][0-9]{0,2}$/u;
 
 export interface CliServerFlags {
   readonly mode: Option.Option<RuntimeMode>;
@@ -335,6 +369,24 @@ export const resolveServerConfig = (
       ),
       () => 443,
     );
+    const browserProviderInput = env.browserProvider?.trim() ?? "disabled";
+    const browserProvider =
+      browserProviderInput === "managed-neko" || browserProviderInput === "remote-url"
+        ? browserProviderInput
+        : "disabled";
+    const browserPrewarm = env.browserPrewarm ?? false;
+    const nekoHttpPort = env.nekoHttpPort ?? 8080;
+    const remoteBrowserUrl =
+      env.remoteBrowserUrl?.toString() ??
+      (browserProvider === "managed-neko" ? `http://127.0.0.1:${nekoHttpPort}` : null);
+    const browserCdpUrl = env.browserCdpUrl?.toString() ?? null;
+    const nekoImage = env.nekoImage?.trim() || "ghcr.io/m1k1o/neko/chromium:latest";
+    const nekoContainerName = env.nekoContainerName?.trim() || "salchi-neko-browser";
+    const nekoScreenInput = env.nekoScreen?.trim();
+    const nekoScreen =
+      nekoScreenInput && NEKO_SCREEN_PATTERN.test(nekoScreenInput)
+        ? nekoScreenInput
+        : "1280x720@30";
     const staticDir = devUrl ? undefined : yield* resolveStaticDir();
     const host = Option.getOrElse(
       resolveOptionPrecedence(
@@ -381,6 +433,17 @@ export const resolveServerConfig = (
       logWebSocketEvents,
       tailscaleServeEnabled,
       tailscaleServePort,
+      remoteBrowser: {
+        enabled: browserProvider !== "disabled",
+        provider: browserProvider,
+        prewarm: browserPrewarm,
+        url: remoteBrowserUrl,
+        cdpUrl: browserCdpUrl,
+        image: browserProvider === "managed-neko" ? nekoImage : null,
+        containerName: browserProvider === "managed-neko" ? nekoContainerName : null,
+        httpPort: nekoHttpPort,
+        screen: nekoScreen,
+      },
     };
 
     return config;

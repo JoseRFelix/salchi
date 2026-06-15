@@ -267,6 +267,13 @@ export interface WsRpcClient {
     >;
     readonly signalProcess: RpcUnaryMethod<typeof WS_METHODS.serverSignalProcess>;
     readonly getPushConfig: RpcUnaryNoArgMethod<typeof WS_METHODS.serverGetPushConfig>;
+    readonly getRemoteBrowserStatus: RpcUnaryNoArgMethod<
+      typeof WS_METHODS.serverGetRemoteBrowserStatus
+    >;
+    readonly startRemoteBrowser: (
+      input?: RpcInput<typeof WS_METHODS.serverStartRemoteBrowser>,
+    ) => ReturnType<RpcUnaryMethod<typeof WS_METHODS.serverStartRemoteBrowser>>;
+    readonly navigateRemoteBrowser: RpcUnaryMethod<typeof WS_METHODS.serverNavigateRemoteBrowser>;
     readonly registerPushSubscription: RpcUnaryMethod<
       typeof WS_METHODS.serverRegisterPushSubscription
     >;
@@ -279,6 +286,9 @@ export interface WsRpcClient {
     readonly subscribeConfig: RpcStreamMethod<typeof WS_METHODS.subscribeServerConfig>;
     readonly subscribeLifecycle: RpcStreamMethod<typeof WS_METHODS.subscribeServerLifecycle>;
     readonly subscribeAuthAccess: RpcStreamMethod<typeof WS_METHODS.subscribeAuthAccess>;
+    readonly subscribeRemoteBrowserStatus: RpcStreamMethod<
+      typeof WS_METHODS.subscribeRemoteBrowserStatus
+    >;
   };
   readonly orchestration: {
     readonly dispatchCommand: RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.dispatchCommand>;
@@ -463,6 +473,12 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         ),
       getPushConfig: () =>
         transport.request((client) => client[WS_METHODS.serverGetPushConfig]({})),
+      getRemoteBrowserStatus: () =>
+        transport.request((client) => client[WS_METHODS.serverGetRemoteBrowserStatus]({})),
+      startRemoteBrowser: (input) =>
+        transport.request((client) => client[WS_METHODS.serverStartRemoteBrowser](input ?? {})),
+      navigateRemoteBrowser: (input) =>
+        transport.request((client) => client[WS_METHODS.serverNavigateRemoteBrowser](input)),
       registerPushSubscription: (input) =>
         transport.request((client) => client[WS_METHODS.serverRegisterPushSubscription](input)),
       unregisterPushSubscription: (input) =>
@@ -484,6 +500,15 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
           ...options,
           tag: options?.tag ?? WS_METHODS.subscribeAuthAccess,
         }),
+      subscribeRemoteBrowserStatus: (listener, options) =>
+        transport.subscribe(
+          (client) => client[WS_METHODS.subscribeRemoteBrowserStatus]({}),
+          listener,
+          {
+            ...options,
+            tag: options?.tag ?? WS_METHODS.subscribeRemoteBrowserStatus,
+          },
+        ),
     },
     orchestration: {
       dispatchCommand: (input) => dispatchCommandWithConnectionRecovery(transport, input),

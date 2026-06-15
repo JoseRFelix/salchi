@@ -86,6 +86,11 @@ import type {
 } from "./preview.ts";
 import type { DesktopPreviewBridge } from "./previewIpc.ts";
 import type {
+  RemoteBrowserNavigateInput,
+  RemoteBrowserStartInput,
+  RemoteBrowserStatus,
+} from "./remoteBrowser.ts";
+import type {
   PreviewAutomationOwner,
   PreviewAutomationRequest,
   PreviewAutomationResponse,
@@ -542,6 +547,9 @@ export interface LocalApi {
     ) => Promise<ServerProcessResourceHistoryResult>;
     signalProcess: (input: ServerSignalProcessInput) => Promise<ServerSignalProcessResult>;
     getPushConfig: () => Promise<ServerPushConfig>;
+    getRemoteBrowserStatus: () => Promise<RemoteBrowserStatus>;
+    startRemoteBrowser: (input?: RemoteBrowserStartInput) => Promise<RemoteBrowserStatus>;
+    navigateRemoteBrowser: (input: RemoteBrowserNavigateInput) => Promise<RemoteBrowserStatus>;
     registerPushSubscription: (
       input: ServerRegisterPushSubscriptionInput,
     ) => Promise<ServerPushSubscriptionStatus>;

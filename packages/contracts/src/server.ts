@@ -20,6 +20,7 @@ import { EditorId } from "./editor.ts";
 import { ModelCapabilities } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerSettings } from "./settings.ts";
+import { DEFAULT_REMOTE_BROWSER_CONFIG, RemoteBrowserConfig } from "./remoteBrowser.ts";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -406,6 +407,9 @@ export const ServerConfig = Schema.Struct({
   availableEditors: Schema.Array(EditorId),
   observability: ServerObservability,
   settings: ServerSettings,
+  remoteBrowser: RemoteBrowserConfig.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_REMOTE_BROWSER_CONFIG)),
+  ),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 

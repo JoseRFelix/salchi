@@ -2,10 +2,12 @@
 
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
-import { isPreviewSupportedInRuntime } from "~/previewStateStore";
+import { isDesktopPreviewSupportedInRuntime } from "~/previewStateStore";
 
 import { PreviewPanelShell, type PreviewPanelMode } from "./PreviewPanelShell";
 import { PreviewView } from "./PreviewView";
+import { RemoteBrowserPanel } from "./RemoteBrowserPanel";
+import { useBrowserPreviewAvailability } from "./previewAvailability";
 
 interface Props {
   mode: PreviewPanelMode;
@@ -16,12 +18,20 @@ interface Props {
 }
 
 export function PreviewPanel({ mode, threadRef, tabId, configuredUrls, visible }: Props) {
-  if (!isPreviewSupportedInRuntime()) {
+  const availability = useBrowserPreviewAvailability();
+  if (!isDesktopPreviewSupportedInRuntime()) {
+    if (availability.remote) {
+      return (
+        <PreviewPanelShell mode={mode}>
+          <RemoteBrowserPanel />
+        </PreviewPanelShell>
+      );
+    }
     return (
       <PreviewPanelShell mode={mode}>
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
           <p className="max-w-sm text-sm text-muted-foreground">
-            Preview is only available in the T3 Code desktop app.
+            Browser preview is unavailable. Configure a remote browser or use the desktop app.
           </p>
         </div>
       </PreviewPanelShell>

@@ -26,7 +26,7 @@ import {
   useRegisterRightPanel,
 } from "../rightPanelGesture";
 import {
-  isPreviewSupportedInRuntime,
+  isDesktopPreviewSupportedInRuntime,
   selectThreadPreviewState,
   usePreviewStateStore,
 } from "../previewStateStore";
@@ -47,6 +47,7 @@ import {
   type WorkspaceFilePreviewDiffReturnTarget,
   useWorkspaceFilePanelState,
 } from "../workspaceFilePreview";
+import { useBrowserPreviewAvailability } from "~/components/preview/previewAvailability";
 import {
   closeSourceControlPanel,
   openSourceControlPanel,
@@ -100,7 +101,8 @@ function ChatThreadRouteView() {
     sourceControlOpen,
     useSheet: shouldUseDiffSheet,
   });
-  const previewAvailable = isPreviewSupportedInRuntime();
+  const previewAvailability = useBrowserPreviewAvailability();
+  const previewAvailable = previewAvailability.available;
   const previewState = usePreviewStateStore((state) =>
     selectThreadPreviewState(state.byThreadKey, threadRef),
   );
@@ -173,13 +175,24 @@ function ChatThreadRouteView() {
     closeSourceControlPanel();
     closeDiff();
     markRightPanelUsed("preview");
+    if (!isDesktopPreviewSupportedInRuntime() && previewAvailability.remote) {
+      useRightPanelStore.getState().openBrowser(threadRef, null);
+      return;
+    }
     const activeTabId = previewState.activeTabId;
     if (!activeTabId) {
       createPreviewSurface();
       return;
     }
     useRightPanelStore.getState().openBrowser(threadRef, activeTabId);
-  }, [closeDiff, createPreviewSurface, previewAvailable, previewState.activeTabId, threadRef]);
+  }, [
+    closeDiff,
+    createPreviewSurface,
+    previewAvailability.remote,
+    previewAvailable,
+    previewState.activeTabId,
+    threadRef,
+  ]);
   const togglePreview = useCallback(() => {
     if (previewOpen) {
       closePreview();
@@ -249,9 +262,11 @@ function ChatThreadRouteView() {
     if (!threadRef) {
       return;
     }
-    useRightPanelStore
-      .getState()
-      .reconcileBrowserSurfaces(threadRef, Object.keys(previewState.sessions));
+    if (isDesktopPreviewSupportedInRuntime()) {
+      useRightPanelStore
+        .getState()
+        .reconcileBrowserSurfaces(threadRef, Object.keys(previewState.sessions));
+    }
   }, [previewState.sessions, threadRef]);
 
   useEffect(() => {

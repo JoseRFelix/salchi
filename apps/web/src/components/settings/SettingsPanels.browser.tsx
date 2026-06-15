@@ -4,6 +4,7 @@ import {
   type AuthAccessStreamEvent,
   type AuthAccessSnapshot,
   AuthSessionId,
+  DEFAULT_REMOTE_BROWSER_CONFIG,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   type DesktopBridge,
@@ -213,6 +214,7 @@ function createBaseServerConfig(): ServerConfig {
       otlpTracesEnabled: true,
       otlpMetricsEnabled: false,
     },
+    remoteBrowser: DEFAULT_REMOTE_BROWSER_CONFIG,
     settings: DEFAULT_SERVER_SETTINGS,
   };
 }

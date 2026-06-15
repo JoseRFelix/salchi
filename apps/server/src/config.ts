@@ -13,6 +13,7 @@ import * as LogLevel from "effect/LogLevel";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
+import type { RemoteBrowserConfig } from "@t3tools/contracts";
 
 export const DEFAULT_PORT = 3773;
 
@@ -73,6 +74,7 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly logWebSocketEvents: boolean;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
+  readonly remoteBrowser: RemoteBrowserConfig;
 }
 
 export const deriveServerPaths = Effect.fn(function* (
@@ -168,6 +170,17 @@ export class ServerConfig extends Context.Service<ServerConfig, ServerConfigShap
           logWebSocketEvents: false,
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
+          remoteBrowser: {
+            enabled: false,
+            provider: "disabled",
+            prewarm: false,
+            url: null,
+            cdpUrl: null,
+            image: null,
+            containerName: null,
+            httpPort: 8080,
+            screen: "1280x720@30",
+          },
           port: 0,
           host: undefined,
           desktopBootstrapToken: undefined,

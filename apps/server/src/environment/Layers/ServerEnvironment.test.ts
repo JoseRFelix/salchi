@@ -7,6 +7,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
+import { DEFAULT_REMOTE_BROWSER_CONFIG } from "@t3tools/contracts";
 
 import { deriveServerPaths, ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { ServerEnvironment } from "../Services/ServerEnvironment.ts";
@@ -37,6 +38,7 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     logWebSocketEvents: false,
     tailscaleServeEnabled: false,
     tailscaleServePort: 443,
+    remoteBrowser: DEFAULT_REMOTE_BROWSER_CONFIG,
     port: 0,
     host: undefined,
     desktopBootstrapToken: undefined,

@@ -1,4 +1,6 @@
 import {
+  DEFAULT_REMOTE_BROWSER_CONFIG,
+  DEFAULT_REMOTE_BROWSER_STATUS,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   ProviderDriverKind,
@@ -41,6 +43,7 @@ function createDeferredPromise<T>() {
 
 const lifecycleListeners = new Set<(event: ServerLifecycleStreamEvent) => void>();
 const configListeners = new Set<(event: ServerConfigStreamEvent) => void>();
+const remoteBrowserListeners = new Set<(status: typeof DEFAULT_REMOTE_BROWSER_STATUS) => void>();
 
 const defaultProviders: ReadonlyArray<ServerProvider> = [
   {
@@ -91,6 +94,7 @@ const baseServerConfig: ServerConfig = {
     otlpTracesEnabled: false,
     otlpMetricsEnabled: false,
   },
+  remoteBrowser: DEFAULT_REMOTE_BROWSER_CONFIG,
   settings: DEFAULT_SERVER_SETTINGS,
 };
 
@@ -101,6 +105,11 @@ const serverApi = {
   ),
   subscribeLifecycle: vi.fn((listener: (event: ServerLifecycleStreamEvent) => void) =>
     registerListener(lifecycleListeners, listener),
+  ),
+  getRemoteBrowserStatus: vi.fn(() => Promise.resolve(DEFAULT_REMOTE_BROWSER_STATUS)),
+  subscribeRemoteBrowserStatus: vi.fn(
+    (listener: (status: typeof DEFAULT_REMOTE_BROWSER_STATUS) => void) =>
+      registerListener(remoteBrowserListeners, listener),
   ),
 };
 
@@ -135,6 +144,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   lifecycleListeners.clear();
   configListeners.clear();
+  remoteBrowserListeners.clear();
   resetServerStateForTests();
 });
 

@@ -286,6 +286,10 @@ export function selectThreadPreviewState(
 }
 
 export function isPreviewSupportedInRuntime(): boolean {
+  return isDesktopPreviewSupportedInRuntime();
+}
+
+export function isDesktopPreviewSupportedInRuntime(): boolean {
   if (typeof window === "undefined") return false;
   return Boolean(window.desktopBridge?.preview);
 }

@@ -10,13 +10,14 @@ import {
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { resolveShortcutCommand } from "../keybindings";
-import { isPreviewSupportedInRuntime } from "../previewStateStore";
+import { isDesktopPreviewSupportedInRuntime } from "../previewStateStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { dispatchPreviewAction, type PreviewAction } from "~/components/preview/previewActionBus";
 import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
 import { useSettings } from "~/hooks/useSettings";
 import { useServerKeybindings } from "~/rpc/serverState";
+import { getRemoteBrowserStatus } from "~/rpc/serverState";
 
 function ChatRouteGlobalShortcuts() {
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -62,7 +63,7 @@ function ChatRouteGlobalShortcuts() {
       };
       const previewAction = command ? previewActionByCommand[command] : undefined;
       if (previewAction) {
-        if (!isPreviewSupportedInRuntime()) {
+        if (!isDesktopPreviewSupportedInRuntime() && !getRemoteBrowserStatus().enabled) {
           return;
         }
         event.preventDefault();

@@ -71,6 +71,7 @@ import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as RemoteBrowserManager from "./remoteBrowser/RemoteBrowserManager.ts";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries.ts";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem.ts";
 import { WorkspacePathOutsideRootError } from "./workspace/Services/WorkspacePaths.ts";
@@ -299,6 +300,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
+      const remoteBrowser = yield* RemoteBrowserManager.RemoteBrowserManager;
       const providerRegistry = yield* ProviderRegistry;
       const providerService = yield* ProviderService;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
@@ -744,6 +746,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
           },
           settings,
+          remoteBrowser: config.remoteBrowser,
         };
       });
 
@@ -1158,6 +1161,18 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           ),
         [WS_METHODS.serverGetConfig]: (_input) =>
           observeRpcEffect(WS_METHODS.serverGetConfig, loadServerConfig, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverGetRemoteBrowserStatus]: (_input) =>
+          observeRpcEffect(WS_METHODS.serverGetRemoteBrowserStatus, remoteBrowser.getStatus, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverStartRemoteBrowser]: (input) =>
+          observeRpcEffect(WS_METHODS.serverStartRemoteBrowser, remoteBrowser.start(input), {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverNavigateRemoteBrowser]: (input) =>
+          observeRpcEffect(WS_METHODS.serverNavigateRemoteBrowser, remoteBrowser.navigate(input), {
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.serverRefreshProviders]: (input) =>
@@ -1771,6 +1786,10 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             }),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.subscribeRemoteBrowserStatus]: (_input) =>
+          observeRpcStream(WS_METHODS.subscribeRemoteBrowserStatus, remoteBrowser.statuses, {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.subscribeAuthAccess]: (_input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeAuthAccess,

@@ -171,6 +171,18 @@ function createBrowserLocalApi(rpcClient?: WsRpcClient): LocalApi {
         rpcClient
           ? rpcClient.server.getPushConfig()
           : Promise.reject(unavailableLocalBackendError()),
+      getRemoteBrowserStatus: () =>
+        rpcClient
+          ? rpcClient.server.getRemoteBrowserStatus()
+          : Promise.reject(unavailableLocalBackendError()),
+      startRemoteBrowser: (input) =>
+        rpcClient
+          ? rpcClient.server.startRemoteBrowser(input)
+          : Promise.reject(unavailableLocalBackendError()),
+      navigateRemoteBrowser: (input) =>
+        rpcClient
+          ? rpcClient.server.navigateRemoteBrowser(input)
+          : Promise.reject(unavailableLocalBackendError()),
       registerPushSubscription: (input) =>
         rpcClient
           ? rpcClient.server.registerPushSubscription(input)

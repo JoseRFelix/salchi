@@ -41,6 +41,7 @@ import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as RemoteBrowserManager from "./remoteBrowser/RemoteBrowserManager.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import { KeybindingsLive } from "./keybindings.ts";
@@ -251,10 +252,18 @@ const TerminalLayerLive = TerminalManagerLive.pipe(
   Layer.provide(PortScannerLayerLive),
 );
 
+const PreviewAutomationBrokerLayerLive = PreviewAutomationBroker.layer;
+
 const PreviewLayerLive = Layer.empty.pipe(
   Layer.provideMerge(PreviewManager.layer),
   Layer.provideMerge(PortScannerLayerLive),
-  Layer.provideMerge(PreviewAutomationBroker.layer),
+  Layer.provideMerge(PreviewAutomationBrokerLayerLive),
+);
+
+const RemoteBrowserManagerLayerLive = RemoteBrowserManager.layer.pipe(
+  Layer.provideMerge(ServerEnvironmentLive),
+  Layer.provideMerge(PreviewAutomationBrokerLayerLive),
+  Layer.provide(ProcessRunner.layer),
 );
 
 const WorkspaceEntriesLayerLive = WorkspaceEntriesLive.pipe(
@@ -289,7 +298,7 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
-const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
+const RuntimeCoreDependenciesBaseLive = ReactorLayerLive.pipe(
   // Core Services
   Layer.provideMerge(CheckpointingLayerLive),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
@@ -326,6 +335,10 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ServerSecretStoreLive),
   Layer.provideMerge(AuthLayerLive),
   Layer.provideMerge(WebPushLayerLive),
+);
+
+const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
+  Layer.provideMerge(RemoteBrowserManagerLayerLive),
 );
 
 const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(

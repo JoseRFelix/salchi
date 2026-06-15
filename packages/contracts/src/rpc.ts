@@ -100,6 +100,11 @@ import {
   PreviewSessionSnapshot,
 } from "./preview.ts";
 import {
+  RemoteBrowserNavigateInput,
+  RemoteBrowserStartInput,
+  RemoteBrowserStatus,
+} from "./remoteBrowser.ts";
+import {
   PreviewAutomationError,
   PreviewAutomationOwner,
   PreviewAutomationRequest,
@@ -218,6 +223,9 @@ export const WS_METHODS = {
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverSignalProcess: "server.signalProcess",
   serverGetPushConfig: "server.getPushConfig",
+  serverGetRemoteBrowserStatus: "server.getRemoteBrowserStatus",
+  serverStartRemoteBrowser: "server.startRemoteBrowser",
+  serverNavigateRemoteBrowser: "server.navigateRemoteBrowser",
   serverRegisterPushSubscription: "server.registerPushSubscription",
   serverUnregisterPushSubscription: "server.unregisterPushSubscription",
   serverSendTestPushNotification: "server.sendTestPushNotification",
@@ -235,6 +243,7 @@ export const WS_METHODS = {
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
+  subscribeRemoteBrowserStatus: "subscribeRemoteBrowserStatus",
 } as const;
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -253,6 +262,21 @@ export const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
   payload: Schema.Struct({}),
   success: ServerConfig,
   error: Schema.Union([KeybindingsConfigError, ServerSettingsError]),
+});
+
+export const WsServerGetRemoteBrowserStatusRpc = Rpc.make(WS_METHODS.serverGetRemoteBrowserStatus, {
+  payload: Schema.Struct({}),
+  success: RemoteBrowserStatus,
+});
+
+export const WsServerStartRemoteBrowserRpc = Rpc.make(WS_METHODS.serverStartRemoteBrowser, {
+  payload: RemoteBrowserStartInput,
+  success: RemoteBrowserStatus,
+});
+
+export const WsServerNavigateRemoteBrowserRpc = Rpc.make(WS_METHODS.serverNavigateRemoteBrowser, {
+  payload: RemoteBrowserNavigateInput,
+  success: RemoteBrowserStatus,
 });
 
 export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
@@ -733,6 +757,12 @@ export const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServer
   stream: true,
 });
 
+export const WsSubscribeRemoteBrowserStatusRpc = Rpc.make(WS_METHODS.subscribeRemoteBrowserStatus, {
+  payload: Schema.Struct({}),
+  success: RemoteBrowserStatus,
+  stream: true,
+});
+
 export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   payload: Schema.Struct({}),
   success: AuthAccessStreamEvent,
@@ -741,6 +771,9 @@ export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess,
 
 export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
+  WsServerGetRemoteBrowserStatusRpc,
+  WsServerStartRemoteBrowserRpc,
+  WsServerNavigateRemoteBrowserRpc,
   WsServerRefreshProvidersRpc,
   WsServerRefreshUsageLimitsRpc,
   WsServerUpdateProviderRpc,
@@ -806,6 +839,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeDiscoveredLocalServersRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
+  WsSubscribeRemoteBrowserStatusRpc,
   WsSubscribeAuthAccessRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetTurnDiffRpc,

@@ -3,6 +3,7 @@ import "../index.css";
 
 import {
   CheckpointRef,
+  DEFAULT_REMOTE_BROWSER_CONFIG,
   EventId,
   ORCHESTRATION_WS_METHODS,
   EnvironmentId,
@@ -235,6 +236,7 @@ function createBaseServerConfig(): ServerConfig {
       otlpTracesEnabled: false,
       otlpMetricsEnabled: false,
     },
+    remoteBrowser: DEFAULT_REMOTE_BROWSER_CONFIG,
     settings: {
       ...DEFAULT_SERVER_SETTINGS,
       ...DEFAULT_CLIENT_SETTINGS,

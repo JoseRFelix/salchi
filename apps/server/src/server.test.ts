@@ -4,6 +4,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import {
   CommandId,
+  DEFAULT_REMOTE_BROWSER_CONFIG,
+  DEFAULT_REMOTE_BROWSER_STATUS,
   DEFAULT_SERVER_SETTINGS,
   EMPTY_ORCHESTRATION_THREAD_DETAIL_PAGE_INFO,
   EnvironmentId,
@@ -123,6 +125,7 @@ import {
   ServerEnvironment,
   type ServerEnvironmentShape,
 } from "./environment/Services/ServerEnvironment.ts";
+import { RemoteBrowserManager } from "./remoteBrowser/RemoteBrowserManager.ts";
 import { WorkspaceEntriesLive } from "./workspace/Layers/WorkspaceEntries.ts";
 import { WorkspaceFileSystemLive } from "./workspace/Layers/WorkspaceFileSystem.ts";
 import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths.ts";
@@ -398,6 +401,7 @@ const buildAppUnderTest = (options?: {
       logWebSocketEvents: false,
       tailscaleServeEnabled: false,
       tailscaleServePort: 443,
+      remoteBrowser: DEFAULT_REMOTE_BROWSER_CONFIG,
       ...options?.config,
     };
     const layerConfig = Layer.succeed(ServerConfig, config);
@@ -789,6 +793,14 @@ const buildAppUnderTest = (options?: {
         Layer.mock(RepositoryIdentityResolver)({
           resolve: () => Effect.succeed(null),
           ...options?.layers?.repositoryIdentityResolver,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(RemoteBrowserManager)({
+          getStatus: Effect.succeed(DEFAULT_REMOTE_BROWSER_STATUS),
+          start: () => Effect.succeed(DEFAULT_REMOTE_BROWSER_STATUS),
+          navigate: () => Effect.succeed(DEFAULT_REMOTE_BROWSER_STATUS),
+          statuses: Stream.empty,
         }),
       ),
       Layer.provideMerge(makeAuthTestLayer()),

@@ -15,6 +15,7 @@ import * as HttpServer from "effect/unstable/http/HttpServer";
 import * as CliError from "effect/unstable/cli/CliError";
 import * as TestConsole from "effect/testing/TestConsole";
 import { Command } from "effect/unstable/cli";
+import { DEFAULT_REMOTE_BROWSER_CONFIG } from "@t3tools/contracts";
 
 import { cli } from "./bin.ts";
 import { deriveServerPaths, ServerConfig, type ServerConfigShape } from "./config.ts";
@@ -78,6 +79,7 @@ const makeCliTestServerConfig = (baseDir: string) =>
       logWebSocketEvents: false,
       tailscaleServeEnabled: false,
       tailscaleServePort: 443,
+      remoteBrowser: DEFAULT_REMOTE_BROWSER_CONFIG,
     } satisfies ServerConfigShape;
   });
 

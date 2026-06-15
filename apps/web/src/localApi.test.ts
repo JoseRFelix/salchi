@@ -1,5 +1,6 @@
 import {
   CommandId,
+  DEFAULT_REMOTE_BROWSER_CONFIG,
   DEFAULT_SERVER_SETTINGS,
   type DesktopBridge,
   EnvironmentId,
@@ -301,6 +302,7 @@ const baseServerConfig: ServerConfig = {
     otlpTracesEnabled: false,
     otlpMetricsEnabled: false,
   },
+  remoteBrowser: DEFAULT_REMOTE_BROWSER_CONFIG,
   settings: DEFAULT_SERVER_SETTINGS,
 };
 
