@@ -7,10 +7,13 @@ import {
   startNewLocalThreadFromContext,
   startNewThreadFromContext,
 } from "../lib/chatThreadActions";
+import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { resolveShortcutCommand } from "../keybindings";
+import { isPreviewSupportedInRuntime } from "../previewStateStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
+import { dispatchPreviewAction, type PreviewAction } from "~/components/preview/previewActionBus";
 import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
 import { useSettings } from "~/hooks/useSettings";
 import { useServerKeybindings } from "~/rpc/serverState";
@@ -33,6 +36,7 @@ function ChatRouteGlobalShortcuts() {
       if (event.defaultPrevented) return;
       const command = resolveShortcutCommand(event, keybindings, {
         context: {
+          previewFocus: isPreviewFocused(),
           terminalFocus: isTerminalFocused(),
           terminalOpen,
         },
@@ -45,6 +49,25 @@ function ChatRouteGlobalShortcuts() {
       if (event.key === "Escape" && selectedThreadKeysSize > 0) {
         event.preventDefault();
         clearSelection();
+        return;
+      }
+
+      const previewActionByCommand: Partial<Record<string, PreviewAction>> = {
+        "preview.toggle": "toggle-panel",
+        "preview.refresh": "refresh",
+        "preview.focusUrl": "focus-url",
+        "preview.zoomIn": "zoom-in",
+        "preview.zoomOut": "zoom-out",
+        "preview.resetZoom": "reset-zoom",
+      };
+      const previewAction = command ? previewActionByCommand[command] : undefined;
+      if (previewAction) {
+        if (!isPreviewSupportedInRuntime()) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        dispatchPreviewAction(previewAction);
         return;
       }
 

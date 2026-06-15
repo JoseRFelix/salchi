@@ -15,6 +15,7 @@ import {
 } from "../diffRouteSearch";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useMobileEdgeSwipe } from "../hooks/useMobileEdgeSwipe";
+import { readEnvironmentApi } from "../environmentApi";
 import {
   resolveRightFilePanelVisibility,
   RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY,
@@ -24,6 +25,12 @@ import {
   openLastUsedRightPanel,
   useRegisterRightPanel,
 } from "../rightPanelGesture";
+import {
+  isPreviewSupportedInRuntime,
+  selectThreadPreviewState,
+  usePreviewStateStore,
+} from "../previewStateStore";
+import { selectActiveRightPanelSurface, useRightPanelStore } from "../rightPanelStore";
 import { retainActiveThreadDetailSubscription } from "../environments/runtime/service";
 import {
   selectEnvironmentState,
@@ -93,6 +100,18 @@ function ChatThreadRouteView() {
     sourceControlOpen,
     useSheet: shouldUseDiffSheet,
   });
+  const previewAvailable = isPreviewSupportedInRuntime();
+  const previewState = usePreviewStateStore((state) =>
+    selectThreadPreviewState(state.byThreadKey, threadRef),
+  );
+  const activePreviewSurface = useRightPanelStore((state) =>
+    selectActiveRightPanelSurface(state.byThreadKey, threadRef),
+  );
+  const previewOpen = previewAvailable && activePreviewSurface?.kind === "preview";
+  const previewTabId =
+    activePreviewSurface?.kind === "preview"
+      ? (activePreviewSurface.resourceId ?? previewState.activeTabId)
+      : previewState.activeTabId;
   const currentThreadKey = threadRef ? `${threadRef.environmentId}:${threadRef.threadId}` : null;
   const [diffPanelMountState, setDiffPanelMountState] = useState(() => ({
     threadKey: currentThreadKey,
@@ -124,12 +143,57 @@ function ChatThreadRouteView() {
       search: (previous) => buildClosedDiffSearch(previous),
     });
   }, [diffOpen, navigate, threadRef]);
+  const closePreview = useCallback(() => {
+    if (!threadRef) {
+      return;
+    }
+    useRightPanelStore.getState().close(threadRef);
+  }, [threadRef]);
+  const createPreviewSurface = useCallback(() => {
+    if (!threadRef) {
+      return;
+    }
+    const api = readEnvironmentApi(threadRef.environmentId);
+    if (!api) {
+      return;
+    }
+    void api.preview
+      .open({ threadId: threadRef.threadId })
+      .then((snapshot) => {
+        usePreviewStateStore.getState().applyServerSnapshot(threadRef, snapshot);
+        useRightPanelStore.getState().openBrowser(threadRef, snapshot.tabId);
+      })
+      .catch(() => undefined);
+  }, [threadRef]);
+  const openPreview = useCallback(() => {
+    if (!threadRef || !previewAvailable) {
+      return;
+    }
+    closeWorkspaceFilePreview();
+    closeSourceControlPanel();
+    closeDiff();
+    markRightPanelUsed("preview");
+    const activeTabId = previewState.activeTabId;
+    if (!activeTabId) {
+      createPreviewSurface();
+      return;
+    }
+    useRightPanelStore.getState().openBrowser(threadRef, activeTabId);
+  }, [closeDiff, createPreviewSurface, previewAvailable, previewState.activeTabId, threadRef]);
+  const togglePreview = useCallback(() => {
+    if (previewOpen) {
+      closePreview();
+      return;
+    }
+    openPreview();
+  }, [closePreview, openPreview, previewOpen]);
   const openDiff = useCallback(() => {
     if (!threadRef) {
       return;
     }
     closeWorkspaceFilePreview();
     closeSourceControlPanel();
+    closePreview();
     markRightPanelUsed("diff");
     markDiffOpened();
     void navigate({
@@ -140,7 +204,7 @@ function ChatThreadRouteView() {
           source: serverThread && !serverThreadStarted ? "unstaged" : undefined,
         }),
     });
-  }, [markDiffOpened, navigate, serverThread, serverThreadStarted, threadRef]);
+  }, [closePreview, markDiffOpened, navigate, serverThread, serverThreadStarted, threadRef]);
   const openFilePreview = useCallback(() => {
     reopenWorkspaceFilePanel();
   }, []);
@@ -180,6 +244,30 @@ function ChatThreadRouteView() {
       markRightPanelUsed("diff");
     }
   }, [diffOpen]);
+
+  useEffect(() => {
+    if (!threadRef) {
+      return;
+    }
+    useRightPanelStore
+      .getState()
+      .reconcileBrowserSurfaces(threadRef, Object.keys(previewState.sessions));
+  }, [previewState.sessions, threadRef]);
+
+  useEffect(() => {
+    if (!threadRef || !previewOpen) {
+      return;
+    }
+    markRightPanelUsed("preview");
+    closeWorkspaceFilePreview();
+    closeSourceControlPanel();
+    if (diffOpen) {
+      closeDiff();
+    }
+    if (previewTabId) {
+      usePreviewStateStore.getState().setActiveTab(threadRef, previewTabId);
+    }
+  }, [closeDiff, diffOpen, previewOpen, previewTabId, threadRef]);
 
   useEffect(() => {
     if (
@@ -233,10 +321,22 @@ function ChatThreadRouteView() {
     kind: "source-control",
     open: openSourceControlPanel,
   });
+  useRegisterRightPanel({
+    close: closePreview,
+    enabled: threadRef !== null && previewAvailable,
+    kind: "preview",
+    open: openPreview,
+  });
 
   useMobileEdgeSwipe({
     blockedByOpenPanelSide: "left",
-    enabled: shouldUseDiffSheet && !diffOpen && !leftSidebarOpenMobile,
+    enabled:
+      shouldUseDiffSheet &&
+      !diffOpen &&
+      !previewOpen &&
+      !rightFilePanel.open &&
+      !sourceControlOpen &&
+      !leftSidebarOpenMobile,
     onSwipe: openLastUsedRightPanel,
     side: "right",
     startArea: "screen",
@@ -268,6 +368,16 @@ function ChatThreadRouteView() {
     enabled: shouldUseDiffSheet && rightFilePanel.open && !sourceControlOpen,
     horizontalScrollOwnerScope: "all",
     onSwipe: closeWorkspaceFilePreview,
+    side: "right",
+    startArea: "screen",
+    startSurface: "panel",
+  });
+
+  useMobileEdgeSwipe({
+    action: "close",
+    enabled: shouldUseDiffSheet && previewOpen,
+    horizontalScrollOwnerScope: "all",
+    onSwipe: closePreview,
     side: "right",
     startArea: "screen",
     startSurface: "panel",
@@ -353,6 +463,10 @@ function ChatThreadRouteView() {
           environmentId={threadRef.environmentId}
           threadId={threadRef.threadId}
           onDiffPanelOpen={markDiffOpened}
+          onPreviewPanelClose={closePreview}
+          onTogglePreview={togglePreview}
+          previewAvailable={previewAvailable}
+          previewOpen={previewOpen}
           reserveTitleBarControlInset={shouldUseDiffSheet || !diffOpen}
           routeKind="server"
         />
@@ -365,6 +479,18 @@ function ChatThreadRouteView() {
           renderContent: shouldRenderDiffContent,
         }}
         fileOpen={rightFilePanel.open}
+        preview={
+          previewAvailable && threadRef
+            ? {
+                open: previewOpen,
+                onClose: closePreview,
+                onOpen: openPreview,
+                renderContent: previewOpen,
+                tabId: previewTabId,
+                threadRef,
+              }
+            : undefined
+        }
         renderFileContent={shouldRenderFilePanelContent}
         useSheet={shouldUseDiffSheet}
         onReturnFromFileToDiff={returnFromFilePreview}

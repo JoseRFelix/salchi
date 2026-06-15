@@ -86,6 +86,7 @@ async function mountReasoningPicker(props?: {
         nonPersistedImageIds: [],
         persistedAttachments: [],
         terminalContexts: [],
+        previewAnnotations: [],
         modelSelectionByProvider: {
           [instanceId]: createModelSelection(instanceId, model, props?.options),
         },

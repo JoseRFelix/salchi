@@ -6,17 +6,18 @@ export default defineConfig({
   run: {
     tasks: {
       build: {
-        command: "vp pack",
+        command: "node scripts/build-preview-annotation-css.mjs && vp pack",
         dependsOn: ["salchi#build"],
         cache: false,
       },
       dev: {
-        command: "cross-env T3CODE_DESKTOP_DEV=1 vp pack --watch",
+        command:
+          "node scripts/build-preview-annotation-css.mjs && cross-env T3CODE_DESKTOP_DEV=1 vp pack --watch",
         dependsOn: ["salchi#build"],
         cache: false,
       },
       "dev:bundle": {
-        command: "vp pack --watch",
+        command: "node scripts/build-preview-annotation-css.mjs && vp pack --watch",
         cache: false,
       },
       "dev:electron": {
@@ -45,6 +46,16 @@ export default defineConfig({
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
       entry: ["src/preload.ts"],
+    },
+    {
+      format: "cjs",
+      outDir: "dist-electron",
+      sourcemap: true,
+      outExtensions: () => ({ js: ".cjs" }),
+      entry: ["src/preview-pick-preload.ts"],
+      deps: {
+        alwaysBundle: (id) => id === "react-grab" || id.startsWith("react-grab/"),
+      },
     },
   ],
 });

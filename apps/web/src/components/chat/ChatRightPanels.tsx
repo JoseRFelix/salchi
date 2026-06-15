@@ -1,3 +1,4 @@
+import type { ScopedThreadRef } from "@t3tools/contracts";
 import { Suspense, lazy, useCallback, type CSSProperties } from "react";
 
 import { cn } from "~/lib/utils";
@@ -14,11 +15,16 @@ import {
 import { RightPanelSheet } from "../RightPanelSheet";
 import { WorkspaceFilesPanel } from "../WorkspaceFilesPanel";
 import { Sidebar, SidebarProvider, SidebarRail } from "../ui/sidebar";
+import { PreviewAutomationOwner } from "../preview/PreviewAutomationOwner";
 
 const DiffPanel = lazy(() => import("../DiffPanel"));
+const PreviewPanel = lazy(() =>
+  import("../preview/PreviewPanel").then((mod) => ({ default: mod.PreviewPanel })),
+);
 
 const DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_diff_sidebar_width";
 const FILE_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_file_preview_sidebar_width";
+const PREVIEW_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_preview_sidebar_width";
 const RIGHT_INLINE_PANEL_DEFAULT_WIDTH = "clamp(24rem,34vw,36rem)";
 const RIGHT_INLINE_PANEL_MIN_WIDTH = 22 * 16;
 const RIGHT_INLINE_PANEL_MAX_WIDTH = 256 * 16;
@@ -180,6 +186,55 @@ const WorkspaceFilesInlineSidebar = (props: {
   );
 };
 
+const PreviewInlineSidebar = (props: {
+  open: boolean;
+  renderContent: boolean;
+  threadRef: ScopedThreadRef;
+  tabId: string | null;
+  onClose: () => void;
+  onOpen: () => void;
+}) => {
+  const { onClose, onOpen, open, renderContent, tabId, threadRef } = props;
+  const onOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (nextOpen) {
+        onOpen();
+        return;
+      }
+      onClose();
+    },
+    [onClose, onOpen],
+  );
+
+  return (
+    <SidebarProvider
+      defaultOpen={false}
+      open={open}
+      onOpenChange={onOpenChange}
+      className="w-auto min-h-0 flex-none bg-transparent"
+      style={rightPanelSidebarStyle}
+    >
+      <Sidebar
+        side="right"
+        collapsible="offcanvas"
+        className="border-l border-border bg-card text-foreground"
+        resizable={{
+          maxWidth: RIGHT_INLINE_PANEL_MAX_WIDTH,
+          minWidth: RIGHT_INLINE_PANEL_MIN_WIDTH,
+          storageKey: PREVIEW_INLINE_SIDEBAR_WIDTH_STORAGE_KEY,
+        }}
+      >
+        {renderContent ? (
+          <Suspense fallback={null}>
+            <PreviewPanel mode="sidebar" threadRef={threadRef} tabId={tabId} visible={open} />
+          </Suspense>
+        ) : null}
+        <SidebarRail />
+      </Sidebar>
+    </SidebarProvider>
+  );
+};
+
 export function ChatRightPanels(props: {
   diff?: {
     readonly open: boolean;
@@ -189,10 +244,23 @@ export function ChatRightPanels(props: {
   };
   readonly fileOpen: boolean;
   readonly onReturnFromFileToDiff: (target: WorkspaceFilePreviewDiffReturnTarget) => void;
+  readonly preview?:
+    | {
+        readonly open: boolean;
+        readonly onClose: () => void;
+        readonly onOpen: () => void;
+        readonly renderContent: boolean;
+        readonly tabId: string | null;
+        readonly threadRef: ScopedThreadRef;
+      }
+    | undefined;
   readonly renderFileContent: boolean;
   readonly useSheet: boolean;
 }) {
-  const { diff, fileOpen, onReturnFromFileToDiff, renderFileContent, useSheet } = props;
+  const { diff, fileOpen, onReturnFromFileToDiff, preview, renderFileContent, useSheet } = props;
+  const automationOwner = preview ? (
+    <PreviewAutomationOwner threadRef={preview.threadRef} visible={preview.open} />
+  ) : null;
 
   // The worker-pool provider eagerly allocates WASM workers on mount, so it must
   // stay gated behind whether any panel content actually renders. It is wrapped
@@ -208,9 +276,15 @@ export function ChatRightPanels(props: {
     // diff); otherwise the diff is active. Closing dismisses only the active
     // layer, leaving any layer underneath to swap back into place.
     const diffOpen = diff?.open ?? false;
-    const sheetOpen = diffOpen || fileOpen;
-    const filesActive = fileOpen;
+    const previewOpen = preview?.open ?? false;
+    const sheetOpen = diffOpen || fileOpen || previewOpen;
+    const previewActive = previewOpen;
+    const filesActive = fileOpen && !previewActive;
     const onCloseSheet = () => {
+      if (previewActive) {
+        preview?.onClose();
+        return;
+      }
       if (filesActive) {
         closeWorkspaceFilePreview();
         return;
@@ -219,31 +293,47 @@ export function ChatRightPanels(props: {
     };
 
     return (
-      <RightPanelSheet open={sheetOpen} onClose={onCloseSheet}>
-        {diff?.renderContent || renderFileContent ? (
-          <DiffWorkerPoolProvider>
-            {diff?.renderContent ? (
-              <div className={cn("h-full min-h-0", filesActive && "hidden")}>
-                <LazyDiffPanel mode="sheet" />
-              </div>
-            ) : null}
-            {renderFileContent ? (
-              <div className={cn("h-full min-h-0", !filesActive && "hidden")}>
-                <WorkspaceFilesPanel
+      <>
+        {automationOwner}
+        <RightPanelSheet open={sheetOpen} onClose={onCloseSheet}>
+          {preview?.renderContent ? (
+            <Suspense fallback={null}>
+              <div className={cn("h-full min-h-0", !previewActive && "hidden")}>
+                <PreviewPanel
                   mode="sheet"
-                  onReturnToDiff={onReturnFromFileToDiff}
-                  panelOpen={fileOpen}
+                  threadRef={preview.threadRef}
+                  tabId={preview.tabId}
+                  visible={preview.open}
                 />
               </div>
-            ) : null}
-          </DiffWorkerPoolProvider>
-        ) : null}
-      </RightPanelSheet>
+            </Suspense>
+          ) : null}
+          {diff?.renderContent || renderFileContent ? (
+            <DiffWorkerPoolProvider>
+              {diff?.renderContent ? (
+                <div className={cn("h-full min-h-0", (filesActive || previewActive) && "hidden")}>
+                  <LazyDiffPanel mode="sheet" />
+                </div>
+              ) : null}
+              {renderFileContent ? (
+                <div className={cn("h-full min-h-0", (!filesActive || previewActive) && "hidden")}>
+                  <WorkspaceFilesPanel
+                    mode="sheet"
+                    onReturnToDiff={onReturnFromFileToDiff}
+                    panelOpen={fileOpen}
+                  />
+                </div>
+              ) : null}
+            </DiffWorkerPoolProvider>
+          ) : null}
+        </RightPanelSheet>
+      </>
     );
   }
 
   return (
     <>
+      {automationOwner}
       {diff ? (
         <DiffPanelInlineSidebar
           diffOpen={diff.open}
@@ -257,6 +347,16 @@ export function ChatRightPanels(props: {
         renderContent={renderFileContent}
         onReturnToDiff={onReturnFromFileToDiff}
       />
+      {preview ? (
+        <PreviewInlineSidebar
+          open={preview.open}
+          onClose={preview.onClose}
+          onOpen={preview.onOpen}
+          renderContent={preview.renderContent}
+          tabId={preview.tabId}
+          threadRef={preview.threadRef}
+        />
+      ) : null}
     </>
   );
 }

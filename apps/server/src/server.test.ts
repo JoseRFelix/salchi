@@ -140,6 +140,9 @@ import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as Data from "effect/Data";
 import { WebPushServiceNoop } from "./push/Layers/WebPushService.ts";
+import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as PreviewManager from "./preview/Manager.ts";
+import * as PortScanner from "./preview/PortScanner.ts";
 
 const defaultProjectId = ProjectId.make("project-default");
 const defaultThreadId = ThreadId.make("thread-default");
@@ -525,6 +528,23 @@ const buildAppUnderTest = (options?: {
           ...options.layers.vcsStatusBroadcaster,
         })
       : VcsStatusBroadcaster.layer.pipe(Layer.provide(gitWorkflowLayer));
+    const previewServicesLayer = Layer.mergeAll(
+      PreviewManager.layer,
+      PreviewAutomationBroker.layer,
+      Layer.mock(PortScanner.PortDiscovery)({
+        scan: () => Effect.succeed([]),
+        subscribe: () => Effect.void,
+        retain: Effect.void,
+        registerTerminalProcesses: () => Effect.void,
+        unregisterTerminal: () => Effect.void,
+      }),
+    );
+    const terminalAndPreviewServicesLayer = Layer.mergeAll(
+      Layer.mock(TerminalManager)({
+        ...options?.layers?.terminalManager,
+      }),
+      previewServicesLayer,
+    );
 
     const servedRoutesLayer = HttpRouter.serve(makeRoutesLayer, {
       disableListenLog: true,
@@ -674,11 +694,7 @@ const buildAppUnderTest = (options?: {
           ...options?.layers?.projectSetupScriptRunner,
         }),
       ),
-      Layer.provide(
-        Layer.mock(TerminalManager)({
-          ...options?.layers?.terminalManager,
-        }),
-      ),
+      Layer.provide(terminalAndPreviewServicesLayer),
       Layer.provide(
         Layer.mock(OrchestrationEngineService)({
           readEvents: () => Stream.empty,
@@ -776,6 +792,7 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provideMerge(makeAuthTestLayer()),
+      Layer.provideMerge(ServerSecretStoreLive),
       Layer.provide(workspaceAndProjectServicesLayer),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(layerConfig),

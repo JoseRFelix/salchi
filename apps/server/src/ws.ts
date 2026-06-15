@@ -32,6 +32,8 @@ import {
   ProjectDeleteEntryError,
   OrchestrationReplayEventsError,
   FilesystemBrowseError,
+  AssetAccessError,
+  type DiscoveredLocalServerList,
   ThreadId,
   type TerminalEvent,
   WS_METHODS,
@@ -65,6 +67,10 @@ import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup.ts";
 import { redactServerSettingsForClient, ServerSettingsService } from "./serverSettings.ts";
 import { TerminalManager } from "./terminal/Services/Manager.ts";
+import { issueAssetUrl } from "./assets/AssetAccess.ts";
+import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as PreviewManager from "./preview/Manager.ts";
+import * as PortScanner from "./preview/PortScanner.ts";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries.ts";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem.ts";
 import { WorkspacePathOutsideRootError } from "./workspace/Services/WorkspacePaths.ts";
@@ -290,6 +296,9 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const vcsProvisioning = yield* VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager;
+      const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+      const previewManager = yield* PreviewManager.PreviewManager;
+      const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry;
       const providerService = yield* ProviderService;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
@@ -1389,6 +1398,55 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             ),
             { "rpc.aggregate": "workspace" },
           ),
+        [WS_METHODS.assetsCreateUrl]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.assetsCreateUrl,
+            Effect.gen(function* () {
+              if (input.resource._tag !== "workspace-file") {
+                return yield* issueAssetUrl({ resource: input.resource });
+              }
+
+              const thread = yield* projectionSnapshotQuery
+                .getThreadShellById(input.resource.threadId)
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new AssetAccessError({
+                        message: "Failed to resolve workspace context.",
+                        cause,
+                      }),
+                  ),
+                );
+              if (Option.isNone(thread)) {
+                return yield* new AssetAccessError({
+                  message: "Workspace context was not found.",
+                });
+              }
+
+              const project = yield* projectionSnapshotQuery
+                .getProjectShellById(thread.value.projectId)
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new AssetAccessError({
+                        message: "Failed to resolve workspace context.",
+                        cause,
+                      }),
+                  ),
+                );
+              if (Option.isNone(project)) {
+                return yield* new AssetAccessError({
+                  message: "Workspace context was not found.",
+                });
+              }
+
+              return yield* issueAssetUrl({
+                resource: input.resource,
+                workspaceRoot: thread.value.worktreePath ?? project.value.workspaceRoot,
+              });
+            }),
+            { "rpc.aggregate": "workspace" },
+          ),
         [WS_METHODS.subscribeVcsStatus]: (input) =>
           observeRpcStream(
             WS_METHODS.subscribeVcsStatus,
@@ -1572,6 +1630,80 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               ),
             ),
             { "rpc.aggregate": "terminal" },
+          ),
+        [WS_METHODS.previewOpen]: (input) =>
+          observeRpcEffect(WS_METHODS.previewOpen, previewManager.open(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewNavigate]: (input) =>
+          observeRpcEffect(WS_METHODS.previewNavigate, previewManager.navigate(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewRefresh]: (input) =>
+          observeRpcEffect(WS_METHODS.previewRefresh, previewManager.refresh(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewClose]: (input) =>
+          observeRpcEffect(WS_METHODS.previewClose, previewManager.close(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewList]: (input) =>
+          observeRpcEffect(WS_METHODS.previewList, previewManager.list(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewReportStatus]: (input) =>
+          observeRpcEffect(WS_METHODS.previewReportStatus, previewManager.reportStatus(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewAutomationConnect]: (input) =>
+          observeRpcStreamEffect(
+            WS_METHODS.previewAutomationConnect,
+            previewAutomationBroker.connect(input.clientId),
+            { "rpc.aggregate": "preview-automation" },
+          ),
+        [WS_METHODS.previewAutomationRespond]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.previewAutomationRespond,
+            previewAutomationBroker.respond(input),
+            { "rpc.aggregate": "preview-automation" },
+          ),
+        [WS_METHODS.previewAutomationReportOwner]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.previewAutomationReportOwner,
+            previewAutomationBroker.reportOwner(input),
+            { "rpc.aggregate": "preview-automation" },
+          ),
+        [WS_METHODS.previewAutomationClearOwner]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.previewAutomationClearOwner,
+            previewAutomationBroker.clearOwner(input.clientId),
+            { "rpc.aggregate": "preview-automation" },
+          ),
+        [WS_METHODS.subscribePreviewEvents]: (_input) =>
+          observeRpcStream(WS_METHODS.subscribePreviewEvents, previewManager.events, {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.subscribeDiscoveredLocalServers]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeDiscoveredLocalServers,
+            Stream.callback<DiscoveredLocalServerList>((queue) =>
+              Effect.gen(function* () {
+                yield* portDiscovery.retain;
+                const initial = yield* portDiscovery.scan();
+                const initialScannedAt = DateTime.formatIso(yield* DateTime.now);
+                yield* Queue.offer(queue, {
+                  servers: initial,
+                  scannedAt: initialScannedAt,
+                });
+                yield* portDiscovery.subscribe((servers) =>
+                  Effect.gen(function* () {
+                    const scannedAt = DateTime.formatIso(yield* DateTime.now);
+                    yield* Queue.offer(queue, { servers, scannedAt });
+                  }),
+                );
+              }),
+            ),
+            { "rpc.aggregate": "preview" },
           ),
         [WS_METHODS.subscribeServerConfig]: (_input) =>
           observeRpcStreamEffect(

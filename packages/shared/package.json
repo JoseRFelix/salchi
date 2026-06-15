@@ -110,6 +110,14 @@
     "./orchestrationThreadDetailFingerprint": {
       "types": "./src/orchestrationThreadDetailFingerprint.ts",
       "import": "./src/orchestrationThreadDetailFingerprint.ts"
+    },
+    "./preview": {
+      "types": "./src/preview.ts",
+      "import": "./src/preview.ts"
+    },
+    "./terminalLabels": {
+      "types": "./src/terminalLabels.ts",
+      "import": "./src/terminalLabels.ts"
     }
   },
   "scripts": {

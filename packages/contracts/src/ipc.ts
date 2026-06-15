@@ -25,6 +25,7 @@ import type {
   VcsCreateRefResult,
 } from "./git.ts";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem.ts";
+import type { AssetCreateUrlInput, AssetCreateUrlResult } from "./assets.ts";
 import type {
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
@@ -71,6 +72,24 @@ import type {
 } from "./terminal.ts";
 import type { ServerRemoveKeybindingInput, ServerUpsertKeybindingInput } from "./server.ts";
 import * as Schema from "effect/Schema";
+import type {
+  DiscoveredLocalServerList,
+  PreviewCloseInput,
+  PreviewEvent,
+  PreviewListInput,
+  PreviewListResult,
+  PreviewNavigateInput,
+  PreviewOpenInput,
+  PreviewRefreshInput,
+  PreviewReportStatusInput,
+  PreviewSessionSnapshot,
+} from "./preview.ts";
+import type { DesktopPreviewBridge } from "./previewIpc.ts";
+import type {
+  PreviewAutomationOwner,
+  PreviewAutomationRequest,
+  PreviewAutomationResponse,
+} from "./previewAutomation.ts";
 import type {
   ClientOrchestrationCommand,
   OrchestrationGetThreadDetailPageInput,
@@ -454,6 +473,7 @@ export interface DesktopBridge {
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
+  preview?: DesktopPreviewBridge;
 }
 
 /**
@@ -565,6 +585,9 @@ export interface EnvironmentApi {
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;
   };
+  assets: {
+    createUrl: (input: AssetCreateUrlInput) => Promise<AssetCreateUrlResult>;
+  };
   sourceControl: {
     lookupRepository: (
       input: SourceControlRepositoryLookupInput,
@@ -628,6 +651,32 @@ export interface EnvironmentApi {
       options?: {
         onResubscribe?: () => void;
       },
+    ) => () => void;
+  };
+  preview: {
+    open: (input: typeof PreviewOpenInput.Encoded) => Promise<PreviewSessionSnapshot>;
+    navigate: (input: typeof PreviewNavigateInput.Encoded) => Promise<PreviewSessionSnapshot>;
+    refresh: (input: typeof PreviewRefreshInput.Encoded) => Promise<void>;
+    close: (input: typeof PreviewCloseInput.Encoded) => Promise<void>;
+    list: (input: typeof PreviewListInput.Encoded) => Promise<PreviewListResult>;
+    reportStatus: (input: typeof PreviewReportStatusInput.Encoded) => Promise<void>;
+    automation: {
+      connect: (
+        input: { clientId: string },
+        callback: (request: PreviewAutomationRequest) => void,
+        options?: { onResubscribe?: () => void },
+      ) => () => void;
+      respond: (response: PreviewAutomationResponse) => Promise<void>;
+      reportOwner: (owner: PreviewAutomationOwner) => Promise<void>;
+      clearOwner: (input: { clientId: string }) => Promise<void>;
+    };
+    onEvent: (
+      callback: (event: PreviewEvent) => void,
+      options?: { onResubscribe?: () => void },
+    ) => () => void;
+    subscribePorts: (
+      callback: (servers: DiscoveredLocalServerList) => void,
+      options?: { onResubscribe?: () => void },
     ) => () => void;
   };
 }

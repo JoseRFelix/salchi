@@ -17,6 +17,7 @@ import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
+import * as PreviewManager from "../preview/Manager.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 
 const environmentInput = {
@@ -107,6 +108,12 @@ const electronThemeLayer = Layer.succeed(ElectronTheme.ElectronTheme, {
   onUpdated: () => Effect.void,
 } satisfies ElectronTheme.ElectronThemeShape);
 
+const previewManagerLayer = Layer.succeed(PreviewManager.PreviewManager, {
+  getBrowserSession: () => Effect.succeed({} as Electron.Session),
+  isBrowserPartition: (partition: string) => partition.startsWith("persist:t3-preview"),
+  setMainWindow: () => Effect.void,
+} as unknown as PreviewManager.PreviewManagerShape);
+
 const desktopEnvironmentLayer = DesktopEnvironment.layer(environmentInput).pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -148,6 +155,7 @@ function makeTestLayer(input: {
         electronShellLayer,
         electronThemeLayer,
         electronWindowLayer,
+        previewManagerLayer,
       ),
     ),
   );

@@ -252,6 +252,7 @@ function createMockEnvironmentApi(input: {
     filesystem: {
       browse: input.browse,
     },
+    assets: {} as EnvironmentApi["assets"],
     sourceControl: {} as EnvironmentApi["sourceControl"],
     vcs: {} as EnvironmentApi["vcs"],
     git: {} as EnvironmentApi["git"],
@@ -276,6 +277,7 @@ function createMockEnvironmentApi(input: {
       subscribeThread: (() => () =>
         undefined) as EnvironmentApi["orchestration"]["subscribeThread"],
     },
+    preview: {} as EnvironmentApi["preview"],
   };
 }
 

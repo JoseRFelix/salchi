@@ -108,6 +108,8 @@ import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useMobileEdgeSwipe } from "../hooks/useMobileEdgeSwipe";
 import { markRightPanelUsed, openRightPanel, useRegisterRightPanel } from "../rightPanelGesture";
+import { useRightPanelStore } from "../rightPanelStore";
+import { usePreviewStateStore } from "../previewStateStore";
 import { closeSourceControlPanel, useSourceControlPanelState } from "../sourceControlPanelState";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import {
@@ -159,11 +161,13 @@ import {
   type TerminalContextDraft,
   type TerminalContextSelection,
 } from "../lib/terminalContext";
+import { appendPreviewAnnotationPrompt } from "../lib/previewAnnotation";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+import { subscribePreviewAction } from "./preview/previewActionBus";
 import {
   scheduleStickToBottom,
   STICK_TO_BOTTOM_RESUME_LOCK_MS,
@@ -446,6 +450,10 @@ type ChatViewProps =
       environmentId: EnvironmentId;
       threadId: ThreadId;
       onDiffPanelOpen?: () => void;
+      onPreviewPanelClose?: () => void;
+      onTogglePreview?: () => void;
+      previewAvailable?: boolean;
+      previewOpen?: boolean;
       reserveTitleBarControlInset?: boolean;
       routeKind: "server";
       draftId?: never;
@@ -454,6 +462,10 @@ type ChatViewProps =
       environmentId: EnvironmentId;
       threadId: ThreadId;
       onDiffPanelOpen?: () => void;
+      onPreviewPanelClose?: () => void;
+      onTogglePreview?: () => void;
+      previewAvailable?: boolean;
+      previewOpen?: boolean;
       reserveTitleBarControlInset?: boolean;
       routeKind: "draft";
       draftId: DraftId;
@@ -731,6 +743,10 @@ export default function ChatView(props: ChatViewProps) {
     threadId,
     routeKind,
     onDiffPanelOpen,
+    onPreviewPanelClose,
+    onTogglePreview,
+    previewAvailable = false,
+    previewOpen = false,
     reserveTitleBarControlInset = true,
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
@@ -783,6 +799,9 @@ export default function ChatView(props: ChatViewProps) {
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const setComposerDraftTerminalContexts = useComposerDraftStore(
     (store) => store.setTerminalContexts,
+  );
+  const setComposerDraftPreviewAnnotations = useComposerDraftStore(
+    (store) => store.setPreviewAnnotations,
   );
   const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
   const applyComposerDraftStickyState = useComposerDraftStore((store) => store.applyStickyState);
@@ -1950,9 +1969,10 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeFileExplorerContext) {
       return;
     }
+    onPreviewPanelClose?.();
     setPlanSidebarOpen(false);
     openWorkspaceFileExplorer(activeFileExplorerContext);
-  }, [activeFileExplorerContext, fileExplorerOpen]);
+  }, [activeFileExplorerContext, fileExplorerOpen, onPreviewPanelClose]);
   useEffect(() => {
     setActiveWorkspaceFileExplorerContext(activeFileExplorerContext);
     return () => {
@@ -1997,6 +2017,10 @@ export default function ChatView(props: ChatViewProps) {
     () => shortcutLabelForCommand(keybindings, "diff.toggle", nonTerminalShortcutLabelOptions),
     [keybindings, nonTerminalShortcutLabelOptions],
   );
+  const previewPanelShortcutLabel = useMemo(
+    () => shortcutLabelForCommand(keybindings, "preview.toggle", nonTerminalShortcutLabelOptions),
+    [keybindings, nonTerminalShortcutLabelOptions],
+  );
   const sourceControlShortcutLabel = useMemo(
     () =>
       shortcutLabelForCommand(keybindings, "sourceControl.toggle", nonTerminalShortcutLabelOptions),
@@ -2005,8 +2029,9 @@ export default function ChatView(props: ChatViewProps) {
   const openDiffPanelExclusive = useCallback(() => {
     closeWorkspaceFilePreview();
     closeSourceControlPanel();
+    onPreviewPanelClose?.();
     onDiffPanelOpen?.();
-  }, [onDiffPanelOpen]);
+  }, [onDiffPanelOpen, onPreviewPanelClose]);
   const onToggleDiff = useCallback(() => {
     if (routeKind === "server" && !isServerThread) {
       return;
@@ -2064,6 +2089,17 @@ export default function ChatView(props: ChatViewProps) {
     // Opens the source control panel and closes any other registered right panel.
     openRightPanel("source-control");
   }, [sourceControlOpen]);
+
+  useEffect(() => {
+    if (!previewAvailable || !onTogglePreview) {
+      return;
+    }
+    return subscribePreviewAction((action) => {
+      if (action === "toggle-panel") {
+        onTogglePreview();
+      }
+    });
+  }, [onTogglePreview, previewAvailable]);
 
   const envLocked = Boolean(
     activeThread &&
@@ -2352,6 +2388,18 @@ export default function ChatView(props: ChatViewProps) {
           terminalId: targetTerminalId,
           data: `${script.command}\r`,
         });
+        if (script.autoOpenPreview && script.previewUrl && previewAvailable && activeThreadRef) {
+          try {
+            const snapshot = await api.preview.open({
+              threadId: activeThreadId,
+              url: script.previewUrl,
+            });
+            usePreviewStateStore.getState().applyServerSnapshot(activeThreadRef, snapshot);
+            useRightPanelStore.getState().openBrowser(activeThreadRef, snapshot.tabId);
+          } catch {
+            // Preview open failures are surfaced by the preview panel.
+          }
+        }
       } catch (error) {
         setThreadError(
           activeThreadId,
@@ -2371,6 +2419,7 @@ export default function ChatView(props: ChatViewProps) {
       storeSetActiveTerminal,
       setLastInvokedScriptByProjectId,
       environmentId,
+      previewAvailable,
       terminalState.activeTerminalId,
       terminalState.runningTerminalIds,
       terminalState.terminalIds,
@@ -2424,6 +2473,8 @@ export default function ChatView(props: ChatViewProps) {
         command: input.command,
         icon: input.icon,
         runOnWorktreeCreate: input.runOnWorktreeCreate,
+        ...(input.previewUrl ? { previewUrl: input.previewUrl } : {}),
+        ...(input.autoOpenPreview ? { autoOpenPreview: input.autoOpenPreview } : {}),
       };
       const nextScripts = input.runOnWorktreeCreate
         ? [
@@ -2459,6 +2510,10 @@ export default function ChatView(props: ChatViewProps) {
         command: input.command,
         icon: input.icon,
         runOnWorktreeCreate: input.runOnWorktreeCreate,
+        ...(input.previewUrl ? { previewUrl: input.previewUrl } : { previewUrl: undefined }),
+        ...(input.autoOpenPreview
+          ? { autoOpenPreview: input.autoOpenPreview }
+          : { autoOpenPreview: undefined }),
       };
       const nextScripts = activeProject.scripts.map((script) =>
         script.id === scriptId
@@ -2559,9 +2614,10 @@ export default function ChatView(props: ChatViewProps) {
     planSidebarDismissedForTurnRef.current = null;
     closeWorkspaceFilePreview();
     closeSourceControlPanel();
+    onPreviewPanelClose?.();
     markRightPanelUsed("plan");
     setPlanSidebarOpen(true);
-  }, []);
+  }, [onPreviewPanelClose]);
   const togglePlanSidebar = useCallback(() => {
     setPlanSidebarOpen((open) => {
       if (open) {
@@ -2571,11 +2627,12 @@ export default function ChatView(props: ChatViewProps) {
         planSidebarDismissedForTurnRef.current = null;
         closeWorkspaceFilePreview();
         closeSourceControlPanel();
+        onPreviewPanelClose?.();
         markRightPanelUsed("plan");
       }
       return !open;
     });
-  }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
+  }, [activePlan?.turnId, onPreviewPanelClose, sidebarProposedPlan?.turnId]);
   const closePlanSidebar = useCallback(() => {
     setPlanSidebarOpen(false);
     planSidebarDismissedForTurnRef.current =
@@ -3342,6 +3399,7 @@ export default function ChatView(props: ChatViewProps) {
     const {
       images: composerImages,
       terminalContexts: composerTerminalContexts,
+      previewAnnotations: composerPreviewAnnotations,
       selectedProvider: ctxSelectedProvider,
       selectedModel: ctxSelectedModel,
       selectedProviderModels: ctxSelectedProviderModels,
@@ -3358,6 +3416,7 @@ export default function ChatView(props: ChatViewProps) {
       prompt: promptForSend,
       imageCount: composerImages.length,
       terminalContexts: composerTerminalContexts,
+      elementContextCount: composerPreviewAnnotations.length,
     });
     if (showPlanFollowUpPrompt && activeProposedPlan) {
       const followUp = resolvePlanFollowUpSubmission({
@@ -3374,7 +3433,9 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
     const standaloneSlashCommand =
-      composerImages.length === 0 && sendableComposerTerminalContexts.length === 0
+      composerImages.length === 0 &&
+      sendableComposerTerminalContexts.length === 0 &&
+      composerPreviewAnnotations.length === 0
         ? parseStandaloneComposerSlashCommand(trimmed)
         : null;
     if (standaloneSlashCommand) {
@@ -3427,9 +3488,14 @@ export default function ChatView(props: ChatViewProps) {
     sendInFlightRef.current = true;
     const composerImagesSnapshot = [...composerImages];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
-    const messageTextForSend = appendTerminalContextsToPrompt(
+    const composerPreviewAnnotationsSnapshot = [...composerPreviewAnnotations];
+    const messageTextWithTerminalContexts = appendTerminalContextsToPrompt(
       promptForSend,
       composerTerminalContextsSnapshot,
+    );
+    const messageTextForSend = composerPreviewAnnotationsSnapshot.reduce(
+      (text, annotation) => appendPreviewAnnotationPrompt(text, annotation),
+      messageTextWithTerminalContexts,
     );
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
@@ -3470,6 +3536,13 @@ export default function ChatView(props: ChatViewProps) {
         titleSeed = `Image: ${firstComposerImageName}`;
       } else if (composerTerminalContextsSnapshot.length > 0) {
         titleSeed = formatTerminalContextLabel(composerTerminalContextsSnapshot[0]!);
+      } else if (composerPreviewAnnotationsSnapshot.length > 0) {
+        const firstAnnotation = composerPreviewAnnotationsSnapshot[0]!;
+        titleSeed =
+          firstAnnotation.comment.trim() ||
+          firstAnnotation.pageTitle?.trim() ||
+          firstAnnotation.pageUrl.trim() ||
+          "Preview annotation";
       } else {
         titleSeed = "New thread";
       }
@@ -3541,7 +3614,9 @@ export default function ChatView(props: ChatViewProps) {
           !queuedTurnSucceeded &&
           promptRef.current.length === 0 &&
           composerImagesRef.current.length === 0 &&
-          composerTerminalContextsRef.current.length === 0
+          composerTerminalContextsRef.current.length === 0 &&
+          (useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
+            ?.previewAnnotations.length ?? 0) === 0
         ) {
           setOptimisticQueuedTurns((existing) => {
             const removed = existing.filter(
@@ -3562,6 +3637,10 @@ export default function ChatView(props: ChatViewProps) {
           setComposerDraftPrompt(composerDraftTarget, promptForSend);
           addComposerDraftImages(composerDraftTarget, retryComposerImages);
           setComposerDraftTerminalContexts(composerDraftTarget, composerTerminalContextsSnapshot);
+          setComposerDraftPreviewAnnotations(
+            composerDraftTarget,
+            composerPreviewAnnotationsSnapshot,
+          );
           composerRef.current?.resetCursorState({
             cursor: collapseExpandedComposerCursor(promptForSend, promptForSend.length),
             prompt: promptForSend,
@@ -3699,7 +3778,9 @@ export default function ChatView(props: ChatViewProps) {
         !turnStartSucceeded &&
         promptRef.current.length === 0 &&
         composerImagesRef.current.length === 0 &&
-        composerTerminalContextsRef.current.length === 0
+        composerTerminalContextsRef.current.length === 0 &&
+        (useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.previewAnnotations
+          .length ?? 0) === 0
       ) {
         setOptimisticUserMessages((existing) => {
           const removed = existing.filter((message) => message.id === messageIdForSend);
@@ -3716,6 +3797,7 @@ export default function ChatView(props: ChatViewProps) {
         setComposerDraftPrompt(composerDraftTarget, promptForSend);
         addComposerDraftImages(composerDraftTarget, retryComposerImages);
         setComposerDraftTerminalContexts(composerDraftTarget, composerTerminalContextsSnapshot);
+        setComposerDraftPreviewAnnotations(composerDraftTarget, composerPreviewAnnotationsSnapshot);
         composerRef.current?.resetCursorState({
           cursor: collapseExpandedComposerCursor(promptForSend, promptForSend.length),
           prompt: promptForSend,
@@ -4375,6 +4457,9 @@ export default function ChatView(props: ChatViewProps) {
           terminalOpen={terminalState.terminalOpen}
           terminalToggleShortcutLabel={terminalToggleShortcutLabel}
           diffToggleShortcutLabel={diffPanelShortcutLabel}
+          previewAvailable={previewAvailable}
+          previewOpen={previewOpen}
+          previewToggleShortcutLabel={previewPanelShortcutLabel}
           sourceControlToggleShortcutLabel={sourceControlShortcutLabel}
           gitCwd={gitCwd}
           diffOpen={diffOpen}
@@ -4386,6 +4471,7 @@ export default function ChatView(props: ChatViewProps) {
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
           onToggleFileExplorer={toggleFileExplorerSidebar}
+          onTogglePreview={onTogglePreview ?? (() => undefined)}
           onToggleTerminal={toggleTerminalVisibility}
           onToggleDiff={onToggleDiff}
           onToggleSourceControl={onToggleSourceControl}

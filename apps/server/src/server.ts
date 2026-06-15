@@ -5,6 +5,7 @@ import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
 import { ServerConfig, type ServerConfigShape } from "./config.ts";
 import {
   attachmentsRouteLayer,
+  assetRouteLayer,
   otlpTracesProxyRouteLayer,
   projectFaviconRouteLayer,
   serverEnvironmentRouteLayer,
@@ -35,6 +36,12 @@ import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
 import { TerminalManagerLive } from "./terminal/Layers/Manager.ts";
+import * as McpHttpServer from "./mcp/McpHttpServer.ts";
+import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
+import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as PreviewManager from "./preview/Manager.ts";
+import * as PortScanner from "./preview/PortScanner.ts";
+import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import { KeybindingsLive } from "./keybindings.ts";
 import { ServerRuntimeStartup, ServerRuntimeStartupLive } from "./serverRuntimeStartup.ts";
@@ -237,7 +244,18 @@ const CheckpointingLayerLive = Layer.empty.pipe(
   Layer.provideMerge(CheckpointStoreLive.pipe(Layer.provide(VcsDriverRegistryLayerLive))),
 );
 
-const TerminalLayerLive = TerminalManagerLive.pipe(Layer.provide(PtyAdapterLive));
+const PortScannerLayerLive = PortScanner.layer.pipe(Layer.provide(ProcessRunner.layer));
+
+const TerminalLayerLive = TerminalManagerLive.pipe(
+  Layer.provide(PtyAdapterLive),
+  Layer.provide(PortScannerLayerLive),
+);
+
+const PreviewLayerLive = Layer.empty.pipe(
+  Layer.provideMerge(PreviewManager.layer),
+  Layer.provideMerge(PortScannerLayerLive),
+  Layer.provideMerge(PreviewAutomationBroker.layer),
+);
 
 const WorkspaceEntriesLayerLive = WorkspaceEntriesLive.pipe(
   Layer.provide(WorkspacePathsLive),
@@ -278,7 +296,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),
-  Layer.provideMerge(TerminalLayerLive),
+  Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(KeybindingsLive),
   Layer.provideMerge(ProviderRegistryLive),
@@ -305,6 +323,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ProjectFaviconResolverLive),
   Layer.provideMerge(RepositoryIdentityResolverLive),
   Layer.provideMerge(ServerEnvironmentLive),
+  Layer.provideMerge(ServerSecretStoreLive),
   Layer.provideMerge(AuthLayerLive),
   Layer.provideMerge(WebPushLayerLive),
 );
@@ -339,6 +358,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   authWebSocketTicketRouteLayer,
   authWebSocketTokenRouteLayer,
   attachmentsRouteLayer,
+  assetRouteLayer,
   orchestrationDispatchRouteLayer,
   orchestrationSnapshotRouteLayer,
   otlpTracesProxyRouteLayer,
@@ -349,6 +369,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   workspaceImageRouteLayer,
   staticAndDevRouteLayer,
   websocketRpcRouteLayer,
+  McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
 ).pipe(Layer.provide(browserApiCorsLayer));
 
 export const makeServerLayer = Layer.unwrap(

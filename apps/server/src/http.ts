@@ -24,6 +24,7 @@ import {
   normalizeAttachmentRelativePath,
   resolveAttachmentRelativePath,
 } from "./attachmentPaths.ts";
+import { ASSET_ROUTE_PREFIX, resolveAsset } from "./assets/AssetAccess.ts";
 import { resolveAttachmentPathById } from "./attachmentStore.ts";
 import { resolveStaticDir, ServerConfig } from "./config.ts";
 import { BrowserTraceCollector } from "./observability/Services/BrowserTraceCollector.ts";
@@ -261,6 +262,55 @@ export const attachmentsRouteLayer = HttpRouter.add(
       ),
     );
   }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+);
+
+export const assetRouteLayer = HttpRouter.add(
+  "GET",
+  `${ASSET_ROUTE_PREFIX}/*`,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) {
+      return HttpServerResponse.text("Bad Request", { status: 400 });
+    }
+
+    const suffix = url.value.pathname.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+    const separatorIndex = suffix.indexOf("/");
+    if (separatorIndex <= 0) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    const asset = yield* resolveAsset(
+      suffix.slice(0, separatorIndex),
+      suffix.slice(separatorIndex + 1),
+    );
+    if (!asset) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    if (asset.kind === "project-favicon-fallback") {
+      return HttpServerResponse.text(FALLBACK_PROJECT_FAVICON_SVG, {
+        status: 200,
+        contentType: "image/svg+xml",
+        headers: {
+          "Cache-Control": "private, max-age=3600",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
+
+    return yield* HttpServerResponse.file(asset.path, {
+      status: 200,
+      headers: {
+        "Cache-Control": "private, max-age=3600",
+        "X-Content-Type-Options": "nosniff",
+      },
+    }).pipe(
+      Effect.catch(() =>
+        Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
+      ),
+    );
+  }),
 );
 
 export const projectFaviconRouteLayer = HttpRouter.add(

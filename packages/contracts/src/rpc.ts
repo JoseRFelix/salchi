@@ -9,6 +9,7 @@ import {
   FilesystemBrowseResult,
   FilesystemBrowseError,
 } from "./filesystem.ts";
+import { AssetAccessError, AssetCreateUrlInput, AssetCreateUrlResult } from "./assets.ts";
 import {
   GitActionProgressEvent,
   GenerateCommitMessageInput,
@@ -86,6 +87,25 @@ import {
   TerminalWriteInput,
 } from "./terminal.ts";
 import {
+  DiscoveredLocalServerList,
+  PreviewCloseInput,
+  PreviewError,
+  PreviewEvent,
+  PreviewListInput,
+  PreviewListResult,
+  PreviewNavigateInput,
+  PreviewOpenInput,
+  PreviewRefreshInput,
+  PreviewReportStatusInput,
+  PreviewSessionSnapshot,
+} from "./preview.ts";
+import {
+  PreviewAutomationError,
+  PreviewAutomationOwner,
+  PreviewAutomationRequest,
+  PreviewAutomationResponse,
+} from "./previewAutomation.ts";
+import {
   ServerConfigStreamEvent,
   ServerConfig,
   ServerProviderUpdateError,
@@ -141,6 +161,7 @@ export const WS_METHODS = {
 
   // Filesystem methods
   filesystemBrowse: "filesystem.browse",
+  assetsCreateUrl: "assets.createUrl",
 
   // VCS methods
   vcsPull: "vcs.pull",
@@ -170,6 +191,18 @@ export const WS_METHODS = {
   terminalRestart: "terminal.restart",
   terminalClose: "terminal.close",
 
+  // Preview methods
+  previewOpen: "preview.open",
+  previewNavigate: "preview.navigate",
+  previewRefresh: "preview.refresh",
+  previewClose: "preview.close",
+  previewList: "preview.list",
+  previewReportStatus: "preview.reportStatus",
+  previewAutomationConnect: "previewAutomation.connect",
+  previewAutomationRespond: "previewAutomation.respond",
+  previewAutomationReportOwner: "previewAutomation.reportOwner",
+  previewAutomationClearOwner: "previewAutomation.clearOwner",
+
   // Server meta
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
@@ -197,6 +230,8 @@ export const WS_METHODS = {
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
   subscribeTerminalEvents: "subscribeTerminalEvents",
+  subscribePreviewEvents: "subscribePreviewEvents",
+  subscribeDiscoveredLocalServers: "subscribeDiscoveredLocalServers",
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
@@ -390,6 +425,12 @@ export const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   error: FilesystemBrowseError,
 });
 
+export const WsAssetsCreateUrlRpc = Rpc.make(WS_METHODS.assetsCreateUrl, {
+  payload: AssetCreateUrlInput,
+  success: AssetCreateUrlResult,
+  error: AssetAccessError,
+});
+
 export const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
   payload: VcsStatusInput,
   success: VcsStatusStreamEvent,
@@ -524,6 +565,60 @@ export const WsTerminalCloseRpc = Rpc.make(WS_METHODS.terminalClose, {
   error: TerminalError,
 });
 
+export const WsPreviewOpenRpc = Rpc.make(WS_METHODS.previewOpen, {
+  payload: PreviewOpenInput,
+  success: PreviewSessionSnapshot,
+  error: PreviewError,
+});
+
+export const WsPreviewNavigateRpc = Rpc.make(WS_METHODS.previewNavigate, {
+  payload: PreviewNavigateInput,
+  success: PreviewSessionSnapshot,
+  error: PreviewError,
+});
+
+export const WsPreviewRefreshRpc = Rpc.make(WS_METHODS.previewRefresh, {
+  payload: PreviewRefreshInput,
+  error: PreviewError,
+});
+
+export const WsPreviewCloseRpc = Rpc.make(WS_METHODS.previewClose, {
+  payload: PreviewCloseInput,
+  error: PreviewError,
+});
+
+export const WsPreviewListRpc = Rpc.make(WS_METHODS.previewList, {
+  payload: PreviewListInput,
+  success: PreviewListResult,
+});
+
+export const WsPreviewReportStatusRpc = Rpc.make(WS_METHODS.previewReportStatus, {
+  payload: PreviewReportStatusInput,
+  error: PreviewError,
+});
+
+export const WsPreviewAutomationConnectRpc = Rpc.make(WS_METHODS.previewAutomationConnect, {
+  payload: Schema.Struct({ clientId: Schema.String }),
+  success: PreviewAutomationRequest,
+  error: PreviewAutomationError,
+  stream: true,
+});
+
+export const WsPreviewAutomationRespondRpc = Rpc.make(WS_METHODS.previewAutomationRespond, {
+  payload: PreviewAutomationResponse,
+  error: PreviewAutomationError,
+});
+
+export const WsPreviewAutomationReportOwnerRpc = Rpc.make(WS_METHODS.previewAutomationReportOwner, {
+  payload: PreviewAutomationOwner,
+  error: PreviewAutomationError,
+});
+
+export const WsPreviewAutomationClearOwnerRpc = Rpc.make(WS_METHODS.previewAutomationClearOwner, {
+  payload: Schema.Struct({ clientId: Schema.String }),
+  error: PreviewAutomationError,
+});
+
 export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.dispatchCommand,
   {
@@ -610,6 +705,21 @@ export const WsSubscribeTerminalEventsRpc = Rpc.make(WS_METHODS.subscribeTermina
   stream: true,
 });
 
+export const WsSubscribePreviewEventsRpc = Rpc.make(WS_METHODS.subscribePreviewEvents, {
+  payload: Schema.Struct({}),
+  success: PreviewEvent,
+  stream: true,
+});
+
+export const WsSubscribeDiscoveredLocalServersRpc = Rpc.make(
+  WS_METHODS.subscribeDiscoveredLocalServers,
+  {
+    payload: Schema.Struct({}),
+    success: DiscoveredLocalServerList,
+    stream: true,
+  },
+);
+
 export const WsSubscribeServerConfigRpc = Rpc.make(WS_METHODS.subscribeServerConfig, {
   payload: Schema.Struct({}),
   success: ServerConfigStreamEvent,
@@ -657,6 +767,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsDeleteEntryRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
+  WsAssetsCreateUrlRpc,
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,
   WsVcsRefreshStatusRpc,
@@ -681,6 +792,18 @@ export const WsRpcGroup = RpcGroup.make(
   WsTerminalRestartRpc,
   WsTerminalCloseRpc,
   WsSubscribeTerminalEventsRpc,
+  WsPreviewOpenRpc,
+  WsPreviewNavigateRpc,
+  WsPreviewRefreshRpc,
+  WsPreviewCloseRpc,
+  WsPreviewListRpc,
+  WsPreviewReportStatusRpc,
+  WsPreviewAutomationConnectRpc,
+  WsPreviewAutomationRespondRpc,
+  WsPreviewAutomationReportOwnerRpc,
+  WsPreviewAutomationClearOwnerRpc,
+  WsSubscribePreviewEventsRpc,
+  WsSubscribeDiscoveredLocalServersRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,

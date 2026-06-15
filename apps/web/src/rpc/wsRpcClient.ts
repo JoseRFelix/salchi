@@ -189,6 +189,9 @@ export interface WsRpcClient {
   readonly filesystem: {
     readonly browse: RpcUnaryMethod<typeof WS_METHODS.filesystemBrowse>;
   };
+  readonly assets: {
+    readonly createUrl: RpcUnaryMethod<typeof WS_METHODS.assetsCreateUrl>;
+  };
   readonly sourceControl: {
     readonly lookupRepository: RpcUnaryMethod<typeof WS_METHODS.sourceControlLookupRepository>;
     readonly cloneRepository: RpcUnaryMethod<typeof WS_METHODS.sourceControlCloneRepository>;
@@ -295,6 +298,22 @@ export interface WsRpcClient {
     readonly subscribeShell: RpcStreamMethod<typeof ORCHESTRATION_WS_METHODS.subscribeShell>;
     readonly subscribeThread: RpcInputStreamMethod<typeof ORCHESTRATION_WS_METHODS.subscribeThread>;
   };
+  readonly preview: {
+    readonly open: RpcUnaryMethod<typeof WS_METHODS.previewOpen>;
+    readonly navigate: RpcUnaryMethod<typeof WS_METHODS.previewNavigate>;
+    readonly refresh: RpcUnaryMethod<typeof WS_METHODS.previewRefresh>;
+    readonly close: RpcUnaryMethod<typeof WS_METHODS.previewClose>;
+    readonly list: RpcUnaryMethod<typeof WS_METHODS.previewList>;
+    readonly reportStatus: RpcUnaryMethod<typeof WS_METHODS.previewReportStatus>;
+    readonly automation: {
+      readonly connect: RpcInputStreamMethod<typeof WS_METHODS.previewAutomationConnect>;
+      readonly respond: RpcUnaryMethod<typeof WS_METHODS.previewAutomationRespond>;
+      readonly reportOwner: RpcUnaryMethod<typeof WS_METHODS.previewAutomationReportOwner>;
+      readonly clearOwner: RpcUnaryMethod<typeof WS_METHODS.previewAutomationClearOwner>;
+    };
+    readonly onEvent: RpcStreamMethod<typeof WS_METHODS.subscribePreviewEvents>;
+    readonly subscribePorts: RpcStreamMethod<typeof WS_METHODS.subscribeDiscoveredLocalServers>;
+  };
 }
 
 export function createWsRpcClient(transport: WsTransport): WsRpcClient {
@@ -332,6 +351,10 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
     },
     filesystem: {
       browse: (input) => transport.request((client) => client[WS_METHODS.filesystemBrowse](input)),
+    },
+    assets: {
+      createUrl: (input) =>
+        transport.request((client) => client[WS_METHODS.assetsCreateUrl](input)),
     },
     sourceControl: {
       lookupRepository: (input) =>
@@ -493,6 +516,43 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
           (client) => client[ORCHESTRATION_WS_METHODS.subscribeThread](input),
           listener,
           { ...options, tag: options?.tag ?? ORCHESTRATION_WS_METHODS.subscribeThread },
+        ),
+    },
+    preview: {
+      open: (input) => transport.request((client) => client[WS_METHODS.previewOpen](input)),
+      navigate: (input) => transport.request((client) => client[WS_METHODS.previewNavigate](input)),
+      refresh: (input) => transport.request((client) => client[WS_METHODS.previewRefresh](input)),
+      close: (input) => transport.request((client) => client[WS_METHODS.previewClose](input)),
+      list: (input) => transport.request((client) => client[WS_METHODS.previewList](input)),
+      reportStatus: (input) =>
+        transport.request((client) => client[WS_METHODS.previewReportStatus](input)),
+      automation: {
+        connect: (input, listener, options) =>
+          transport.subscribe(
+            (client) => client[WS_METHODS.previewAutomationConnect](input),
+            listener,
+            { ...options, tag: options?.tag ?? WS_METHODS.previewAutomationConnect },
+          ),
+        respond: (input) =>
+          transport.request((client) => client[WS_METHODS.previewAutomationRespond](input)),
+        reportOwner: (input) =>
+          transport.request((client) => client[WS_METHODS.previewAutomationReportOwner](input)),
+        clearOwner: (input) =>
+          transport.request((client) => client[WS_METHODS.previewAutomationClearOwner](input)),
+      },
+      onEvent: (listener, options) =>
+        transport.subscribe((client) => client[WS_METHODS.subscribePreviewEvents]({}), listener, {
+          ...options,
+          tag: options?.tag ?? WS_METHODS.subscribePreviewEvents,
+        }),
+      subscribePorts: (listener, options) =>
+        transport.subscribe(
+          (client) => client[WS_METHODS.subscribeDiscoveredLocalServers]({}),
+          listener,
+          {
+            ...options,
+            tag: options?.tag ?? WS_METHODS.subscribeDiscoveredLocalServers,
+          },
         ),
     },
   };

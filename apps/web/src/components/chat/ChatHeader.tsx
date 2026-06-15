@@ -10,6 +10,7 @@ import {
   EllipsisIcon,
   FolderTreeIcon,
   GitBranchIcon,
+  GlobeIcon,
   TerminalSquareIcon,
 } from "lucide-react";
 import { Badge } from "../ui/badge";
@@ -41,6 +42,9 @@ interface ChatHeaderProps {
   terminalOpen: boolean;
   terminalToggleShortcutLabel: string | null;
   diffToggleShortcutLabel: string | null;
+  previewAvailable: boolean;
+  previewOpen: boolean;
+  previewToggleShortcutLabel: string | null;
   sourceControlToggleShortcutLabel: string | null;
   gitCwd: string | null;
   diffOpen: boolean;
@@ -52,6 +56,7 @@ interface ChatHeaderProps {
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleFileExplorer: () => void;
+  onTogglePreview: () => void;
   onToggleTerminal: () => void;
   onToggleDiff: () => void;
   onToggleSourceControl: () => void;
@@ -83,6 +88,9 @@ export const ChatHeader = memo(function ChatHeader({
   terminalOpen,
   terminalToggleShortcutLabel,
   diffToggleShortcutLabel,
+  previewAvailable,
+  previewOpen,
+  previewToggleShortcutLabel,
   sourceControlToggleShortcutLabel,
   gitCwd,
   diffOpen,
@@ -94,6 +102,7 @@ export const ChatHeader = memo(function ChatHeader({
   onUpdateProjectScript,
   onDeleteProjectScript,
   onToggleFileExplorer,
+  onTogglePreview,
   onToggleTerminal,
   onToggleDiff,
   onToggleSourceControl,
@@ -213,6 +222,30 @@ export const ChatHeader = memo(function ChatHeader({
             render={
               <Toggle
                 className="shrink-0"
+                pressed={previewOpen}
+                onPressedChange={onTogglePreview}
+                aria-label="Toggle browser preview"
+                variant="outline"
+                size="xs"
+                disabled={!previewAvailable}
+              >
+                <GlobeIcon className="size-4.5 sm:size-3" />
+              </Toggle>
+            }
+          />
+          <TooltipPopup side="bottom">
+            {!previewAvailable
+              ? "Browser preview is only available in the desktop app."
+              : previewToggleShortcutLabel
+                ? `Toggle browser preview (${previewToggleShortcutLabel})`
+                : "Toggle browser preview"}
+          </TooltipPopup>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Toggle
+                className="shrink-0"
                 pressed={terminalOpen}
                 onPressedChange={onToggleTerminal}
                 aria-label="Toggle terminal drawer"
@@ -293,6 +326,10 @@ export const ChatHeader = memo(function ChatHeader({
               <MenuItem onClick={() => onToggleDiff()} disabled={!isGitRepo && !diffOpen}>
                 <DiffIcon aria-hidden="true" className="size-4" />
                 Diff
+              </MenuItem>
+              <MenuItem onClick={() => onTogglePreview()} disabled={!previewAvailable}>
+                <GlobeIcon aria-hidden="true" className="size-4" />
+                Preview
               </MenuItem>
               <MenuItem onClick={() => onToggleFileExplorer()} disabled={!fileExplorerAvailable}>
                 <FolderTreeIcon aria-hidden="true" className="size-4" />
