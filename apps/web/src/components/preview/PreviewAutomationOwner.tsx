@@ -145,31 +145,48 @@ export function PreviewAutomationOwner(props: {
             const snapshot = await api.preview.open({
               threadId: threadRef.threadId,
               ...(input.url ? { url: input.url } : {}),
+              hostPreference: previewBridge ? "desktop" : "steel",
             });
             usePreviewStateStore.getState().applyServerSnapshot(threadRef, snapshot);
             activeTabId = snapshot.tabId;
           } else if (input.url && previewBridge) {
             await previewBridge.navigate(activeTabId, input.url);
+          } else if (input.url) {
+            const snapshot = await api.preview.navigate({
+              threadId: threadRef.threadId,
+              tabId: activeTabId,
+              url: input.url,
+            });
+            usePreviewStateStore.getState().applyServerSnapshot(threadRef, snapshot);
           }
           if (input.show ?? true) {
             useRightPanelStore.getState().openBrowser(threadRef, activeTabId);
           }
-          await waitForDesktopOverlay(threadRef, request.timeoutMs);
+          if (previewBridge) await waitForDesktopOverlay(threadRef, request.timeoutMs);
           return currentStatus(threadRef, input.show ?? true);
         }
         case "navigate": {
-          if (!previewBridge || !tabId) throw new Error("Preview tab is not initialized.");
+          if (!tabId) throw new Error("Preview tab is not initialized.");
           const input = request.input as PreviewAutomationNavigateInput;
           const resolution = resolveBrowserNavigationTarget(
             threadRef.environmentId,
             input.target ?? { kind: "url", url: input.url! },
           );
-          await previewBridge.navigate(tabId, resolution.resolvedUrl);
-          await waitForNavigationReadiness(
-            tabId,
-            input.readiness ?? "load",
-            input.timeoutMs ?? request.timeoutMs,
-          );
+          if (previewBridge) {
+            await previewBridge.navigate(tabId, resolution.resolvedUrl);
+            await waitForNavigationReadiness(
+              tabId,
+              input.readiness ?? "load",
+              input.timeoutMs ?? request.timeoutMs,
+            );
+          } else {
+            const snapshot = await api.preview.navigate({
+              threadId: threadRef.threadId,
+              tabId,
+              url: resolution.resolvedUrl,
+            });
+            usePreviewStateStore.getState().applyServerSnapshot(threadRef, snapshot);
+          }
           return currentStatus(threadRef, visible);
         }
         case "snapshot":

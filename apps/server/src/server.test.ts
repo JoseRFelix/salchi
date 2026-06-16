@@ -143,6 +143,7 @@ import { WebPushServiceNoop } from "./push/Layers/WebPushService.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as SteelBrowser from "./preview/SteelBrowser.ts";
 
 const defaultProjectId = ProjectId.make("project-default");
 const defaultThreadId = ThreadId.make("thread-default");
@@ -529,7 +530,7 @@ const buildAppUnderTest = (options?: {
         })
       : VcsStatusBroadcaster.layer.pipe(Layer.provide(gitWorkflowLayer));
     const previewServicesLayer = Layer.mergeAll(
-      PreviewManager.layer,
+      PreviewManager.layer.pipe(Layer.provide(SteelBrowser.layerDisabled)),
       PreviewAutomationBroker.layer,
       Layer.mock(PortScanner.PortDiscovery)({
         scan: () => Effect.succeed([]),

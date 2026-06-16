@@ -13,13 +13,16 @@ import {
   type PreviewCloseInput,
   type PreviewEvent,
   type PreviewError,
+  type PreviewHistoryInput,
   PreviewInvalidUrlError,
+  type PreviewKeyboardInput,
   type PreviewListInput,
   type PreviewListResult,
   type PreviewNavigateInput,
   type PreviewOpenInput,
   type PreviewRefreshInput,
   type PreviewReportStatusInput,
+  PreviewRemoteHostUnavailableError,
   PreviewSessionLookupError,
   type PreviewSessionSnapshot,
 } from "@t3tools/contracts";
@@ -39,6 +42,8 @@ import {
   SynchronizedRef,
 } from "effect";
 
+import { SteelBrowser, type SteelBrowserNavigationState } from "./SteelBrowser.ts";
+
 export interface PreviewManagerShape {
   readonly open: (input: PreviewOpenInput) => Effect.Effect<PreviewSessionSnapshot, PreviewError>;
   readonly navigate: (
@@ -46,6 +51,13 @@ export interface PreviewManagerShape {
   ) => Effect.Effect<PreviewSessionSnapshot, PreviewError>;
   readonly reportStatus: (input: PreviewReportStatusInput) => Effect.Effect<void, PreviewError>;
   readonly refresh: (input: PreviewRefreshInput) => Effect.Effect<void, PreviewError>;
+  readonly goBack: (
+    input: PreviewHistoryInput,
+  ) => Effect.Effect<PreviewSessionSnapshot, PreviewError>;
+  readonly goForward: (
+    input: PreviewHistoryInput,
+  ) => Effect.Effect<PreviewSessionSnapshot, PreviewError>;
+  readonly keyboardInput: (input: PreviewKeyboardInput) => Effect.Effect<void, PreviewError>;
   readonly close: (input: PreviewCloseInput) => Effect.Effect<void, PreviewError>;
   readonly list: (input: PreviewListInput) => Effect.Effect<PreviewListResult>;
   readonly events: Stream.Stream<PreviewEvent>;
@@ -60,7 +72,35 @@ interface PreviewSessionState {
   readonly threadId: string;
   readonly tabId: string;
   readonly snapshot: PreviewSessionSnapshot;
+  readonly steel: SteelSessionState | null;
 }
+
+interface SteelSessionState {
+  readonly sessionId: string;
+  readonly websocketUrl: string;
+  readonly viewportSize?: PreviewSessionViewportSize | undefined;
+}
+
+interface PreviewSessionViewportSize {
+  readonly width: number;
+  readonly height: number;
+}
+
+const viewportSizesEqual = (
+  left: PreviewSessionViewportSize | undefined,
+  right: PreviewSessionViewportSize | undefined,
+): boolean => left?.width === right?.width && left?.height === right?.height;
+
+const buildSteelHost = (input: {
+  readonly sessionId: string;
+  readonly viewerUrl: string;
+  readonly viewportSize?: PreviewSessionViewportSize | undefined;
+}): Extract<PreviewSessionSnapshot["host"], { _tag: "Steel" }> => ({
+  _tag: "Steel",
+  sessionId: input.sessionId,
+  viewerUrl: input.viewerUrl,
+  ...(input.viewportSize !== undefined ? { viewportSize: input.viewportSize } : {}),
+});
 
 interface ManagerState {
   /** All sessions across every thread, keyed by `${threadId}\u0000${tabId}`. */
@@ -114,6 +154,25 @@ const buildLoadingSnapshot = (input: {
   updatedAt: input.updatedAt,
 });
 
+const buildSuccessSnapshot = (input: {
+  readonly threadId: string;
+  readonly tabId: string;
+  readonly url: string;
+  readonly title: string;
+  readonly updatedAt: string;
+  readonly host?: PreviewSessionSnapshot["host"];
+  readonly canGoBack?: boolean;
+  readonly canGoForward?: boolean;
+}): PreviewSessionSnapshot => ({
+  threadId: input.threadId,
+  tabId: input.tabId,
+  ...(input.host !== undefined ? { host: input.host } : {}),
+  navStatus: { _tag: "Success", url: input.url, title: input.title },
+  canGoBack: input.canGoBack ?? false,
+  canGoForward: input.canGoForward ?? false,
+  updatedAt: input.updatedAt,
+});
+
 const buildIdleSnapshot = (input: {
   readonly threadId: string;
   readonly tabId: string;
@@ -129,6 +188,7 @@ const buildIdleSnapshot = (input: {
 
 const make = Effect.gen(function* PreviewManagerMake() {
   const stateRef = yield* SynchronizedRef.make<ManagerState>(initialState);
+  const steelBrowser = yield* SteelBrowser;
   // Unbounded PubSub is fine here — events are tiny and we don't want to
   // block publishers if a subscriber is slow. WS clients backpressure on
   // their own queues downstream.
@@ -184,14 +244,159 @@ const make = Effect.gen(function* PreviewManagerMake() {
     );
   };
 
+  const getExistingSession = (
+    threadId: string,
+    tabId: string,
+  ): Effect.Effect<PreviewSessionState, PreviewSessionLookupError> =>
+    SynchronizedRef.get(stateRef).pipe(
+      Effect.flatMap((state) => {
+        const session = state.sessions.get(compositeKey(threadId, tabId));
+        return session
+          ? Effect.succeed(session)
+          : Effect.fail(new PreviewSessionLookupError({ threadId, tabId }));
+      }),
+    );
+
+  const requireSteelSession = (
+    session: PreviewSessionState,
+  ): Effect.Effect<SteelSessionState, PreviewRemoteHostUnavailableError> =>
+    session.steel !== null
+      ? Effect.succeed(session.steel)
+      : Effect.fail(
+          new PreviewRemoteHostUnavailableError({
+            host: "steel",
+            detail: "This preview tab is not backed by a Steel session.",
+          }),
+        );
+
+  const snapshotFromSteelNavigation = (
+    session: PreviewSessionState,
+    navigation: SteelBrowserNavigationState,
+    updatedAt: string,
+  ): PreviewSessionSnapshot => {
+    const fallbackUrl =
+      session.snapshot.navStatus._tag === "Idle" ? "" : session.snapshot.navStatus.url;
+    const fallbackTitle =
+      session.snapshot.navStatus._tag === "Idle" ? "" : session.snapshot.navStatus.title;
+    return {
+      threadId: session.threadId,
+      tabId: session.tabId,
+      ...(session.snapshot.host !== undefined ? { host: session.snapshot.host } : {}),
+      navStatus: {
+        _tag: "Success",
+        url: navigation.url || fallbackUrl,
+        title: navigation.title || fallbackTitle,
+      },
+      canGoBack: navigation.canGoBack,
+      canGoForward: navigation.canGoForward,
+      updatedAt,
+    };
+  };
+
+  const commitSteelNavigation = (
+    threadId: string,
+    tabId: string,
+    navigation: SteelBrowserNavigationState,
+  ): Effect.Effect<PreviewSessionSnapshot, PreviewSessionLookupError> =>
+    mutateExistingSession(
+      threadId,
+      tabId,
+      Effect.fn("PreviewManager.commitSteelNavigation")(function* (session) {
+        const updatedAt = yield* currentIsoTimestamp;
+        const snapshot = snapshotFromSteelNavigation(session, navigation, updatedAt);
+        return {
+          next: { ...session, snapshot },
+          emit: {
+            type: "navigated",
+            threadId: session.threadId,
+            tabId: session.tabId,
+            createdAt: snapshot.updatedAt,
+            snapshot,
+          },
+          result: snapshot,
+        };
+      }),
+    );
+
   const open: PreviewManagerShape["open"] = Effect.fn("PreviewManager.open")(function* (input) {
     const tabId = newPreviewTabId();
     const updatedAt = yield* currentIsoTimestamp;
-    const snapshot = input.url
+    const url = input.url ? yield* normalizeUrl(input.url) : undefined;
+
+    if (input.hostPreference === "steel") {
+      const steelSession = yield* steelBrowser.createMobileSession({
+        viewportSize: input.viewportSize,
+      });
+      const host = buildSteelHost({
+        sessionId: steelSession.sessionId,
+        viewerUrl: steelSession.viewerUrl,
+        viewportSize: input.viewportSize,
+      });
+
+      const steelNavigation =
+        url !== undefined
+          ? yield* steelBrowser
+              .navigate({
+                sessionId: steelSession.sessionId,
+                websocketUrl: steelSession.websocketUrl,
+                url,
+                viewportSize: input.viewportSize,
+              })
+              .pipe(
+                Effect.catch((error) =>
+                  steelBrowser
+                    .release({ sessionId: steelSession.sessionId })
+                    .pipe(Effect.flatMap(() => Effect.fail(error))),
+                ),
+              )
+          : null;
+
+      const snapshot =
+        steelNavigation !== null
+          ? buildSuccessSnapshot({
+              threadId: input.threadId,
+              tabId,
+              url: steelNavigation.url || url || steelNavigation.url,
+              title: steelNavigation.title,
+              updatedAt,
+              host,
+              canGoBack: steelNavigation.canGoBack,
+              canGoForward: steelNavigation.canGoForward,
+            })
+          : {
+              ...buildIdleSnapshot({ threadId: input.threadId, tabId, updatedAt }),
+              host,
+            };
+
+      yield* SynchronizedRef.update(stateRef, (state) => {
+        const sessions = new Map(state.sessions);
+        sessions.set(compositeKey(input.threadId, tabId), {
+          threadId: input.threadId,
+          tabId,
+          snapshot,
+          steel: {
+            sessionId: steelSession.sessionId,
+            websocketUrl: steelSession.websocketUrl,
+            viewportSize: input.viewportSize,
+          },
+        });
+        return { sessions };
+      });
+      yield* PubSub.publish(eventsPubSub, {
+        type: "opened",
+        threadId: input.threadId,
+        tabId,
+        createdAt: snapshot.updatedAt,
+        snapshot,
+      });
+      return snapshot;
+    }
+
+    const snapshot = url
       ? buildLoadingSnapshot({
           threadId: input.threadId,
           tabId,
-          url: yield* normalizeUrl(input.url),
+          url,
           title: "",
           updatedAt,
         })
@@ -202,6 +407,7 @@ const make = Effect.gen(function* PreviewManagerMake() {
         threadId: input.threadId,
         tabId,
         snapshot,
+        steel: null,
       });
       return { sessions };
     });
@@ -218,24 +424,78 @@ const make = Effect.gen(function* PreviewManagerMake() {
   const navigate: PreviewManagerShape["navigate"] = Effect.fn("PreviewManager.navigate")(
     function* (input) {
       const url = yield* normalizeUrl(input.url);
-      return yield* mutateExistingSession(
+      const existing = yield* getExistingSession(input.threadId, input.tabId);
+      let nextSteel = existing.steel;
+      let nextHost = existing.snapshot.host;
+      let steelNavigation: SteelBrowserNavigationState | null = null;
+      let releaseAfterCommit: string | null = null;
+      if (existing.steel !== null) {
+        const targetViewportSize = input.viewportSize ?? existing.steel.viewportSize;
+        const shouldReplaceSteelSession =
+          input.viewportSize !== undefined &&
+          !viewportSizesEqual(existing.steel.viewportSize, input.viewportSize);
+
+        if (shouldReplaceSteelSession) {
+          const replacement = yield* steelBrowser.createMobileSession({
+            viewportSize: input.viewportSize,
+          });
+          steelNavigation = yield* steelBrowser
+            .navigate({
+              sessionId: replacement.sessionId,
+              websocketUrl: replacement.websocketUrl,
+              url,
+              viewportSize: input.viewportSize,
+            })
+            .pipe(
+              Effect.catch((error) =>
+                steelBrowser
+                  .release({ sessionId: replacement.sessionId })
+                  .pipe(Effect.flatMap(() => Effect.fail(error))),
+              ),
+            );
+          nextSteel = {
+            sessionId: replacement.sessionId,
+            websocketUrl: replacement.websocketUrl,
+            viewportSize: input.viewportSize,
+          };
+          nextHost = buildSteelHost({
+            sessionId: replacement.sessionId,
+            viewerUrl: replacement.viewerUrl,
+            viewportSize: input.viewportSize,
+          });
+          releaseAfterCommit = existing.steel.sessionId;
+        } else {
+          steelNavigation = yield* steelBrowser.navigate({
+            sessionId: existing.steel.sessionId,
+            websocketUrl: existing.steel.websocketUrl,
+            url,
+            viewportSize: targetViewportSize,
+          });
+        }
+      }
+      const snapshot = yield* mutateExistingSession(
         input.threadId,
         input.tabId,
         Effect.fn("PreviewManager.navigateSession")(function* (session) {
           const updatedAt = yield* currentIsoTimestamp;
           const previousTitle =
             session.snapshot.navStatus._tag === "Idle" ? "" : session.snapshot.navStatus.title;
-          const resolvedTitle = input.resolvedTitle ?? previousTitle;
+          const resolvedTitle = steelNavigation?.title ?? input.resolvedTitle ?? previousTitle;
           const snapshot: PreviewSessionSnapshot = {
             threadId: session.threadId,
             tabId: session.tabId,
-            navStatus: { _tag: "Success", url, title: resolvedTitle },
-            canGoBack: session.snapshot.canGoBack,
-            canGoForward: session.snapshot.canGoForward,
+            ...(nextHost !== undefined ? { host: nextHost } : {}),
+            navStatus: { _tag: "Success", url: steelNavigation?.url || url, title: resolvedTitle },
+            canGoBack: steelNavigation?.canGoBack ?? session.snapshot.canGoBack,
+            canGoForward: steelNavigation?.canGoForward ?? session.snapshot.canGoForward,
             updatedAt,
           };
           return {
-            next: { ...session, snapshot },
+            next: {
+              ...session,
+              snapshot,
+              steel: nextSteel,
+            },
             emit: {
               type: "navigated",
               threadId: session.threadId,
@@ -247,6 +507,12 @@ const make = Effect.gen(function* PreviewManagerMake() {
           };
         }),
       );
+      if (releaseAfterCommit !== null) {
+        yield* steelBrowser
+          .release({ sessionId: releaseAfterCommit })
+          .pipe(Effect.ignoreCause({ log: true }));
+      }
+      return snapshot;
     },
   );
 
@@ -261,6 +527,7 @@ const make = Effect.gen(function* PreviewManagerMake() {
         const snapshot: PreviewSessionSnapshot = {
           threadId: session.threadId,
           tabId: session.tabId,
+          ...(session.snapshot.host !== undefined ? { host: session.snapshot.host } : {}),
           navStatus: input.navStatus,
           canGoBack: input.canGoBack,
           canGoForward: input.canGoForward,
@@ -297,17 +564,72 @@ const make = Effect.gen(function* PreviewManagerMake() {
   const refresh: PreviewManagerShape["refresh"] = Effect.fn("PreviewManager.refresh")(
     function* (input) {
       // Verify the session exists; the desktop bridge handles the actual reload
-      // and will report progress back via `reportStatus`. No event emitted.
+      // and will report progress back via `reportStatus`.
+      const existing = yield* getExistingSession(input.threadId, input.tabId);
+      if (existing.steel === null) {
+        yield* mutateExistingSession(input.threadId, input.tabId, (session) =>
+          Effect.succeed({ next: session, emit: null, result: undefined as void }),
+        );
+        return;
+      }
+      if (existing.snapshot.navStatus._tag !== "Idle") {
+        const navigation = yield* steelBrowser.reload({
+          sessionId: existing.steel.sessionId,
+          websocketUrl: existing.steel.websocketUrl,
+          viewportSize: existing.steel.viewportSize,
+        });
+        yield* commitSteelNavigation(input.threadId, input.tabId, navigation).pipe(Effect.asVoid);
+        return;
+      }
       yield* mutateExistingSession(input.threadId, input.tabId, (session) =>
         Effect.succeed({ next: session, emit: null, result: undefined as void }),
       );
     },
   );
 
+  const goBack: PreviewManagerShape["goBack"] = Effect.fn("PreviewManager.goBack")(
+    function* (input) {
+      const existing = yield* getExistingSession(input.threadId, input.tabId);
+      const steel = yield* requireSteelSession(existing);
+      const navigation = yield* steelBrowser.goBack({
+        sessionId: steel.sessionId,
+        websocketUrl: steel.websocketUrl,
+        viewportSize: steel.viewportSize,
+      });
+      return yield* commitSteelNavigation(input.threadId, input.tabId, navigation);
+    },
+  );
+
+  const goForward: PreviewManagerShape["goForward"] = Effect.fn("PreviewManager.goForward")(
+    function* (input) {
+      const existing = yield* getExistingSession(input.threadId, input.tabId);
+      const steel = yield* requireSteelSession(existing);
+      const navigation = yield* steelBrowser.goForward({
+        sessionId: steel.sessionId,
+        websocketUrl: steel.websocketUrl,
+        viewportSize: steel.viewportSize,
+      });
+      return yield* commitSteelNavigation(input.threadId, input.tabId, navigation);
+    },
+  );
+
+  const keyboardInput: PreviewManagerShape["keyboardInput"] = Effect.fn(
+    "PreviewManager.keyboardInput",
+  )(function* (input) {
+    const existing = yield* getExistingSession(input.threadId, input.tabId);
+    const steel = yield* requireSteelSession(existing);
+    yield* steelBrowser.keyboardInput({
+      sessionId: steel.sessionId,
+      websocketUrl: steel.websocketUrl,
+      action: input.action,
+    });
+  });
+
   const close: PreviewManagerShape["close"] = Effect.fn("PreviewManager.close")(function* (input) {
     const createdAt = yield* currentIsoTimestamp;
-    const events = yield* SynchronizedRef.modify(stateRef, (state) => {
+    const { events, steelSessions } = yield* SynchronizedRef.modify(stateRef, (state) => {
       const eventsToEmit: PreviewEvent[] = [];
+      const steelSessionsToRelease: SteelSessionState[] = [];
       const sessions = new Map(state.sessions);
       const targets = input.tabId
         ? [state.sessions.get(compositeKey(input.threadId, input.tabId))].filter(
@@ -316,6 +638,7 @@ const make = Effect.gen(function* PreviewManagerMake() {
         : sessionsForThread(state, input.threadId);
       for (const target of targets) {
         sessions.delete(compositeKey(target.threadId, target.tabId));
+        if (target.steel !== null) steelSessionsToRelease.push(target.steel);
         eventsToEmit.push({
           type: "closed",
           threadId: target.threadId,
@@ -324,14 +647,24 @@ const make = Effect.gen(function* PreviewManagerMake() {
         });
       }
       if (eventsToEmit.length === 0) {
-        return [eventsToEmit, state] as const;
+        return [{ events: eventsToEmit, steelSessions: steelSessionsToRelease }, state] as const;
       }
-      return [eventsToEmit, { sessions }] as const;
+      return [
+        { events: eventsToEmit, steelSessions: steelSessionsToRelease },
+        { sessions },
+      ] as const;
     });
     if (events.length > 0) {
       yield* Effect.forEach(events, (event) => PubSub.publish(eventsPubSub, event), {
         discard: true,
       });
+    }
+    if (steelSessions.length > 0) {
+      yield* Effect.forEach(
+        steelSessions,
+        (session) => steelBrowser.release({ sessionId: session.sessionId }),
+        { discard: true },
+      );
     }
   });
 
@@ -352,6 +685,9 @@ const make = Effect.gen(function* PreviewManagerMake() {
     navigate,
     reportStatus,
     refresh,
+    goBack,
+    goForward,
+    keyboardInput,
     close,
     list,
     events,

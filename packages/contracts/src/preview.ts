@@ -1,15 +1,14 @@
 /**
  * Preview - Schemas for the in-app browser preview surface.
  *
- * The preview is desktop-only (Chromium <webview>); the server tracks per-thread
- * tab metadata so it survives client reconnects and multi-window. The desktop
- * renderer mediates: it owns the actual <webview> and reports navigation back to
- * the server via these RPCs, the server fans events to all subscribers.
+ * The preview server tracks per-thread tab metadata so it survives client
+ * reconnects and multi-window. Desktop renderers own Chromium <webview>
+ * instances; web/mobile clients can use a server-hosted browser provider.
  *
  * @module Preview
  */
 import { Schema } from "effect";
-import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { PositiveInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 const Url = TrimmedNonEmptyString.check(Schema.isMaxLength(2048));
 const Title = Schema.String.check(Schema.isMaxLength(512));
@@ -36,9 +35,26 @@ export const PreviewNavStatus = Schema.Union([
 ]);
 export type PreviewNavStatus = typeof PreviewNavStatus.Type;
 
+export const PreviewViewportSize = Schema.Struct({
+  width: PositiveInt,
+  height: PositiveInt,
+});
+export type PreviewViewportSize = typeof PreviewViewportSize.Type;
+
+export const PreviewSessionHost = Schema.Union([
+  Schema.TaggedStruct("Desktop", {}),
+  Schema.TaggedStruct("Steel", {
+    sessionId: TrimmedNonEmptyString,
+    viewerUrl: Url,
+    viewportSize: Schema.optional(PreviewViewportSize),
+  }),
+]);
+export type PreviewSessionHost = typeof PreviewSessionHost.Type;
+
 export const PreviewSessionSnapshot = Schema.Struct({
   threadId: TrimmedNonEmptyString,
   tabId: PreviewTabId,
+  host: Schema.optional(PreviewSessionHost),
   navStatus: PreviewNavStatus,
   canGoBack: Schema.Boolean,
   canGoForward: Schema.Boolean,
@@ -50,6 +66,10 @@ export const PreviewOpenInput = Schema.Struct({
   threadId: ThreadId,
   /** Omit to create an empty (Idle) tab the user can type into. */
   url: Schema.optional(Url),
+  /** Prefer the local desktop webview or a configured server-hosted provider. */
+  hostPreference: Schema.optional(Schema.Literals(["desktop", "steel"])),
+  /** Optional renderer viewport for server-hosted preview providers. */
+  viewportSize: Schema.optional(PreviewViewportSize),
 });
 export type PreviewOpenInput = typeof PreviewOpenInput.Type;
 
@@ -58,6 +78,8 @@ export const PreviewNavigateInput = Schema.Struct({
   tabId: PreviewTabId,
   url: Url,
   resolvedTitle: Schema.optional(Title),
+  /** Optional renderer viewport for server-hosted preview providers. */
+  viewportSize: Schema.optional(PreviewViewportSize),
 });
 export type PreviewNavigateInput = typeof PreviewNavigateInput.Type;
 
@@ -75,6 +97,26 @@ export const PreviewRefreshInput = Schema.Struct({
   tabId: PreviewTabId,
 });
 export type PreviewRefreshInput = typeof PreviewRefreshInput.Type;
+
+export const PreviewHistoryInput = Schema.Struct({
+  threadId: ThreadId,
+  tabId: PreviewTabId,
+});
+export type PreviewHistoryInput = typeof PreviewHistoryInput.Type;
+
+export const PreviewKeyboardInput = Schema.Struct({
+  threadId: ThreadId,
+  tabId: PreviewTabId,
+  action: Schema.Union([
+    Schema.TaggedStruct("InsertText", {
+      text: Schema.String.check(Schema.isMaxLength(4096)),
+    }),
+    Schema.TaggedStruct("PressKey", {
+      key: Schema.Literals(["Backspace", "Delete", "Enter", "Tab"]),
+    }),
+  ]),
+});
+export type PreviewKeyboardInput = typeof PreviewKeyboardInput.Type;
 
 export const PreviewCloseInput = Schema.Struct({
   threadId: ThreadId,
@@ -183,5 +225,21 @@ export class PreviewInvalidUrlError extends Schema.TaggedErrorClass<PreviewInval
   }
 }
 
-export const PreviewError = Schema.Union([PreviewSessionLookupError, PreviewInvalidUrlError]);
+export class PreviewRemoteHostUnavailableError extends Schema.TaggedErrorClass<PreviewRemoteHostUnavailableError>()(
+  "PreviewRemoteHostUnavailableError",
+  {
+    host: Schema.Literals(["steel"]),
+    detail: Schema.String,
+  },
+) {
+  override get message() {
+    return `Preview remote host unavailable: ${this.host} (${this.detail})`;
+  }
+}
+
+export const PreviewError = Schema.Union([
+  PreviewSessionLookupError,
+  PreviewInvalidUrlError,
+  PreviewRemoteHostUnavailableError,
+]);
 export type PreviewError = typeof PreviewError.Type;

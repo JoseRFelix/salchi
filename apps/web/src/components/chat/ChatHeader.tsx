@@ -235,7 +235,7 @@ export const ChatHeader = memo(function ChatHeader({
           />
           <TooltipPopup side="bottom">
             {!previewAvailable
-              ? "Browser preview is only available in the desktop app."
+              ? "Browser preview requires the desktop app or Steel remote preview."
               : previewToggleShortcutLabel
                 ? `Toggle browser preview (${previewToggleShortcutLabel})`
                 : "Toggle browser preview"}

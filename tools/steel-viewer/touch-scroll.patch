@@ -1,0 +1,73 @@
+--- /tmp/steel-pristine.ejs	2026-06-16 04:59:29.471251361 +0000
++++ /tmp/steel-live.ejs	2026-06-16 04:57:22.012918969 +0000
+@@ -127,6 +127,7 @@
+             left: 50%;
+             transform: translateX(-50%);
+             object-fit: contain;
++            touch-action: none;
+           }
+ 
+           /* Tab bar styles */
+@@ -968,6 +969,10 @@
+               canvas.removeEventListener('mouseup', canvas._mouseUpHandler);
+               canvas.removeEventListener('mousemove', canvas._mouseMoveHandler);
+               canvas.removeEventListener('wheel', canvas._wheelHandler);
++              canvas.removeEventListener('touchstart', canvas._touchStartHandler);
++              canvas.removeEventListener('touchmove', canvas._touchMoveHandler);
++              canvas.removeEventListener('touchend', canvas._touchEndHandler);
++              canvas.removeEventListener('touchcancel', canvas._touchEndHandler);
+ 
+               // Helper function for scaled coordinates
+               function getScaledCoordinates(e, canvas, pageId) {
+@@ -1118,6 +1123,51 @@
+               };
+               canvas.addEventListener('wheel', canvas._wheelHandler);
+ 
++              // Touch scrolling (mobile): translate single-finger drags into
++              // mouseWheel events, reusing the same server-side mouseWheel path as
++              // the wheel handler above. Without this, touch devices can't scroll
++              // because the viewer only listens for mouse 'wheel' events.
++              let lastTouchX = null;
++              let lastTouchY = null;
++              canvas._touchStartHandler = (e) => {
++                  if (e.touches.length !== 1) { lastTouchX = lastTouchY = null; return; }
++                  lastTouchX = e.touches[0].clientX;
++                  lastTouchY = e.touches[0].clientY;
++              };
++              canvas._touchMoveHandler = (e) => {
++                  if (ws.readyState !== WebSocket.OPEN) return;
++                  if (e.touches.length !== 1 || lastTouchX === null) return;
++
++                  const touch = e.touches[0];
++                  const coords = getScaledCoordinates(touch, canvas, pageId);
++                  const deltaX = lastTouchX - touch.clientX;
++                  const deltaY = lastTouchY - touch.clientY;
++                  lastTouchX = touch.clientX;
++                  lastTouchY = touch.clientY;
++
++                  ws.send(JSON.stringify({
++                      type: 'mouseEvent',
++                      pageId: pageId,
++                      event: {
++                          type: 'mouseWheel',
++                          x: coords.x,
++                          y: coords.y,
++                          button: 'none',
++                          modifiers: 0,
++                          deltaX: deltaX,
++                          deltaY: deltaY
++                      }
++                  }));
++
++                  // Prevent the viewer page itself from panning/bouncing.
++                  e.preventDefault();
++              };
++              canvas._touchEndHandler = () => { lastTouchX = lastTouchY = null; };
++              canvas.addEventListener('touchstart', canvas._touchStartHandler, { passive: true });
++              canvas.addEventListener('touchmove', canvas._touchMoveHandler, { passive: false });
++              canvas.addEventListener('touchend', canvas._touchEndHandler);
++              canvas.addEventListener('touchcancel', canvas._touchEndHandler);
++
+               console.log(`Event listeners set up for canvas of tab ${pageId}`);
+               return true;
+           }

@@ -76,6 +76,8 @@ import type {
   DiscoveredLocalServerList,
   PreviewCloseInput,
   PreviewEvent,
+  PreviewHistoryInput,
+  PreviewKeyboardInput,
   PreviewListInput,
   PreviewListResult,
   PreviewNavigateInput,
@@ -657,6 +659,9 @@ export interface EnvironmentApi {
     open: (input: typeof PreviewOpenInput.Encoded) => Promise<PreviewSessionSnapshot>;
     navigate: (input: typeof PreviewNavigateInput.Encoded) => Promise<PreviewSessionSnapshot>;
     refresh: (input: typeof PreviewRefreshInput.Encoded) => Promise<void>;
+    goBack: (input: typeof PreviewHistoryInput.Encoded) => Promise<PreviewSessionSnapshot>;
+    goForward: (input: typeof PreviewHistoryInput.Encoded) => Promise<PreviewSessionSnapshot>;
+    keyboardInput: (input: typeof PreviewKeyboardInput.Encoded) => Promise<void>;
     close: (input: typeof PreviewCloseInput.Encoded) => Promise<void>;
     list: (input: typeof PreviewListInput.Encoded) => Promise<PreviewListResult>;
     reportStatus: (input: typeof PreviewReportStatusInput.Encoded) => Promise<void>;

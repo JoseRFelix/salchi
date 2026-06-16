@@ -214,6 +214,17 @@ export const ServerObservability = Schema.Struct({
 });
 export type ServerObservability = typeof ServerObservability.Type;
 
+export const ServerPreviewRemoteHostConfig = Schema.Struct({
+  enabled: Schema.Boolean,
+  viewerUrl: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerPreviewRemoteHostConfig = typeof ServerPreviewRemoteHostConfig.Type;
+
+export const ServerPreviewConfig = Schema.Struct({
+  steel: ServerPreviewRemoteHostConfig,
+});
+export type ServerPreviewConfig = typeof ServerPreviewConfig.Type;
+
 export const ServerTraceDiagnosticsErrorKind = Schema.Literals([
   "trace-file-not-found",
   "trace-file-read-failed",
@@ -405,6 +416,7 @@ export const ServerConfig = Schema.Struct({
   providers: ServerProviders,
   availableEditors: Schema.Array(EditorId),
   observability: ServerObservability,
+  preview: Schema.optionalKey(ServerPreviewConfig),
   settings: ServerSettings,
 });
 export type ServerConfig = typeof ServerConfig.Type;

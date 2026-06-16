@@ -52,6 +52,7 @@ import {
   openSourceControlPanel,
   useSourceControlPanelState,
 } from "../sourceControlPanelState";
+import { useServerConfig } from "../rpc/serverState";
 
 const MISSING_THREAD_ROUTE_RECOVERY_GRACE_MS = 3_000;
 
@@ -100,7 +101,8 @@ function ChatThreadRouteView() {
     sourceControlOpen,
     useSheet: shouldUseDiffSheet,
   });
-  const previewAvailable = isPreviewSupportedInRuntime();
+  const serverConfig = useServerConfig();
+  const previewAvailable = isPreviewSupportedInRuntime(serverConfig);
   const previewState = usePreviewStateStore((state) =>
     selectThreadPreviewState(state.byThreadKey, threadRef),
   );

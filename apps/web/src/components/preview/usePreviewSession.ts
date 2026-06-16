@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import { ensureEnvironmentApi, readEnvironmentApi } from "~/environmentApi";
 import { readEnvironmentConnection, subscribeEnvironmentConnections } from "~/environments/runtime";
 import { readPreviewStateRevision, usePreviewStateStore } from "~/previewStateStore";
+import { getServerConfig } from "~/rpc/serverState";
 
 import { refreshPreviewSessionState, usePreviewSessionState } from "./previewSessionState";
 
@@ -55,8 +56,17 @@ export function usePreviewSession(threadRef: ScopedThreadRef): void {
     }
 
     const api = ensureEnvironmentApi(threadRef.environmentId);
+    const steelPreviewEnabled = getServerConfig()?.preview?.steel.enabled === true;
     void api.preview
-      .open({ threadId: threadIdValue, url: recoverableUrl })
+      .open({
+        threadId: threadIdValue,
+        url: recoverableUrl,
+        ...(window.desktopBridge?.preview
+          ? { hostPreference: "desktop" as const }
+          : steelPreviewEnabled
+            ? { hostPreference: "steel" as const }
+            : {}),
+      })
       .then((snapshot) => {
         if (cancelled) return;
         applyServerSnapshot(threadRef, snapshot);

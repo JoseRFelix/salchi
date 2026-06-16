@@ -66,6 +66,34 @@ describe("PreviewSessionSnapshot", () => {
     expect(snapshot.tabId).toBe("preview-thread-1");
     expect(snapshot.navStatus._tag).toBe("Success");
   });
+
+  it("decodes a Steel-hosted snapshot", () => {
+    const snapshot = decodeSnapshot({
+      threadId: "thread-1",
+      tabId: "preview-thread-1",
+      host: {
+        _tag: "Steel",
+        sessionId: "steel-session-1",
+        viewerUrl: "http://localhost:3000/v1/sessions/debug?interactive=true",
+        viewportSize: {
+          width: 508,
+          height: 974,
+        },
+      },
+      navStatus: {
+        _tag: "Success",
+        url: "http://localhost:5173/",
+        title: "Vite App",
+      },
+      canGoBack: false,
+      canGoForward: false,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(snapshot.host?._tag).toBe("Steel");
+    if (snapshot.host?._tag === "Steel") {
+      expect(snapshot.host.viewportSize).toEqual({ width: 508, height: 974 });
+    }
+  });
 });
 
 describe("PreviewEvent", () => {

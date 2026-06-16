@@ -91,6 +91,8 @@ import {
   PreviewCloseInput,
   PreviewError,
   PreviewEvent,
+  PreviewHistoryInput,
+  PreviewKeyboardInput,
   PreviewListInput,
   PreviewListResult,
   PreviewNavigateInput,
@@ -195,6 +197,9 @@ export const WS_METHODS = {
   previewOpen: "preview.open",
   previewNavigate: "preview.navigate",
   previewRefresh: "preview.refresh",
+  previewGoBack: "preview.goBack",
+  previewGoForward: "preview.goForward",
+  previewKeyboardInput: "preview.keyboardInput",
   previewClose: "preview.close",
   previewList: "preview.list",
   previewReportStatus: "preview.reportStatus",
@@ -582,6 +587,23 @@ export const WsPreviewRefreshRpc = Rpc.make(WS_METHODS.previewRefresh, {
   error: PreviewError,
 });
 
+export const WsPreviewGoBackRpc = Rpc.make(WS_METHODS.previewGoBack, {
+  payload: PreviewHistoryInput,
+  success: PreviewSessionSnapshot,
+  error: PreviewError,
+});
+
+export const WsPreviewGoForwardRpc = Rpc.make(WS_METHODS.previewGoForward, {
+  payload: PreviewHistoryInput,
+  success: PreviewSessionSnapshot,
+  error: PreviewError,
+});
+
+export const WsPreviewKeyboardInputRpc = Rpc.make(WS_METHODS.previewKeyboardInput, {
+  payload: PreviewKeyboardInput,
+  error: PreviewError,
+});
+
 export const WsPreviewCloseRpc = Rpc.make(WS_METHODS.previewClose, {
   payload: PreviewCloseInput,
   error: PreviewError,
@@ -795,6 +817,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewOpenRpc,
   WsPreviewNavigateRpc,
   WsPreviewRefreshRpc,
+  WsPreviewGoBackRpc,
+  WsPreviewGoForwardRpc,
+  WsPreviewKeyboardInputRpc,
   WsPreviewCloseRpc,
   WsPreviewListRpc,
   WsPreviewReportStatusRpc,

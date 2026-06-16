@@ -27,6 +27,7 @@ const SNAPSHOT_SUBSCRIPTION_ACK_TAGS = new Set<string>([
   ORCHESTRATION_WS_METHODS.subscribeThread,
   WS_METHODS.subscribeServerConfig,
 ]);
+const LONG_LIVED_STREAM_REQUEST_TAGS = new Set<string>([WS_METHODS.previewAutomationConnect]);
 
 const slowRpcAckRequestsAtom = Atom.make<ReadonlyArray<SlowRpcAckRequest>>([]).pipe(
   Atom.keepAlive,
@@ -44,6 +45,9 @@ function getSlowRpcAckRequestsValue(): ReadonlyArray<SlowRpcAckRequest> {
 function shouldTrackRpcAck(tag: string): boolean {
   if (SNAPSHOT_SUBSCRIPTION_ACK_TAGS.has(tag)) {
     return true;
+  }
+  if (LONG_LIVED_STREAM_REQUEST_TAGS.has(tag)) {
+    return false;
   }
   return !tag.includes("subscribe");
 }

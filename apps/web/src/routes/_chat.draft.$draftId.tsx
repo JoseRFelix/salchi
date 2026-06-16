@@ -43,6 +43,7 @@ import {
   openSourceControlPanel,
   useSourceControlPanelState,
 } from "../sourceControlPanelState";
+import { useServerConfig } from "../rpc/serverState";
 
 function DraftChatThreadRouteView() {
   const navigate = useNavigate();
@@ -78,7 +79,8 @@ function DraftChatThreadRouteView() {
     sourceControlOpen,
     useSheet: shouldUseRightPanelSheet,
   });
-  const previewAvailable = isPreviewSupportedInRuntime();
+  const serverConfig = useServerConfig();
+  const previewAvailable = isPreviewSupportedInRuntime(serverConfig);
   const previewState = usePreviewStateStore((state) =>
     selectThreadPreviewState(state.byThreadKey, draftThreadRef),
   );

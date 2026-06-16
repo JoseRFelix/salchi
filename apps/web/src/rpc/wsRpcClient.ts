@@ -302,6 +302,9 @@ export interface WsRpcClient {
     readonly open: RpcUnaryMethod<typeof WS_METHODS.previewOpen>;
     readonly navigate: RpcUnaryMethod<typeof WS_METHODS.previewNavigate>;
     readonly refresh: RpcUnaryMethod<typeof WS_METHODS.previewRefresh>;
+    readonly goBack: RpcUnaryMethod<typeof WS_METHODS.previewGoBack>;
+    readonly goForward: RpcUnaryMethod<typeof WS_METHODS.previewGoForward>;
+    readonly keyboardInput: RpcUnaryMethod<typeof WS_METHODS.previewKeyboardInput>;
     readonly close: RpcUnaryMethod<typeof WS_METHODS.previewClose>;
     readonly list: RpcUnaryMethod<typeof WS_METHODS.previewList>;
     readonly reportStatus: RpcUnaryMethod<typeof WS_METHODS.previewReportStatus>;
@@ -522,6 +525,11 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
       open: (input) => transport.request((client) => client[WS_METHODS.previewOpen](input)),
       navigate: (input) => transport.request((client) => client[WS_METHODS.previewNavigate](input)),
       refresh: (input) => transport.request((client) => client[WS_METHODS.previewRefresh](input)),
+      goBack: (input) => transport.request((client) => client[WS_METHODS.previewGoBack](input)),
+      goForward: (input) =>
+        transport.request((client) => client[WS_METHODS.previewGoForward](input)),
+      keyboardInput: (input) =>
+        transport.request((client) => client[WS_METHODS.previewKeyboardInput](input)),
       close: (input) => transport.request((client) => client[WS_METHODS.previewClose](input)),
       list: (input) => transport.request((client) => client[WS_METHODS.previewList](input)),
       reportStatus: (input) =>

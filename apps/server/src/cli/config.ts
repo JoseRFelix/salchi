@@ -136,6 +136,16 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  steelBrowserBaseUrl: Config.url("T3CODE_STEEL_BASE_URL").pipe(
+    Config.option,
+    Config.map(Option.map((url) => url.toString().replace(/\/+$/u, ""))),
+    Config.map(Option.getOrUndefined),
+  ),
+  steelBrowserPublicBaseUrl: Config.url("T3CODE_STEEL_PUBLIC_BASE_URL").pipe(
+    Config.option,
+    Config.map(Option.map((url) => url.toString().replace(/\/+$/u, ""))),
+    Config.map(Option.getOrUndefined),
+  ),
 });
 
 export interface CliServerFlags {
@@ -381,6 +391,12 @@ export const resolveServerConfig = (
       logWebSocketEvents,
       tailscaleServeEnabled,
       tailscaleServePort,
+      ...(env.steelBrowserBaseUrl !== undefined
+        ? { steelBrowserBaseUrl: env.steelBrowserBaseUrl }
+        : {}),
+      ...(env.steelBrowserPublicBaseUrl !== undefined
+        ? { steelBrowserPublicBaseUrl: env.steelBrowserPublicBaseUrl }
+        : {}),
     };
 
     return config;

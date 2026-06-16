@@ -2393,6 +2393,10 @@ export default function ChatView(props: ChatViewProps) {
             const snapshot = await api.preview.open({
               threadId: activeThreadId,
               url: script.previewUrl,
+              hostPreference:
+                typeof window !== "undefined" && window.desktopBridge?.preview
+                  ? "desktop"
+                  : "steel",
             });
             usePreviewStateStore.getState().applyServerSnapshot(activeThreadRef, snapshot);
             useRightPanelStore.getState().openBrowser(activeThreadRef, snapshot.tabId);

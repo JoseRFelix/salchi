@@ -76,6 +76,13 @@ describe("requestLatencyState", () => {
     expect(getSlowRpcAckRequests()).toEqual([]);
   });
 
+  it("ignores preview automation connections because they are idle control streams", () => {
+    trackRpcRequestSent("1", WS_METHODS.previewAutomationConnect);
+    vi.advanceTimersByTime(SLOW_RPC_ACK_THRESHOLD_MS * 2);
+
+    expect(getSlowRpcAckRequests()).toEqual([]);
+  });
+
   it("tracks thread detail subscriptions until the initial snapshot arrives", () => {
     trackRpcRequestSent("1", ORCHESTRATION_WS_METHODS.subscribeThread);
     vi.advanceTimersByTime(SLOW_RPC_ACK_THRESHOLD_MS);

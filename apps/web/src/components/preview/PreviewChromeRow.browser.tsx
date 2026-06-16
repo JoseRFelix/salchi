@@ -72,4 +72,42 @@ describe("PreviewChromeRow", () => {
 
     await expect.element(input).toHaveValue(fullUrl);
   });
+
+  it("keeps the typed URL focused when submission fails", async () => {
+    const onSubmit = vi.fn(async () => false);
+    await render(<PreviewChromeRow {...defaultProps} onSubmit={onSubmit} />);
+    const input = page.getByRole("textbox");
+    const inputElement = input.element() as HTMLInputElement;
+
+    await input.click();
+    await input.fill("https://next.example/");
+    inputElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith("https://next.example/");
+    });
+    await vi.waitFor(() => {
+      expect(document.activeElement).toBe(inputElement);
+      expect(inputElement.value).toBe("https://next.example/");
+    });
+  });
+
+  it("keeps the submitted URL visible until the server URL catches up", async () => {
+    const onSubmit = vi.fn(async () => true);
+    await render(<PreviewChromeRow {...defaultProps} url="" onSubmit={onSubmit} />);
+    const input = page.getByRole("textbox");
+    const inputElement = input.element() as HTMLInputElement;
+
+    await input.click();
+    await input.fill("https://next.example/");
+    inputElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith("https://next.example/");
+    });
+    await vi.waitFor(() => {
+      expect(document.activeElement).not.toBe(inputElement);
+      expect(inputElement.value).toBe("https://next.example/");
+    });
+  });
 });

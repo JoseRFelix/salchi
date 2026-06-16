@@ -56,6 +56,8 @@ export async function openTerminalLinkInPreview(
       await input.api.preview.open({
         threadId: input.threadRef.threadId,
         url: input.url,
+        hostPreference:
+          typeof window !== "undefined" && window.desktopBridge?.preview ? "desktop" : "steel",
       });
       useRightPanelStore.getState().open(input.threadRef, "preview");
     } catch {

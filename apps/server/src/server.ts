@@ -41,6 +41,7 @@ import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as SteelBrowser from "./preview/SteelBrowser.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import { KeybindingsLive } from "./keybindings.ts";
@@ -251,8 +252,10 @@ const TerminalLayerLive = TerminalManagerLive.pipe(
   Layer.provide(PortScannerLayerLive),
 );
 
+const PreviewManagerLayerLive = PreviewManager.layer.pipe(Layer.provide(SteelBrowser.layer));
+
 const PreviewLayerLive = Layer.empty.pipe(
-  Layer.provideMerge(PreviewManager.layer),
+  Layer.provideMerge(PreviewManagerLayerLive),
   Layer.provideMerge(PortScannerLayerLive),
   Layer.provideMerge(PreviewAutomationBroker.layer),
 );

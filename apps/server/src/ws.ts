@@ -112,6 +112,14 @@ const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError)
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const THREAD_DETAIL_RECONCILE_EVENT_LIMIT = 500;
 
+function buildSteelDebugViewerUrl(baseUrl: string): string {
+  const url = new URL("/v1/sessions/debug", baseUrl);
+  url.searchParams.set("showControls", "false");
+  url.searchParams.set("interactive", "true");
+  url.searchParams.set("theme", "dark");
+  return url.toString();
+}
+
 function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   OrchestrationEvent,
   {
@@ -742,6 +750,18 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               ? { otlpMetricsUrl: config.otlpMetricsUrl }
               : {}),
             otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
+          },
+          preview: {
+            steel: {
+              enabled: config.steelBrowserBaseUrl !== undefined,
+              ...(config.steelBrowserBaseUrl !== undefined
+                ? {
+                    viewerUrl: buildSteelDebugViewerUrl(
+                      config.steelBrowserPublicBaseUrl ?? config.steelBrowserBaseUrl,
+                    ),
+                  }
+                : {}),
+            },
           },
           settings,
         };
@@ -1641,6 +1661,18 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           }),
         [WS_METHODS.previewRefresh]: (input) =>
           observeRpcEffect(WS_METHODS.previewRefresh, previewManager.refresh(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewGoBack]: (input) =>
+          observeRpcEffect(WS_METHODS.previewGoBack, previewManager.goBack(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewGoForward]: (input) =>
+          observeRpcEffect(WS_METHODS.previewGoForward, previewManager.goForward(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewKeyboardInput]: (input) =>
+          observeRpcEffect(WS_METHODS.previewKeyboardInput, previewManager.keyboardInput(input), {
             "rpc.aggregate": "preview",
           }),
         [WS_METHODS.previewClose]: (input) =>

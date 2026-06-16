@@ -3,6 +3,7 @@ import {
   ArrowRight,
   Camera,
   ExternalLink,
+  Keyboard,
   MousePointerClick,
   RotateCw,
 } from "lucide-react";
@@ -34,12 +35,14 @@ interface Props {
   onBack: () => void;
   onForward: () => void;
   onRefresh: () => void;
-  onSubmit: (url: string) => void;
+  onSubmit: (url: string) => boolean | void | Promise<boolean | void>;
   /** When provided, renders an "Open in browser" affordance to the right. */
   onOpenInBrowser?: (() => void) | undefined;
   onCapture?: ((record: boolean) => void) | undefined;
   captureDisabled?: boolean | undefined;
   recording?: boolean | undefined;
+  onKeyboardInput?: (() => void) | undefined;
+  keyboardInputActive?: boolean | undefined;
   /**
    * When provided, renders an annotation-mode toggle button to the right of
    * the URL input. Pressed while annotation mode is active (button shows in `pressed`
@@ -77,6 +80,8 @@ export function PreviewChromeRow({
   onCapture,
   captureDisabled,
   recording,
+  onKeyboardInput,
+  keyboardInputActive,
   onPickElement,
   pickActive,
   pickDisabled,
@@ -84,12 +89,18 @@ export function PreviewChromeRow({
   trailingActions,
 }: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const submittingRef = useRef(false);
+  const lastSubmittedUrlRef = useRef<string | null>(null);
   const [draft, setDraft] = useState(url);
   const [inputFocused, setInputFocused] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   // Sync the input with external URL changes, but only when the user isn't
   // actively typing (preserves in-progress edits during navigation events).
   useEffect(() => {
+    if (lastSubmittedUrlRef.current === url) {
+      lastSubmittedUrlRef.current = null;
+    }
     setDraft((previous) => (document.activeElement === inputRef.current ? previous : url));
   }, [url]);
 
@@ -103,9 +114,23 @@ export function PreviewChromeRow({
   const submit = (event?: FormEvent | KeyboardEvent) => {
     event?.preventDefault();
     const next = draft.trim();
-    if (next.length === 0) return;
-    onSubmit(next);
-    inputRef.current?.blur();
+    if (next.length === 0 || submittingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+    void Promise.resolve()
+      .then(() => onSubmit(next))
+      .then((result) => {
+        if (result !== false) {
+          lastSubmittedUrlRef.current = next;
+          setDraft(next);
+          inputRef.current?.blur();
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        submittingRef.current = false;
+        setSubmitting(false);
+      });
   };
 
   return (
@@ -182,18 +207,19 @@ export function PreviewChromeRow({
                   )}
                   onChange={(event) => setDraft(event.target.value)}
                   onFocus={() => {
-                    setDraft(url);
+                    setDraft(lastSubmittedUrlRef.current ?? url);
                     setInputFocused(true);
                     queueMicrotask(() => inputRef.current?.select());
                   }}
                   onBlur={() => {
-                    setDraft(url);
+                    setDraft(lastSubmittedUrlRef.current ?? url);
                     setInputFocused(false);
                   }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") submit(event);
                     if (event.key === "Escape") {
                       event.preventDefault();
+                      lastSubmittedUrlRef.current = null;
                       setDraft(url);
                       inputRef.current?.blur();
                     }
@@ -201,6 +227,7 @@ export function PreviewChromeRow({
                   placeholder="Search or enter URL"
                   spellCheck={false}
                   disabled={inputDisabled}
+                  aria-busy={submitting}
                   data-preview-url-input
                   size="sm"
                 />
@@ -257,6 +284,25 @@ export function PreviewChromeRow({
                   ? "Cancel annotation (Esc)"
                   : "Annotate elements, regions, and drawings"}
             </TooltipPopup>
+          </Tooltip>
+        ) : null}
+        {onKeyboardInput ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant={keyboardInputActive ? "secondary" : "ghost"}
+                  size="icon-xs"
+                  onClick={onKeyboardInput}
+                  aria-label="Keyboard input"
+                  aria-pressed={keyboardInputActive ? "true" : "false"}
+                  type="button"
+                />
+              }
+            >
+              <Keyboard className={cn(keyboardInputActive && "text-primary")} />
+            </TooltipTrigger>
+            <TooltipPopup>Keyboard input</TooltipPopup>
           </Tooltip>
         ) : null}
         {onCapture ? (

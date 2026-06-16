@@ -15,11 +15,13 @@ import { scopedThreadKey } from "@t3tools/client-runtime";
 import {
   type PreviewEvent,
   type PreviewSessionSnapshot,
+  type ServerConfig,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { create } from "zustand";
 
 import { PREVIEW_RECENT_URL_LIMIT } from "./components/preview/previewConstants";
+import { getServerConfig } from "./rpc/serverState";
 
 export interface DesktopPreviewOverlay {
   canGoBack: boolean;
@@ -285,9 +287,11 @@ export function selectThreadPreviewState(
   return ensureState(byThreadKey, scopedThreadKey(ref));
 }
 
-export function isPreviewSupportedInRuntime(): boolean {
+export function isPreviewSupportedInRuntime(
+  serverConfig: Pick<ServerConfig, "preview"> | null | undefined = getServerConfig(),
+): boolean {
   if (typeof window === "undefined") return false;
-  return Boolean(window.desktopBridge?.preview);
+  return Boolean(window.desktopBridge?.preview || serverConfig?.preview?.steel.enabled);
 }
 
 export const __testing = {

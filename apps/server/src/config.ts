@@ -73,6 +73,8 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly logWebSocketEvents: boolean;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
+  readonly steelBrowserBaseUrl?: string | undefined;
+  readonly steelBrowserPublicBaseUrl?: string | undefined;
 }
 
 export const deriveServerPaths = Effect.fn(function* (

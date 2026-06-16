@@ -14,7 +14,12 @@ export async function openUrlInPreview(threadRef: ScopedThreadRef, url: string):
     throw new Error("Environment is not connected.");
   }
 
-  const snapshot = await api.preview.open({ threadId: threadRef.threadId, url });
+  const snapshot = await api.preview.open({
+    threadId: threadRef.threadId,
+    url,
+    hostPreference:
+      typeof window !== "undefined" && window.desktopBridge?.preview ? "desktop" : "steel",
+  });
   usePreviewStateStore.getState().applyServerSnapshot(threadRef, snapshot);
   usePreviewStateStore.getState().rememberUrl(threadRef, url);
   useRightPanelStore.getState().openBrowser(threadRef, snapshot.tabId);
