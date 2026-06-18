@@ -63,7 +63,7 @@ import {
 } from "@t3tools/contracts/settings";
 import { usePrimaryEnvironmentId } from "../environments/primary";
 import { isElectron } from "../env";
-import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
+import { APP_VERSION } from "../branding";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isMacPlatform, newCommandId } from "../lib/utils";
 import {
@@ -2438,12 +2438,13 @@ const SidebarProjectListRow = memo(function SidebarProjectListRow(props: Sidebar
 
 function SalchiLogo() {
   return (
-    <img
-      alt=""
-      aria-hidden="true"
-      className="size-5 shrink-0 object-contain [image-rendering:pixelated]"
-      src="/salchi-logo.png"
-    />
+    <span aria-hidden="true" className="relative size-[25px] shrink-0 overflow-hidden">
+      <img
+        alt=""
+        className="absolute -top-[5.25px] -left-[7px] size-[39px] max-w-none"
+        src="/salchi-logo.png"
+      />
+    </span>
   );
 }
 
@@ -2651,15 +2652,12 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
           render={
             <Link
               aria-label="Go to threads"
-              className="ml-1 flex min-w-0 flex-1 cursor-pointer items-center gap-1 rounded-md outline-hidden ring-ring transition-colors hover:text-foreground focus-visible:ring-2"
+              className="ml-1 flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md outline-hidden ring-ring transition-colors hover:text-foreground focus-visible:ring-2"
               to="/"
             >
               <SalchiLogo />
               <span className="truncate text-sm font-medium tracking-tight text-muted-foreground">
                 Salchi
-              </span>
-              <span className="rounded-full bg-muted/50 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-[0.18em] text-muted-foreground/60">
-                {APP_STAGE_LABEL}
               </span>
             </Link>
           }
