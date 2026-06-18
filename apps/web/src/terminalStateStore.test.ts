@@ -435,6 +435,98 @@ describe("terminalStateStore actions", () => {
     ).toEqual(["http://localhost:5173/"]);
   });
 
+  it("clears stale dev server links when a subprocess is running without current links", () => {
+    const store = useTerminalStateStore.getState();
+    store.applyTerminalEvent(
+      THREAD_REF,
+      makeTerminalEvent("started", {
+        snapshot: {
+          threadId: THREAD_ID,
+          terminalId: "default",
+          cwd: "/tmp/workspace",
+          worktreePath: null,
+          status: "running",
+          pid: 123,
+          history: "Local: http://localhost:5173/\n",
+          exitCode: null,
+          exitSignal: null,
+          updatedAt: "2026-04-02T20:00:00.000Z",
+        },
+      }),
+    );
+    store.applyTerminalEvent(
+      THREAD_REF,
+      makeTerminalEvent("output", {
+        data: Array.from({ length: 5_050 }, (_, index) => `log ${index}\n`).join(""),
+      }),
+    );
+
+    expect(
+      selectTerminalDevServerLinks(
+        useTerminalStateStore.getState().terminalDevServerLinksByKey,
+        THREAD_REF,
+        "default",
+      ).map((link) => link.url),
+    ).toEqual(["http://localhost:5173/"]);
+
+    store.applyTerminalEvent(
+      THREAD_REF,
+      makeTerminalEvent("activity", {
+        hasRunningSubprocess: true,
+      }),
+    );
+
+    expect(
+      selectTerminalDevServerLinks(
+        useTerminalStateStore.getState().terminalDevServerLinksByKey,
+        THREAD_REF,
+        "default",
+      ),
+    ).toEqual([]);
+  });
+
+  it("treats running terminal snapshots without dev links as authoritative", () => {
+    const store = useTerminalStateStore.getState();
+    store.applyTerminalEvent(
+      THREAD_REF,
+      makeTerminalEvent("started", {
+        snapshot: {
+          threadId: THREAD_ID,
+          terminalId: "default",
+          cwd: "/tmp/workspace",
+          worktreePath: null,
+          status: "running",
+          pid: 123,
+          history: "Local: http://localhost:5173/\n",
+          exitCode: null,
+          exitSignal: null,
+          updatedAt: "2026-04-02T20:00:00.000Z",
+        },
+      }),
+    );
+
+    store.recordTerminalSnapshot(THREAD_REF, {
+      threadId: THREAD_ID,
+      terminalId: "default",
+      cwd: "/tmp/workspace",
+      worktreePath: null,
+      status: "running",
+      pid: 123,
+      history: "server is running, but did not print a URL\n",
+      exitCode: null,
+      exitSignal: null,
+      updatedAt: "2026-04-02T20:01:00.000Z",
+    });
+
+    expect(
+      selectTerminalDevServerLinks(
+        useTerminalStateStore.getState().terminalDevServerLinksByKey,
+        THREAD_REF,
+        "default",
+      ),
+    ).toEqual([]);
+  });
+
   it("clears stale dev server links at subprocess boundaries", () => {
     const store = useTerminalStateStore.getState();
     store.applyTerminalEvent(

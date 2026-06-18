@@ -8,6 +8,8 @@ import {
   detectDevServerLinksFromText,
   mergeDevServerLinks,
   probeDevServerReachable,
+  resolveDevServerReachabilityHostname,
+  rewriteDevServerLinksForTailscale,
 } from "./devServerLinks";
 import type { TerminalEventEntry } from "./terminalStateStore";
 
@@ -233,6 +235,12 @@ describe("canCurrentBrowserReachDevServerUrl", () => {
         url: "http://100.82.150.82:5173/",
       }),
     ).toBe(true);
+    expect(
+      canCurrentBrowserReachDevServerUrl({
+        browserHostname: "100.99.1.2",
+        url: "http://macbook.tail1234.ts.net:5173/",
+      }),
+    ).toBe(true);
   });
 
   it("rejects server-only interfaces the remote browser cannot reach", () => {
@@ -255,6 +263,90 @@ describe("canCurrentBrowserReachDevServerUrl", () => {
         url: "http://192.168.1.44:5173/",
       }),
     ).toBe(false);
+  });
+});
+
+describe("rewriteDevServerLinksForTailscale", () => {
+  it("replaces loopback dev server links with Tailscale IP and MagicDNS links", () => {
+    const links = detectDevServerLinksFromText("Local: http://localhost:5173/app?debug=1");
+
+    expect(
+      rewriteDevServerLinksForTailscale(links, {
+        environmentHttpBaseUrl: "https://macbook.tail1234.ts.net/",
+        advertisedEndpoints: [
+          {
+            id: "tailscale-ip:http://100.82.150.82:3773",
+            httpBaseUrl: "http://100.82.150.82:3773/",
+          },
+          {
+            id: "tailscale-magicdns:https://macbook.tail1234.ts.net/",
+            httpBaseUrl: "https://macbook.tail1234.ts.net/",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        url: "http://100.82.150.82:5173/app?debug=1",
+        displayUrl: "http://100.82.150.82:5173/app?debug=1",
+        label: "Tailscale IP 100.82.150.82:5173",
+        host: "100.82.150.82:5173",
+        port: "5173",
+      },
+      {
+        url: "http://macbook.tail1234.ts.net:5173/app?debug=1",
+        displayUrl: "http://macbook.tail1234.ts.net:5173/app?debug=1",
+        label: "MagicDNS macbook.tail1234.ts.net:5173",
+        host: "macbook.tail1234.ts.net:5173",
+        port: "5173",
+      },
+    ]);
+  });
+
+  it("keeps existing Tailscale links and does not duplicate rewritten localhost links", () => {
+    const links = detectDevServerLinksFromText(
+      ["Network: http://100.82.150.82:5173/", "Local: http://localhost:5173/"].join("\n"),
+    );
+
+    expect(
+      rewriteDevServerLinksForTailscale(links, {
+        browserHostname: "macbook.tail1234.ts.net",
+        advertisedEndpoints: [
+          {
+            id: "tailscale-ip:http://100.82.150.82:3773",
+            httpBaseUrl: "http://100.82.150.82:3773/",
+          },
+          {
+            id: "tailscale-magicdns:https://macbook.tail1234.ts.net/",
+            httpBaseUrl: "https://macbook.tail1234.ts.net/",
+          },
+        ],
+      }).map((link) => link.url),
+    ).toEqual(["http://100.82.150.82:5173/", "http://macbook.tail1234.ts.net:5173/"]);
+  });
+
+  it("leaves loopback links unchanged outside a Tailscale server context", () => {
+    const links = detectDevServerLinksFromText("Local: http://localhost:5173/");
+
+    expect(
+      rewriteDevServerLinksForTailscale(links, {
+        environmentHttpBaseUrl: "http://localhost:3773/",
+      }),
+    ).toEqual(links);
+  });
+
+  it("uses a Tailscale host as the reachability route hint when available", () => {
+    expect(
+      resolveDevServerReachabilityHostname({
+        browserHostname: "app.t3.codes",
+        environmentHttpBaseUrl: "https://macbook.tail1234.ts.net/",
+        advertisedEndpoints: [
+          {
+            id: "tailscale-ip:http://100.82.150.82:3773",
+            httpBaseUrl: "http://100.82.150.82:3773/",
+          },
+        ],
+      }),
+    ).toBe("100.82.150.82");
   });
 });
 

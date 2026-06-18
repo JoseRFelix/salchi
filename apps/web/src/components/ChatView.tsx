@@ -2,6 +2,8 @@ import {
   type ApprovalRequestId,
   DEFAULT_MODEL,
   defaultInstanceIdForDriver,
+  type AdvertisedEndpoint,
+  type DesktopServerExposureState,
   type EnvironmentId,
   type MessageId,
   type ModelSelection,
@@ -142,6 +144,7 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import {
+  getEnvironmentHttpBaseUrl,
   reconnectSavedEnvironment,
   useSavedEnvironmentRegistryStore,
   useSavedEnvironmentRuntimeStore,
@@ -228,7 +231,11 @@ import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { retainActiveThreadDetailSubscription } from "../environments/runtime/service";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { Button } from "./ui/button";
-import { mergeDevServerLinks } from "../devServerLinks";
+import {
+  mergeDevServerLinks,
+  resolveDevServerReachabilityHostname,
+  rewriteDevServerLinksForTailscale,
+} from "../devServerLinks";
 import {
   buildVersionMismatchDismissalKey,
   dismissVersionMismatch,
@@ -986,8 +993,64 @@ export default function ChatView(props: ChatViewProps) {
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
   const activeThreadEnvironmentId = activeThreadRef?.environmentId ?? null;
   const activeThreadIdForTerminalSnapshot = activeThreadRef?.threadId ?? null;
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const savedEnvironmentRegistry = useSavedEnvironmentRegistryStore((s) => s.byId);
+  const savedEnvironmentRuntimeById = useSavedEnvironmentRuntimeStore((s) => s.byId);
+  const activeEnvironmentHttpBaseUrl = useMemo(
+    () => (activeThreadEnvironmentId ? getEnvironmentHttpBaseUrl(activeThreadEnvironmentId) : null),
+    [activeThreadEnvironmentId, savedEnvironmentRegistry],
+  );
+  const [desktopDevServerTailscaleContext, setDesktopDevServerTailscaleContext] = useState<{
+    readonly advertisedEndpoints: ReadonlyArray<Pick<AdvertisedEndpoint, "httpBaseUrl" | "id">>;
+    readonly serverAvailableViaTailscale: boolean;
+  }>({
+    advertisedEndpoints: [],
+    serverAvailableViaTailscale: false,
+  });
+  useEffect(() => {
+    const desktopBridge = typeof window === "undefined" ? undefined : window.desktopBridge;
+    if (!desktopBridge) {
+      setDesktopDevServerTailscaleContext({
+        advertisedEndpoints: [],
+        serverAvailableViaTailscale: false,
+      });
+      return;
+    }
+
+    let disposed = false;
+    const getAdvertisedEndpoints =
+      typeof desktopBridge.getAdvertisedEndpoints === "function"
+        ? desktopBridge.getAdvertisedEndpoints.bind(desktopBridge)
+        : null;
+    const getServerExposureState =
+      typeof desktopBridge.getServerExposureState === "function"
+        ? desktopBridge.getServerExposureState.bind(desktopBridge)
+        : null;
+
+    const advertisedEndpointsPromise: Promise<readonly AdvertisedEndpoint[]> =
+      getAdvertisedEndpoints?.().catch(() => []) ?? Promise.resolve([]);
+    const exposureStatePromise: Promise<DesktopServerExposureState | null> =
+      getServerExposureState?.().catch(() => null) ?? Promise.resolve(null);
+
+    void Promise.all([advertisedEndpointsPromise, exposureStatePromise]).then(
+      ([advertisedEndpoints, exposureState]) => {
+        if (disposed) return;
+        setDesktopDevServerTailscaleContext({
+          advertisedEndpoints: advertisedEndpoints.map((endpoint) => ({
+            id: endpoint.id,
+            httpBaseUrl: endpoint.httpBaseUrl,
+          })),
+          serverAvailableViaTailscale: exposureState?.tailscaleServeEnabled === true,
+        });
+      },
+    );
+
+    return () => {
+      disposed = true;
+    };
+  }, [activeThreadEnvironmentId]);
   const activeRunningTerminalIdKey = terminalState.runningTerminalIds.join("\u0000");
-  const devServerLinks = useTerminalStateStore(
+  const detectedDevServerLinks = useTerminalStateStore(
     useShallow((state) => {
       if (!activeThreadRef) return [];
       return mergeDevServerLinks(
@@ -1000,6 +1063,35 @@ export default function ChatView(props: ChatViewProps) {
         ),
       );
     }),
+  );
+  const devServerLinks = useMemo(
+    () =>
+      rewriteDevServerLinksForTailscale(detectedDevServerLinks, {
+        advertisedEndpoints: desktopDevServerTailscaleContext.advertisedEndpoints,
+        browserHostname: typeof window === "undefined" ? null : window.location.hostname,
+        environmentHttpBaseUrl: activeEnvironmentHttpBaseUrl,
+        serverAvailableViaTailscale: desktopDevServerTailscaleContext.serverAvailableViaTailscale,
+      }),
+    [
+      activeEnvironmentHttpBaseUrl,
+      desktopDevServerTailscaleContext.advertisedEndpoints,
+      desktopDevServerTailscaleContext.serverAvailableViaTailscale,
+      detectedDevServerLinks,
+    ],
+  );
+  const devServerProbeBrowserHostname = useMemo(
+    () =>
+      resolveDevServerReachabilityHostname({
+        advertisedEndpoints: desktopDevServerTailscaleContext.advertisedEndpoints,
+        browserHostname: typeof window === "undefined" ? null : window.location.hostname,
+        environmentHttpBaseUrl: activeEnvironmentHttpBaseUrl,
+        serverAvailableViaTailscale: desktopDevServerTailscaleContext.serverAvailableViaTailscale,
+      }),
+    [
+      activeEnvironmentHttpBaseUrl,
+      desktopDevServerTailscaleContext.advertisedEndpoints,
+      desktopDevServerTailscaleContext.serverAvailableViaTailscale,
+    ],
   );
   useEffect(() => {
     if (
@@ -1128,9 +1220,6 @@ export default function ChatView(props: ChatViewProps) {
   // Compute the list of environments this logical project spans, used to
   // drive the environment picker in BranchToolbar.
   const allProjects = useStore(useShallow(selectProjectsAcrossEnvironments));
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const savedEnvironmentRegistry = useSavedEnvironmentRegistryStore((s) => s.byId);
-  const savedEnvironmentRuntimeById = useSavedEnvironmentRuntimeStore((s) => s.byId);
   const activeSavedEnvironmentRecord =
     activeThread && activeThread.environmentId !== primaryEnvironmentId
       ? (savedEnvironmentRegistry[activeThread.environmentId] ?? null)
@@ -4512,6 +4601,7 @@ export default function ChatView(props: ChatViewProps) {
           diffOpen={diffOpen}
           sourceControlOpen={sourceControlOpen}
           devServerLinks={devServerLinks}
+          devServerProbeBrowserHostname={devServerProbeBrowserHostname}
           probeDevServerUrl={probeDevServerUrl}
           fileExplorerAvailable={fileExplorerAvailable}
           fileExplorerOpen={fileExplorerOpen}

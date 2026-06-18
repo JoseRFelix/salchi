@@ -437,14 +437,14 @@ function updateTerminalDevServerLinksForEvent(
         ),
       );
     case "activity":
-      return event.hasRunningSubprocess
-        ? terminalDevServerLinksByKey
-        : setTerminalDevServerLinks(
-            terminalDevServerLinksByKey,
-            threadRef,
-            event.terminalId,
-            EMPTY_DEV_SERVER_LINKS,
-          );
+      return setTerminalDevServerLinks(
+        terminalDevServerLinksByKey,
+        threadRef,
+        event.terminalId,
+        event.hasRunningSubprocess && currentSnapshot
+          ? detectDevServerLinksFromText(currentSnapshot.history)
+          : EMPTY_DEV_SERVER_LINKS,
+      );
     case "cleared":
     case "exited":
     case "error":
@@ -470,7 +470,7 @@ function updateTerminalDevServerLinksForSnapshot(
       EMPTY_DEV_SERVER_LINKS,
     );
   }
-  return mergeTerminalDevServerLinks(
+  return setTerminalDevServerLinks(
     terminalDevServerLinksByKey,
     threadRef,
     snapshot.terminalId,

@@ -1,4 +1,4 @@
-import type { TerminalSessionSnapshot } from "@t3tools/contracts";
+import type { AdvertisedEndpoint, TerminalSessionSnapshot } from "@t3tools/contracts";
 import type { TerminalEventEntry } from "./terminalStateStore";
 import { extractTerminalLinks } from "./terminal-links";
 
@@ -20,6 +20,13 @@ export interface DevServerProbeOptions {
   readonly probe: (url: string) => Promise<boolean>;
 }
 
+export interface DevServerTailscaleRewriteOptions {
+  readonly advertisedEndpoints?: ReadonlyArray<Pick<AdvertisedEndpoint, "httpBaseUrl" | "id">>;
+  readonly browserHostname?: string | null;
+  readonly environmentHttpBaseUrl?: string | null;
+  readonly serverAvailableViaTailscale?: boolean;
+}
+
 interface DevServerCandidate {
   readonly url: string;
   readonly context: string;
@@ -27,6 +34,11 @@ interface DevServerCandidate {
   readonly hostname: string;
   readonly port: string;
   readonly sequence: number;
+}
+
+interface TailscaleDevServerHostAlias {
+  readonly hostname: string;
+  readonly kind: "tailscale-ip" | "magicdns";
 }
 
 const DEV_SERVER_CONTEXT_PATTERN =
@@ -76,6 +88,10 @@ function isTailscaleCgnatIpv4(hostname: string): boolean {
   return first === 100 && second >= 64 && second <= 127;
 }
 
+function isTailscaleMagicDnsHost(hostname: string): boolean {
+  return normalizeHostname(hostname).endsWith(".ts.net");
+}
+
 function normalizeHostname(hostname: string): string {
   return hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
 }
@@ -88,7 +104,7 @@ function normalizeHostname(hostname: string): string {
  */
 function isTailnetBrowserHost(hostname: string): boolean {
   const host = normalizeHostname(hostname);
-  return isTailscaleCgnatIpv4(host) || host.endsWith(".ts.net");
+  return isTailscaleCgnatIpv4(host) || isTailscaleMagicDnsHost(host);
 }
 
 function isLocalDevHost(hostname: string): boolean {
@@ -133,6 +149,22 @@ function parseHttpUrl(value: string): URL | null {
   } catch {
     return null;
   }
+}
+
+function tailscaleAliasFromHostname(hostname: string): TailscaleDevServerHostAlias | null {
+  const normalized = normalizeHostname(hostname);
+  if (isTailscaleCgnatIpv4(normalized)) {
+    return { hostname: normalized, kind: "tailscale-ip" };
+  }
+  if (isTailscaleMagicDnsHost(normalized)) {
+    return { hostname: normalized, kind: "magicdns" };
+  }
+  return null;
+}
+
+function tailscaleAliasFromUrl(value: string): TailscaleDevServerHostAlias | null {
+  const url = parseHttpUrl(value);
+  return url ? tailscaleAliasFromHostname(url.hostname) : null;
 }
 
 function normalizeDevServerUrl(value: string): string | null {
@@ -182,6 +214,95 @@ function linkFromCandidate(candidate: DevServerCandidate): DevServerLink {
     host: candidate.host,
     port: candidate.port,
   };
+}
+
+function tailscaleAliasLabel(alias: TailscaleDevServerHostAlias): string {
+  return alias.kind === "tailscale-ip" ? "Tailscale IP" : "MagicDNS";
+}
+
+function tailscaleAliasPriority(alias: TailscaleDevServerHostAlias): number {
+  return alias.kind === "tailscale-ip" ? 0 : 1;
+}
+
+function resolveTailscaleDevServerHostAliases(
+  options: DevServerTailscaleRewriteOptions,
+): TailscaleDevServerHostAlias[] {
+  const aliasesByHostname = new Map<string, TailscaleDevServerHostAlias>();
+  const addAlias = (alias: TailscaleDevServerHostAlias | null) => {
+    if (!alias) return;
+    aliasesByHostname.set(alias.hostname, alias);
+  };
+
+  addAlias(
+    options.environmentHttpBaseUrl ? tailscaleAliasFromUrl(options.environmentHttpBaseUrl) : null,
+  );
+  addAlias(options.browserHostname ? tailscaleAliasFromHostname(options.browserHostname) : null);
+
+  const isTailscaleContext =
+    options.serverAvailableViaTailscale === true || aliasesByHostname.size > 0;
+  if (!isTailscaleContext) {
+    return [];
+  }
+
+  for (const endpoint of options.advertisedEndpoints ?? []) {
+    if (!endpoint.id.startsWith("tailscale-")) continue;
+    addAlias(tailscaleAliasFromUrl(endpoint.httpBaseUrl));
+  }
+
+  return [...aliasesByHostname.values()].toSorted(
+    (left, right) =>
+      tailscaleAliasPriority(left) - tailscaleAliasPriority(right) ||
+      left.hostname.localeCompare(right.hostname),
+  );
+}
+
+function rewriteDevServerLinkHost(
+  link: DevServerLink,
+  alias: TailscaleDevServerHostAlias,
+): DevServerLink | null {
+  const url = parseHttpUrl(link.url);
+  if (!url) return null;
+  url.hostname = alias.hostname;
+
+  const displayUrl = displayUrlFor(url.href);
+  return {
+    url: url.href,
+    displayUrl,
+    label: `${tailscaleAliasLabel(alias)} ${url.host}`,
+    host: url.host,
+    port: url.port,
+  };
+}
+
+export function rewriteDevServerLinksForTailscale(
+  links: ReadonlyArray<DevServerLink>,
+  options: DevServerTailscaleRewriteOptions,
+): DevServerLink[] {
+  const aliases = resolveTailscaleDevServerHostAliases(options);
+  if (aliases.length === 0) {
+    return mergeDevServerLinks(links);
+  }
+
+  const rewrittenLinks = links.flatMap((link) => {
+    const url = parseHttpUrl(link.url);
+    if (!url || !isLoopbackDevHost(url.hostname)) {
+      return [link];
+    }
+
+    return aliases
+      .map((alias) => rewriteDevServerLinkHost(link, alias))
+      .filter((rewritten): rewritten is DevServerLink => rewritten !== null);
+  });
+
+  return mergeDevServerLinks(rewrittenLinks);
+}
+
+export function resolveDevServerReachabilityHostname(
+  options: DevServerTailscaleRewriteOptions,
+): string | null {
+  return (
+    resolveTailscaleDevServerHostAliases(options)[0]?.hostname ?? options.browserHostname ?? null
+  );
 }
 
 export function detectDevServerLinksFromText(text: string): DevServerLink[] {
@@ -304,6 +425,13 @@ export function canCurrentBrowserReachDevServerUrl(input: {
   // browser, even when the UI is served via a MagicDNS (`*.ts.net`) name rather
   // than the raw `100.x` IP that Vite prints.
   if (isTailscaleCgnatIpv4(urlHost) && isTailnetBrowserHost(browserHost)) {
+    return true;
+  }
+
+  // MagicDNS names resolve inside the tailnet as well. They are especially
+  // useful when a dev server only printed loopback URLs and the UI is loaded
+  // from another Tailscale address.
+  if (isTailscaleMagicDnsHost(urlHost) && isTailnetBrowserHost(browserHost)) {
     return true;
   }
 

@@ -5,6 +5,10 @@
 - All of `bun fmt`, `bun lint`, and `bun typecheck` must pass before considering tasks completed.
 - NEVER run `bun test`. Always use `bun run test` (runs Vitest).
 
+## Pull Requests
+
+- Open PRs against the `origin` repository by default unless the user explicitly specifies another remote or repository.
+
 ## Project Snapshot
 
 Salchi is a minimal web GUI for using coding agents like Codex and Claude.

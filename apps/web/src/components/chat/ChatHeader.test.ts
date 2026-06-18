@@ -4,8 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __resetDevServerWindowForTests,
   openDevServerLink,
+  shouldEnableDevServerButton,
   shouldShowOpenInPicker,
 } from "./ChatHeader";
+import type { DevServerLink } from "../../devServerLinks";
 
 afterEach(() => {
   __resetDevServerWindowForTests();
@@ -77,5 +79,20 @@ describe("openDevServerLink", () => {
     expect(openedWindow.location.href).toBe("http://localhost:3000/");
     expect(openedWindow.focus).toHaveBeenCalledTimes(2);
     expect(openedWindow.opener).toBeNull();
+  });
+});
+
+describe("shouldEnableDevServerButton", () => {
+  it("requires at least one detected dev server link", () => {
+    const link: DevServerLink = {
+      url: "http://localhost:5173/",
+      displayUrl: "http://localhost:5173",
+      label: "Local localhost:5173",
+      host: "localhost:5173",
+      port: "5173",
+    };
+
+    expect(shouldEnableDevServerButton([])).toBe(false);
+    expect(shouldEnableDevServerButton([link])).toBe(true);
   });
 });

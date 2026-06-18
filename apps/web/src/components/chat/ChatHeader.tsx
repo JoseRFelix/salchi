@@ -50,6 +50,7 @@ interface ChatHeaderProps {
   diffOpen: boolean;
   sourceControlOpen: boolean;
   devServerLinks: ReadonlyArray<DevServerLink>;
+  devServerProbeBrowserHostname: string | null;
   probeDevServerUrl: (url: string) => Promise<boolean>;
   fileExplorerAvailable: boolean;
   fileExplorerOpen: boolean;
@@ -94,6 +95,7 @@ export const ChatHeader = memo(function ChatHeader({
   diffOpen,
   sourceControlOpen,
   devServerLinks,
+  devServerProbeBrowserHostname,
   probeDevServerUrl,
   fileExplorerAvailable,
   fileExplorerOpen,
@@ -193,7 +195,11 @@ export const ChatHeader = memo(function ChatHeader({
           </>
         )}
         {isCompactHeader ? (
-          <MobileDevServerButton links={devServerLinks} probe={probeDevServerUrl} />
+          <MobileDevServerButton
+            browserHostname={devServerProbeBrowserHostname}
+            links={devServerLinks}
+            probe={probeDevServerUrl}
+          />
         ) : null}
         <Tooltip>
           <TooltipTrigger
@@ -405,6 +411,7 @@ function reconcileProbeStatuses(
 function useDevServerReachability(
   links: ReadonlyArray<DevServerLink>,
   probe: (url: string) => Promise<boolean>,
+  browserHostnameOverride: string | null,
 ): ReadonlyMap<string, DevServerReachabilityStatus> {
   const [probeStatuses, setProbeStatuses] = useState<
     ReadonlyMap<string, DevServerReachabilityStatus>
@@ -425,7 +432,8 @@ function useDevServerReachability(
 
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const browserHostname = typeof window === "undefined" ? "" : window.location.hostname;
+    const browserHostname =
+      browserHostnameOverride ?? (typeof window === "undefined" ? "" : window.location.hostname);
 
     const updateReachability = (url: string, reachable: boolean) => {
       if (disposed) return;
@@ -470,7 +478,7 @@ function useDevServerReachability(
         clearTimeout(timer);
       }
     };
-  }, [urlKey]);
+  }, [browserHostnameOverride, urlKey]);
 
   return probeStatuses;
 }
@@ -521,37 +529,39 @@ function DevServerBrowserIcon({
 }
 
 function MobileDevServerButton({
+  browserHostname,
   links,
   probe,
 }: {
+  readonly browserHostname: string | null;
   readonly links: ReadonlyArray<DevServerLink>;
   readonly probe: (url: string) => Promise<boolean>;
 }) {
-  const hasLinks = links.length > 0;
+  const buttonEnabled = shouldEnableDevServerButton(links);
   const [disabledTooltipOpen, setDisabledTooltipOpen] = useState(false);
   const disabledTooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const probeStatuses = useDevServerReachability(links, probe);
+  const probeStatuses = useDevServerReachability(links, probe, browserHostname);
   const headerProbeStatus = aggregateProbeStatus(links, probeStatuses);
-  const tooltipLabel = hasLinks
+  const tooltipLabel = buttonEnabled
     ? links.length === 1
       ? (links[0]?.displayUrl ?? "Open dev server")
       : "Open dev server"
     : "No running dev servers";
-  const buttonClassName = hasLinks
+  const buttonClassName = buttonEnabled
     ? "shrink-0 text-foreground hover:text-foreground"
-    : "shrink-0 cursor-default opacity-64";
-  const iconClassName = hasLinks
+    : "shrink-0";
+  const iconClassName = buttonEnabled
     ? "size-4.5 text-foreground sm:size-3"
     : "size-4.5 text-muted-foreground opacity-80 sm:size-3.5";
 
   useEffect(() => {
-    if (!hasLinks) return;
+    if (!buttonEnabled) return;
     if (disabledTooltipTimerRef.current !== null) {
       clearTimeout(disabledTooltipTimerRef.current);
       disabledTooltipTimerRef.current = null;
     }
     setDisabledTooltipOpen(false);
-  }, [hasLinks]);
+  }, [buttonEnabled]);
 
   useEffect(
     () => () => {
@@ -563,7 +573,7 @@ function MobileDevServerButton({
   );
 
   const showDisabledTooltip = () => {
-    if (hasLinks) return;
+    if (buttonEnabled) return;
     setDisabledTooltipOpen(true);
 
     if (disabledTooltipTimerRef.current !== null) {
@@ -614,25 +624,47 @@ function MobileDevServerButton({
   }
 
   const link = links[0] ?? null;
+  if (!link) {
+    return (
+      <Tooltip open={disabledTooltipOpen}>
+        <TooltipTrigger
+          render={
+            <span
+              aria-disabled="true"
+              aria-label="No running dev servers"
+              className="inline-flex shrink-0 cursor-default"
+              onFocus={showDisabledTooltip}
+              onPointerDown={showDisabledTooltip}
+              onPointerEnter={showDisabledTooltip}
+              role="button"
+              tabIndex={0}
+            >
+              <Button
+                aria-hidden="true"
+                className={buttonClassName}
+                disabled
+                size="icon-xs"
+                tabIndex={-1}
+                variant="outline"
+              >
+                <DevServerBrowserIcon className={iconClassName} status={headerProbeStatus} />
+              </Button>
+            </span>
+          }
+        />
+        <TooltipPopup side="bottom">{tooltipLabel}</TooltipPopup>
+      </Tooltip>
+    );
+  }
+
   return (
-    <Tooltip open={link ? undefined : disabledTooltipOpen}>
+    <Tooltip>
       <TooltipTrigger
         render={
           <Button
-            aria-label={link ? `Open ${link.displayUrl}` : "No running dev servers"}
-            aria-disabled={!link}
+            aria-label={`Open ${link.displayUrl}`}
             className={buttonClassName}
-            onClick={
-              link
-                ? () => openDevServerLink(link.url)
-                : (event) => {
-                    event.preventDefault();
-                    showDisabledTooltip();
-                  }
-            }
-            onFocus={!link ? showDisabledTooltip : undefined}
-            onPointerDown={!link ? showDisabledTooltip : undefined}
-            onPointerEnter={!link ? showDisabledTooltip : undefined}
+            onClick={() => openDevServerLink(link.url)}
             size="icon-xs"
             variant="outline"
           >
@@ -643,4 +675,8 @@ function MobileDevServerButton({
       <TooltipPopup side="bottom">{tooltipLabel}</TooltipPopup>
     </Tooltip>
   );
+}
+
+export function shouldEnableDevServerButton(links: ReadonlyArray<DevServerLink>): boolean {
+  return links.length > 0;
 }
