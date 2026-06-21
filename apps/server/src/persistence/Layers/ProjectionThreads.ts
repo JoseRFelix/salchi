@@ -23,6 +23,10 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
 );
 type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
 
+function sqliteBoolean(value: boolean | number | null | undefined): number {
+  return value === true || value === 1 ? 1 : 0;
+}
+
 const makeProjectionThreadRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
@@ -61,11 +65,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${JSON.stringify(row.modelSelection)},
           ${row.runtimeMode},
           ${row.interactionMode},
-          ${row.parentThreadId},
-          ${row.subagentKind},
-          ${row.subagentNickname},
-          ${row.subagentRole},
-          ${row.hiddenFromThreadList},
+          ${row.parentThreadId ?? null},
+          ${row.subagentKind ?? null},
+          ${row.subagentNickname ?? null},
+          ${row.subagentRole ?? null},
+          ${sqliteBoolean(row.hiddenFromThreadList)},
           ${row.branch},
           ${row.worktreePath},
           ${row.latestTurnId},
