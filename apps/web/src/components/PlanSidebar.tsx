@@ -1,5 +1,5 @@
 import { memo, useState, useCallback } from "react";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -9,7 +9,6 @@ import {
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  CircleAlertIcon,
   EllipsisIcon,
   LoaderIcon,
   PanelRightCloseIcon,
@@ -17,7 +16,6 @@ import {
 import { cn } from "~/lib/utils";
 import type { ActivePlanState } from "../session-logic";
 import type { LatestProposedPlanState } from "../session-logic";
-import type { SubagentSummary } from "../session-logic";
 import { formatTimestamp } from "../timestampFormat";
 import {
   proposedPlanTitle,
@@ -53,57 +51,9 @@ function stepStatusIcon(status: string): React.ReactNode {
   );
 }
 
-function subagentStatusIcon(status: SubagentSummary["status"]): React.ReactNode {
-  if (status === "running" || status === "starting") {
-    return (
-      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-        <LoaderIcon className="size-3 animate-spin" />
-      </span>
-    );
-  }
-  if (status === "completed") {
-    return (
-      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-success/10 text-success-foreground">
-        <CheckIcon className="size-3" />
-      </span>
-    );
-  }
-  if (status === "failed") {
-    return (
-      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
-        <CircleAlertIcon className="size-3" />
-      </span>
-    );
-  }
-  return (
-    <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-border/60 bg-muted/30">
-      <span className="size-1.5 rounded-full bg-muted-foreground/40" />
-    </span>
-  );
-}
-
-function subagentStatusLabel(status: SubagentSummary["status"]): string {
-  switch (status) {
-    case "starting":
-      return "Starting";
-    case "running":
-      return "Running";
-    case "completed":
-      return "Done";
-    case "failed":
-      return "Failed";
-    case "stopped":
-      return "Stopped";
-    case "interrupted":
-      return "Interrupted";
-  }
-}
-
 interface PlanSidebarProps {
   activePlan: ActivePlanState | null;
   activeProposedPlan: LatestProposedPlanState | null;
-  subagents?: ReadonlyArray<SubagentSummary>;
-  onOpenSubagentThread?: (threadId: ThreadId) => void;
   label?: string;
   environmentId: EnvironmentId;
   markdownCwd: string | undefined;
@@ -116,8 +66,6 @@ interface PlanSidebarProps {
 const PlanSidebar = memo(function PlanSidebar({
   activePlan,
   activeProposedPlan,
-  subagents = [],
-  onOpenSubagentThread,
   label = "Plan",
   environmentId,
   markdownCwd,
@@ -133,7 +81,6 @@ const PlanSidebar = memo(function PlanSidebar({
   const planMarkdown = activeProposedPlan?.planMarkdown ?? null;
   const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
   const planTitle = planMarkdown ? proposedPlanTitle(planMarkdown) : null;
-  const hasSubagents = subagents.length > 0;
 
   const handleCopyPlan = useCallback(() => {
     if (!planMarkdown) return;
@@ -248,79 +195,6 @@ const PlanSidebar = memo(function PlanSidebar({
       {/* Content */}
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-3 space-y-4">
-          {/* Agents */}
-          {hasSubagents ? (
-            <div className="space-y-1.5">
-              <p className="mb-2 text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase">
-                Agents
-              </p>
-              {subagents.map((agent) => {
-                const secondary = [agent.role, agent.model, agent.providerThreadId]
-                  .filter(Boolean)
-                  .join(" · ");
-                const detail = agent.detail ?? agent.summary;
-                const materializedThreadId = agent.materializedThreadId;
-                const canOpenThread = Boolean(materializedThreadId && onOpenSubagentThread);
-                const rowClassName = cn(
-                  "w-full rounded-md border border-border/50 bg-background/45 px-2.5 py-2 text-left",
-                  canOpenThread &&
-                    "transition-colors hover:border-border hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none",
-                  agent.tone === "error" && "border-destructive/30 bg-destructive/5",
-                );
-                const content = (
-                  <>
-                    <div className="flex items-start gap-2.5">
-                      {subagentStatusIcon(agent.status)}
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <p className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground/85">
-                            {agent.label}
-                          </p>
-                          <span
-                            className={cn(
-                              "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium",
-                              agent.status === "failed"
-                                ? "bg-destructive/10 text-destructive"
-                                : "bg-muted/50 text-muted-foreground",
-                            )}
-                          >
-                            {subagentStatusLabel(agent.status)}
-                          </span>
-                        </div>
-                        {secondary ? (
-                          <p className="truncate text-[11px] text-muted-foreground/45">
-                            {secondary}
-                          </p>
-                        ) : null}
-                        {detail ? (
-                          <p className="line-clamp-2 text-[12px] leading-snug break-words text-muted-foreground/70">
-                            {detail}
-                          </p>
-                        ) : null}
-                      </div>
-                    </div>
-                  </>
-                );
-
-                return canOpenThread && materializedThreadId ? (
-                  <button
-                    key={agent.id}
-                    type="button"
-                    className={rowClassName}
-                    aria-label={`Open ${agent.label}`}
-                    onClick={() => onOpenSubagentThread?.(materializedThreadId)}
-                  >
-                    {content}
-                  </button>
-                ) : (
-                  <div key={agent.id} className={rowClassName}>
-                    {content}
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
-
           {/* Explanation */}
           {activePlan?.explanation ? (
             <p className="text-[13px] leading-relaxed text-muted-foreground/80">
@@ -392,9 +266,9 @@ const PlanSidebar = memo(function PlanSidebar({
           ) : null}
 
           {/* Empty state */}
-          {!activePlan && !planMarkdown && !hasSubagents ? (
+          {!activePlan && !planMarkdown ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
-              <p className="text-[13px] text-muted-foreground/40">No active plan or agents yet.</p>
+              <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
               <p className="mt-1 text-[11px] text-muted-foreground/30">
                 Activity will appear here when generated.
               </p>

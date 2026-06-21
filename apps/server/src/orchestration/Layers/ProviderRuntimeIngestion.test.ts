@@ -884,6 +884,9 @@ describe("ProviderRuntimeIngestion", () => {
       providerInstanceId: ProviderInstanceId.make("codex"),
       createdAt: now,
       threadId: childThreadId,
+      providerRefs: {
+        providerItemId: asItemId("call-planner"),
+      },
       payload: {
         providerThreadId: "provider-child-1",
         providerParentThreadId: "provider-parent-1",
@@ -929,6 +932,7 @@ describe("ProviderRuntimeIngestion", () => {
       subagentNickname: "planner",
       subagentRole: "Planning",
       subagentPath: "agents/planner.md",
+      sourceItemId: asItemId("call-planner"),
     });
 
     expect(harness.materializedBindings).toHaveLength(1);
@@ -997,7 +1001,76 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
-  it("does not duplicate materialized child thread bindings for repeated Codex child starts", async () => {
+  it("mirrors materialized child final answers to the parent subagent activity", async () => {
+    const harness = await createHarness();
+    harness.setChildThreadMode("materialized");
+    const childThreadId = asThreadId("child-thread-result");
+
+    harness.emit({
+      type: "thread.started",
+      eventId: asEventId("evt-codex-child-result-started"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      threadId: childThreadId,
+      payload: {
+        providerThreadId: "provider-child-result",
+        providerParentThreadId: "provider-parent-1",
+        parentThreadId: asThreadId("thread-1"),
+        subagentKind: "thread_spawn",
+        subagentNickname: "Aquinas",
+        hiddenFromThreadList: false,
+      },
+    });
+    await harness.drain();
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-codex-child-result-final"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      createdAt: "2026-01-01T00:00:05.000Z",
+      threadId: childThreadId,
+      turnId: asTurnId("turn-child-result"),
+      itemId: asItemId("msg-child-result"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "Aquinas report: inspected the repo and found the lifecycle hotspot.",
+      },
+      raw: {
+        source: "codex.app-server.notification",
+        method: "item/completed",
+        payload: {
+          threadId: "provider-child-result",
+        },
+      },
+    });
+    await harness.drain();
+
+    const snapshot = await harness.readModel();
+    const parent = snapshot.threads.find((thread) => thread.id === asThreadId("thread-1"));
+    const completed = parent?.activities.find(
+      (activity) =>
+        activity.kind === "subagent.completed" &&
+        activity.payload &&
+        typeof activity.payload === "object" &&
+        "providerThreadId" in activity.payload &&
+        activity.payload.providerThreadId === "provider-child-result",
+    );
+
+    expect(completed?.summary).toBe("Aquinas completed");
+    expect(completed?.payload).toMatchObject({
+      subagentId: "provider-child-result",
+      providerThreadId: "provider-child-result",
+      threadId: childThreadId,
+      status: "completed",
+      detail: "Aquinas report: inspected the repo and found the lifecycle hotspot.",
+      sourceItemId: asItemId("msg-child-result"),
+    });
+  });
+
+  it("does not duplicate materialized child thread rows or activities for repeated Codex child starts", async () => {
     const harness = await createHarness();
     harness.setChildThreadMode("materialized");
     const childThreadId = asThreadId("child-thread-repeat");
@@ -1044,7 +1117,76 @@ describe("ProviderRuntimeIngestion", () => {
       parent?.activities.filter((activity) => activity.kind === "subagent.thread.spawned") ?? [];
     expect(children).toHaveLength(1);
     expect(parentSpawns).toHaveLength(1);
+    expect(harness.materializedBindings).toHaveLength(2);
+  });
+
+  it("repairs provider bindings and parent spawn activities for existing materialized children", async () => {
+    const harness = await createHarness();
+    harness.setChildThreadMode("materialized");
+    const childThreadId = asThreadId("child-thread-existing-repair");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-existing-child-repair-create"),
+        threadId: childThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Subagent",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        parentThreadId: asThreadId("thread-1"),
+        subagentKind: "thread_spawn",
+        subagentNickname: null,
+        subagentRole: null,
+        hiddenFromThreadList: false,
+        branch: null,
+        worktreePath: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    harness.emit({
+      type: "thread.started",
+      eventId: asEventId("evt-existing-child-repair"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      createdAt: "2026-01-01T00:00:05.000Z",
+      threadId: childThreadId,
+      payload: {
+        providerThreadId: "provider-child-existing-repair",
+        providerParentThreadId: "provider-parent-1",
+        parentThreadId: asThreadId("thread-1"),
+        subagentKind: "thread_spawn",
+        subagentNickname: "Noether",
+        hiddenFromThreadList: false,
+      },
+    });
+    await harness.drain();
+
+    const snapshot = await harness.readModel();
+    const children = snapshot.threads.filter((thread) => thread.id === childThreadId);
+    const parent = snapshot.threads.find((thread) => thread.id === asThreadId("thread-1"));
+    const parentSpawns =
+      parent?.activities.filter((activity) => activity.kind === "subagent.thread.spawned") ?? [];
+
+    expect(children).toHaveLength(1);
+    expect(children[0]?.title).toBe("Noether");
+    expect(parentSpawns).toHaveLength(1);
+    expect(parentSpawns[0]?.payload).toMatchObject({
+      threadId: childThreadId,
+      providerThreadId: "provider-child-existing-repair",
+      subagentNickname: "Noether",
+    });
     expect(harness.materializedBindings).toHaveLength(1);
+    expect(harness.materializedBindings[0]).toMatchObject({
+      threadId: childThreadId,
+      resumeCursor: { threadId: "provider-child-existing-repair" },
+      status: "running",
+    });
   });
 
   it("refreshes materialized child thread titles and timestamps from later subagent events", async () => {
@@ -1165,7 +1307,12 @@ describe("ProviderRuntimeIngestion", () => {
     }
     expect(childAfterRefresh.title).toBe("Mill");
     expect(childAfterRefresh.updatedAt > childBeforeRefresh.updatedAt).toBe(true);
-    expect(harness.materializedBindings).toHaveLength(1);
+    const snapshot = await harness.readModel();
+    const parent = snapshot.threads.find((thread) => thread.id === asThreadId("thread-1"));
+    const parentSpawns =
+      parent?.activities.filter((activity) => activity.kind === "subagent.thread.spawned") ?? [];
+    expect(parentSpawns).toHaveLength(1);
+    expect(harness.materializedBindings).toHaveLength(2);
   });
 
   it("drops materialized child starts when the parent Salchi thread is missing", async () => {

@@ -70,6 +70,7 @@ import {
   makeCodexAppServerClient,
   makeCodexSessionRuntime,
   type CodexAppServerClientHandle,
+  type CodexSpawnedChildThreadListOptions,
   type CodexSessionRuntimeError,
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeShape,
@@ -121,6 +122,10 @@ interface CodexAdapterRootSessionContext {
   readonly childThreadIds: Set<ThreadId>;
   readonly stoppedChildThreadIds: Set<ThreadId>;
   readonly stoppedChildProviderThreadIds: Set<string>;
+  readonly childThreadStartedMetadataByProviderThreadId: Map<
+    string,
+    { readonly key: string; readonly score: number }
+  >;
   readonly recoveryWorker: KeyedCoalescingWorker<ThreadId, CodexChildRecoveryWork>;
   providerThreadId?: string;
   stopped: boolean;
@@ -145,6 +150,8 @@ interface CodexChildBackfillWork {
 
 interface CodexChildHydrationWork {
   readonly candidateProviderThreadIds?: ReadonlySet<string>;
+  readonly allowScanRepair?: boolean;
+  readonly maxPages?: number;
   readonly reason?: string;
 }
 
@@ -727,10 +734,18 @@ function subagentNicknameFromPath(agentPath: string | undefined): string | undef
   return trimText(basename.replace(/\.[^.]+$/, "")) ?? basename;
 }
 
+function subagentNicknameFromPrompt(prompt: string | undefined): string | undefined {
+  if (!prompt) {
+    return undefined;
+  }
+  const match = prompt.match(/\byour\s+nickname\s+is\s+([A-Za-z][\w-]{0,63})\b/i);
+  return match?.[1] ? trimText(match[1]) : undefined;
+}
+
 function collabAgentMetadataFromState(
   record: Record<string, unknown>,
   subagentId: string,
-): { readonly role?: string; readonly nickname?: string } {
+): { readonly role?: string; readonly nickname?: string; readonly path?: string } {
   const agentsStates = isRecord(record.agentsStates) ? record.agentsStates : null;
   const state =
     agentsStates && isRecord(agentsStates[subagentId]) ? agentsStates[subagentId] : null;
@@ -747,11 +762,13 @@ function collabAgentMetadataFromState(
     readString(state.nickname) ??
     readString(state.agentName) ??
     readString(state.name) ??
+    subagentNicknameFromPrompt(readString(record.prompt)) ??
     subagentNicknameFromPath(agentPath);
 
   return {
     ...(role ? { role } : {}),
     ...(nickname ? { nickname } : {}),
+    ...(agentPath ? { path: agentPath } : {}),
   };
 }
 
@@ -764,6 +781,9 @@ function readCollabAgentReceiverThreadIds(item: unknown): string[] {
 
 function shouldHydrateSpawnedChildrenFromCollabTool(item: unknown): boolean {
   if (!isRecord(item) || readCollabAgentReceiverThreadIds(item).length === 0) {
+    return false;
+  }
+  if (readString(item.status) !== "completed") {
     return false;
   }
 
@@ -780,6 +800,9 @@ function shouldHydrateSpawnedChildrenFromCollabTool(item: unknown): boolean {
 function collabAgentChildHydrationInputFromEvent(
   event: ProviderEvent,
 ): { readonly candidateProviderThreadIds: ReadonlySet<string>; readonly reason: string } | null {
+  if (event.method !== "item/completed") {
+    return null;
+  }
   if (!isRecord(event.payload)) {
     return null;
   }
@@ -795,6 +818,25 @@ function collabAgentChildHydrationInputFromEvent(
   return {
     candidateProviderThreadIds: new Set(receiverThreadIds),
     reason: tool ? `collab-agent:${tool}` : "collab-agent",
+  };
+}
+
+function collabAgentThreadSpawnMetadataFromEvent(
+  event: ProviderEvent,
+  providerThreadId: string,
+): {
+  readonly subagentNickname?: string;
+  readonly subagentRole?: string;
+  readonly subagentPath?: string;
+} {
+  if (!isRecord(event.payload) || !isRecord(event.payload.item)) {
+    return {};
+  }
+  const metadata = collabAgentMetadataFromState(event.payload.item, providerThreadId);
+  return {
+    ...(metadata.nickname ? { subagentNickname: metadata.nickname } : {}),
+    ...(metadata.role ? { subagentRole: metadata.role } : {}),
+    ...(metadata.path ? { subagentPath: metadata.path } : {}),
   };
 }
 
@@ -1950,6 +1992,48 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       }
     | undefined;
 
+  const childThreadStartedMetadataKey = (input: {
+    readonly providerThreadId: string;
+    readonly providerParentThreadId: string;
+    readonly parentThreadId: ThreadId;
+    readonly subagentNickname?: string | undefined;
+    readonly subagentRole?: string | undefined;
+    readonly subagentPath?: string | undefined;
+  }): string =>
+    JSON.stringify({
+      providerThreadId: input.providerThreadId,
+      providerParentThreadId: input.providerParentThreadId,
+      parentThreadId: input.parentThreadId,
+      subagentKind: "thread_spawn",
+      subagentNickname: input.subagentNickname ?? null,
+      subagentRole: input.subagentRole ?? null,
+      subagentPath: input.subagentPath ?? null,
+      hiddenFromThreadList: false,
+    });
+
+  const childThreadStartedMetadataScore = (input: {
+    readonly subagentNickname?: string | undefined;
+    readonly subagentRole?: string | undefined;
+    readonly subagentPath?: string | undefined;
+  }): number =>
+    (input.subagentNickname ? 1 : 0) + (input.subagentRole ? 1 : 0) + (input.subagentPath ? 1 : 0);
+
+  const childThreadStartedEventId = (input: {
+    readonly providerParentThreadId: string;
+    readonly providerThreadId: string;
+    readonly metadataKey: string;
+  }): EventId => {
+    const suffix = Buffer.from(input.metadataKey).toString("base64url").slice(0, 96);
+    return EventId.make(
+      [
+        "codex-child-thread-started",
+        input.providerParentThreadId,
+        input.providerThreadId,
+        suffix,
+      ].join(":"),
+    );
+  };
+
   const registerVirtualChildSession = Effect.fn("registerVirtualChildSession")(function* (input: {
     readonly root: CodexAdapterRootSessionContext;
     readonly threadId: ThreadId;
@@ -1979,6 +2063,131 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       runtime: input.root.runtime,
       stopped: false,
     });
+  });
+
+  const emitMaterializedChildThreadStarted = Effect.fn("emitMaterializedChildThreadStarted")(
+    function* (input: {
+      readonly root: CodexAdapterRootSessionContext;
+      readonly threadId: ThreadId;
+      readonly providerThreadId: string;
+      readonly createdAt: string;
+      readonly subagentNickname?: string | undefined;
+      readonly subagentRole?: string | undefined;
+      readonly subagentPath?: string | undefined;
+      readonly raw?: ProviderRuntimeEvent["raw"] | undefined;
+      readonly providerRefs?: ProviderRuntimeEvent["providerRefs"] | undefined;
+    }) {
+      const providerParentThreadId = input.root.providerThreadId;
+      if (!providerParentThreadId) {
+        return;
+      }
+      const metadataKey = childThreadStartedMetadataKey({
+        providerThreadId: input.providerThreadId,
+        providerParentThreadId,
+        parentThreadId: input.root.threadId,
+        subagentNickname: input.subagentNickname,
+        subagentRole: input.subagentRole,
+        subagentPath: input.subagentPath,
+      });
+      const metadataScore = childThreadStartedMetadataScore(input);
+      const previousMetadata = input.root.childThreadStartedMetadataByProviderThreadId.get(
+        input.providerThreadId,
+      );
+      if (
+        previousMetadata?.key === metadataKey ||
+        (previousMetadata?.score ?? -1) > metadataScore
+      ) {
+        return;
+      }
+      input.root.childThreadStartedMetadataByProviderThreadId.set(input.providerThreadId, {
+        key: metadataKey,
+        score: metadataScore,
+      });
+
+      yield* Queue.offer(runtimeEventQueue, {
+        eventId: childThreadStartedEventId({
+          providerParentThreadId,
+          providerThreadId: input.providerThreadId,
+          metadataKey,
+        }),
+        provider: PROVIDER,
+        providerInstanceId: boundInstanceId,
+        threadId: input.threadId,
+        createdAt: input.createdAt,
+        type: "thread.started",
+        payload: {
+          providerThreadId: input.providerThreadId,
+          providerParentThreadId,
+          parentThreadId: input.root.threadId,
+          subagentKind: "thread_spawn",
+          hiddenFromThreadList: false,
+          ...(input.subagentNickname ? { subagentNickname: input.subagentNickname } : {}),
+          ...(input.subagentRole ? { subagentRole: input.subagentRole } : {}),
+          ...(input.subagentPath ? { subagentPath: input.subagentPath } : {}),
+        },
+        ...(input.providerRefs ? { providerRefs: input.providerRefs } : {}),
+        ...(input.raw ? { raw: input.raw } : {}),
+      });
+    },
+  );
+
+  const ensureMaterializedReceiverChildSessions = Effect.fn(
+    "ensureMaterializedReceiverChildSessions",
+  )(function* (
+    root: CodexAdapterRootSessionContext,
+    event: ProviderEvent,
+    hydration: CodexChildHydrationWork,
+  ) {
+    if (!root.providerThreadId || !hydration.candidateProviderThreadIds) {
+      return;
+    }
+
+    yield* Effect.forEach(
+      hydration.candidateProviderThreadIds,
+      (providerThreadId) =>
+        Effect.gen(function* () {
+          if (root.stoppedChildProviderThreadIds.has(providerThreadId)) {
+            return;
+          }
+
+          const threadId = codexChildThreadId(boundInstanceId, providerThreadId);
+          if (root.stoppedChildThreadIds.has(threadId)) {
+            return;
+          }
+
+          const existing = sessions.get(threadId);
+          if (
+            !existing ||
+            existing.stopped ||
+            existing.kind !== "child" ||
+            existing.providerThreadId !== providerThreadId
+          ) {
+            yield* registerVirtualChildSession({
+              root,
+              threadId,
+              parentThreadId: root.threadId,
+              providerThreadId,
+            });
+          }
+
+          const metadata = collabAgentThreadSpawnMetadataFromEvent(event, providerThreadId);
+          yield* emitMaterializedChildThreadStarted({
+            root,
+            threadId,
+            providerThreadId,
+            createdAt: event.createdAt,
+            ...metadata,
+            providerRefs: providerRefsFromEvent(event),
+            raw: {
+              source: eventRawSource(event),
+              method: event.method,
+              payload: event.payload ?? {},
+            },
+          });
+          yield* enqueueChildBackfillRecovery(root, { threadId, providerThreadId });
+        }),
+      { concurrency: 1, discard: true },
+    );
   });
 
   const enqueueChildThreadSnapshotBackfill = Effect.fn("enqueueChildThreadSnapshotBackfill")(
@@ -2031,15 +2240,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const hydrateSpawnedChildSessions = Effect.fn("hydrateSpawnedChildSessions")(function* (
     root: CodexAdapterRootSessionContext,
-    options?: {
-      readonly candidateProviderThreadIds?: ReadonlySet<string>;
+    options?: CodexSpawnedChildThreadListOptions & {
       readonly reason?: string;
     },
   ) {
     if (!root.providerThreadId) {
       return;
     }
-    const children = yield* root.runtime.listSpawnedChildThreads(root.providerThreadId);
+    const children = yield* root.runtime.listSpawnedChildThreads(root.providerThreadId, options);
+    const rootSession = yield* root.runtime.getSession;
     yield* Effect.forEach(
       children,
       (thread) =>
@@ -2063,38 +2272,35 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           }
           const existing = sessions.get(threadId);
           if (
-            existing &&
-            !existing.stopped &&
-            existing.kind === "child" &&
-            existing.providerThreadId === thread.id
+            !existing ||
+            existing.stopped ||
+            existing.kind !== "child" ||
+            existing.providerThreadId !== thread.id
           ) {
-            return;
+            yield* registerVirtualChildSession({
+              root,
+              threadId,
+              parentThreadId: root.threadId,
+              providerThreadId: thread.id,
+            });
           }
-          yield* registerVirtualChildSession({
+          yield* emitMaterializedChildThreadStarted({
             root,
             threadId,
-            parentThreadId: root.threadId,
             providerThreadId: thread.id,
-          });
-          const id = yield* crypto.randomUUIDv4;
-          const rootSession = yield* root.runtime.getSession;
-          const event: ProviderEvent = {
-            id: EventId.make(id),
-            provider: PROVIDER,
-            providerInstanceId: boundInstanceId,
             createdAt: rootSession.updatedAt,
-            kind: "notification",
-            threadId,
-            method: "thread/started",
-            payload: {
-              thread,
-              salchiParentThreadId: root.threadId,
+            subagentNickname: metadata.subagentNickname,
+            subagentRole: metadata.subagentRole,
+            subagentPath: metadata.subagentPath,
+            raw: {
+              source: "codex.app-server.notification",
+              method: "thread/started",
+              payload: {
+                thread,
+                salchiParentThreadId: root.threadId,
+              },
             },
-          };
-          const runtimeEvents = mapToRuntimeEvents(event, threadId);
-          if (runtimeEvents.length > 0) {
-            yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
-          }
+          });
           yield* enqueueChildBackfillRecovery(root, {
             threadId,
             providerThreadId: thread.id,
@@ -2268,8 +2474,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             if (root) {
               yield* registerVirtualChildFromThreadStartedEvent(root, event);
             }
-            const runtimeEvents = mapToRuntimeEvents(event, event.threadId);
             const hydrationInput = root ? collabAgentChildHydrationInputFromEvent(event) : null;
+            if (root && hydrationInput) {
+              yield* ensureMaterializedReceiverChildSessions(root, event, hydrationInput);
+            }
+            const runtimeEvents = mapToRuntimeEvents(event, event.threadId);
             if (runtimeEvents.length === 0) {
               yield* Effect.logDebug("ignoring unhandled Codex provider event", {
                 method: event.method,
@@ -2290,7 +2499,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               }
             }
             if (root && hydrationInput) {
-              yield* enqueueChildHydrationRecovery(root, hydrationInput);
+              yield* enqueueChildHydrationRecovery(root, {
+                ...hydrationInput,
+                allowScanRepair: true,
+              });
             }
           }),
         ).pipe(Effect.forkChild);
@@ -2303,6 +2515,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           childThreadIds: new Set(),
           stoppedChildThreadIds: new Set(),
           stoppedChildProviderThreadIds: new Set(),
+          childThreadStartedMetadataByProviderThreadId: new Map(),
           recoveryWorker,
           stopped: false,
         };
@@ -2339,7 +2552,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             providerThreadId: startedProviderThreadId,
           });
         }
-        yield* enqueueChildHydrationRecovery(rootSession);
+        yield* enqueueChildHydrationRecovery(rootSession, {
+          allowScanRepair: true,
+          reason: "root-start",
+        });
         sessionScopeTransferred = true;
 
         return started;

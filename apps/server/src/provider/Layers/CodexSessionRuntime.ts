@@ -140,6 +140,12 @@ export interface CodexThreadSnapshot {
   readonly turns: ReadonlyArray<CodexThreadTurnSnapshot>;
 }
 
+export interface CodexSpawnedChildThreadListOptions {
+  readonly candidateProviderThreadIds?: ReadonlySet<string>;
+  readonly allowScanRepair?: boolean;
+  readonly maxPages?: number;
+}
+
 export interface CodexSessionRuntimeShape {
   readonly start: () => Effect.Effect<ProviderSession, CodexSessionRuntimeError>;
   readonly getSession: Effect.Effect<ProviderSession>;
@@ -173,6 +179,7 @@ export interface CodexSessionRuntimeShape {
   ) => Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
   readonly listSpawnedChildThreads: (
     parentProviderThreadId: string,
+    options?: CodexSpawnedChildThreadListOptions,
   ) => Effect.Effect<
     ReadonlyArray<EffectCodexSchema.V2ThreadListResponse["data"][number]>,
     CodexSessionRuntimeError
@@ -1592,18 +1599,83 @@ export const makeCodexSessionRuntime = (
         return parseThreadSnapshot(response);
       });
 
-    const listSpawnedChildThreads = (parentProviderThreadId: string) =>
+    const listSpawnedChildThreads = (
+      parentProviderThreadId: string,
+      options: CodexSpawnedChildThreadListOptions = {},
+    ) =>
       Effect.gen(function* () {
-        const response = yield* client.request("thread/list", {
-          sourceKinds: ["subAgentThreadSpawn"],
-          useStateDbOnly: true,
-          limit: 200,
-        });
-        return response.data.filter(
-          (thread) =>
-            extractCodexThreadSpawnMetadata(thread)?.providerParentThreadId ===
-            parentProviderThreadId,
-        );
+        const candidateProviderThreadIds = options.candidateProviderThreadIds;
+        const hasAllCandidates = (
+          threads: ReadonlyArray<EffectCodexSchema.V2ThreadListResponse["data"][number]>,
+        ) => {
+          if (!candidateProviderThreadIds || candidateProviderThreadIds.size === 0) {
+            return false;
+          }
+          const found = new Set(threads.map((thread) => thread.id));
+          for (const candidate of candidateProviderThreadIds) {
+            if (!found.has(candidate)) {
+              return false;
+            }
+          }
+          return true;
+        };
+        const listWithStateDbMode = (useStateDbOnly: boolean) =>
+          Effect.gen(function* () {
+            const maxPages = Math.max(1, options.maxPages ?? 10);
+            const threads: Array<EffectCodexSchema.V2ThreadListResponse["data"][number]> = [];
+            let cursor: string | null | undefined;
+            for (let page = 0; page < maxPages; page += 1) {
+              const response = yield* client.request("thread/list", {
+                sourceKinds: ["subAgentThreadSpawn"],
+                useStateDbOnly,
+                limit: 200,
+                ...(cursor ? { cursor } : {}),
+              });
+              threads.push(
+                ...response.data.filter(
+                  (thread) =>
+                    extractCodexThreadSpawnMetadata(thread)?.providerParentThreadId ===
+                    parentProviderThreadId,
+                ),
+              );
+              if (hasAllCandidates(threads)) {
+                break;
+              }
+              cursor = response.nextCursor;
+              if (!cursor) {
+                break;
+              }
+            }
+            return threads;
+          });
+
+        const stateDbThreads = yield* listWithStateDbMode(true);
+        if (hasAllCandidates(stateDbThreads) || !options.allowScanRepair) {
+          return stateDbThreads;
+        }
+
+        const repairedThreads = yield* listWithStateDbMode(false);
+        const mergedThreadsById = new Map<string, (typeof stateDbThreads)[number]>();
+        for (const thread of stateDbThreads) {
+          mergedThreadsById.set(thread.id, thread);
+        }
+        for (const thread of repairedThreads) {
+          mergedThreadsById.set(thread.id, thread);
+        }
+        const mergedThreads = [...mergedThreadsById.values()];
+        if (candidateProviderThreadIds && !hasAllCandidates(mergedThreads)) {
+          const found = new Set(mergedThreads.map((thread) => thread.id));
+          const missing = [...candidateProviderThreadIds].filter(
+            (candidate) => !found.has(candidate),
+          );
+          if (missing.length > 0) {
+            yield* Effect.logWarning("Codex spawned child thread/list candidates missing", {
+              parentProviderThreadId,
+              missingProviderThreadIds: missing,
+            });
+          }
+        }
+        return mergedThreads;
       });
 
     return {

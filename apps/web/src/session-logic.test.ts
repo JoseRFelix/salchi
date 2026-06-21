@@ -557,6 +557,48 @@ describe("deriveSubagentSummaries", () => {
     });
   });
 
+  it("coalesces materialized spawned subagents with source tool-call activity", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "subagent-started",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "subagent.started",
+        summary: "Subagent started",
+        tone: "info",
+        payload: {
+          subagentId: "call_spawn_1",
+          status: "running",
+          prompt: "Your nickname is Aquinas. Inspect the repo.",
+          summary: "Subagent started",
+        },
+      }),
+      makeActivity({
+        id: "subagent-thread-spawned",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "subagent.thread.spawned",
+        summary: "Aquinas",
+        tone: "info",
+        payload: {
+          threadId: "child-thread-1",
+          providerThreadId: "provider-child-1",
+          subagentNickname: "Aquinas",
+          sourceItemId: "call_spawn_1",
+        },
+      }),
+    ];
+
+    const summaries = deriveSubagentSummaries(activities);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({
+      id: "call_spawn_1",
+      label: "Aquinas",
+      status: "running",
+      providerThreadId: "provider-child-1",
+      materializedThreadId: ThreadId.make("child-thread-1"),
+      sourceItemId: "call_spawn_1",
+    });
+  });
+
   it("updates materialized spawned subagents when provider-thread completion arrives", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

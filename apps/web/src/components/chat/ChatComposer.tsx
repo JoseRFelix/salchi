@@ -497,7 +497,6 @@ export interface ChatComposerProps {
   activeProposedPlan: Thread["proposedPlans"][number] | null;
   activePlan: { turnId?: TurnId } | null;
   sidebarProposedPlan: { turnId?: TurnId } | null;
-  hasSubagents: boolean;
   planSidebarLabel: string;
   planSidebarOpen: boolean;
 
@@ -601,7 +600,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeProposedPlan,
     activePlan,
     sidebarProposedPlan,
-    hasSubagents,
     planSidebarLabel,
     planSidebarOpen,
     runtimeMode,
@@ -1117,9 +1115,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isComposerCollapsedMobile && !isComposerApprovalState && pendingUserInputs.length === 0;
 
   const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
-  const showPlanSidebarToggle = Boolean(
-    activePlan || sidebarProposedPlan || hasSubagents || planSidebarOpen,
-  );
+  const showPlanSidebarToggle = Boolean(activePlan || sidebarProposedPlan || planSidebarOpen);
   const composerFooterActionLayoutKey = useMemo(() => {
     if (activePendingProgress) {
       return `pending:${activePendingProgress.questionIndex}:${activePendingProgress.isLastQuestion}:${activePendingIsResponding}`;

@@ -642,6 +642,7 @@ export function deriveSubagentSummaries(
     if (activity.kind === "subagent.thread.spawned") {
       const materializedThreadIdText = asTrimmedString(payload?.threadId);
       const providerThreadId = asTrimmedString(payload?.providerThreadId);
+      const sourceItemId = asTrimmedString(payload?.sourceItemId);
       const subagentId = providerThreadId ?? materializedThreadIdText;
       if (!subagentId) {
         continue;
@@ -649,13 +650,17 @@ export function deriveSubagentSummaries(
 
       const existingKey =
         (providerThreadId ? keyByProviderThreadId.get(providerThreadId) : undefined) ??
-        (materializedThreadIdText ? keyBySubagentId.get(materializedThreadIdText) : undefined);
+        (materializedThreadIdText ? keyBySubagentId.get(materializedThreadIdText) : undefined) ??
+        (sourceItemId ? keyBySubagentId.get(sourceItemId) : undefined);
       const key = existingKey ?? subagentId;
       if (providerThreadId) {
         keyByProviderThreadId.set(providerThreadId, key);
       }
       if (materializedThreadIdText) {
         keyBySubagentId.set(materializedThreadIdText, key);
+      }
+      if (sourceItemId) {
+        keyBySubagentId.set(sourceItemId, key);
       }
 
       const previous = byKey.get(key);
@@ -668,6 +673,7 @@ export function deriveSubagentSummaries(
         ? ThreadId.make(materializedThreadIdText)
         : previous?.materializedThreadId;
       const status = previous?.status ?? "running";
+      const resolvedSourceItemId = sourceItemId ?? previous?.sourceItemId;
       const label =
         normalizeSubagentDisplayName(nickname) ??
         normalizeSubagentDisplayName(role) ??
@@ -688,7 +694,7 @@ export function deriveSubagentSummaries(
         ...(previous?.turnId !== undefined ? { turnId: previous.turnId } : {}),
         ...(resolvedProviderThreadId ? { providerThreadId: resolvedProviderThreadId } : {}),
         ...(materializedThreadId ? { materializedThreadId } : {}),
-        ...(previous?.sourceItemId ? { sourceItemId: previous.sourceItemId } : {}),
+        ...(resolvedSourceItemId ? { sourceItemId: resolvedSourceItemId } : {}),
         ...(role ? { role } : {}),
         ...(nickname ? { nickname } : {}),
         ...(previous?.model ? { model: previous.model } : {}),

@@ -48,10 +48,24 @@ function readThreadRecord(value: unknown): Record<string, unknown> | null {
   return value;
 }
 
+function parseJsonRecord(value: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function readSubagentSource(thread: Record<string, unknown>): unknown {
   const source = thread.source;
-  if (!isRecord(source)) return null;
-  return source.subAgent ?? null;
+  const sourceRecord = isRecord(source)
+    ? source
+    : typeof source === "string"
+      ? parseJsonRecord(source)
+      : null;
+  if (!sourceRecord) return null;
+  return sourceRecord.subAgent ?? sourceRecord.subagent ?? null;
 }
 
 export function extractCodexThreadSpawnMetadata(value: unknown): CodexThreadSpawnMetadata | null {
@@ -59,20 +73,44 @@ export function extractCodexThreadSpawnMetadata(value: unknown): CodexThreadSpaw
   if (!thread) return null;
 
   const source = readSubagentSource(thread);
-  if (!isRecord(source) || !isRecord(source.thread_spawn)) {
+  const topLevelThreadSource =
+    readString(thread.threadSource) ?? readString(thread.thread_source) ?? undefined;
+  const topLevelSpawnRecord =
+    topLevelThreadSource === "subagent" &&
+    (readString(thread.parentThreadId) || readString(thread.parent_thread_id))
+      ? thread
+      : null;
+  const spawnRecord =
+    isRecord(source) && isRecord(source.thread_spawn) ? source.thread_spawn : topLevelSpawnRecord;
+  if (!spawnRecord) {
     return null;
   }
 
   const providerParentThreadId =
-    readString(source.thread_spawn.parent_thread_id) ?? readString(thread.parentThreadId);
+    readString(spawnRecord.parent_thread_id) ??
+    readString(spawnRecord.parentThreadId) ??
+    readString(thread.parentThreadId) ??
+    readString(thread.parent_thread_id);
   if (!providerParentThreadId) {
     return null;
   }
 
   const subagentNickname =
-    readString(source.thread_spawn.agent_nickname) ?? readString(thread.agentNickname);
-  const subagentRole = readString(source.thread_spawn.agent_role) ?? readString(thread.agentRole);
-  const subagentPath = readString(source.thread_spawn.agent_path) ?? readString(thread.path);
+    readString(spawnRecord.agent_nickname) ??
+    readString(spawnRecord.agentNickname) ??
+    readString(thread.agentNickname) ??
+    readString(thread.agent_nickname);
+  const subagentRole =
+    readString(spawnRecord.agent_role) ??
+    readString(spawnRecord.agentRole) ??
+    readString(thread.agentRole) ??
+    readString(thread.agent_role);
+  const subagentPath =
+    readString(spawnRecord.agent_path) ??
+    readString(spawnRecord.agentPath) ??
+    readString(thread.agentPath) ??
+    readString(thread.agent_path) ??
+    readString(thread.path);
 
   return {
     providerParentThreadId,

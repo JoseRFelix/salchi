@@ -66,7 +66,6 @@ import {
   deriveTimelineEntries,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
-  deriveSubagentSummaries,
   findSidebarProposedPlan,
   findLatestProposedPlan,
   deriveWorkLogEntries,
@@ -863,7 +862,6 @@ export default function ChatView(props: ChatViewProps) {
   const canAutoOpenPlanSidebar = autoOpenPlanSidebar && !shouldUsePlanSidebarSheet;
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
-  const lastSubagentAutoOpenKeyByThreadRef = useRef(new Map<string, string | null>());
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const [pullRequestDialogState, setPullRequestDialogState] =
     useState<PullRequestDialogState | null>(null);
@@ -1752,31 +1750,11 @@ export default function ChatView(props: ChatViewProps) {
     () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, threadActivities],
   );
-  const subagentSummaries = useMemo(
-    () => deriveSubagentSummaries(threadActivities),
-    [threadActivities],
-  );
-  const subagentSidebarAutoOpenKey = useMemo(() => {
-    const materialized = subagentSummaries
-      .filter((agent) => agent.materializedThreadId)
-      .toSorted((left, right) => left.updatedAt.localeCompare(right.updatedAt));
-    const latest = materialized.at(-1)?.materializedThreadId;
-    return latest ? String(latest) : null;
-  }, [subagentSummaries]);
-  const planSidebarLabel =
-    sidebarProposedPlan || interactionMode === "plan"
-      ? "Plan"
-      : subagentSummaries.length > 0 && !activePlan
-        ? "Agents"
-        : "Tasks";
+  const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
   const currentPlanSidebarDismissalKey = useMemo(() => {
-    const key =
-      activePlan?.turnId ??
-      sidebarProposedPlan?.turnId ??
-      subagentSidebarAutoOpenKey ??
-      "__dismissed__";
+    const key = activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
     return String(key);
-  }, [activePlan?.turnId, sidebarProposedPlan?.turnId, subagentSidebarAutoOpenKey]);
+  }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -2860,26 +2838,6 @@ export default function ChatView(props: ChatViewProps) {
     setPlanSidebarOpen(false);
     planSidebarDismissedForTurnRef.current = currentPlanSidebarDismissalKey;
   }, [currentPlanSidebarDismissalKey]);
-  const openSubagentThread = useCallback(
-    (threadId: ThreadId) => {
-      if (!activeThread) {
-        return;
-      }
-
-      void navigate({
-        to: "/$environmentId/$threadId",
-        params: {
-          environmentId: activeThread.environmentId,
-          threadId,
-        },
-      });
-
-      if (shouldUsePlanSidebarSheet) {
-        setPlanSidebarOpen(false);
-      }
-    },
-    [activeThread, navigate, shouldUsePlanSidebarSheet],
-  );
 
   useRegisterRightPanel({
     close: hidePlanSidebar,
@@ -3173,28 +3131,6 @@ export default function ChatView(props: ChatViewProps) {
     currentPlanSidebarDismissalKey,
     planSidebarOpen,
   ]);
-
-  useEffect(() => {
-    if (!activeThreadKey) return;
-    const lastByThread = lastSubagentAutoOpenKeyByThreadRef.current;
-    if (!lastByThread.has(activeThreadKey)) {
-      lastByThread.set(activeThreadKey, subagentSidebarAutoOpenKey);
-      return;
-    }
-
-    const previousKey = lastByThread.get(activeThreadKey) ?? null;
-    if (previousKey === subagentSidebarAutoOpenKey) {
-      return;
-    }
-
-    lastByThread.set(activeThreadKey, subagentSidebarAutoOpenKey);
-    if (!subagentSidebarAutoOpenKey) return;
-    if (!canAutoOpenPlanSidebar) return;
-    if (planSidebarOpen) return;
-    if (planSidebarDismissedForTurnRef.current === subagentSidebarAutoOpenKey) return;
-
-    setPlanSidebarOpen(true);
-  }, [activeThreadKey, canAutoOpenPlanSidebar, planSidebarOpen, subagentSidebarAutoOpenKey]);
 
   useEffect(() => {
     setIsRevertingCheckpoint(false);
@@ -4823,7 +4759,6 @@ export default function ChatView(props: ChatViewProps) {
                   activeProposedPlan={activeProposedPlan}
                   activePlan={activePlan as { turnId?: TurnId } | null}
                   sidebarProposedPlan={sidebarProposedPlan as { turnId?: TurnId } | null}
-                  hasSubagents={subagentSummaries.length > 0}
                   planSidebarLabel={planSidebarLabel}
                   planSidebarOpen={planSidebarOpen}
                   runtimeMode={runtimeMode}
@@ -4917,8 +4852,6 @@ export default function ChatView(props: ChatViewProps) {
           <PlanSidebar
             activePlan={activePlan}
             activeProposedPlan={sidebarProposedPlan}
-            subagents={subagentSummaries}
-            onOpenSubagentThread={openSubagentThread}
             label={planSidebarLabel}
             environmentId={environmentId}
             markdownCwd={gitCwd ?? undefined}
@@ -4953,8 +4886,6 @@ export default function ChatView(props: ChatViewProps) {
           <PlanSidebar
             activePlan={activePlan}
             activeProposedPlan={sidebarProposedPlan}
-            subagents={subagentSummaries}
-            onOpenSubagentThread={openSubagentThread}
             label={planSidebarLabel}
             environmentId={environmentId}
             markdownCwd={gitCwd ?? undefined}

@@ -90,11 +90,19 @@ function makeRuntimeTrackingEvent(input: {
 }
 
 function makeThreadShell(input: {
+  readonly id?: ThreadId;
+  readonly parentThreadId?: ThreadId | null;
+  readonly subagentKind?: string | null;
+  readonly latestUserMessageAt?: string | null;
   readonly status?: NonNullable<OrchestrationThreadShell["session"]>["status"];
   readonly activeTurnId?: TurnId | null;
 }): OrchestrationThreadShell {
   return {
+    id: input.id ?? ThreadId.make("thread-1"),
     title: "Finished thread",
+    parentThreadId: input.parentThreadId ?? null,
+    subagentKind: input.subagentKind ?? null,
+    latestUserMessageAt: input.latestUserMessageAt ?? null,
     session: {
       status: input.status ?? "ready",
       activeTurnId: input.activeTurnId ?? null,
@@ -485,5 +493,103 @@ describe("deriveWebPushPayloadForEvent", () => {
         Option.some(makeThreadShell({ status: "running", activeTurnId: TurnId.make("turn-2") })),
       ),
     ).toBe(false);
+  });
+
+  it("suppresses successful completion notifications for unengaged materialized subagents", () => {
+    expect(
+      shouldNotifyRuntimeTurnCompletion(
+        makeTurnCompletedEvent(),
+        Option.some(
+          makeThreadShell({
+            parentThreadId: ThreadId.make("parent-thread"),
+            subagentKind: "thread_spawn",
+            latestUserMessageAt: null,
+          }),
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("notifies materialized subagents after durable user engagement", () => {
+    expect(
+      shouldNotifyRuntimeTurnCompletion(
+        makeTurnCompletedEvent(),
+        Option.some(
+          makeThreadShell({
+            parentThreadId: ThreadId.make("parent-thread"),
+            subagentKind: "thread_spawn",
+            latestUserMessageAt: "2026-01-01T00:00:01.000Z",
+          }),
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("notifies materialized subagents after same-process user engagement", () => {
+    const childThreadId = ThreadId.make("thread-1");
+
+    expect(
+      shouldNotifyRuntimeTurnCompletion(
+        makeTurnCompletedEvent(),
+        Option.some(
+          makeThreadShell({
+            id: childThreadId,
+            parentThreadId: ThreadId.make("parent-thread"),
+            subagentKind: "thread_spawn",
+            latestUserMessageAt: null,
+          }),
+        ),
+        {
+          engagedThreadIds: new Set([childThreadId]),
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps notifying root threads without user engagement", () => {
+    expect(
+      shouldNotifyRuntimeTurnCompletion(
+        makeTurnCompletedEvent(),
+        Option.some(
+          makeThreadShell({
+            parentThreadId: null,
+            subagentKind: null,
+            latestUserMessageAt: null,
+          }),
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not suppress non-materialized child thread kinds", () => {
+    expect(
+      shouldNotifyRuntimeTurnCompletion(
+        makeTurnCompletedEvent(),
+        Option.some(
+          makeThreadShell({
+            parentThreadId: ThreadId.make("parent-thread"),
+            subagentKind: "independent_thread",
+            latestUserMessageAt: null,
+          }),
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps notifying unengaged materialized subagent failures", () => {
+    expect(
+      shouldNotifyRuntimeTurnCompletion(
+        makeTurnCompletedEvent("failed", {
+          errorMessage: "Provider quota exhausted",
+        }),
+        Option.some(
+          makeThreadShell({
+            parentThreadId: ThreadId.make("parent-thread"),
+            subagentKind: "thread_spawn",
+            latestUserMessageAt: null,
+          }),
+        ),
+      ),
+    ).toBe(true);
   });
 });
