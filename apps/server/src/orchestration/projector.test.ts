@@ -84,6 +84,7 @@ describe("orchestration projector", () => {
         runtimeMode: "full-access",
         interactionMode: "default",
         parentThreadId: null,
+        createdByThreadId: null,
         subagentKind: null,
         subagentNickname: null,
         subagentRole: null,
