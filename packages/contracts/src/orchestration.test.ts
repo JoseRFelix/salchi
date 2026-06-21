@@ -582,6 +582,7 @@ it.effect("decodes thread.created runtime mode for historical events", () =>
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
     assert.strictEqual(parsed.modelSelection.instanceId, "codex");
     assert.strictEqual(parsed.parentThreadId, null);
+    assert.strictEqual(parsed.createdByThreadId, null);
     assert.strictEqual(parsed.subagentKind, null);
     assert.strictEqual(parsed.subagentNickname, null);
     assert.strictEqual(parsed.subagentRole, null);
@@ -613,6 +614,7 @@ it.effect("decodes thread.created child metadata", () =>
     });
 
     assert.strictEqual(parsed.parentThreadId, "parent-thread");
+    assert.strictEqual(parsed.createdByThreadId, null);
     assert.strictEqual(parsed.subagentKind, "thread_spawn");
     assert.strictEqual(parsed.subagentNickname, "planner");
     assert.strictEqual(parsed.subagentRole, "Planner");

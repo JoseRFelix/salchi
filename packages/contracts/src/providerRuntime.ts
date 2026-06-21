@@ -1,8 +1,10 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { ModelSelection, ProviderInteractionMode, RuntimeMode } from "./orchestration.ts";
 import {
   EventId,
   IsoDateTime,
+  MessageId,
   NonNegativeInt,
   ProviderItemId,
   PositiveInt,
@@ -154,6 +156,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "session.state.changed",
   "session.exited",
   "thread.started",
+  "thread.independent.created",
   "thread.state.changed",
   "thread.metadata.updated",
   "thread.token-usage.updated",
@@ -209,6 +212,7 @@ const SessionConfiguredType = Schema.Literal("session.configured");
 const SessionStateChangedType = Schema.Literal("session.state.changed");
 const SessionExitedType = Schema.Literal("session.exited");
 const ThreadStartedType = Schema.Literal("thread.started");
+const ThreadIndependentCreatedType = Schema.Literal("thread.independent.created");
 const ThreadStateChangedType = Schema.Literal("thread.state.changed");
 const ThreadMetadataUpdatedType = Schema.Literal("thread.metadata.updated");
 const ThreadTokenUsageUpdatedType = Schema.Literal("thread.token-usage.updated");
@@ -310,6 +314,24 @@ const ThreadStartedPayload = Schema.Struct({
   hiddenFromThreadList: Schema.optional(Schema.Boolean),
 });
 export type ThreadStartedPayload = typeof ThreadStartedPayload.Type;
+
+const ThreadIndependentCreatedPayload = Schema.Struct({
+  threadId: ThreadId,
+  title: TrimmedNonEmptyStringSchema,
+  initialPrompt: Schema.optional(TrimmedNonEmptyStringSchema),
+  initialMessageId: Schema.optional(MessageId),
+  titleSeed: Schema.optional(TrimmedNonEmptyStringSchema),
+  modelSelection: Schema.optional(ModelSelection),
+  runtimeMode: Schema.optional(RuntimeMode),
+  interactionMode: Schema.optional(ProviderInteractionMode),
+  branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
+  worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
+  createdByThreadId: Schema.optional(ThreadId),
+  originThreadId: Schema.optional(ThreadId),
+  providerThreadId: Schema.optional(TrimmedNonEmptyStringSchema),
+  sourceItemId: Schema.optional(RuntimeItemId),
+});
+export type ThreadIndependentCreatedPayload = typeof ThreadIndependentCreatedPayload.Type;
 
 const ThreadStateChangedPayload = Schema.Struct({
   state: RuntimeThreadState,
@@ -718,6 +740,14 @@ const ProviderRuntimeThreadStartedEvent = Schema.Struct({
 });
 export type ProviderRuntimeThreadStartedEvent = typeof ProviderRuntimeThreadStartedEvent.Type;
 
+const ProviderRuntimeThreadIndependentCreatedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: ThreadIndependentCreatedType,
+  payload: ThreadIndependentCreatedPayload,
+});
+export type ProviderRuntimeThreadIndependentCreatedEvent =
+  typeof ProviderRuntimeThreadIndependentCreatedEvent.Type;
+
 const ProviderRuntimeThreadStateChangedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: ThreadStateChangedType,
@@ -1069,6 +1099,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeSessionStateChangedEvent,
   ProviderRuntimeSessionExitedEvent,
   ProviderRuntimeThreadStartedEvent,
+  ProviderRuntimeThreadIndependentCreatedEvent,
   ProviderRuntimeThreadStateChangedEvent,
   ProviderRuntimeThreadMetadataUpdatedEvent,
   ProviderRuntimeThreadTokenUsageUpdatedEvent,

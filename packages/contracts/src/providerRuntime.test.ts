@@ -98,6 +98,38 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.subagentRole).toBe("Planning");
   });
 
+  it("decodes independent thread creation events", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "thread.independent.created",
+      eventId: "event-independent-thread-created",
+      provider: "codex",
+      providerInstanceId: "codex",
+      createdAt: "2026-02-28T00:00:00.000Z",
+      threadId: "source-thread",
+      turnId: "source-turn",
+      payload: {
+        threadId: "created-thread",
+        title: "Investigate retry behavior",
+        initialPrompt: "Review retry behavior and report findings.",
+        createdByThreadId: "source-thread",
+        providerThreadId: "provider-created-thread",
+        sourceItemId: "tool-call-1",
+        branch: "feature/retry-behavior",
+        worktreePath: "/tmp/retry-behavior-worktree",
+      },
+    });
+
+    expect(parsed.type).toBe("thread.independent.created");
+    if (parsed.type !== "thread.independent.created") {
+      throw new Error("expected thread.independent.created");
+    }
+    expect(parsed.payload.threadId).toBe("created-thread");
+    expect(parsed.payload.createdByThreadId).toBe("source-thread");
+    expect(parsed.payload.initialPrompt).toBe("Review retry behavior and report findings.");
+    expect(parsed.payload.branch).toBe("feature/retry-behavior");
+    expect(parsed.payload.worktreePath).toBe("/tmp/retry-behavior-worktree");
+  });
+
   it("decodes user-input.requested with structured questions", () => {
     const parsed = decodeRuntimeEvent({
       type: "user-input.requested",

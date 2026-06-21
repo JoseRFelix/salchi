@@ -8,7 +8,9 @@
  */
 import {
   type CanUseTool,
+  createSdkMcpServer,
   query,
+  tool,
   type Options as ClaudeQueryOptions,
   type PermissionMode,
   type PermissionResult,
@@ -81,6 +83,15 @@ import {
 } from "../attachmentInputs.ts";
 import { makeClaudeEnvironment, resolveClaudeHomePath } from "../Drivers/ClaudeHome.ts";
 import {
+  INDEPENDENT_THREAD_MCP_SERVER_NAME,
+  INDEPENDENT_THREAD_TOOL_DESCRIPTION,
+  INDEPENDENT_THREAD_TOOL_ZOD_INPUT_SHAPE,
+  INDEPENDENT_THREAD_TOOL_MCP_INSTRUCTIONS,
+  INDEPENDENT_THREAD_TOOL_NAME,
+  createIndependentThreadToolRuntimeResult,
+  makeIndependentThreadCreatedRuntimeEvent,
+} from "../IndependentThreadTool.ts";
+import {
   getClaudeModelCapabilities,
   normalizeClaudeCliEffort,
   resolveClaudeApiModelId,
@@ -128,8 +139,46 @@ type ClaudeToolResultStreamKind = Extract<
 type ClaudeSdkEffort = NonNullable<ClaudeQueryOptions["effort"]>;
 type ClaudeAccountUsageSource = "claude.oauth.usage" | "claude.statusline";
 
+const ClaudeIndependentThreadToolInputSchema = INDEPENDENT_THREAD_TOOL_ZOD_INPUT_SHAPE;
+
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readNonEmptyString(record: Record<string, unknown>, fieldNames: ReadonlyArray<string>) {
+  for (const fieldName of fieldNames) {
+    const value = record[fieldName];
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function readClaudeToolUseId(extra: unknown): string | undefined {
+  const record = asRecord(extra);
+  if (!record) {
+    return undefined;
+  }
+  return (
+    readNonEmptyString(record, ["toolUseID", "toolUseId", "tool_use_id"]) ??
+    readNonEmptyString(asRecord(record.toolUseBlock) ?? {}, [
+      "id",
+      "toolUseID",
+      "toolUseId",
+      "tool_use_id",
+    ])
+  );
 }
 
 function makeClaudeStatuslineCaptureCommand(): string {
@@ -4394,6 +4443,82 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ),
         ),
       );
+      const salchiMcpServer = createSdkMcpServer({
+        name: INDEPENDENT_THREAD_MCP_SERVER_NAME,
+        version: "0.1.0",
+        instructions: INDEPENDENT_THREAD_TOOL_MCP_INSTRUCTIONS,
+        alwaysLoad: true,
+        tools: [
+          tool(
+            INDEPENDENT_THREAD_TOOL_NAME,
+            INDEPENDENT_THREAD_TOOL_DESCRIPTION,
+            ClaudeIndependentThreadToolInputSchema,
+            async (args, extra) =>
+              runPromise(
+                Effect.gen(function* () {
+                  const context = yield* Ref.get(contextRef);
+                  if (!context) {
+                    return {
+                      isError: true,
+                      content: [
+                        {
+                          type: "text" as const,
+                          text: "Claude session context is unavailable.",
+                        },
+                      ],
+                    };
+                  }
+
+                  const stamp = yield* makeEventStamp();
+                  const toolUseId = readClaudeToolUseId(extra);
+                  const idPrefix = `claude-tool:${toolUseId ?? stamp.eventId}`;
+                  const result = createIndependentThreadToolRuntimeResult({
+                    argumentsValue: args,
+                    sourceThreadId: context.session.threadId,
+                    idPrefix,
+                    sourceItemId: idPrefix,
+                    ...(sessionId ? { providerThreadId: sessionId } : {}),
+                  });
+                  yield* offerRuntimeEvent(
+                    makeIndependentThreadCreatedRuntimeEvent({
+                      provider: PROVIDER,
+                      providerInstanceId: boundInstanceId,
+                      eventId: stamp.eventId,
+                      createdAt: stamp.createdAt,
+                      sourceThreadId: context.session.threadId,
+                      ...(context.turnState
+                        ? { turnId: asCanonicalTurnId(context.turnState.turnId) }
+                        : {}),
+                      idPrefix,
+                      argumentsValue: args,
+                      sourceItemId: idPrefix,
+                      ...(sessionId ? { providerThreadId: sessionId } : {}),
+                      raw: {
+                        source: "claude.sdk.message",
+                        method: "mcp/create_thread",
+                        payload: {
+                          toolName: INDEPENDENT_THREAD_TOOL_NAME,
+                          input: args,
+                        },
+                      },
+                    }),
+                  );
+
+                  return {
+                    content: [
+                      {
+                        type: "text" as const,
+                        text: result.text,
+                      },
+                    ],
+                    structuredContent: result.structuredContent,
+                  };
+                }),
+              ),
+            { alwaysLoad: true },
+          ),
+        ],
+      });
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
@@ -4416,6 +4541,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(newSessionId ? { sessionId: newSessionId } : {}),
         includePartialMessages: true,
         canUseTool,
+        mcpServers: {
+          [INDEPENDENT_THREAD_MCP_SERVER_NAME]: salchiMcpServer,
+        },
         env: queryEnvironment,
         ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),

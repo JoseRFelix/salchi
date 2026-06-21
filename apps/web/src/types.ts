@@ -120,6 +120,7 @@ export interface Thread {
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
   parentThreadId?: ThreadId | null;
+  createdByThreadId?: ThreadId | null;
   subagentKind?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
@@ -151,6 +152,7 @@ export interface ThreadShell {
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
   parentThreadId?: ThreadId | null;
+  createdByThreadId?: ThreadId | null;
   subagentKind?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
@@ -175,6 +177,7 @@ export interface SidebarThreadSummary {
   title: string;
   interactionMode: ProviderInteractionMode;
   parentThreadId?: ThreadId | null;
+  createdByThreadId?: ThreadId | null;
   subagentKind?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;

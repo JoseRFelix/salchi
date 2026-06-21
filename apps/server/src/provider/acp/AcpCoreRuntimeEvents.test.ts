@@ -4,11 +4,13 @@ import { describe, expect, it } from "vitest";
 import {
   makeAcpAssistantItemEvent,
   makeAcpContentDeltaEvent,
+  makeAcpIndependentThreadCreatedEvent,
   makeAcpPlanUpdatedEvent,
   makeAcpRequestOpenedEvent,
   makeAcpRequestResolvedEvent,
   makeAcpToolCallEvent,
 } from "./AcpCoreRuntimeEvents.ts";
+import { INDEPENDENT_THREAD_TOOL_RESULT_MARKER } from "../IndependentThreadTool.ts";
 
 describe("AcpCoreRuntimeEvents", () => {
   it("maps ACP permission requests to canonical runtime events", () => {
@@ -151,5 +153,91 @@ describe("AcpCoreRuntimeEvents", () => {
         status: "inProgress",
       },
     });
+  });
+
+  it("maps completed Salchi MCP tool output to an independent thread event", () => {
+    const stamp = { eventId: "event-1" as never, createdAt: "2026-06-21T00:00:00.000Z" };
+    const turnId = TurnId.make("turn-1");
+    const marker = {
+      type: INDEPENDENT_THREAD_TOOL_RESULT_MARKER,
+      version: 1,
+      arguments: {
+        title: "ACP audit",
+        initialPrompt: "Audit from ACP.",
+        threadId: "thread-acp-audit",
+        checkoutMode: "worktree",
+        branch: "feature/acp-audit",
+        worktreePath: "/tmp/acp-audit",
+      },
+    };
+
+    const event = makeAcpIndependentThreadCreatedEvent({
+      stamp,
+      provider: ProviderDriverKind.make("cursor"),
+      threadId: "thread-source" as never,
+      turnId,
+      toolCall: {
+        toolCallId: "tool-1",
+        status: "completed",
+        data: {
+          rawOutput: {
+            content: [
+              {
+                type: "text",
+                text: `${INDEPENDENT_THREAD_TOOL_RESULT_MARKER} ${JSON.stringify(marker)}`,
+              },
+            ],
+          },
+        },
+      },
+      rawPayload: { sessionId: "session-1" },
+    });
+
+    expect(event).toMatchObject({
+      type: "thread.independent.created",
+      threadId: "thread-source",
+      itemId: "tool-1",
+      payload: {
+        threadId: "thread-acp-audit",
+        title: "ACP audit",
+        initialPrompt: "Audit from ACP.",
+        branch: "feature/acp-audit",
+        worktreePath: "/tmp/acp-audit",
+      },
+      raw: {
+        source: "acp.jsonrpc",
+        method: "session/update",
+      },
+    });
+  });
+
+  it("ignores incomplete ACP Salchi MCP tool updates", () => {
+    const stamp = { eventId: "event-1" as never, createdAt: "2026-06-21T00:00:00.000Z" };
+
+    expect(
+      makeAcpIndependentThreadCreatedEvent({
+        stamp,
+        provider: ProviderDriverKind.make("cursor"),
+        threadId: "thread-source" as never,
+        turnId: undefined,
+        toolCall: {
+          toolCallId: "tool-1",
+          status: "inProgress",
+          data: {
+            rawOutput: {
+              structuredContent: {
+                type: INDEPENDENT_THREAD_TOOL_RESULT_MARKER,
+                version: 1,
+                arguments: {
+                  title: "ACP audit",
+                  initialPrompt: "Audit from ACP.",
+                },
+              },
+            },
+          },
+        },
+        rawPayload: { sessionId: "session-1" },
+      }),
+    ).toBeUndefined();
   });
 });

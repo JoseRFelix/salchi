@@ -172,6 +172,32 @@ function isSubagentThreadSpawnedActivityFor(
   );
 }
 
+function isIndependentThreadCreatedActivityFor(
+  activity: OrchestrationThreadActivity,
+  input: {
+    readonly threadId: ThreadId;
+    readonly providerThreadId?: string | undefined;
+  },
+): boolean {
+  if (activity.kind !== "thread.created" || !isRecord(activity.payload)) {
+    return false;
+  }
+
+  const payloadThreadId =
+    typeof activity.payload.threadId === "string" ? activity.payload.threadId.trim() : "";
+  const payloadProviderThreadId =
+    typeof activity.payload.providerThreadId === "string"
+      ? activity.payload.providerThreadId.trim()
+      : "";
+  const threadId = String(input.threadId).trim();
+  const providerThreadId = input.providerThreadId?.trim() ?? "";
+
+  return (
+    payloadThreadId === threadId ||
+    (providerThreadId.length > 0 && payloadProviderThreadId === providerThreadId)
+  );
+}
+
 function providerThreadIdFromRuntimeEvent(event: ProviderRuntimeEvent): string | undefined {
   const payload = isRecord(event.raw?.payload) ? event.raw.payload : null;
   const rawThreadId = payload && typeof payload.threadId === "string" ? payload.threadId : null;
@@ -938,6 +964,169 @@ const make = Effect.gen(function* () {
       .getThreadShellById(threadId)
       .pipe(Effect.map(Option.getOrUndefined));
   });
+
+  const materializeIndependentThreadIfNeeded = Effect.fn("materializeIndependentThreadIfNeeded")(
+    function* (event: ProviderRuntimeEvent) {
+      if (event.type !== "thread.independent.created") {
+        return;
+      }
+
+      const payload = event.payload;
+      const sourceThreadId = payload.createdByThreadId ?? payload.originThreadId ?? event.threadId;
+      const sourceThread = yield* resolveThreadShell(sourceThreadId);
+      if (!sourceThread) {
+        yield* Effect.logWarning("provider runtime independent thread creation dropped", {
+          eventId: event.eventId,
+          threadId: event.threadId,
+          createdThreadId: payload.threadId,
+          sourceThreadId,
+          reason: "missing-source-thread",
+        });
+        return;
+      }
+
+      if (payload.threadId === sourceThread.id) {
+        yield* Effect.logWarning("provider runtime independent thread creation dropped", {
+          eventId: event.eventId,
+          threadId: event.threadId,
+          createdThreadId: payload.threadId,
+          sourceThreadId: sourceThread.id,
+          reason: "self-reference",
+        });
+        return;
+      }
+
+      const existingThread = yield* resolveThreadShell(payload.threadId);
+      if (existingThread) {
+        const conflictsWithExistingThread =
+          existingThread.projectId !== sourceThread.projectId ||
+          existingThread.parentThreadId !== null ||
+          !sameId(existingThread.createdByThreadId, sourceThread.id);
+        if (conflictsWithExistingThread) {
+          yield* Effect.logWarning("provider runtime independent thread creation dropped", {
+            eventId: event.eventId,
+            threadId: event.threadId,
+            createdThreadId: payload.threadId,
+            sourceThreadId: sourceThread.id,
+            existingProjectId: existingThread.projectId,
+            sourceProjectId: sourceThread.projectId,
+            existingParentThreadId: existingThread.parentThreadId,
+            existingCreatedByThreadId: existingThread.createdByThreadId,
+            reason: "conflicting-existing-thread",
+          });
+          return;
+        }
+      } else {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.create",
+          commandId: yield* providerCommandId(event, "independent-thread-create"),
+          threadId: payload.threadId,
+          projectId: sourceThread.projectId,
+          title: payload.title,
+          modelSelection: payload.modelSelection ?? sourceThread.modelSelection,
+          runtimeMode: payload.runtimeMode ?? sourceThread.runtimeMode,
+          interactionMode: payload.interactionMode ?? sourceThread.interactionMode,
+          parentThreadId: null,
+          createdByThreadId: sourceThread.id,
+          subagentKind: null,
+          subagentNickname: null,
+          subagentRole: null,
+          hiddenFromThreadList: false,
+          branch: payload.branch !== undefined ? payload.branch : sourceThread.branch,
+          worktreePath:
+            payload.worktreePath !== undefined ? payload.worktreePath : sourceThread.worktreePath,
+          createdAt: event.createdAt,
+        });
+      }
+
+      const sourceThreadDetail = yield* resolveThreadDetail(sourceThread.id);
+      const hasSourceActivity =
+        sourceThreadDetail?.activities.some((activity) =>
+          isIndependentThreadCreatedActivityFor(activity, {
+            threadId: payload.threadId,
+            providerThreadId: payload.providerThreadId,
+          }),
+        ) ?? false;
+
+      if (!hasSourceActivity) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.activity.append",
+          commandId: yield* providerCommandId(event, "independent-thread-source-activity"),
+          threadId: sourceThread.id,
+          activity: {
+            id: EventId.make(`${event.eventId}:independent-thread-created`),
+            createdAt: event.createdAt,
+            tone: "info",
+            kind: "thread.created",
+            summary: payload.title,
+            payload: {
+              threadId: payload.threadId,
+              title: payload.title,
+              createdByThreadId: sourceThread.id,
+              ...(payload.providerThreadId ? { providerThreadId: payload.providerThreadId } : {}),
+              ...(payload.sourceItemId ? { sourceItemId: payload.sourceItemId } : {}),
+              ...(event.providerRefs?.providerItemId
+                ? { providerItemId: event.providerRefs.providerItemId }
+                : {}),
+              ...(payload.initialPrompt
+                ? { initialPrompt: truncateDetail(payload.initialPrompt) }
+                : {}),
+            },
+            turnId: toTurnId(event.turnId) ?? null,
+          },
+          createdAt: event.createdAt,
+        });
+      }
+
+      const initialPrompt = payload.initialPrompt?.trim();
+      if (!initialPrompt) {
+        return;
+      }
+
+      const createdThreadDetail = yield* resolveThreadDetail(payload.threadId);
+      const messageId =
+        payload.initialMessageId ??
+        MessageId.make(`provider:${event.eventId}:independent-thread-message`);
+      const alreadyHasInitialPrompt =
+        createdThreadDetail?.messages.some((message) => message.id === messageId) === true ||
+        createdThreadDetail?.queuedTurns.some(
+          (queuedTurn) => queuedTurn.messageId === messageId,
+        ) === true;
+
+      if (alreadyHasInitialPrompt) {
+        return;
+      }
+
+      const targetThread = (yield* resolveThreadShell(payload.threadId)) ?? existingThread;
+      if (!targetThread) {
+        yield* Effect.logWarning("provider runtime independent thread prompt dropped", {
+          eventId: event.eventId,
+          threadId: event.threadId,
+          createdThreadId: payload.threadId,
+          sourceThreadId: sourceThread.id,
+          reason: "missing-created-thread",
+        });
+        return;
+      }
+
+      yield* orchestrationEngine.dispatch({
+        type: "thread.turn.start",
+        commandId: yield* providerCommandId(event, "independent-thread-initial-turn"),
+        threadId: payload.threadId,
+        message: {
+          messageId,
+          role: "user",
+          text: initialPrompt,
+          attachments: [],
+        },
+        modelSelection: targetThread.modelSelection,
+        titleSeed: payload.titleSeed ?? payload.title,
+        runtimeMode: targetThread.runtimeMode,
+        interactionMode: targetThread.interactionMode,
+        createdAt: event.createdAt,
+      });
+    },
+  );
 
   const materializeChildThreadIfNeeded = Effect.fn("materializeChildThreadIfNeeded")(function* (
     event: ProviderRuntimeEvent,
@@ -2050,6 +2239,7 @@ const make = Effect.gen(function* () {
 
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
+      yield* materializeIndependentThreadIfNeeded(event);
       yield* materializeChildThreadIfNeeded(event);
       yield* refreshMaterializedChildThreadMetadataIfNeeded(event);
       const thread = yield* resolveThreadShell(event.threadId);

@@ -2,6 +2,7 @@ import {
   ApprovalRequestId,
   DEFAULT_MODEL,
   EventId,
+  MessageId,
   ProviderDriverKind,
   ProviderItemId,
   ProviderInstanceId,
@@ -45,7 +46,16 @@ import {
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
 } from "../CodexDeveloperInstructions.ts";
 import { codexChildThreadId, extractCodexThreadSpawnMetadata } from "./CodexChildThreads.ts";
+import {
+  INDEPENDENT_THREAD_TOOL_METHOD,
+  INDEPENDENT_THREAD_TOOL_SPEC,
+  isIndependentThreadToolCall,
+  parseIndependentThreadToolArguments,
+} from "../IndependentThreadTool.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
+const decodeV2ThreadStartResponse = Schema.decodeUnknownEffect(
+  EffectCodexSchema.V2ThreadStartResponse,
+);
 
 const PROVIDER = ProviderDriverKind.make("codex");
 
@@ -94,6 +104,10 @@ const formatSchemaIssue = SchemaIssue.makeFormatterDefault();
 
 export type CodexResumeCursor = typeof CodexResumeCursorSchema.Type;
 type CodexServiceTier = NonNullable<EffectCodexSchema.V2ThreadStartParams["serviceTier"]>;
+type CodexDynamicToolSpec = EffectCodexSchema.V2ThreadStartParams__DynamicToolSpec;
+type CodexThreadStartParamsWithDynamicTools = EffectCodexSchema.V2ThreadStartParams & {
+  readonly dynamicTools?: ReadonlyArray<CodexDynamicToolSpec> | null;
+};
 type CodexThreadItem =
   | EffectCodexSchema.V2ThreadReadResponse["thread"]["turns"][number]["items"][number]
   | EffectCodexSchema.V2ThreadRollbackResponse["thread"]["turns"][number]["items"][number];
@@ -338,9 +352,30 @@ function buildThreadStartParams(input: {
   readonly model: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly approvalsReviewer: EffectCodexSchema.V2ThreadStartParams__ApprovalsReviewer | undefined;
-}): EffectCodexSchema.V2ThreadStartParams {
+}): CodexThreadStartParamsWithDynamicTools {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
   return {
+    cwd: input.cwd,
+    approvalPolicy: config.approvalPolicy,
+    sandbox: config.sandbox,
+    dynamicTools: [INDEPENDENT_THREAD_TOOL_SPEC],
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
+    ...(input.approvalsReviewer ? { approvalsReviewer: input.approvalsReviewer } : {}),
+  };
+}
+
+function buildThreadResumeParams(input: {
+  readonly threadId: string;
+  readonly cwd: string;
+  readonly runtimeMode: RuntimeMode;
+  readonly model: string | undefined;
+  readonly serviceTier: CodexServiceTier | undefined;
+  readonly approvalsReviewer: EffectCodexSchema.V2ThreadResumeParams__ApprovalsReviewer | undefined;
+}): EffectCodexSchema.V2ThreadResumeParams {
+  const config = runtimeModeToThreadConfig(input.runtimeMode);
+  return {
+    threadId: input.threadId,
     cwd: input.cwd,
     approvalPolicy: config.approvalPolicy,
     sandbox: config.sandbox,
@@ -474,10 +509,36 @@ type CodexThreadOpenResponse =
 type CodexThreadOpenMethod = "thread/start" | "thread/resume";
 
 interface CodexThreadOpenClient {
+  readonly raw: {
+    readonly request: (
+      method: string,
+      payload?: unknown,
+    ) => Effect.Effect<unknown, CodexErrors.CodexAppServerError>;
+  };
   readonly request: <M extends CodexThreadOpenMethod>(
     method: M,
     payload: CodexRpc.ClientRequestParamsByMethod[M],
   ) => Effect.Effect<CodexRpc.ClientRequestResponsesByMethod[M], CodexErrors.CodexAppServerError>;
+}
+
+function startCodexThread(
+  client: CodexThreadOpenClient,
+  payload: CodexThreadStartParamsWithDynamicTools,
+): Effect.Effect<
+  CodexRpc.ClientRequestResponsesByMethod["thread/start"],
+  CodexErrors.CodexAppServerError
+> {
+  return client.raw
+    .request("thread/start", payload)
+    .pipe(
+      Effect.flatMap((raw) =>
+        decodeV2ThreadStartResponse(raw).pipe(
+          Effect.mapError((error) =>
+            toProtocolParseError("Invalid thread/start response payload", error),
+          ),
+        ),
+      ),
+    );
 }
 
 export const openCodexThread = (input: {
@@ -500,14 +561,21 @@ export const openCodexThread = (input: {
   });
 
   if (resumeThreadId === undefined) {
-    return input.client.request("thread/start", startParams);
+    return startCodexThread(input.client, startParams);
   }
 
   return input.client
-    .request("thread/resume", {
-      threadId: resumeThreadId,
-      ...startParams,
-    })
+    .request(
+      "thread/resume",
+      buildThreadResumeParams({
+        threadId: resumeThreadId,
+        cwd: input.cwd,
+        runtimeMode: input.runtimeMode,
+        model: input.requestedModel,
+        serviceTier: input.serviceTier,
+        approvalsReviewer: input.approvalsReviewer,
+      }),
+    )
     .pipe(
       Effect.catchIf(isRecoverableThreadResumeError, (error) =>
         Effect.logWarning("codex app-server thread resume fell back to fresh start", {
@@ -516,7 +584,7 @@ export const openCodexThread = (input: {
           resumeThreadId,
           recoverable: true,
           cause: error.message,
-        }).pipe(Effect.andThen(input.client.request("thread/start", startParams))),
+        }).pipe(Effect.andThen(startCodexThread(input.client, startParams))),
       ),
     );
 };
@@ -1350,6 +1418,81 @@ export const makeCodexSessionRuntime = (
             ),
           ),
         } satisfies EffectCodexSchema.ToolRequestUserInputResponse;
+      }),
+    );
+
+    yield* client.handleServerRequest("item/tool/call", (payload) =>
+      Effect.gen(function* () {
+        if (!isIndependentThreadToolCall(payload)) {
+          return {
+            success: false,
+            contentItems: [
+              {
+                type: "inputText",
+                text: `Unsupported Salchi dynamic tool: ${
+                  payload.namespace ? `${payload.namespace}/` : ""
+                }${payload.tool}`,
+              },
+            ],
+          } satisfies EffectCodexSchema.DynamicToolCallResponse;
+        }
+
+        const sourceThreadId = yield* resolveSalchiThreadIdForProviderThread(
+          readProviderThreadIdFromPayload(payload),
+        );
+        const turnId = TurnId.make(payload.turnId);
+        const itemId = ProviderItemId.make(payload.callId);
+        const parsedArguments = parseIndependentThreadToolArguments(payload.arguments);
+        if (
+          parsedArguments.checkoutMode === "worktree" &&
+          typeof parsedArguments.worktreePath !== "string"
+        ) {
+          return {
+            success: false,
+            contentItems: [
+              {
+                type: "inputText",
+                text: "create_thread with checkoutMode 'worktree' requires worktreePath.",
+              },
+            ],
+          } satisfies EffectCodexSchema.DynamicToolCallResponse;
+        }
+        const createdThreadId =
+          parsedArguments.requestedThreadId ?? ThreadId.make(`codex-tool:${payload.callId}`);
+        const initialMessageId = MessageId.make(`codex-tool:${payload.callId}:initial-message`);
+
+        yield* emitEvent({
+          kind: "notification",
+          threadId: sourceThreadId,
+          method: INDEPENDENT_THREAD_TOOL_METHOD,
+          turnId,
+          itemId,
+          payload: {
+            threadId: createdThreadId,
+            title: parsedArguments.title,
+            createdByThreadId: sourceThreadId,
+            initialMessageId,
+            sourceItemId: itemId,
+            ...(parsedArguments.initialPrompt
+              ? { initialPrompt: parsedArguments.initialPrompt }
+              : {}),
+            ...(parsedArguments.titleSeed ? { titleSeed: parsedArguments.titleSeed } : {}),
+            ...(parsedArguments.branch !== undefined ? { branch: parsedArguments.branch } : {}),
+            ...(parsedArguments.worktreePath !== undefined
+              ? { worktreePath: parsedArguments.worktreePath }
+              : {}),
+          },
+        });
+
+        return {
+          success: true,
+          contentItems: [
+            {
+              type: "inputText",
+              text: `Created independent thread '${createdThreadId}' (${parsedArguments.title}) from '${sourceThreadId}'.`,
+            },
+          ],
+        } satisfies EffectCodexSchema.DynamicToolCallResponse;
       }),
     );
 

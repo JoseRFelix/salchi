@@ -648,6 +648,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             runtimeMode: event.payload.runtimeMode,
             interactionMode: event.payload.interactionMode,
             parentThreadId: event.payload.parentThreadId ?? null,
+            createdByThreadId: event.payload.createdByThreadId ?? null,
             subagentKind: event.payload.subagentKind ?? null,
             subagentNickname: event.payload.subagentNickname ?? null,
             subagentRole: event.payload.subagentRole ?? null,

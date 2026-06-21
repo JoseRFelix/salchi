@@ -12,6 +12,7 @@ import {
   type CanonicalRequestType,
   type CodexSettings,
   EventId,
+  MessageId,
   ProviderDriverKind,
   type ProviderEvent,
   ProviderInstanceId,
@@ -24,6 +25,7 @@ import {
   RuntimeSubagentId,
   ProviderApprovalDecision,
   ThreadId,
+  TrimmedNonEmptyString,
   ProviderSendTurnInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -87,6 +89,7 @@ import {
   extractCodexSubagentMetadata,
   extractCodexThreadSpawnMetadata,
 } from "./CodexChildThreads.ts";
+import { INDEPENDENT_THREAD_TOOL_METHOD } from "../IndependentThreadTool.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -205,6 +208,18 @@ type CodexToolUserInputQuestion =
 
 const ApprovalDecisionPayload = Schema.Struct({
   decision: ProviderApprovalDecision,
+});
+
+const SalchiThreadCreateNotificationPayload = Schema.Struct({
+  threadId: ThreadId,
+  title: TrimmedNonEmptyString,
+  initialPrompt: Schema.optional(TrimmedNonEmptyString),
+  initialMessageId: Schema.optional(MessageId),
+  titleSeed: Schema.optional(TrimmedNonEmptyString),
+  createdByThreadId: Schema.optional(ThreadId),
+  sourceItemId: Schema.optional(RuntimeItemId),
+  branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
 });
 
 function readPayload<A>(
@@ -1074,6 +1089,30 @@ function mapToRuntimeEvents(
           message: event.message,
           class: "provider_error",
           ...(event.payload !== undefined ? { detail: event.payload } : {}),
+        },
+      },
+    ];
+  }
+
+  if (event.method === INDEPENDENT_THREAD_TOOL_METHOD) {
+    const payload = readPayload(SalchiThreadCreateNotificationPayload, event.payload);
+    if (!payload) {
+      return [];
+    }
+    return [
+      {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "thread.independent.created",
+        payload: {
+          threadId: payload.threadId,
+          title: payload.title,
+          createdByThreadId: payload.createdByThreadId ?? canonicalThreadId,
+          ...(payload.initialPrompt ? { initialPrompt: payload.initialPrompt } : {}),
+          ...(payload.initialMessageId ? { initialMessageId: payload.initialMessageId } : {}),
+          ...(payload.titleSeed ? { titleSeed: payload.titleSeed } : {}),
+          ...(payload.sourceItemId ? { sourceItemId: payload.sourceItemId } : {}),
+          ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
+          ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
         },
       },
     ];

@@ -57,6 +57,7 @@ import {
   makeAcpRequestOpenedEvent,
   makeAcpRequestResolvedEvent,
   makeAcpToolCallEvent,
+  offerAcpIndependentThreadCreatedEvent,
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import {
   type AcpSessionMode,
@@ -906,6 +907,15 @@ export function makeCursorAdapter(
                         rawPayload: event.rawPayload,
                       }),
                     );
+                    yield* offerAcpIndependentThreadCreatedEvent({
+                      stamp: yield* makeEventStamp(),
+                      provider: PROVIDER,
+                      threadId: ctx.threadId,
+                      turnId: ctx.activeTurnId,
+                      toolCall: event.toolCall,
+                      rawPayload: event.rawPayload,
+                      offerRuntimeEvent,
+                    });
                     return;
                   case "ContentDelta":
                     yield* logNative(

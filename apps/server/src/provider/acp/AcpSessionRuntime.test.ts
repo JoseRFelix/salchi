@@ -16,6 +16,7 @@ import {
   type AcpSessionRuntimeShape,
 } from "./AcpSessionRuntime.ts";
 import type { AcpParsedSessionEvent } from "./AcpRuntimeModel.ts";
+import { INDEPENDENT_THREAD_MCP_SERVER_NAME } from "../IndependentThreadTool.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mockAgentPath = path.join(__dirname, "../../../scripts/acp-mock-agent.ts");
@@ -103,6 +104,45 @@ function firstAssistantItemId(env?: NodeJS.ProcessEnv) {
 }
 
 describe("AcpSessionRuntime resume", () => {
+  it.effect("registers the Salchi MCP server when loading an ACP session", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      yield* runtime.start();
+
+      const loadStarted = requestEvents.find(
+        (event) => event.method === "session/load" && event.status === "started",
+      );
+      const payload = loadStarted?.payload as
+        | {
+            readonly mcpServers?: ReadonlyArray<{
+              readonly name?: string;
+              readonly command?: string;
+              readonly args?: ReadonlyArray<string>;
+              readonly env?: ReadonlyArray<unknown>;
+            }>;
+          }
+        | undefined;
+      const salchiServer = payload?.mcpServers?.find(
+        (server) => server.name === INDEPENDENT_THREAD_MCP_SERVER_NAME,
+      );
+
+      expect(salchiServer).toMatchObject({
+        name: INDEPENDENT_THREAD_MCP_SERVER_NAME,
+        command: process.execPath,
+        env: [],
+      });
+      expect(salchiServer?.args).toContain("--input-type=module");
+      expect(salchiServer?.args).toContain("--eval");
+      expect(salchiServer?.args?.at(-1)).toContain("create_thread");
+    }).pipe(
+      Effect.provide(runtimeLayer({ requestEvents })),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
   it.effect("suppresses replayed assistant and tool updates during session/load", () =>
     Effect.gen(function* () {
       const events = yield* promptAndCollectLiveEvents;
