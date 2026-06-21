@@ -110,6 +110,11 @@ export interface Thread {
   modelSelection: ModelSelection;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
+  parentThreadId?: ThreadId | null;
+  subagentKind?: string | null;
+  subagentNickname?: string | null;
+  subagentRole?: string | null;
+  hiddenFromThreadList?: boolean;
   session: ThreadSession | null;
   messages: ChatMessage[];
   queuedTurns: QueuedTurn[];
@@ -136,6 +141,11 @@ export interface ThreadShell {
   modelSelection: ModelSelection;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
+  parentThreadId?: ThreadId | null;
+  subagentKind?: string | null;
+  subagentNickname?: string | null;
+  subagentRole?: string | null;
+  hiddenFromThreadList?: boolean;
   error: string | null;
   createdAt: string;
   archivedAt: string | null;
@@ -155,6 +165,11 @@ export interface SidebarThreadSummary {
   projectId: ProjectId;
   title: string;
   interactionMode: ProviderInteractionMode;
+  parentThreadId?: ThreadId | null;
+  subagentKind?: string | null;
+  subagentNickname?: string | null;
+  subagentRole?: string | null;
+  hiddenFromThreadList?: boolean;
   session: ThreadSession | null;
   createdAt: string;
   archivedAt: string | null;

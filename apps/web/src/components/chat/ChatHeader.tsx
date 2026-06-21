@@ -34,6 +34,8 @@ import { probeDevServerReachable, type DevServerLink } from "../../devServerLink
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
   activeThreadTitle: string;
+  isSubagentThread?: boolean;
+  parentThreadTitle?: string | null;
   activeProjectName: string | undefined;
   isGitRepo: boolean;
   openInCwd: string | null;
@@ -62,6 +64,7 @@ interface ChatHeaderProps {
   onToggleTerminal: () => void;
   onToggleDiff: () => void;
   onToggleSourceControl: () => void;
+  onNavigateToParentThread?: () => void;
 }
 
 export function shouldShowOpenInPicker(input: {
@@ -79,6 +82,8 @@ export function shouldShowOpenInPicker(input: {
 export const ChatHeader = memo(function ChatHeader({
   activeThreadEnvironmentId,
   activeThreadTitle,
+  isSubagentThread = false,
+  parentThreadTitle,
   activeProjectName,
   isGitRepo,
   openInCwd,
@@ -107,6 +112,7 @@ export const ChatHeader = memo(function ChatHeader({
   onToggleTerminal,
   onToggleDiff,
   onToggleSourceControl,
+  onNavigateToParentThread,
 }: ChatHeaderProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const isCompactHeader = useMediaQuery("(max-width: 760px)");
@@ -154,8 +160,23 @@ export const ChatHeader = memo(function ChatHeader({
           >
             {activeThreadTitle}
           </h2>
-          {(activeProjectName || threadEnvironmentLabel) && (
+          {(activeProjectName || threadEnvironmentLabel || isSubagentThread) && (
             <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs leading-tight text-muted-foreground">
+              {isSubagentThread && (
+                <Badge variant="secondary" className="shrink-0 px-1 py-0 text-[10px]">
+                  Subagent
+                </Badge>
+              )}
+              {parentThreadTitle && onNavigateToParentThread && (
+                <button
+                  type="button"
+                  className="min-w-0 truncate rounded-sm text-left text-muted-foreground hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                  title={`Parent: ${parentThreadTitle}`}
+                  onClick={onNavigateToParentThread}
+                >
+                  Parent: {parentThreadTitle}
+                </button>
+              )}
               {activeProjectName && (
                 <span className="min-w-0 truncate" title={activeProjectName}>
                   {activeProjectName}
@@ -194,134 +215,136 @@ export const ChatHeader = memo(function ChatHeader({
             />
           </>
         )}
-        {isCompactHeader ? (
-          <MobileDevServerButton
+        <div className="flex shrink-0 items-center gap-1">
+          <ChatHeaderDevServerButton
             browserHostname={devServerProbeBrowserHostname}
             links={devServerLinks}
             probe={probeDevServerUrl}
           />
-        ) : null}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Toggle
-                className="shrink-0"
-                pressed={sourceControlOpen}
-                onPressedChange={onToggleSourceControl}
-                aria-label="Toggle source control"
-                variant="outline"
-                size="xs"
-                disabled={!hasSourceControl}
-              >
-                <GitBranchIcon className="size-4.5 sm:size-3" />
-              </Toggle>
-            }
-          />
-          <TooltipPopup side="bottom">
-            {hasSourceControl
-              ? sourceControlToggleShortcutLabel
-                ? `Toggle source control (${sourceControlToggleShortcutLabel})`
-                : "Toggle source control"
-              : "Source control is unavailable until this thread has an active project."}
-          </TooltipPopup>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Toggle
-                className="shrink-0"
-                pressed={terminalOpen}
-                onPressedChange={onToggleTerminal}
-                aria-label="Toggle terminal drawer"
-                variant="outline"
-                size="xs"
-                disabled={!terminalAvailable}
-              >
-                <TerminalSquareIcon className="size-4.5 sm:size-3" />
-              </Toggle>
-            }
-          />
-          <TooltipPopup side="bottom">
-            {!terminalAvailable
-              ? "Terminal is unavailable until this thread has an active project."
-              : terminalToggleShortcutLabel
-                ? `Toggle terminal drawer (${terminalToggleShortcutLabel})`
-                : "Toggle terminal drawer"}
-          </TooltipPopup>
-        </Tooltip>
-        {!isCompactHeader && (
           <Tooltip>
             <TooltipTrigger
               render={
                 <Toggle
                   className="shrink-0"
-                  pressed={fileExplorerOpen}
-                  onPressedChange={onToggleFileExplorer}
-                  aria-label="Toggle file explorer"
+                  pressed={sourceControlOpen}
+                  onPressedChange={onToggleSourceControl}
+                  aria-label="Toggle source control"
                   variant="outline"
                   size="xs"
-                  disabled={!fileExplorerAvailable}
+                  disabled={!hasSourceControl}
                 >
-                  <FolderTreeIcon className="size-3" />
+                  <GitBranchIcon className="size-4.5 sm:size-3" />
                 </Toggle>
               }
             />
             <TooltipPopup side="bottom">
-              {fileExplorerAvailable
-                ? "Toggle file explorer"
-                : "File explorer is unavailable until this thread has an active project."}
+              {hasSourceControl
+                ? sourceControlToggleShortcutLabel
+                  ? `Toggle source control (${sourceControlToggleShortcutLabel})`
+                  : "Toggle source control"
+                : "Source control is unavailable until this thread has an active project."}
             </TooltipPopup>
           </Tooltip>
-        )}
-        {!isCompactHeader && (
           <Tooltip>
             <TooltipTrigger
               render={
                 <Toggle
                   className="shrink-0"
-                  pressed={diffOpen}
-                  onPressedChange={onToggleDiff}
-                  aria-label="Toggle diff panel"
-                  variant="ghost"
+                  pressed={terminalOpen}
+                  onPressedChange={onToggleTerminal}
+                  aria-label="Toggle terminal drawer"
+                  variant="outline"
                   size="xs"
-                  disabled={!isGitRepo && !diffOpen}
+                  disabled={!terminalAvailable}
                 >
-                  <DiffIcon className="size-3" />
+                  <TerminalSquareIcon className="size-4.5 sm:size-3" />
                 </Toggle>
               }
             />
             <TooltipPopup side="bottom">
-              {!isGitRepo && !diffOpen
-                ? "Diff panel is unavailable because this project is not a git repository."
-                : diffToggleShortcutLabel
-                  ? `Toggle diff panel (${diffToggleShortcutLabel})`
-                  : "Toggle diff panel"}
+              {!terminalAvailable
+                ? "Terminal is unavailable until this thread has an active project."
+                : terminalToggleShortcutLabel
+                  ? `Toggle terminal drawer (${terminalToggleShortcutLabel})`
+                  : "Toggle terminal drawer"}
             </TooltipPopup>
           </Tooltip>
-        )}
-        {isCompactHeader ? (
-          <Menu>
-            <MenuTrigger
-              render={<Button size="icon-xs" variant="outline" aria-label="More thread actions" />}
-            >
-              <EllipsisIcon className="size-4.5 sm:size-4" />
-            </MenuTrigger>
-            <MenuPopup align="end" side="bottom" className="min-w-48">
-              <MenuItem onClick={() => onToggleDiff()} disabled={!isGitRepo && !diffOpen}>
-                <DiffIcon aria-hidden="true" className="size-4" />
-                Diff
-              </MenuItem>
-              <MenuItem onClick={() => onToggleFileExplorer()} disabled={!fileExplorerAvailable}>
-                <FolderTreeIcon aria-hidden="true" className="size-4" />
-                File explorer
-              </MenuItem>
-              {showCompactOverflowActions ? <MenuSeparator /> : null}
-              {showCompactOverflowActions && hasProjectScriptsControl
-                ? renderProjectScriptsControl(true)
-                : null}
-            </MenuPopup>
-          </Menu>
-        ) : null}
+          {!isCompactHeader && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Toggle
+                    className="shrink-0"
+                    pressed={fileExplorerOpen}
+                    onPressedChange={onToggleFileExplorer}
+                    aria-label="Toggle file explorer"
+                    variant="outline"
+                    size="xs"
+                    disabled={!fileExplorerAvailable}
+                  >
+                    <FolderTreeIcon className="size-3" />
+                  </Toggle>
+                }
+              />
+              <TooltipPopup side="bottom">
+                {fileExplorerAvailable
+                  ? "Toggle file explorer"
+                  : "File explorer is unavailable until this thread has an active project."}
+              </TooltipPopup>
+            </Tooltip>
+          )}
+          {!isCompactHeader && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Toggle
+                    className="shrink-0"
+                    pressed={diffOpen}
+                    onPressedChange={onToggleDiff}
+                    aria-label="Toggle diff panel"
+                    variant="outline"
+                    size="xs"
+                    disabled={!isGitRepo && !diffOpen}
+                  >
+                    <DiffIcon className="size-3" />
+                  </Toggle>
+                }
+              />
+              <TooltipPopup side="bottom">
+                {!isGitRepo && !diffOpen
+                  ? "Diff panel is unavailable because this project is not a git repository."
+                  : diffToggleShortcutLabel
+                    ? `Toggle diff panel (${diffToggleShortcutLabel})`
+                    : "Toggle diff panel"}
+              </TooltipPopup>
+            </Tooltip>
+          )}
+          {isCompactHeader ? (
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button size="icon-xs" variant="outline" aria-label="More thread actions" />
+                }
+              >
+                <EllipsisIcon className="size-4.5 sm:size-4" />
+              </MenuTrigger>
+              <MenuPopup align="end" side="bottom" className="min-w-48">
+                <MenuItem onClick={() => onToggleDiff()} disabled={!isGitRepo && !diffOpen}>
+                  <DiffIcon aria-hidden="true" className="size-4" />
+                  Diff
+                </MenuItem>
+                <MenuItem onClick={() => onToggleFileExplorer()} disabled={!fileExplorerAvailable}>
+                  <FolderTreeIcon aria-hidden="true" className="size-4" />
+                  File explorer
+                </MenuItem>
+                {showCompactOverflowActions ? <MenuSeparator /> : null}
+                {showCompactOverflowActions && hasProjectScriptsControl
+                  ? renderProjectScriptsControl(true)
+                  : null}
+              </MenuPopup>
+            </Menu>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -330,6 +353,8 @@ export const ChatHeader = memo(function ChatHeader({
 const DEV_SERVER_WINDOW_TARGET = "salchi-dev-server-preview";
 const DEV_SERVER_PROBE_INITIAL_DELAY_MS = 250;
 const DEV_SERVER_PROBE_INTERVAL_MS = 5000;
+const DEV_SERVER_DISABLED_TOOLTIP_HOVER_DELAY_MS = 700;
+const DEV_SERVER_DISABLED_TOOLTIP_VISIBLE_MS = 1600;
 
 let activeDevServerWindow: Window | null = null;
 type DevServerReachabilityStatus = "checking" | "reachable" | "unreachable";
@@ -528,7 +553,7 @@ function DevServerBrowserIcon({
   );
 }
 
-function MobileDevServerButton({
+function ChatHeaderDevServerButton({
   browserHostname,
   links,
   probe,
@@ -539,7 +564,8 @@ function MobileDevServerButton({
 }) {
   const buttonEnabled = shouldEnableDevServerButton(links);
   const [disabledTooltipOpen, setDisabledTooltipOpen] = useState(false);
-  const disabledTooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const disabledTooltipDelayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const disabledTooltipDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const probeStatuses = useDevServerReachability(links, probe, browserHostname);
   const headerProbeStatus = aggregateProbeStatus(links, probeStatuses);
   const tooltipLabel = buttonEnabled
@@ -556,33 +582,65 @@ function MobileDevServerButton({
 
   useEffect(() => {
     if (!buttonEnabled) return;
-    if (disabledTooltipTimerRef.current !== null) {
-      clearTimeout(disabledTooltipTimerRef.current);
-      disabledTooltipTimerRef.current = null;
+    if (disabledTooltipDelayTimerRef.current !== null) {
+      clearTimeout(disabledTooltipDelayTimerRef.current);
+      disabledTooltipDelayTimerRef.current = null;
+    }
+    if (disabledTooltipDismissTimerRef.current !== null) {
+      clearTimeout(disabledTooltipDismissTimerRef.current);
+      disabledTooltipDismissTimerRef.current = null;
     }
     setDisabledTooltipOpen(false);
   }, [buttonEnabled]);
 
   useEffect(
     () => () => {
-      if (disabledTooltipTimerRef.current !== null) {
-        clearTimeout(disabledTooltipTimerRef.current);
+      if (disabledTooltipDelayTimerRef.current !== null) {
+        clearTimeout(disabledTooltipDelayTimerRef.current);
+      }
+      if (disabledTooltipDismissTimerRef.current !== null) {
+        clearTimeout(disabledTooltipDismissTimerRef.current);
       }
     },
     [],
   );
 
-  const showDisabledTooltip = () => {
-    if (buttonEnabled) return;
-    setDisabledTooltipOpen(true);
+  const clearDisabledTooltipDelayTimer = () => {
+    if (disabledTooltipDelayTimerRef.current === null) return;
+    clearTimeout(disabledTooltipDelayTimerRef.current);
+    disabledTooltipDelayTimerRef.current = null;
+  };
 
-    if (disabledTooltipTimerRef.current !== null) {
-      clearTimeout(disabledTooltipTimerRef.current);
-    }
-    disabledTooltipTimerRef.current = setTimeout(() => {
-      disabledTooltipTimerRef.current = null;
+  const clearDisabledTooltipDismissTimer = () => {
+    if (disabledTooltipDismissTimerRef.current === null) return;
+    clearTimeout(disabledTooltipDismissTimerRef.current);
+    disabledTooltipDismissTimerRef.current = null;
+  };
+
+  const showDisabledTooltipImmediately = () => {
+    if (buttonEnabled) return;
+    clearDisabledTooltipDelayTimer();
+    clearDisabledTooltipDismissTimer();
+    setDisabledTooltipOpen(true);
+    disabledTooltipDismissTimerRef.current = setTimeout(() => {
+      disabledTooltipDismissTimerRef.current = null;
       setDisabledTooltipOpen(false);
-    }, 1600);
+    }, DEV_SERVER_DISABLED_TOOLTIP_VISIBLE_MS);
+  };
+
+  const showDisabledTooltipAfterHoverDelay = () => {
+    if (buttonEnabled || disabledTooltipOpen) return;
+    clearDisabledTooltipDelayTimer();
+    disabledTooltipDelayTimerRef.current = setTimeout(() => {
+      disabledTooltipDelayTimerRef.current = null;
+      showDisabledTooltipImmediately();
+    }, DEV_SERVER_DISABLED_TOOLTIP_HOVER_DELAY_MS);
+  };
+
+  const hideDisabledTooltip = () => {
+    clearDisabledTooltipDelayTimer();
+    clearDisabledTooltipDismissTimer();
+    setDisabledTooltipOpen(false);
   };
 
   if (links.length > 1) {
@@ -633,9 +691,11 @@ function MobileDevServerButton({
               aria-disabled="true"
               aria-label="No running dev servers"
               className="inline-flex shrink-0 cursor-default"
-              onFocus={showDisabledTooltip}
-              onPointerDown={showDisabledTooltip}
-              onPointerEnter={showDisabledTooltip}
+              onBlur={hideDisabledTooltip}
+              onFocus={showDisabledTooltipImmediately}
+              onPointerDown={showDisabledTooltipImmediately}
+              onPointerEnter={showDisabledTooltipAfterHoverDelay}
+              onPointerLeave={hideDisabledTooltip}
               role="button"
               tabIndex={0}
             >

@@ -3,7 +3,7 @@ import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import { type ReactNode } from "react";
-import { sortThreads } from "../lib/threadSort";
+import { getThreadActivityTimestamp, sortThreads } from "../lib/threadSort";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { type Project, type SidebarThreadSummary, type Thread } from "../types";
 
@@ -163,9 +163,7 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
         searchTerms: [thread.title, projectTitle ?? ``, thread.branch ?? ``],
         title: thread.title,
         description: descriptionParts.join(` · `),
-        timestamp: formatRelativeTimeLabel(
-          thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
-        ),
+        timestamp: formatRelativeTimeLabel(getThreadActivityTimestamp(thread)),
         icon: input.icon,
       },
       leadingContent ? { titleLeadingContent: leadingContent } : {},
