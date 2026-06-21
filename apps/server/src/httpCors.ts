@@ -4,6 +4,7 @@ export const browserApiCorsAllowedHeaders = [
   "b3",
   "traceparent",
   "content-type",
+  "range",
 ] as const;
 
 export const browserApiCorsHeaders = {

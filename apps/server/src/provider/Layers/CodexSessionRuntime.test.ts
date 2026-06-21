@@ -124,6 +124,35 @@ describe("buildTurnStartParams", () => {
     });
   });
 
+  it("includes PDF attachments as mention inputs", () => {
+    const params = Effect.runSync(
+      buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "Read this",
+        attachments: [
+          {
+            type: "mention",
+            name: "report.pdf",
+            path: "/tmp/report.pdf",
+          },
+        ],
+      }),
+    );
+
+    assert.deepStrictEqual(params.input, [
+      {
+        type: "text",
+        text: "Read this",
+      },
+      {
+        type: "mention",
+        name: "report.pdf",
+        path: "/tmp/report.pdf",
+      },
+    ]);
+  });
+
   it("includes automatic approval review when requested", () => {
     const params = Effect.runSync(
       buildTurnStartParams({

@@ -252,10 +252,10 @@ function latestMessageNotificationContent(
   }
   const attachmentCount = message?.attachments?.length ?? 0;
   if (attachmentCount === 1) {
-    return "Image attachment";
+    return "Attachment";
   }
   if (attachmentCount > 1) {
-    return `${attachmentCount} image attachments`;
+    return `${attachmentCount} attachments`;
   }
   return null;
 }

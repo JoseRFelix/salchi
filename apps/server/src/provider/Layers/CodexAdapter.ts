@@ -64,6 +64,10 @@ import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
+  formatPdfAttachmentReferenceText,
+  toProviderAttachmentReference,
+} from "../attachmentInputs.ts";
+import {
   CodexResumeCursorSchema,
   CodexSessionRuntimeThreadIdMissingError,
   CODEX_USAGE_REFRESH_TIMEOUT,
@@ -2577,6 +2581,17 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         detail: `Invalid attachment id '${attachment.id}'.`,
       });
     }
+    if (attachment.type === "pdf") {
+      const reference = toProviderAttachmentReference(attachment, attachmentPath);
+      return {
+        input: {
+          type: "mention" as const,
+          name: attachment.name,
+          path: attachmentPath,
+        },
+        reference,
+      };
+    }
     const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
       Effect.mapError(
         (cause) =>
@@ -2589,17 +2604,28 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       ),
     );
     return {
-      type: "image" as const,
-      url: `data:${attachment.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
+      input: {
+        type: "image" as const,
+        url: `data:${attachment.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
+      },
     };
   });
 
   const sendTurn: CodexAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
-    const codexAttachments = yield* Effect.forEach(
+    const resolvedAttachments = yield* Effect.forEach(
       input.attachments ?? [],
       (attachment) => resolveAttachment(input, attachment),
       { concurrency: 1 },
     );
+    const codexAttachments = resolvedAttachments.map((attachment) => attachment.input);
+    const attachmentReferenceText = formatPdfAttachmentReferenceText(
+      resolvedAttachments.flatMap((attachment) =>
+        attachment.reference ? [attachment.reference] : [],
+      ),
+    );
+    const runtimeInputText = [input.input, attachmentReferenceText]
+      .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+      .join("\n\n");
 
     const session = yield* requireSession(input.threadId);
     const reasoningEffort =
@@ -2612,7 +2638,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         : undefined;
     const approvalsReviewer = resolveCodexApprovalsReviewer(input.modelSelection, boundInstanceId);
     const runtimeTurnInput = {
-      ...(input.input !== undefined ? { input: input.input } : {}),
+      ...(runtimeInputText.length > 0 ? { input: runtimeInputText } : {}),
       ...(input.modelSelection?.instanceId === boundInstanceId
         ? { model: input.modelSelection.model }
         : {}),

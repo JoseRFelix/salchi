@@ -46,6 +46,10 @@ vi.mock("@legendapp/list/react", async () => {
 });
 
 import { MessagesTimeline } from "./MessagesTimeline";
+import {
+  __readWorkspaceFilePanelStateForTests,
+  __resetWorkspaceFilePanelStateForTests,
+} from "../../workspaceFilePreview";
 
 const MESSAGE_CREATED_AT = "2026-04-13T12:00:00.000Z";
 
@@ -114,6 +118,7 @@ describe("MessagesTimeline", () => {
     scrollToEndSpy.mockReset();
     getStateSpy.mockClear();
     vi.restoreAllMocks();
+    __resetWorkspaceFilePanelStateForTests();
     document.body.innerHTML = "";
   });
 
@@ -343,6 +348,38 @@ describe("MessagesTimeline", () => {
       expect(messageBody?.querySelector("strong")?.textContent).toBe("bold");
       // remark-breaks: the single newline between the inline runs is a <br>.
       expect(messageBody?.querySelectorAll("p br").length).toBe(1);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("opens user message workspace media links in the file preview panel", async () => {
+    const props = {
+      ...buildProps(),
+      activeThreadEnvironmentId: EnvironmentId.make("environment-user-media-preview"),
+      markdownCwd: "/repo/project",
+    };
+    const screen = await render(
+      <MessagesTimeline
+        {...props}
+        timelineEntries={[buildUserTimelineEntry("[demo.webm](outputs/demo.webm)")]}
+      />,
+    );
+
+    try {
+      await page.getByRole("link", { name: "demo.webm" }).click();
+
+      await vi.waitFor(() => {
+        expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+          open: true,
+          view: "preview",
+          target: {
+            environmentId: props.activeThreadEnvironmentId,
+            cwd: "/repo/project",
+            relativePath: "outputs/demo.webm",
+          },
+        });
+      });
     } finally {
       await screen.unmount();
     }

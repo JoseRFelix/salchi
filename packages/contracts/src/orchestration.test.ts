@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  ClientOrchestrationCommand,
   ModelSelection,
   OrchestrationCommand,
   OrchestrationEvent,
@@ -17,6 +18,7 @@ import {
   OrchestrationProposedPlan,
   OrchestrationSession,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  PROVIDER_SEND_TURN_MAX_PDF_BYTES,
   ProjectCreateCommand,
   ThreadMetaUpdatedPayload,
   ThreadTurnStartCommand,
@@ -53,6 +55,7 @@ function getOptionValue(
 }
 const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPayload);
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
+const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeOrchestrationReadModel = Schema.decodeUnknownEffect(OrchestrationReadModel);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
@@ -275,6 +278,35 @@ it.effect("decodes internal attachment add commands for assistant images", () =>
   }),
 );
 
+it.effect("decodes internal attachment add commands for assistant PDFs", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.message.attachments.add",
+      commandId: "cmd-attachments-add-pdf",
+      threadId: "thread-1",
+      messageId: "assistant:item-1",
+      role: "assistant",
+      attachments: [
+        {
+          type: "pdf",
+          id: "thread-1-attachment-1",
+          name: "report.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 4,
+        },
+      ],
+      turnId: "turn-1",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    if (parsed.type !== "thread.message.attachments.add") {
+      assert.fail(`Expected thread.message.attachments.add command, received ${parsed.type}.`);
+    }
+    assert.strictEqual(parsed.attachments[0]?.type, "pdf");
+    assert.strictEqual(parsed.attachments[0]?.mimeType, "application/pdf");
+  }),
+);
+
 it.effect("rejects invalid assistant image attachment metadata", () =>
   Effect.gen(function* () {
     const invalidMime = yield* Effect.exit(
@@ -312,6 +344,90 @@ it.effect("rejects invalid assistant image attachment metadata", () =>
             sizeBytes: PROVIDER_SEND_TURN_MAX_IMAGE_BYTES + 1,
           },
         ],
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    assert.strictEqual(invalidMime._tag, "Failure");
+    assert.strictEqual(oversized._tag, "Failure");
+  }),
+);
+
+it.effect("decodes uploaded PDF attachments and rejects invalid PDF metadata", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeClientOrchestrationCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-pdf",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-pdf",
+        role: "user",
+        text: "see pdf",
+        attachments: [
+          {
+            type: "pdf",
+            name: "report.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 4,
+            dataUrl: "data:application/pdf;base64,JVBERg==",
+          },
+        ],
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    if (parsed.type !== "thread.turn.start") {
+      assert.fail(`Expected thread.turn.start command, received ${parsed.type}.`);
+    }
+    assert.strictEqual(parsed.message.attachments[0]?.type, "pdf");
+
+    const invalidMime = yield* Effect.exit(
+      decodeClientOrchestrationCommand({
+        type: "thread.turn.start",
+        commandId: "cmd-turn-pdf-bad-mime",
+        threadId: "thread-1",
+        message: {
+          messageId: "msg-pdf-bad-mime",
+          role: "user",
+          text: "see pdf",
+          attachments: [
+            {
+              type: "pdf",
+              name: "report.pdf",
+              mimeType: "text/plain",
+              sizeBytes: 4,
+              dataUrl: "data:text/plain;base64,SGVsbG8=",
+            },
+          ],
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const oversized = yield* Effect.exit(
+      decodeClientOrchestrationCommand({
+        type: "thread.turn.start",
+        commandId: "cmd-turn-pdf-oversized",
+        threadId: "thread-1",
+        message: {
+          messageId: "msg-pdf-oversized",
+          role: "user",
+          text: "see pdf",
+          attachments: [
+            {
+              type: "pdf",
+              name: "report.pdf",
+              mimeType: "application/pdf",
+              sizeBytes: PROVIDER_SEND_TURN_MAX_PDF_BYTES + 1,
+              dataUrl: "data:application/pdf;base64,JVBERg==",
+            },
+          ],
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
         createdAt: "2026-01-01T00:00:00.000Z",
       }),
     );

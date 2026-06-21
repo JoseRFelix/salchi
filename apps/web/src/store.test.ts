@@ -39,6 +39,7 @@ import {
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  type ChatAttachment,
   type SidebarThreadSummary,
   type Thread,
 } from "./types";
@@ -180,6 +181,27 @@ function makeTurnDiffSummary(index: number): Thread["turnDiffSummaries"][number]
   };
 }
 
+function toOrchestrationChatAttachment(
+  attachment: ChatAttachment,
+): NonNullable<OrchestrationThread["messages"][number]["attachments"]>[number] {
+  if (attachment.type === "pdf") {
+    return {
+      type: "pdf",
+      id: attachment.id,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+    };
+  }
+  return {
+    type: "image",
+    id: attachment.id,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes,
+  };
+}
+
 function makeOrchestrationThread(
   thread: Thread,
   overrides: Partial<OrchestrationThread> = {},
@@ -204,13 +226,7 @@ function makeOrchestrationThread(
       text: message.text,
       ...(message.attachments
         ? {
-            attachments: message.attachments.map((attachment) => ({
-              type: attachment.type,
-              id: attachment.id,
-              name: attachment.name,
-              mimeType: attachment.mimeType,
-              sizeBytes: attachment.sizeBytes,
-            })),
+            attachments: message.attachments.map(toOrchestrationChatAttachment),
           }
         : {}),
       turnId: message.turnId ?? null,
@@ -223,13 +239,7 @@ function makeOrchestrationThread(
       messageId: queuedTurn.messageId,
       role: queuedTurn.role,
       text: queuedTurn.text,
-      attachments: queuedTurn.attachments.map((attachment) => ({
-        type: attachment.type,
-        id: attachment.id,
-        name: attachment.name,
-        mimeType: attachment.mimeType,
-        sizeBytes: attachment.sizeBytes,
-      })),
+      attachments: queuedTurn.attachments.map(toOrchestrationChatAttachment),
       ...(queuedTurn.modelSelection !== undefined
         ? { modelSelection: queuedTurn.modelSelection }
         : {}),
@@ -1088,7 +1098,7 @@ describe("thread detail structural sharing", () => {
 });
 
 describe("thread detail pagination", () => {
-  it("maps persisted user image attachments to environment attachment preview URLs", () => {
+  it("maps persisted user attachments to environment attachment preview URLs", () => {
     const originalWindow = globalThis.window;
     Reflect.set(globalThis, "window", {
       desktopBridge: undefined,
@@ -1128,6 +1138,13 @@ describe("thread detail pagination", () => {
                 mimeType: "image/png",
                 sizeBytes: 4,
               },
+              {
+                type: "pdf",
+                id: "thread-attachments-file-2",
+                name: "report.pdf",
+                mimeType: "application/pdf",
+                sizeBytes: 8,
+              },
             ],
           },
         ],
@@ -1148,6 +1165,14 @@ describe("thread detail pagination", () => {
           mimeType: "image/png",
           sizeBytes: 4,
           previewUrl: "http://environment.test/attachments/thread-attachments-file-1",
+        },
+        {
+          type: "pdf",
+          id: "thread-attachments-file-2",
+          name: "report.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 8,
+          previewUrl: "http://environment.test/attachments/thread-attachments-file-2",
         },
       ]);
     } finally {

@@ -19,8 +19,14 @@ import {
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  PROVIDER_SEND_TURN_MAX_PDF_BYTES,
 } from "@t3tools/contracts";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
+import {
+  inferSupportedAttachmentType,
+  normalizeAttachmentMimeType,
+  PDF_MIME_TYPE,
+} from "@t3tools/shared/attachmentMime";
 import {
   createModelSelection,
   getProviderOptionBooleanSelectionValue,
@@ -57,7 +63,7 @@ import { deriveComposerSendState, readFileAsDataUrl, threadHasStarted } from "..
 import {
   type ComposerImageAttachment,
   type DraftId,
-  type PersistedComposerImageAttachment,
+  type PersistedComposerAttachment,
   useComposerDraftStore,
   useComposerThreadDraft,
   useEffectiveComposerModelState,
@@ -109,7 +115,9 @@ import {
   BotIcon,
   ChevronDownIcon,
   CircleAlertIcon,
+  FileTextIcon,
   ListTodoIcon,
+  PaperclipIcon,
   PencilRulerIcon,
   XIcon,
 } from "lucide-react";
@@ -134,10 +142,24 @@ import { formatProviderSkillDisplayName } from "../../providerSkillPresentation"
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 
-const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
+const ATTACHMENT_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
+
+function normalizeComposerAttachmentFile(file: File, mimeType: string): File {
+  if (file.type === mimeType) {
+    return file;
+  }
+  return new File([file], file.name, {
+    type: mimeType,
+    lastModified: file.lastModified,
+  });
+}
+
+function composerAttachmentSizeLimit(type: "image" | "pdf"): number {
+  return type === "pdf" ? PROVIDER_SEND_TURN_MAX_PDF_BYTES : PROVIDER_SEND_TURN_MAX_IMAGE_BYTES;
+}
 const COMPOSER_FLOATING_LAYER_SELECTOR = [
   '[data-slot="popover-popup"]',
   '[data-slot="menu-popup"]',
@@ -954,6 +976,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Refs
   // ------------------------------------------------------------------
   const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const composerFormRef = useRef<HTMLFormElement>(null);
   const composerSurfaceRef = useRef<HTMLDivElement>(null);
   const composerFormHeightRef = useRef(0);
@@ -976,7 +999,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () =>
       deriveComposerSendState({
         prompt,
-        imageCount: composerImages.length,
+        attachmentCount: composerImages.length,
         terminalContexts: composerTerminalContexts,
       }),
     [composerImages.length, composerTerminalContexts, prompt],
@@ -1443,12 +1466,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         const existingPersistedById = new Map(
           currentPersistedAttachments.map((attachment) => [attachment.id, attachment]),
         );
-        const stagedAttachmentById = new Map<string, PersistedComposerImageAttachment>();
+        const stagedAttachmentById = new Map<string, PersistedComposerAttachment>();
         await Promise.all(
           composerImages.map(async (image) => {
             try {
               const dataUrl = await readFileAsDataUrl(image.file);
               stagedAttachmentById.set(image.id, {
+                type: image.type,
                 id: image.id,
                 name: image.name,
                 mimeType: image.mimeType,
@@ -1908,14 +1932,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
 
   // ------------------------------------------------------------------
-  // Callbacks: images
+  // Callbacks: attachments
   // ------------------------------------------------------------------
   const addComposerImages = (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
     if (pendingUserInputs.length > 0) {
       toastManager.add({
         type: "error",
-        title: "Attach images after answering plan questions.",
+        title: "Attach files after answering plan questions.",
       });
       return;
     }
@@ -1923,28 +1947,31 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     let nextImageCount = composerImagesRef.current.length;
     let error: string | null = null;
     for (const file of files) {
-      if (!file.type.startsWith("image/")) {
-        error = `Unsupported file type for '${file.name}'. Please attach image files only.`;
+      const attachmentType = inferSupportedAttachmentType(file);
+      if (!attachmentType) {
+        error = `Unsupported file type for '${file.name}'. Attach image or PDF files only.`;
         continue;
       }
-      if (file.size > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
-        error = `'${file.name}' exceeds the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`;
+      const mimeType = attachmentType === "pdf" ? PDF_MIME_TYPE : normalizeAttachmentMimeType(file);
+      const normalizedFile = normalizeComposerAttachmentFile(file, mimeType);
+      if (normalizedFile.size > composerAttachmentSizeLimit(attachmentType)) {
+        error = `'${file.name}' exceeds the ${ATTACHMENT_SIZE_LIMIT_LABEL} attachment limit.`;
         continue;
       }
       if (nextImageCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
-        error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images per message.`;
+        error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`;
         break;
       }
-      const previewUrl = URL.createObjectURL(file);
+      const previewUrl = URL.createObjectURL(normalizedFile);
       nextImages.push({
-        type: "image",
+        type: attachmentType,
         id: randomUUID(),
-        name: file.name || "image",
-        mimeType: file.type,
-        sizeBytes: file.size,
+        name: file.name || (attachmentType === "pdf" ? "document.pdf" : "image"),
+        mimeType,
+        sizeBytes: normalizedFile.size,
         previewUrl,
-        file,
-      });
+        file: normalizedFile,
+      } as ComposerImageAttachment);
       nextImageCount += 1;
     }
     if (nextImages.length === 1 && nextImages[0]) {
@@ -1959,13 +1986,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     removeComposerImageFromDraft(imageId);
   };
 
+  const openAttachmentPicker = () => {
+    attachmentInputRef.current?.click();
+  };
+
+  const onAttachmentInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.currentTarget.files ?? []);
+    event.currentTarget.value = "";
+    addComposerImages(files);
+  };
+
   // ------------------------------------------------------------------
   // Callbacks: paste / drag
   // ------------------------------------------------------------------
   const onComposerPaste = (event: React.ClipboardEvent<HTMLElement>) => {
     const files = Array.from(event.clipboardData.files);
     if (files.length === 0) return;
-    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+    const imageFiles = files.filter((file) => inferSupportedAttachmentType(file) !== null);
     if (imageFiles.length === 0) return;
     event.preventDefault();
     addComposerImages(imageFiles);
@@ -2230,6 +2267,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       className="mx-auto w-full min-w-0 max-w-208"
       data-chat-composer-form="true"
     >
+      <input
+        ref={attachmentInputRef}
+        type="file"
+        multiple
+        accept="image/*,application/pdf,.pdf"
+        className="hidden"
+        onChange={onAttachmentInputChange}
+      />
       <div
         className={cn(
           "group rounded-[22px] p-px transition-colors duration-200",
@@ -2457,15 +2502,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   {composerImages.map((image) => (
                     <div
                       key={image.id}
-                      className="relative h-16 w-16 overflow-hidden rounded-lg border border-border/80 bg-background"
+                      className={cn(
+                        "relative h-16 overflow-hidden rounded-lg border border-border/80 bg-background",
+                        image.type === "pdf" ? "w-56 max-w-full p-2 pr-8" : "w-16",
+                      )}
                     >
-                      {image.previewUrl ? (
+                      {image.type === "pdf" ? (
+                        <div className="flex h-full min-w-0 items-center gap-2">
+                          <FileTextIcon className="size-5 shrink-0 text-muted-foreground" />
+                          <div className="min-w-0">
+                            <div className="truncate text-xs font-medium">{image.name}</div>
+                            <div className="text-[11px] text-muted-foreground">PDF</div>
+                          </div>
+                        </div>
+                      ) : image.previewUrl ? (
                         <button
                           type="button"
                           className="h-full w-full cursor-zoom-in"
                           aria-label={`Preview ${image.name}`}
                           onClick={() => {
-                            const preview = buildExpandedImagePreview(composerImages, image.id);
+                            const preview = buildExpandedImagePreview(
+                              composerImages.filter((attachment) => attachment.type === "image"),
+                              image.id,
+                            );
                             if (!preview) return;
                             onExpandImage(preview);
                           }}
@@ -2554,7 +2613,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 : "disconnected"
                             }`
                           : phase === "disconnected"
-                            ? "Ask for follow-up changes or attach images"
+                            ? "Ask for follow-up changes or attach files"
                             : "Ask anything, @tag files/folders, $use skills, or / for commands"
                 }
                 disabled={
@@ -2610,6 +2669,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               )}
             >
               <div className="-m-1 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        disabled={
+                          isConnecting ||
+                          isComposerApprovalState ||
+                          (environmentUnavailable !== null && activePendingProgress === null)
+                        }
+                        aria-label="Attach files"
+                        onClick={openAttachmentPicker}
+                      />
+                    }
+                  >
+                    <PaperclipIcon className="size-4" aria-hidden="true" />
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">Attach images or PDFs</TooltipPopup>
+                </Tooltip>
                 <ProviderModelPicker
                   compact={isComposerFooterCompact}
                   activeInstanceId={selectedInstanceId}

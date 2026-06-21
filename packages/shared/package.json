@@ -107,6 +107,14 @@
       "types": "./src/imageMime.ts",
       "import": "./src/imageMime.ts"
     },
+    "./attachmentMime": {
+      "types": "./src/attachmentMime.ts",
+      "import": "./src/attachmentMime.ts"
+    },
+    "./videoMime": {
+      "types": "./src/videoMime.ts",
+      "import": "./src/videoMime.ts"
+    },
     "./oauthScope": {
       "types": "./src/oauthScope.ts",
       "import": "./src/oauthScope.ts"

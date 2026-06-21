@@ -27,6 +27,7 @@ import type { OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
   OpenCodeRuntime,
   OpenCodeRuntimeError,
+  toOpenCodeFileParts,
   type OpenCodeRuntimeShape,
 } from "../opencodeRuntime.ts";
 import {
@@ -41,6 +42,32 @@ class OpenCodeAdapter extends Context.Service<OpenCodeAdapter, OpenCodeAdapterSh
 ) {}
 
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
+
+it.effect("maps PDF attachments to OpenCode file parts", () =>
+  Effect.sync(() => {
+    const parts = toOpenCodeFileParts({
+      attachments: [
+        {
+          type: "pdf",
+          id: "thread-1-attachment",
+          name: "report.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 4,
+        },
+      ],
+      resolveAttachmentPath: () => "/tmp/report.pdf",
+    });
+
+    assert.deepStrictEqual(parts, [
+      {
+        type: "file",
+        mime: "application/pdf",
+        filename: "report.pdf",
+        url: "file:///tmp/report.pdf",
+      },
+    ]);
+  }),
+);
 
 type MessageEntry = {
   info: {

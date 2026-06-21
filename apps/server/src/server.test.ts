@@ -952,6 +952,7 @@ const assertBrowserApiCorsHeaders = (headers: Readonly<Record<string, string | u
     "authorization",
     "b3",
     "content-type",
+    "range",
     "traceparent",
   ]);
 };
@@ -2018,7 +2019,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       assert.deepEqual(
         splitHeaderTokens(response.headers["access-control-allow-headers"] ?? null),
-        ["authorization", "b3", "content-type", "traceparent"],
+        ["authorization", "b3", "content-type", "range", "traceparent"],
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );

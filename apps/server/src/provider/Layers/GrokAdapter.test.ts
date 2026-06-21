@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as path from "node:path";
 import * as os from "node:os";
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -175,6 +175,60 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       }
 
       yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("maps PDF attachments to ACP resource links", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig;
+      const threadId = ThreadId.make("grok-pdf-attachment");
+      const tempDir = yield* Effect.promise(() => mkdtemp(path.join(os.tmpdir(), "grok-acp-")));
+      const requestLogPath = path.join(tempDir, "requests.ndjson");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockGrokWrapper({
+          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+        }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+
+      const attachmentId = "grok-pdf-attachment-id";
+      const attachmentPath = path.join(serverConfig.attachmentsDir, `${attachmentId}.pdf`);
+      yield* Effect.promise(() => mkdir(serverConfig.attachmentsDir, { recursive: true }));
+      yield* Effect.promise(() => writeFile(attachmentPath, "%PDF", "utf8"));
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("grok"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("grok"), model: "grok-build" },
+      });
+
+      yield* adapter.sendTurn({
+        threadId,
+        input: "read this pdf",
+        attachments: [
+          {
+            type: "pdf",
+            id: attachmentId,
+            name: "report.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 4,
+          },
+        ],
+      });
+      yield* adapter.stopSession(threadId);
+
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      const promptRequest = requests.find((entry) => entry.method === "session/prompt");
+      const prompt = (promptRequest?.params as { prompt?: unknown } | undefined)?.prompt;
+      assert.deepInclude(prompt as unknown[], {
+        type: "resource_link",
+        uri: `file://${attachmentPath}`,
+        name: "report.pdf",
+        mimeType: "application/pdf",
+        size: 4,
+      });
     }),
   );
 
