@@ -7,12 +7,14 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import type { Thread } from "../types";
-import { getLatestThreadForProject, sortThreads } from "./threadSort";
+import { getLatestThreadForProject, getThreadActivityTimestamp, sortThreads } from "./threadSort";
 
 const LOCAL_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const PROJECT_ID = ProjectId.make("project-1");
 
-function makeThread(overrides: Partial<Thread> = {}): Thread {
+function makeThread(
+  overrides: Partial<Thread> & { latestUserMessageAt?: string | null } = {},
+): Thread & { latestUserMessageAt?: string | null } {
   return {
     id: ThreadId.make("thread-1"),
     environmentId: LOCAL_ENVIRONMENT_ID,
@@ -40,6 +42,29 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
 }
 
 describe("sortThreads", () => {
+  it("uses createdAt as the activity timestamp when updatedAt is older", () => {
+    expect(
+      getThreadActivityTimestamp(
+        makeThread({
+          createdAt: "2026-03-09T10:10:00.000Z",
+          updatedAt: "2026-03-09T09:00:00.000Z",
+        }),
+      ),
+    ).toBe("2026-03-09T10:10:00.000Z");
+  });
+
+  it("uses latestUserMessageAt as the activity timestamp when it is latest", () => {
+    expect(
+      getThreadActivityTimestamp(
+        makeThread({
+          createdAt: "2026-03-09T10:00:00.000Z",
+          updatedAt: "2026-03-09T10:05:00.000Z",
+          latestUserMessageAt: "2026-03-09T10:15:00.000Z",
+        }),
+      ),
+    ).toBe("2026-03-09T10:15:00.000Z");
+  });
+
   it("sorts threads by the latest user message in recency mode", () => {
     const sorted = sortThreads(
       [
@@ -103,6 +128,32 @@ describe("sortThreads", () => {
           id: ThreadId.make("thread-2"),
           createdAt: "2026-03-09T10:05:00.000Z",
           updatedAt: "2026-03-09T10:05:00.000Z",
+          messages: [],
+        }),
+      ],
+      "updated_at",
+    );
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      ThreadId.make("thread-2"),
+      ThreadId.make("thread-1"),
+    ]);
+  });
+
+  it("sorts recently created child rows ahead of older backfilled updates", () => {
+    const sorted = sortThreads(
+      [
+        makeThread({
+          id: ThreadId.make("thread-1"),
+          createdAt: "2026-03-09T10:00:00.000Z",
+          updatedAt: "2026-03-09T10:05:00.000Z",
+          messages: [],
+        }),
+        makeThread({
+          id: ThreadId.make("thread-2"),
+          parentThreadId: ThreadId.make("thread-parent"),
+          createdAt: "2026-03-09T10:10:00.000Z",
+          updatedAt: "2026-03-09T09:00:00.000Z",
           messages: [],
         }),
       ],

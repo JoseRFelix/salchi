@@ -2,9 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderDriverKind } from "@t3tools/contracts";
 
 import {
+  countSidebarRootThreadItems,
   createThreadJumpHintVisibilityController,
+  flattenSidebarThreadTree,
+  getSidebarPreviewRootThreadIds,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
+  resolveSidebarThreadDisplayTitle,
   resolveAdjacentThreadId,
   getFallbackThreadIdAfterDelete,
   getVisibleThreadsForProject,
@@ -355,6 +359,169 @@ describe("orderItemsByPreferredIds", () => {
       "/work/alpha",
       "/work/beta",
     ]);
+  });
+});
+
+describe("flattenSidebarThreadTree", () => {
+  const thread = (
+    id: string,
+    parentThreadId: string | null = null,
+    hiddenFromThreadList = false,
+  ) => ({
+    id,
+    parentThreadId,
+    hiddenFromThreadList,
+  });
+
+  it("renders children immediately under their parent in existing order", () => {
+    const flattened = flattenSidebarThreadTree([
+      thread("root-a"),
+      thread("root-b"),
+      thread("child-a-1", "root-a"),
+      thread("child-b-1", "root-b"),
+      thread("child-a-2", "root-a"),
+    ]);
+
+    expect(flattened.map((item) => [item.thread.id, item.depth])).toEqual([
+      ["root-a", 0],
+      ["child-a-1", 1],
+      ["child-a-2", 1],
+      ["root-b", 0],
+      ["child-b-1", 1],
+    ]);
+    expect(flattened.map((item) => [item.thread.id, item.rootThreadId, item.childCount])).toEqual([
+      ["root-a", "root-a", 2],
+      ["child-a-1", "root-a", 0],
+      ["child-a-2", "root-a", 0],
+      ["root-b", "root-b", 1],
+      ["child-b-1", "root-b", 0],
+    ]);
+  });
+
+  it("excludes hidden threads from root rendering", () => {
+    const flattened = flattenSidebarThreadTree([
+      thread("root"),
+      thread("hidden-child", "root", true),
+      thread("visible-child", "root"),
+      thread("hidden-root", null, true),
+    ]);
+
+    expect(flattened.map((item) => item.thread.id)).toEqual(["root", "visible-child"]);
+  });
+
+  it("keeps orphaned visible children navigable as roots", () => {
+    const flattened = flattenSidebarThreadTree([thread("orphan", "missing-parent")]);
+
+    expect(flattened).toEqual([
+      {
+        thread: thread("orphan", "missing-parent"),
+        depth: 0,
+        rootThreadId: "orphan",
+        childCount: 0,
+      },
+    ]);
+  });
+
+  it("omits descendants below collapsed threads", () => {
+    const flattened = flattenSidebarThreadTree(
+      [
+        thread("root-a"),
+        thread("root-b"),
+        thread("child-a-1", "root-a"),
+        thread("grandchild-a-1", "child-a-1"),
+        thread("child-b-1", "root-b"),
+      ],
+      {
+        collapsedThreadIds: new Set(["root-a"]),
+      },
+    );
+
+    expect(flattened.map((item) => [item.thread.id, item.depth, item.childCount])).toEqual([
+      ["root-a", 0, 1],
+      ["root-b", 0, 1],
+      ["child-b-1", 1, 0],
+    ]);
+  });
+
+  it("counts preview roots without counting child subagent rows", () => {
+    const flattened = flattenSidebarThreadTree([
+      thread("root-a"),
+      thread("child-a-1", "root-a"),
+      thread("root-b"),
+      thread("child-b-1", "root-b"),
+    ]);
+
+    expect(countSidebarRootThreadItems(flattened)).toBe(2);
+    expect(getSidebarPreviewRootThreadIds(flattened, 1)).toEqual(["root-a"]);
+    expect(getSidebarPreviewRootThreadIds(flattened, 0)).toEqual([]);
+  });
+});
+
+describe("resolveSidebarThreadDisplayTitle", () => {
+  it("uses subagent nickname before role for child thread rows", () => {
+    expect(
+      resolveSidebarThreadDisplayTitle({
+        parentThreadId: ThreadId.make("thread-parent"),
+        subagentRole: "Planning",
+        subagentNickname: "planner",
+        title: "Subagent: Planning",
+      }),
+    ).toBe("planner");
+  });
+
+  it("strips the legacy subagent prefix when no role or nickname exists", () => {
+    expect(
+      resolveSidebarThreadDisplayTitle({
+        parentThreadId: ThreadId.make("thread-parent"),
+        subagentRole: null,
+        subagentNickname: null,
+        title: "Subagent: Research",
+      }),
+    ).toBe("Research");
+  });
+
+  it("ignores generic child metadata when the title has a real subagent name", () => {
+    expect(
+      resolveSidebarThreadDisplayTitle({
+        parentThreadId: ThreadId.make("thread-parent"),
+        subagentRole: "default",
+        subagentNickname: "default",
+        title: "Mill",
+      }),
+    ).toBe("Mill");
+  });
+
+  it("does not show generic default child thread titles", () => {
+    expect(
+      resolveSidebarThreadDisplayTitle({
+        parentThreadId: ThreadId.make("thread-parent"),
+        subagentRole: null,
+        subagentNickname: null,
+        title: "Subagent: default",
+      }),
+    ).toBe("Subagent");
+  });
+
+  it("uses the basename for child agent paths", () => {
+    expect(
+      resolveSidebarThreadDisplayTitle({
+        parentThreadId: ThreadId.make("thread-parent"),
+        subagentRole: "agents/Mill.md",
+        subagentNickname: null,
+        title: "Subagent",
+      }),
+    ).toBe("Mill");
+  });
+
+  it("leaves ordinary root thread titles unchanged", () => {
+    expect(
+      resolveSidebarThreadDisplayTitle({
+        parentThreadId: null,
+        subagentRole: "Planning",
+        subagentNickname: "planner",
+        title: "Subagent: Planning",
+      }),
+    ).toBe("Subagent: Planning");
   });
 });
 
