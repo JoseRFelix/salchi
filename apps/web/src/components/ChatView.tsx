@@ -220,6 +220,8 @@ import {
   shouldWriteThreadErrorToCurrentServerThread,
   shouldIgnoreInterruptClick,
   threadHasStarted,
+  toOptimisticChatAttachment,
+  toUploadComposerAttachment,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerHandleContext } from "../composerHandleContext";
@@ -3162,9 +3164,13 @@ export default function ChatView(props: ChatViewProps) {
       );
     }, 0);
     for (const removedMessage of removedMessages) {
-      const previewUrls = collectUserMessageBlobPreviewUrls(removedMessage);
-      if (previewUrls.length > 0) {
-        handoffAttachmentPreviews(removedMessage.id, previewUrls);
+      const { handoffPreviewUrls, revokePreviewUrls } =
+        collectUserMessageBlobPreviewUrls(removedMessage);
+      if (handoffPreviewUrls.length > 0) {
+        handoffAttachmentPreviews(removedMessage.id, handoffPreviewUrls);
+        for (const previewUrl of revokePreviewUrls) {
+          revokeBlobPreviewUrl(previewUrl);
+        }
         continue;
       }
       revokeUserMessagePreviewUrls(removedMessage);
@@ -3697,43 +3703,11 @@ export default function ChatView(props: ChatViewProps) {
       text: messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
     });
     const turnAttachmentsPromise = Promise.all(
-      composerImagesSnapshot.map(async (attachment) =>
-        attachment.type === "pdf"
-          ? {
-              type: "pdf" as const,
-              name: attachment.name,
-              mimeType: "application/pdf" as const,
-              sizeBytes: attachment.sizeBytes,
-              dataUrl: await readFileAsDataUrl(attachment.file),
-            }
-          : {
-              type: "image" as const,
-              name: attachment.name,
-              mimeType: attachment.mimeType,
-              sizeBytes: attachment.sizeBytes,
-              dataUrl: await readFileAsDataUrl(attachment.file),
-            },
+      composerImagesSnapshot.map((attachment) =>
+        toUploadComposerAttachment(attachment, readFileAsDataUrl),
       ),
     );
-    const optimisticAttachments = composerImagesSnapshot.map((attachment) =>
-      attachment.type === "pdf"
-        ? {
-            type: "pdf" as const,
-            id: attachment.id,
-            name: attachment.name,
-            mimeType: "application/pdf" as const,
-            sizeBytes: attachment.sizeBytes,
-            previewUrl: attachment.previewUrl,
-          }
-        : {
-            type: "image" as const,
-            id: attachment.id,
-            name: attachment.name,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-            previewUrl: attachment.previewUrl,
-          },
-    );
+    const optimisticAttachments = composerImagesSnapshot.map(toOptimisticChatAttachment);
     let firstComposerAttachmentName: string | null = null;
     if (composerImagesSnapshot.length > 0) {
       const firstComposerAttachment = composerImagesSnapshot[0];

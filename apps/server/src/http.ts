@@ -263,8 +263,11 @@ function serveWorkspaceMediaFile(input: {
     }
 
     const fileSize = Number(fileInfo.size);
-    if (!Number.isSafeInteger(fileSize) || fileSize <= 0) {
-      return HttpServerResponse.text(`Workspace ${input.routeLabel} is empty`, { status: 413 });
+    if (!Number.isSafeInteger(fileSize) || fileSize < 0) {
+      return HttpServerResponse.text("Internal Server Error", { status: 500 });
+    }
+    if (fileSize === 0) {
+      return HttpServerResponse.text(`Workspace ${input.routeLabel} is empty`, { status: 404 });
     }
     if (input.maxBytes !== undefined && fileSize > input.maxBytes) {
       return HttpServerResponse.text(`Workspace ${input.routeLabel} is too large`, {

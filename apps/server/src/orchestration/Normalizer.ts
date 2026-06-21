@@ -112,7 +112,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
                   type: "pdf" as const,
                   id: attachmentId,
                   name: attachment.name,
-                  mimeType: "application/pdf" as const,
+                  mimeType: PDF_MIME_TYPE,
                   sizeBytes: bytes.byteLength,
                 }
               : {

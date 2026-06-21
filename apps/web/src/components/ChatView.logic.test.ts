@@ -11,12 +11,13 @@ import {
 } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type EnvironmentState, useStore } from "../store";
-import { type Thread } from "../types";
+import { type ChatMessage, type Thread } from "../types";
 
 import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   buildExpiredTerminalContextToastCopy,
   buildOlderThreadDetailPageCursors,
+  collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   deriveIsInterrupting,
   deriveComposerSendState,
@@ -95,6 +96,41 @@ describe("buildExpiredTerminalContextToastCopy", () => {
     expect(buildExpiredTerminalContextToastCopy(2, "omitted")).toEqual({
       title: "Expired terminal contexts omitted from message",
       description: "Re-add it if you want that terminal output included.",
+    });
+  });
+});
+
+describe("collectUserMessageBlobPreviewUrls", () => {
+  it("separates image handoff previews from non-image previews to revoke", () => {
+    const message: ChatMessage = {
+      id: MessageId.make("msg-mixed-attachments"),
+      role: "user",
+      text: "see attachments",
+      attachments: [
+        {
+          type: "image",
+          id: "image-1",
+          name: "image.png",
+          mimeType: "image/png",
+          sizeBytes: 4,
+          previewUrl: "blob:image-1",
+        },
+        {
+          type: "pdf",
+          id: "pdf-1",
+          name: "report.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 4,
+          previewUrl: "blob:pdf-1",
+        },
+      ],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      streaming: false,
+    };
+
+    expect(collectUserMessageBlobPreviewUrls(message)).toEqual({
+      handoffPreviewUrls: ["blob:image-1"],
+      revokePreviewUrls: ["blob:pdf-1"],
     });
   });
 });

@@ -1,4 +1,4 @@
-export const PDF_MIME_TYPE = "application/pdf";
+export const PDF_MIME_TYPE = "application/pdf" as const;
 export type SupportedAttachmentType = "image" | "pdf";
 
 export function isPdfMimeType(mimeType: string | null | undefined): boolean {

@@ -8,7 +8,9 @@ import {
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import type * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 
@@ -20,6 +22,16 @@ import { normalizeDispatchCommand } from "./Normalizer.ts";
 const TestLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-normalizer-attachments-",
 }).pipe(Layer.provideMerge(WorkspacePathsLive), Layer.provideMerge(NodeServices.layer));
+
+function assertFailureMessage(exit: Exit.Exit<unknown, unknown>, expectedMessage: string): void {
+  if (exit._tag !== "Failure") {
+    assert.fail(`Expected failure, received ${exit._tag}.`);
+  }
+  const failReason = exit.cause.reasons.find(Cause.isFailReason);
+  const error = failReason?.error;
+  const message = error instanceof Error ? error.message : String(error);
+  assert.equal(message, expectedMessage);
+}
 
 let nextImageUploadCommandId = 0;
 
@@ -226,15 +238,27 @@ it.layer(TestLayer)("normalizeDispatchCommand image attachments", (it) => {
       const oversizedDataUrl = `data:application/pdf;base64,${Buffer.from(oversizedBytes).toString("base64")}`;
 
       const cases = [
-        "data:text/plain;base64,SGVsbG8=",
-        "not-a-data-url",
-        "data:application/pdf;base64,",
-        oversizedDataUrl,
+        {
+          dataUrl: "data:text/plain;base64,SGVsbG8=",
+          expectedMessage: "Invalid pdf attachment payload for 'example.pdf'.",
+        },
+        {
+          dataUrl: "not-a-data-url",
+          expectedMessage: "Invalid pdf attachment payload for 'example.pdf'.",
+        },
+        {
+          dataUrl: "data:application/pdf;base64,",
+          expectedMessage: "Invalid pdf attachment payload for 'example.pdf'.",
+        },
+        {
+          dataUrl: oversizedDataUrl,
+          expectedMessage: "PDF attachment 'example.pdf' is empty or too large.",
+        },
       ];
 
-      for (const dataUrl of cases) {
+      for (const { dataUrl, expectedMessage } of cases) {
         const exit = yield* Effect.exit(normalizeDispatchCommand(pdfUploadCommand(dataUrl)));
-        assert.isTrue(exit._tag === "Failure");
+        assertFailureMessage(exit, expectedMessage);
       }
     }),
   );
