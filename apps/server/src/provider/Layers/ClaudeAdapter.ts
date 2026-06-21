@@ -24,7 +24,6 @@ import {
   type ModelUsage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
-import { z } from "zod/v4";
 import {
   ApprovalRequestId,
   type CanonicalItemType,
@@ -86,6 +85,7 @@ import { makeClaudeEnvironment, resolveClaudeHomePath } from "../Drivers/ClaudeH
 import {
   INDEPENDENT_THREAD_MCP_SERVER_NAME,
   INDEPENDENT_THREAD_TOOL_DESCRIPTION,
+  INDEPENDENT_THREAD_TOOL_ZOD_INPUT_SHAPE,
   INDEPENDENT_THREAD_TOOL_MCP_INSTRUCTIONS,
   INDEPENDENT_THREAD_TOOL_NAME,
   createIndependentThreadToolRuntimeResult,
@@ -139,40 +139,46 @@ type ClaudeToolResultStreamKind = Extract<
 type ClaudeSdkEffort = NonNullable<ClaudeQueryOptions["effort"]>;
 type ClaudeAccountUsageSource = "claude.oauth.usage" | "claude.statusline";
 
-const ClaudeIndependentThreadToolInputSchema = {
-  title: z.string().min(1).describe("Concise title for the independent thread."),
-  initialPrompt: z
-    .string()
-    .min(1)
-    .describe("First user-style prompt to run in the new independent thread."),
-  titleSeed: z
-    .string()
-    .min(1)
-    .optional()
-    .describe("Optional short source text for title generation."),
-  checkoutMode: z
-    .enum(["inherit", "local", "worktree"])
-    .optional()
-    .describe("Optional checkout placement for the independent thread."),
-  branch: z
-    .string()
-    .min(1)
-    .nullable()
-    .optional()
-    .describe(
-      "Optional branch label. Use null when switching checkouts and the branch is unknown.",
-    ),
-  worktreePath: z
-    .string()
-    .min(1)
-    .nullable()
-    .optional()
-    .describe("Optional absolute path for a dedicated worktree or checkout."),
-  threadId: z.string().min(1).optional().describe("Optional stable Salchi thread id."),
-};
+const ClaudeIndependentThreadToolInputSchema = INDEPENDENT_THREAD_TOOL_ZOD_INPUT_SHAPE;
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readNonEmptyString(record: Record<string, unknown>, fieldNames: ReadonlyArray<string>) {
+  for (const fieldName of fieldNames) {
+    const value = record[fieldName];
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function readClaudeToolUseId(extra: unknown): string | undefined {
+  const record = asRecord(extra);
+  if (!record) {
+    return undefined;
+  }
+  return (
+    readNonEmptyString(record, ["toolUseID", "toolUseId", "tool_use_id"]) ??
+    readNonEmptyString(asRecord(record.toolUseBlock) ?? {}, [
+      "id",
+      "toolUseID",
+      "toolUseId",
+      "tool_use_id",
+    ])
+  );
 }
 
 function makeClaudeStatuslineCaptureCommand(): string {
@@ -4447,7 +4453,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             INDEPENDENT_THREAD_TOOL_NAME,
             INDEPENDENT_THREAD_TOOL_DESCRIPTION,
             ClaudeIndependentThreadToolInputSchema,
-            async (args) =>
+            async (args, extra) =>
               runPromise(
                 Effect.gen(function* () {
                   const context = yield* Ref.get(contextRef);
@@ -4464,7 +4470,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
                   }
 
                   const stamp = yield* makeEventStamp();
-                  const idPrefix = `claude-tool:${stamp.eventId}`;
+                  const toolUseId = readClaudeToolUseId(extra);
+                  const idPrefix = `claude-tool:${toolUseId ?? stamp.eventId}`;
                   const result = createIndependentThreadToolRuntimeResult({
                     argumentsValue: args,
                     sourceThreadId: context.session.threadId,

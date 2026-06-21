@@ -12,7 +12,7 @@ import {
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const SALCHI_ACP_MCP_SERVER_VERSION = "0.1.0";
 
-const SALCHI_ACP_MCP_SERVER_SCRIPT = `
+export const SALCHI_ACP_MCP_SERVER_SCRIPT = `
 import { createInterface } from "node:readline";
 
 const protocolVersion = ${JSON.stringify(MCP_PROTOCOL_VERSION)};
@@ -40,6 +40,14 @@ function fail(id, code, message) {
 
 function normalizeArgs(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+}
+
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasValidCreateThreadArgs(args) {
+  return isNonEmptyString(args.title) && isNonEmptyString(args.initialPrompt);
 }
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -93,6 +101,10 @@ for await (const line of rl) {
           break;
         }
         const args = normalizeArgs(params?.arguments);
+        if (!hasValidCreateThreadArgs(args)) {
+          fail(id, -32602, "Invalid arguments: title and initialPrompt are required.");
+          break;
+        }
         const structuredContent = {
           type: toolResultMarker,
           version: 1,

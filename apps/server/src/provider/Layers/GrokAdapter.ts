@@ -43,11 +43,11 @@ import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
   makeAcpContentDeltaEvent,
-  makeAcpIndependentThreadCreatedEvent,
   makeAcpPlanUpdatedEvent,
   makeAcpRequestOpenedEvent,
   makeAcpRequestResolvedEvent,
   makeAcpToolCallEvent,
+  offerAcpIndependentThreadCreatedEvent,
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import { parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
@@ -645,17 +645,15 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                         rawPayload: event.rawPayload,
                       }),
                     );
-                    const independentThreadEvent = makeAcpIndependentThreadCreatedEvent({
+                    yield* offerAcpIndependentThreadCreatedEvent({
                       stamp: yield* makeEventStamp(),
                       provider: PROVIDER,
                       threadId: ctx.threadId,
                       turnId: ctx.activeTurnId,
                       toolCall: event.toolCall,
                       rawPayload: event.rawPayload,
+                      offerRuntimeEvent,
                     });
-                    if (independentThreadEvent) {
-                      yield* offerRuntimeEvent(independentThreadEvent);
-                    }
                     return;
                   case "ContentDelta":
                     yield* logNative(ctx.threadId, "session/update", event.rawPayload);

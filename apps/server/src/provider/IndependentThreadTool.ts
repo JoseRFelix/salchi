@@ -8,6 +8,7 @@ import {
   ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
+import { z } from "zod/v4";
 
 export const INDEPENDENT_THREAD_TOOL_NAMESPACE = "salchi";
 export const INDEPENDENT_THREAD_TOOL_NAME = "create_thread";
@@ -104,6 +105,38 @@ export const INDEPENDENT_THREAD_TOOL_INPUT_SCHEMA = {
     },
   },
   required: ["title", "initialPrompt"],
+} as const;
+
+export const INDEPENDENT_THREAD_TOOL_ZOD_INPUT_SHAPE = {
+  title: z.string().min(1).describe("Concise title for the independent thread."),
+  initialPrompt: z
+    .string()
+    .min(1)
+    .describe("First user-style prompt to run in the new independent thread."),
+  titleSeed: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Optional short source text for title generation."),
+  checkoutMode: z
+    .enum(["inherit", "local", "worktree"])
+    .optional()
+    .describe("Optional checkout placement for the independent thread."),
+  branch: z
+    .string()
+    .min(1)
+    .nullable()
+    .optional()
+    .describe(
+      "Optional branch label. Use null when switching checkouts and the branch is unknown.",
+    ),
+  worktreePath: z
+    .string()
+    .min(1)
+    .nullable()
+    .optional()
+    .describe("Optional absolute path for a dedicated worktree or checkout."),
+  threadId: z.string().min(1).optional().describe("Optional stable Salchi thread id."),
 } as const;
 
 export const INDEPENDENT_THREAD_TOOL_SPEC = {

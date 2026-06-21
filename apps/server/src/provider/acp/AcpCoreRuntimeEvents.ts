@@ -11,6 +11,7 @@ import {
   type ToolLifecycleItemType,
   type TurnId,
 } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 
 import type { AcpPermissionRequest, AcpPlanUpdate, AcpToolCallState } from "./AcpRuntimeModel.ts";
 import {
@@ -323,6 +324,19 @@ export function makeAcpIndependentThreadCreatedEvent(input: {
       payload: input.rawPayload,
     },
   });
+}
+
+export function offerAcpIndependentThreadCreatedEvent<A, E, R>(input: {
+  readonly stamp: AcpEventStamp;
+  readonly provider: ProviderDriverKind;
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId | undefined;
+  readonly toolCall: AcpToolCallState;
+  readonly rawPayload: unknown;
+  readonly offerRuntimeEvent: (event: ProviderRuntimeEvent) => Effect.Effect<A, E, R>;
+}): Effect.Effect<void, E, R> {
+  const event = makeAcpIndependentThreadCreatedEvent(input);
+  return event ? input.offerRuntimeEvent(event).pipe(Effect.asVoid) : Effect.void;
 }
 
 export function makeAcpAssistantItemEvent(input: {

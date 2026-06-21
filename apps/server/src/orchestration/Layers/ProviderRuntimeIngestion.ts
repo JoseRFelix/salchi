@@ -1000,7 +1000,8 @@ const make = Effect.gen(function* () {
       if (existingThread) {
         const conflictsWithExistingThread =
           existingThread.projectId !== sourceThread.projectId ||
-          existingThread.parentThreadId !== null;
+          existingThread.parentThreadId !== null ||
+          !sameId(existingThread.createdByThreadId, sourceThread.id);
         if (conflictsWithExistingThread) {
           yield* Effect.logWarning("provider runtime independent thread creation dropped", {
             eventId: event.eventId,
@@ -1010,6 +1011,7 @@ const make = Effect.gen(function* () {
             existingProjectId: existingThread.projectId,
             sourceProjectId: sourceThread.projectId,
             existingParentThreadId: existingThread.parentThreadId,
+            existingCreatedByThreadId: existingThread.createdByThreadId,
             reason: "conflicting-existing-thread",
           });
           return;

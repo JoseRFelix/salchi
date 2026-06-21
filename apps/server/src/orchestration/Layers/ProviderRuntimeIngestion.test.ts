@@ -1052,6 +1052,60 @@ describe("ProviderRuntimeIngestion", () => {
     ).toHaveLength(1);
   });
 
+  it("drops provider-created independent threads that collide with unrelated root threads", async () => {
+    const harness = await createHarness();
+    const existingThreadId = asThreadId("existing-root-thread");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-existing-root-thread-create"),
+        threadId: existingThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Existing Root",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    const before = await harness.readModel();
+    const sourceBefore = before.threads.find((thread) => thread.id === asThreadId("thread-1"));
+    expect(
+      sourceBefore?.activities.filter((activity) => activity.kind === "thread.created"),
+    ).toHaveLength(0);
+
+    harness.emit({
+      type: "thread.independent.created",
+      eventId: asEventId("evt-provider-independent-thread-collision"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: {
+        threadId: existingThreadId,
+        title: "Hijack existing root",
+        initialPrompt: "This prompt should not be enqueued.",
+      },
+    } satisfies LegacyProviderRuntimeEvent);
+    await harness.drain();
+
+    const after = await harness.readModel();
+    const sourceAfter = after.threads.find((thread) => thread.id === asThreadId("thread-1"));
+    const existingAfter = after.threads.find((thread) => thread.id === existingThreadId);
+    expect(
+      sourceAfter?.activities.filter((activity) => activity.kind === "thread.created"),
+    ).toHaveLength(0);
+    expect(existingAfter?.createdByThreadId).toBeNull();
+    expect(existingAfter?.messages).toHaveLength(0);
+    expect(existingAfter?.queuedTurns).toHaveLength(0);
+  });
+
   it("uses real materialized child nicknames before generic roles", async () => {
     const harness = await createHarness();
     harness.setChildThreadMode("materialized");

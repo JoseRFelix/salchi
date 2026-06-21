@@ -28,6 +28,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -469,8 +470,9 @@ describe("ClaudeAdapterLive", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 4).pipe(
-        Stream.runCollect,
+      const createdEventFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "thread.independent.created"),
+        Stream.runHead,
         Effect.forkChild,
       );
 
@@ -493,7 +495,7 @@ describe("ClaudeAdapterLive", () => {
             initialPrompt: "Investigate this independently.",
             checkoutMode: "local",
           },
-          {},
+          { toolUseID: "toolu-claude-create-1" },
         ),
       );
 
@@ -502,14 +504,19 @@ describe("ClaudeAdapterLive", () => {
         | undefined;
       assert.equal(structuredContent?.type, INDEPENDENT_THREAD_TOOL_RESULT_MARKER);
 
-      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
-      const createdEvent = runtimeEvents.find(
-        (event) => event.type === "thread.independent.created",
-      );
+      const createdEvent = Option.getOrUndefined(yield* Fiber.join(createdEventFiber));
       assert.equal(createdEvent?.type, "thread.independent.created");
       if (createdEvent?.type !== "thread.independent.created") {
         return;
       }
+      assert.equal(
+        createdEvent.payload.threadId,
+        "claude-tool:toolu-claude-create-1:independent-thread",
+      );
+      assert.equal(
+        createdEvent.payload.initialMessageId,
+        "claude-tool:toolu-claude-create-1:initial-message",
+      );
       assert.equal(createdEvent.payload.title, "Claude split");
       assert.equal(createdEvent.payload.initialPrompt, "Investigate this independently.");
       assert.equal(createdEvent.payload.branch, null);
