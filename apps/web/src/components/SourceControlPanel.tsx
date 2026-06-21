@@ -112,7 +112,7 @@ import { cn } from "~/lib/utils";
 export type SourceControlPanelMode = "sidebar" | "sheet";
 type SourceControlSection = SourceControlTreeSection;
 
-const SOURCE_CONTROL_ROW_HEIGHT = 32;
+export const SOURCE_CONTROL_ROW_HEIGHT = 32;
 const SOURCE_CONTROL_ROW_OVERSCAN_COUNT = 12;
 const SOURCE_CONTROL_ROW_OVERSCAN_PX = 336;
 const sourceControlRowActionButtonClass =

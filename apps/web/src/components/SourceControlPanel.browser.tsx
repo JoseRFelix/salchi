@@ -414,7 +414,7 @@ vi.mock("~/store", () => {
 });
 
 import { useGitActionRunner } from "./useGitActionRunner";
-import SourceControlPanel from "./SourceControlPanel";
+import SourceControlPanel, { SOURCE_CONTROL_ROW_HEIGHT } from "./SourceControlPanel";
 import { __resetSourceControlPanelStateForTests } from "../sourceControlPanelState";
 import {
   __readWorkspaceFilePanelStateForTests,
@@ -806,8 +806,8 @@ describe("SourceControlPanel git action runner", () => {
       });
       expect(virtualizedListPropsRef.current).toMatchObject({
         dataLength: 3,
-        estimatedItemSize: 28,
-        fixedItemSize: 28,
+        estimatedItemSize: SOURCE_CONTROL_ROW_HEIGHT,
+        fixedItemSize: SOURCE_CONTROL_ROW_HEIGHT,
         increaseViewportBy: 336,
         minOverscanItemCount: 12,
       });
