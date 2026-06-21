@@ -53,7 +53,8 @@
         margin: 0 auto;
         padding: 32px 24px 56px;
       }
-te        padding: 28px 0 26px;
+      header {
+        padding: 28px 0 26px;
         border-bottom: 1px solid var(--line);
       }
 
@@ -391,7 +392,7 @@ te        padding: 28px 0 26px;
         <div class="meta" aria-label="Plan metadata">
           <span class="pill">Created: 2026-06-19</span>
           <span class="pill">Scope: apps/server, apps/web, packages/contracts</span>
-          <span class="pill">Verification: bun fmt, bun lint, bun typecheck</span>
+          <span class="pill">Verification: bun fmt, bun lint, bun typecheck, bun run test</span>
         </div>
       </header>
 
@@ -850,7 +851,10 @@ te        padding: 28px 0 26px;
               Focused regression tests cover Codex child-thread routing, Codex
               <code>subAgentActivity</code>, Claude task progress, and orchestration recovery.
             </li>
-            <li><code>bun fmt</code>, <code>bun lint</code>, and <code>bun typecheck</code> pass.</li>
+            <li>
+              <code>bun fmt</code>, <code>bun lint</code>, <code>bun typecheck</code>, and
+              <code>bun run test</code> pass.
+            </li>
           </ul>
         </section>
       </main>

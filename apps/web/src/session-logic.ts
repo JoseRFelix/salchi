@@ -683,6 +683,7 @@ export function deriveSubagentSummaries(
         previous?.label ??
         activity.summary;
       const resolvedProviderThreadId = providerThreadId ?? previous?.providerThreadId;
+      const turnId = activity.turnId ?? previous?.turnId;
 
       byKey.set(key, {
         id: previous?.id ?? subagentId,
@@ -691,7 +692,7 @@ export function deriveSubagentSummaries(
         createdAt: previous?.createdAt ?? activity.createdAt,
         updatedAt: activity.createdAt,
         ...(previous?.completedAt ? { completedAt: previous.completedAt } : {}),
-        ...(previous?.turnId !== undefined ? { turnId: previous.turnId } : {}),
+        ...(turnId !== undefined ? { turnId } : {}),
         ...(resolvedProviderThreadId ? { providerThreadId: resolvedProviderThreadId } : {}),
         ...(materializedThreadId ? { materializedThreadId } : {}),
         ...(resolvedSourceItemId ? { sourceItemId: resolvedSourceItemId } : {}),
@@ -726,6 +727,7 @@ export function deriveSubagentSummaries(
       asTrimmedString(payload?.status),
       activity.kind,
       previous?.status,
+      activity.tone,
     );
     const nickname = asTrimmedString(payload?.nickname) ?? previous?.nickname;
     const role = asTrimmedString(payload?.role) ?? previous?.role;
@@ -1162,6 +1164,7 @@ function normalizeSubagentStatus(
   value: string | null,
   kind: OrchestrationThreadActivity["kind"],
   fallback: SubagentStatus | undefined,
+  tone: OrchestrationThreadActivity["tone"],
 ): SubagentStatus {
   switch (value) {
     case "starting":
@@ -1173,7 +1176,7 @@ function normalizeSubagentStatus(
       return value;
     default:
       if (kind === "subagent.completed") {
-        return "completed";
+        return tone === "error" ? "failed" : "completed";
       }
       return fallback ?? "running";
   }

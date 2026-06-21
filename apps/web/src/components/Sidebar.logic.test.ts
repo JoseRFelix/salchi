@@ -409,6 +409,17 @@ describe("flattenSidebarThreadTree", () => {
     expect(flattened.map((item) => item.thread.id)).toEqual(["root", "visible-child"]);
   });
 
+  it("keeps a visible child of a hidden parent navigable as a root", () => {
+    const flattened = flattenSidebarThreadTree([
+      thread("hidden-root", null, true),
+      thread("visible-child", "hidden-root"),
+    ]);
+
+    expect(flattened.map((item) => [item.thread.id, item.depth, item.rootThreadId])).toEqual([
+      ["visible-child", 0, "visible-child"],
+    ]);
+  });
+
   it("keeps orphaned visible children navigable as roots", () => {
     const flattened = flattenSidebarThreadTree([thread("orphan", "missing-parent")]);
 

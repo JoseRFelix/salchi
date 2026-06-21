@@ -268,14 +268,12 @@ export function flattenSidebarThreadTree<
     readonly isThreadCollapsed?: (thread: TThread) => boolean;
   } = {},
 ): SidebarThreadTreeItem<TThread>[] {
-  const byId = new Map(threads.map((thread) => [thread.id, thread] as const));
+  const visibleThreads = threads.filter((thread) => thread.hiddenFromThreadList !== true);
+  const byId = new Map(visibleThreads.map((thread) => [thread.id, thread] as const));
   const childrenByParentId = new Map<string, TThread[]>();
   const roots: TThread[] = [];
 
-  for (const thread of threads) {
-    if (thread.hiddenFromThreadList === true) {
-      continue;
-    }
+  for (const thread of visibleThreads) {
     if (thread.parentThreadId && byId.has(thread.parentThreadId)) {
       const children = childrenByParentId.get(thread.parentThreadId) ?? [];
       children.push(thread);

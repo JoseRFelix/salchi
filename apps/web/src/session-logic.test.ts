@@ -476,6 +476,37 @@ describe("deriveSubagentSummaries", () => {
     expect(summary?.detail).toBe("Test command failed");
   });
 
+  it("marks error-tone subagent completions without status as failed", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "subagent-started",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "subagent.started",
+        summary: "Subagent started",
+        tone: "info",
+        payload: {
+          subagentId: "agent-error-tone",
+          role: "tester",
+        },
+      }),
+      makeActivity({
+        id: "subagent-completed-error",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "subagent.completed",
+        summary: "Subagent failed",
+        tone: "error",
+        payload: {
+          subagentId: "agent-error-tone",
+          detail: "Subagent exited with an error",
+        },
+      }),
+    ];
+
+    const [summary] = deriveSubagentSummaries(activities);
+    expect(summary?.status).toBe("failed");
+    expect(summary?.tone).toBe("error");
+  });
+
   it("derives materialized spawned subagents from parent thread activities", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -597,6 +628,27 @@ describe("deriveSubagentSummaries", () => {
       materializedThreadId: ThreadId.make("child-thread-1"),
       sourceItemId: "call_spawn_1",
     });
+  });
+
+  it("preserves turn metadata from spawn-only materialized subagents", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "subagent-thread-spawned",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "subagent.thread.spawned",
+        summary: "Aquinas",
+        tone: "info",
+        turnId: "turn-spawn",
+        payload: {
+          threadId: "child-thread-1",
+          providerThreadId: "provider-child-1",
+          subagentNickname: "Aquinas",
+        },
+      }),
+    ];
+
+    const summaries = deriveSubagentSummaries(activities);
+    expect(summaries[0]?.turnId).toBe(TurnId.make("turn-spawn"));
   });
 
   it("updates materialized spawned subagents when provider-thread completion arrives", () => {

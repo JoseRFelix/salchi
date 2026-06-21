@@ -757,7 +757,7 @@ describe("uiStateStore persistence round-trip", () => {
     expect(persisted.defaultAdvertisedEndpointKey).toBe("desktop-core:lan:http");
   });
 
-  it("persists collapsed thread groups across restart", () => {
+  it("persists collapsed thread groups across restart", async () => {
     const thread1 = ThreadId.make("thread-1");
     const state = setThreadExpanded(makeUiState(), thread1, false);
 
@@ -768,6 +768,11 @@ describe("uiStateStore persistence round-trip", () => {
     ) as PersistedUiState;
 
     expect(persisted.collapsedThreadKeys).toEqual([thread1]);
+
+    expect(makeUiState().threadExpandedById).toEqual({});
+    vi.resetModules();
+    const { useUiStateStore } = await import("./uiStateStore");
+    expect(useUiStateStore.getState().threadExpandedById).toEqual({ [thread1]: false });
   });
 
   it("preserves expand state across restart when project's logical key changes", () => {
