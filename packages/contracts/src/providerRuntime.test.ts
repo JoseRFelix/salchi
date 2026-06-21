@@ -69,6 +69,35 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.planMarkdown).toBe("# Ship it");
   });
 
+  it("decodes thread.started with provider parent and subagent metadata", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "thread.started",
+      eventId: "event-child-thread-started",
+      provider: "codex",
+      providerInstanceId: "codex",
+      createdAt: "2026-02-28T00:00:00.000Z",
+      threadId: "codex-child-abc",
+      payload: {
+        providerThreadId: "provider-child",
+        providerParentThreadId: "provider-parent",
+        parentThreadId: "parent-thread",
+        subagentKind: "thread_spawn",
+        subagentNickname: "planner",
+        subagentRole: "Planning",
+        subagentPath: "agents/planner.md",
+        hiddenFromThreadList: false,
+      },
+    });
+
+    expect(parsed.type).toBe("thread.started");
+    if (parsed.type !== "thread.started") {
+      throw new Error("expected thread.started");
+    }
+    expect(parsed.payload.parentThreadId).toBe("parent-thread");
+    expect(parsed.payload.providerParentThreadId).toBe("provider-parent");
+    expect(parsed.payload.subagentRole).toBe("Planning");
+  });
+
   it("decodes user-input.requested with structured questions", () => {
     const parsed = decodeRuntimeEvent({
       type: "user-input.requested",

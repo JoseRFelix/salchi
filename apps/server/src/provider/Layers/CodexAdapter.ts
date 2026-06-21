@@ -11,6 +11,7 @@ import {
   type CanonicalItemType,
   type CanonicalRequestType,
   type CodexSettings,
+  EventId,
   ProviderDriverKind,
   type ProviderEvent,
   ProviderInstanceId,
@@ -20,12 +21,14 @@ import {
   type ProviderUserInputAnswers,
   RuntimeItemId,
   RuntimeRequestId,
+  RuntimeSubagentId,
   ProviderApprovalDecision,
   ThreadId,
   ProviderSendTurnInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
@@ -38,6 +41,10 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
+import {
+  makeKeyedCoalescingWorker,
+  type KeyedCoalescingWorker,
+} from "@t3tools/shared/KeyedCoalescingWorker";
 
 import {
   getModelSelectionBooleanOptionValue,
@@ -63,12 +70,19 @@ import {
   makeCodexAppServerClient,
   makeCodexSessionRuntime,
   type CodexAppServerClientHandle,
+  type CodexSpawnedChildThreadListOptions,
   type CodexSessionRuntimeError,
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeShape,
+  type CodexThreadSnapshot,
   type MakeCodexAppServerClientOptions,
 } from "./CodexSessionRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import {
+  codexChildThreadId,
+  extractCodexSubagentMetadata,
+  extractCodexThreadSpawnMetadata,
+} from "./CodexChildThreads.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -99,12 +113,52 @@ export interface CodexAdapterLiveOptions {
   readonly nativeEventLogger?: EventNdjsonLogger;
 }
 
-interface CodexAdapterSessionContext {
+interface CodexAdapterRootSessionContext {
+  readonly kind: "root";
   readonly threadId: ThreadId;
   readonly scope: Scope.Closeable;
   readonly runtime: CodexSessionRuntimeShape;
   readonly eventFiber: Fiber.Fiber<void, never>;
+  readonly childThreadIds: Set<ThreadId>;
+  readonly stoppedChildThreadIds: Set<ThreadId>;
+  readonly stoppedChildProviderThreadIds: Set<string>;
+  readonly childThreadStartedMetadataByProviderThreadId: Map<
+    string,
+    { readonly key: string; readonly score: number }
+  >;
+  readonly recoveryWorker: KeyedCoalescingWorker<ThreadId, CodexChildRecoveryWork>;
+  providerThreadId?: string;
   stopped: boolean;
+}
+
+interface CodexAdapterChildSessionContext {
+  readonly kind: "child";
+  readonly threadId: ThreadId;
+  readonly parentThreadId: ThreadId;
+  readonly rootThreadId: ThreadId;
+  readonly providerThreadId: string;
+  readonly runtime: CodexSessionRuntimeShape;
+  stopped: boolean;
+}
+
+type CodexAdapterSessionContext = CodexAdapterRootSessionContext | CodexAdapterChildSessionContext;
+
+interface CodexChildBackfillWork {
+  readonly threadId: ThreadId;
+  readonly providerThreadId: string;
+}
+
+interface CodexChildHydrationWork {
+  readonly candidateProviderThreadIds?: ReadonlySet<string>;
+  readonly allowScanRepair?: boolean;
+  readonly maxPages?: number;
+  readonly reason?: string;
+}
+
+interface CodexChildRecoveryWork {
+  readonly root: CodexAdapterRootSessionContext;
+  readonly backfills: ReadonlyMap<string, CodexChildBackfillWork>;
+  readonly hydrations: ReadonlyArray<CodexChildHydrationWork>;
 }
 
 function mapCodexRuntimeError(
@@ -138,7 +192,8 @@ function mapCodexRuntimeError(
 
 type CodexLifecycleItem =
   | EffectCodexSchema.V2ItemStartedNotification["item"]
-  | EffectCodexSchema.V2ItemCompletedNotification["item"];
+  | EffectCodexSchema.V2ItemCompletedNotification["item"]
+  | CodexThreadSnapshot["turns"][number]["items"][number];
 
 type CodexToolUserInputQuestion =
   | EffectCodexSchema.ServerRequest__ToolRequestUserInputQuestion
@@ -156,9 +211,32 @@ function readPayload<A>(
   return isPayload(payload) ? payload : undefined;
 }
 
+function readSalchiParentThreadId(payload: unknown): ThreadId | undefined {
+  if (!isRecord(payload)) return undefined;
+  const raw = payload.salchiParentThreadId;
+  return typeof raw === "string" && raw.trim().length > 0 ? ThreadId.make(raw) : undefined;
+}
+
 function trimText(value: string | undefined | null): string | undefined {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" ? trimText(value) : undefined;
+}
+
+function readStringArray(value: unknown): ReadonlyArray<string> {
+  return Array.isArray(value)
+    ? value.flatMap((entry) => {
+        const text = readString(entry);
+        return text ? [text] : [];
+      })
+    : [];
 }
 
 const FATAL_CODEX_STDERR_SNIPPETS = ["failed to connect to websocket"];
@@ -257,7 +335,8 @@ function toCanonicalItemType(raw: string | undefined | null): CanonicalItemType 
     return "file_change";
   if (type.includes("mcp")) return "mcp_tool_call";
   if (type.includes("dynamic tool")) return "dynamic_tool_call";
-  if (type.includes("collab")) return "collab_agent_tool_call";
+  if (type.includes("collab") || type.includes("sub agent") || type.includes("agent activity"))
+    return "collab_agent_tool_call";
   if (type.includes("web search")) return "web_search";
   if (type.includes("image")) return "image_view";
   if (type.includes("review entered")) return "review_entered";
@@ -285,6 +364,8 @@ function itemTitle(itemType: CanonicalItemType): string | undefined {
       return "MCP tool call";
     case "dynamic_tool_call":
       return "Tool call";
+    case "collab_agent_tool_call":
+      return "Subagent task";
     case "web_search":
       return "Web search";
     case "image_view":
@@ -311,6 +392,124 @@ function itemDetail(item: CodexLifecycleItem): string | undefined {
     return trimmed;
   }
   return undefined;
+}
+
+function isoFromUnixSeconds(value: number | null | undefined, fallback: string): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return DateTime.formatIso(DateTime.makeUnsafe(value * 1000));
+}
+
+function runtimeTurnStateFromSnapshotStatus(
+  status: string,
+): "completed" | "failed" | "interrupted" | undefined {
+  switch (status) {
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "interrupted":
+      return "interrupted";
+    default:
+      return undefined;
+  }
+}
+
+function runtimeItemStatusFromSnapshotItem(
+  item: CodexThreadSnapshot["turns"][number]["items"][number],
+): "inProgress" | "completed" | "failed" | "declined" | undefined {
+  if (!("status" in item) || typeof item.status !== "string") {
+    return undefined;
+  }
+  switch (item.status) {
+    case "inProgress":
+    case "completed":
+    case "failed":
+    case "declined":
+      return item.status;
+    default:
+      return undefined;
+  }
+}
+
+function backfillEventId(...parts: ReadonlyArray<string>): EventId {
+  return EventId.make(["codex-snapshot-backfill", ...parts].join(":"));
+}
+
+function codexThreadSnapshotBackfillEvents(input: {
+  readonly threadId: ThreadId;
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly snapshot: CodexThreadSnapshot;
+  readonly fallbackCreatedAt: string;
+}): ReadonlyArray<ProviderRuntimeEvent> {
+  const events: ProviderRuntimeEvent[] = [];
+
+  for (const turn of input.snapshot.turns) {
+    const turnStartedAt = isoFromUnixSeconds(turn.startedAt, input.fallbackCreatedAt);
+    const turnCompletedAt = isoFromUnixSeconds(
+      turn.completedAt ?? turn.startedAt,
+      input.fallbackCreatedAt,
+    );
+    events.push({
+      eventId: backfillEventId(input.snapshot.threadId, turn.id, "turn-started"),
+      provider: PROVIDER,
+      providerInstanceId: input.providerInstanceId,
+      threadId: input.threadId,
+      turnId: turn.id,
+      createdAt: turnStartedAt,
+      type: "turn.started",
+      payload: {},
+    });
+
+    for (const item of turn.items) {
+      const itemId = RuntimeItemId.make(item.id);
+      const itemType = toCanonicalItemType(item.type);
+      const detail = itemDetail(item);
+      const status = runtimeItemStatusFromSnapshotItem(item);
+      const eventType = status === "inProgress" ? "item.updated" : "item.completed";
+      events.push({
+        eventId: backfillEventId(input.snapshot.threadId, turn.id, item.id, eventType),
+        provider: PROVIDER,
+        providerInstanceId: input.providerInstanceId,
+        threadId: input.threadId,
+        turnId: turn.id,
+        itemId,
+        createdAt: turnCompletedAt,
+        type: eventType,
+        payload: {
+          itemType,
+          ...(status ? { status } : {}),
+          ...(itemTitle(itemType) ? { title: itemTitle(itemType) } : {}),
+          ...(detail ? { detail } : {}),
+          data: {
+            source: "codex.thread-read.backfill",
+            providerThreadId: input.snapshot.threadId,
+            item,
+          },
+        },
+      });
+    }
+
+    const turnState = runtimeTurnStateFromSnapshotStatus(turn.status);
+    if (turnState) {
+      events.push({
+        eventId: backfillEventId(input.snapshot.threadId, turn.id, "turn-completed"),
+        provider: PROVIDER,
+        providerInstanceId: input.providerInstanceId,
+        threadId: input.threadId,
+        turnId: turn.id,
+        createdAt: turnCompletedAt,
+        type: "turn.completed",
+        payload: {
+          state: turnState,
+          ...(turn.errorMessage ? { errorMessage: turn.errorMessage } : {}),
+        },
+      });
+    }
+  }
+
+  return events;
 }
 
 function imageGenerationPayloadFromItem(
@@ -478,6 +677,10 @@ function asRuntimeItemId(itemId: ProviderEvent["itemId"] & string): RuntimeItemI
   return RuntimeItemId.make(itemId);
 }
 
+function asRuntimeSubagentId(subagentId: string): RuntimeSubagentId {
+  return RuntimeSubagentId.make(subagentId);
+}
+
 function asRuntimeRequestId(requestId: string): RuntimeRequestId {
   return RuntimeRequestId.make(requestId);
 }
@@ -517,6 +720,300 @@ function runtimeEventBase(
       payload: event.payload ?? {},
     },
   };
+}
+
+function subagentNicknameFromPath(agentPath: string | undefined): string | undefined {
+  if (!agentPath) {
+    return undefined;
+  }
+  const segments = agentPath.split(/[\\/]/).map((segment) => trimText(segment));
+  const basename = segments.findLast((segment) => segment !== undefined);
+  if (!basename) {
+    return undefined;
+  }
+  return trimText(basename.replace(/\.[^.]+$/, "")) ?? basename;
+}
+
+function subagentNicknameFromPrompt(prompt: string | undefined): string | undefined {
+  if (!prompt) {
+    return undefined;
+  }
+  const match = prompt.match(/\byour\s+nickname\s+is\s+([A-Za-z][\w-]{0,63})\b/i);
+  return match?.[1] ? trimText(match[1]) : undefined;
+}
+
+function collabAgentMetadataFromState(
+  record: Record<string, unknown>,
+  subagentId: string,
+): { readonly role?: string; readonly nickname?: string; readonly path?: string } {
+  const agentsStates = isRecord(record.agentsStates) ? record.agentsStates : null;
+  const state =
+    agentsStates && isRecord(agentsStates[subagentId]) ? agentsStates[subagentId] : null;
+  if (!state) {
+    return {};
+  }
+
+  const agentPath =
+    readString(state.agentPath) ?? readString(state.agent_path) ?? readString(state.path);
+  const role = readString(state.agentRole) ?? readString(state.agent_role) ?? agentPath;
+  const nickname =
+    readString(state.agentNickname) ??
+    readString(state.agent_nickname) ??
+    readString(state.nickname) ??
+    readString(state.agentName) ??
+    readString(state.name) ??
+    subagentNicknameFromPrompt(readString(record.prompt)) ??
+    subagentNicknameFromPath(agentPath);
+
+  return {
+    ...(role ? { role } : {}),
+    ...(nickname ? { nickname } : {}),
+    ...(agentPath ? { path: agentPath } : {}),
+  };
+}
+
+function readCollabAgentReceiverThreadIds(item: unknown): string[] {
+  if (!isRecord(item) || readString(item.type) !== "collabAgentToolCall") {
+    return [];
+  }
+  return [...readStringArray(item.receiverThreadIds)];
+}
+
+function shouldHydrateSpawnedChildrenFromCollabTool(item: unknown): boolean {
+  if (!isRecord(item) || readCollabAgentReceiverThreadIds(item).length === 0) {
+    return false;
+  }
+  if (readString(item.status) !== "completed") {
+    return false;
+  }
+
+  switch (readString(item.tool)) {
+    case "spawnAgent":
+    case "wait":
+    case "closeAgent":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function collabAgentChildHydrationInputFromEvent(
+  event: ProviderEvent,
+): { readonly candidateProviderThreadIds: ReadonlySet<string>; readonly reason: string } | null {
+  if (event.method !== "item/completed") {
+    return null;
+  }
+  if (!isRecord(event.payload)) {
+    return null;
+  }
+  const item = event.payload.item;
+  if (!shouldHydrateSpawnedChildrenFromCollabTool(item)) {
+    return null;
+  }
+  const receiverThreadIds = readCollabAgentReceiverThreadIds(item);
+  if (receiverThreadIds.length === 0) {
+    return null;
+  }
+  const tool = isRecord(item) ? readString(item.tool) : undefined;
+  return {
+    candidateProviderThreadIds: new Set(receiverThreadIds),
+    reason: tool ? `collab-agent:${tool}` : "collab-agent",
+  };
+}
+
+function collabAgentThreadSpawnMetadataFromEvent(
+  event: ProviderEvent,
+  providerThreadId: string,
+): {
+  readonly subagentNickname?: string;
+  readonly subagentRole?: string;
+  readonly subagentPath?: string;
+} {
+  if (!isRecord(event.payload) || !isRecord(event.payload.item)) {
+    return {};
+  }
+  const metadata = collabAgentMetadataFromState(event.payload.item, providerThreadId);
+  return {
+    ...(metadata.nickname ? { subagentNickname: metadata.nickname } : {}),
+    ...(metadata.role ? { subagentRole: metadata.role } : {}),
+    ...(metadata.path ? { subagentPath: metadata.path } : {}),
+  };
+}
+
+function codexCollabToolSummary(
+  tool: string | undefined,
+  lifecycle: "item.started" | "item.completed",
+  status: string | undefined,
+): string {
+  if (status === "failed") {
+    return "Subagent action failed";
+  }
+
+  switch (tool) {
+    case "spawnAgent":
+      return lifecycle === "item.started" ? "Subagent started" : "Subagent spawned";
+    case "sendInput":
+      return lifecycle === "item.started" ? "Sending input to subagent" : "Subagent input sent";
+    case "resumeAgent":
+      return lifecycle === "item.started" ? "Resuming subagent" : "Subagent resumed";
+    case "wait":
+      return lifecycle === "item.started" ? "Waiting on subagent" : "Subagent wait completed";
+    case "closeAgent":
+      return lifecycle === "item.started" ? "Closing subagent" : "Subagent closed";
+    default:
+      return lifecycle === "item.started"
+        ? "Subagent activity started"
+        : "Subagent activity completed";
+  }
+}
+
+function codexSubagentEventsFromLifecycle(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+  lifecycle: "item.started" | "item.completed",
+  item: CodexLifecycleItem,
+): ReadonlyArray<ProviderRuntimeEvent> {
+  if (!isRecord(item)) {
+    return [];
+  }
+
+  const record = item as Record<string, unknown>;
+  const itemType = readString(record.type);
+  if (itemType === "subAgentActivity") {
+    const subagentThreadId = readString(record.agentThreadId);
+    if (!subagentThreadId) {
+      return [];
+    }
+
+    const agentPath = readString(record.agentPath);
+    const nickname = subagentNicknameFromPath(agentPath);
+    const commonPayload = {
+      subagentId: asRuntimeSubagentId(subagentThreadId),
+      providerThreadId: subagentThreadId,
+      ...(event.turnId ? { parentTurnId: event.turnId } : {}),
+      ...(event.itemId ? { sourceItemId: asRuntimeItemId(event.itemId) } : {}),
+      ...(agentPath ? { role: agentPath } : {}),
+      ...(nickname && nickname !== agentPath ? { nickname } : {}),
+    };
+
+    switch (readString(record.kind)) {
+      case "started":
+        return [
+          {
+            ...runtimeEventBase(event, canonicalThreadId),
+            type: "subagent.started",
+            payload: {
+              ...commonPayload,
+              status: "running",
+              summary: "Subagent started",
+            },
+          },
+        ];
+      case "interacted":
+        return [
+          {
+            ...runtimeEventBase(event, canonicalThreadId),
+            type: "subagent.updated",
+            payload: {
+              ...commonPayload,
+              status: "running",
+              summary: "Subagent active",
+            },
+          },
+        ];
+      case "interrupted":
+        return [
+          {
+            ...runtimeEventBase(event, canonicalThreadId),
+            type: "subagent.completed",
+            payload: {
+              ...commonPayload,
+              status: "interrupted",
+              summary: "Subagent interrupted",
+            },
+          },
+        ];
+      default:
+        return [];
+    }
+  }
+
+  if (itemType !== "collabAgentToolCall") {
+    return [];
+  }
+
+  const receiverThreadIds = readStringArray(record.receiverThreadIds);
+  const fallbackId = readString(record.id);
+  const subagentIds =
+    receiverThreadIds.length > 0 ? receiverThreadIds : fallbackId ? [fallbackId] : [];
+  if (subagentIds.length === 0) {
+    return [];
+  }
+
+  const tool = readString(record.tool);
+  const status = readString(record.status);
+  const model = readString(record.model);
+  const prompt = readString(record.prompt);
+  const receiverThreadIdSet = new Set(receiverThreadIds);
+  const summary = codexCollabToolSummary(tool, lifecycle, status);
+
+  return subagentIds.map((subagentId) => {
+    const metadata = collabAgentMetadataFromState(record, subagentId);
+    const commonPayload = {
+      subagentId: asRuntimeSubagentId(subagentId),
+      ...(receiverThreadIdSet.has(subagentId) ? { providerThreadId: subagentId } : {}),
+      ...(event.turnId ? { parentTurnId: event.turnId } : {}),
+      ...(event.itemId ? { sourceItemId: asRuntimeItemId(event.itemId) } : {}),
+      ...metadata,
+      ...(model ? { model } : {}),
+      ...(prompt ? { prompt } : {}),
+      summary,
+    };
+
+    if (tool === "spawnAgent" && lifecycle === "item.started") {
+      return {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "subagent.started",
+        payload: {
+          ...commonPayload,
+          status: "running",
+        },
+      };
+    }
+
+    if (tool === "spawnAgent" && lifecycle === "item.completed" && status === "failed") {
+      return {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "subagent.completed",
+        payload: {
+          ...commonPayload,
+          status: "failed",
+          error: summary,
+        },
+      };
+    }
+
+    if (tool === "closeAgent" && lifecycle === "item.completed" && status === "completed") {
+      return {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "subagent.completed",
+        payload: {
+          ...commonPayload,
+          status: "stopped",
+        },
+      };
+    }
+
+    return {
+      ...runtimeEventBase(event, canonicalThreadId),
+      type: "subagent.updated",
+      payload: {
+        ...commonPayload,
+        ...(status === "failed" ? {} : { status: "running" }),
+        ...(tool ? { lastToolName: tool } : {}),
+      },
+    };
+  });
 }
 
 function mapItemLifecycle(
@@ -729,12 +1226,23 @@ function mapToRuntimeEvents(
     if (!payload) {
       return [];
     }
+    const metadata = extractCodexSubagentMetadata(payload.thread);
+    const parentThreadId = readSalchiParentThreadId(event.payload);
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
         type: "thread.started",
         payload: {
           providerThreadId: payload.thread.id,
+          ...(metadata?.providerParentThreadId
+            ? { providerParentThreadId: metadata.providerParentThreadId }
+            : {}),
+          ...(parentThreadId ? { parentThreadId } : {}),
+          ...(metadata?.subagentKind ? { subagentKind: metadata.subagentKind } : {}),
+          ...(metadata?.subagentNickname ? { subagentNickname: metadata.subagentNickname } : {}),
+          ...(metadata?.subagentRole ? { subagentRole: metadata.subagentRole } : {}),
+          ...(metadata?.subagentPath ? { subagentPath: metadata.subagentPath } : {}),
+          ...(metadata ? { hiddenFromThreadList: metadata.hiddenFromThreadList } : {}),
         },
       },
     ];
@@ -922,7 +1430,14 @@ function mapToRuntimeEvents(
       payload?.item,
     );
     const started = mapItemLifecycle(event, canonicalThreadId, "item.started");
-    return [...(generatedEvent ? [generatedEvent] : []), ...(started ? [started] : [])];
+    const subagentEvents = payload?.item
+      ? codexSubagentEventsFromLifecycle(event, canonicalThreadId, "item.started", payload.item)
+      : [];
+    return [
+      ...(generatedEvent ? [generatedEvent] : []),
+      ...(started ? [started] : []),
+      ...subagentEvents,
+    ];
   }
 
   if (event.method === "item/completed") {
@@ -949,7 +1464,17 @@ function mapToRuntimeEvents(
     }
     const generatedEvent = imageGeneratedRuntimeEventFromItem(event, canonicalThreadId, item);
     const completed = mapItemLifecycle(event, canonicalThreadId, "item.completed");
-    return [...(generatedEvent ? [generatedEvent] : []), ...(completed ? [completed] : [])];
+    const subagentEvents = codexSubagentEventsFromLifecycle(
+      event,
+      canonicalThreadId,
+      "item.completed",
+      item,
+    );
+    return [
+      ...(generatedEvent ? [generatedEvent] : []),
+      ...(completed ? [completed] : []),
+      ...subagentEvents,
+    ];
   }
 
   if (
@@ -1467,6 +1992,405 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       }
     | undefined;
 
+  const childThreadStartedMetadataKey = (input: {
+    readonly providerThreadId: string;
+    readonly providerParentThreadId: string;
+    readonly parentThreadId: ThreadId;
+    readonly subagentNickname?: string | undefined;
+    readonly subagentRole?: string | undefined;
+    readonly subagentPath?: string | undefined;
+  }): string =>
+    JSON.stringify({
+      providerThreadId: input.providerThreadId,
+      providerParentThreadId: input.providerParentThreadId,
+      parentThreadId: input.parentThreadId,
+      subagentKind: "thread_spawn",
+      subagentNickname: input.subagentNickname ?? null,
+      subagentRole: input.subagentRole ?? null,
+      subagentPath: input.subagentPath ?? null,
+      hiddenFromThreadList: false,
+    });
+
+  const childThreadStartedMetadataScore = (input: {
+    readonly subagentNickname?: string | undefined;
+    readonly subagentRole?: string | undefined;
+    readonly subagentPath?: string | undefined;
+  }): number =>
+    (input.subagentNickname ? 1 : 0) + (input.subagentRole ? 1 : 0) + (input.subagentPath ? 1 : 0);
+
+  const childThreadStartedEventId = (input: {
+    readonly providerParentThreadId: string;
+    readonly providerThreadId: string;
+    readonly metadataKey: string;
+  }): EventId => {
+    const suffix = Buffer.from(input.metadataKey).toString("base64url").slice(0, 96);
+    return EventId.make(
+      [
+        "codex-child-thread-started",
+        input.providerParentThreadId,
+        input.providerThreadId,
+        suffix,
+      ].join(":"),
+    );
+  };
+
+  const registerVirtualChildSession = Effect.fn("registerVirtualChildSession")(function* (input: {
+    readonly root: CodexAdapterRootSessionContext;
+    readonly threadId: ThreadId;
+    readonly parentThreadId: ThreadId;
+    readonly providerThreadId: string;
+  }) {
+    const existing = sessions.get(input.threadId);
+    if (existing && !existing.stopped) {
+      if (existing.kind === "child" && existing.providerThreadId === input.providerThreadId) {
+        return;
+      }
+      yield* stopSessionInternal(existing);
+    }
+
+    yield* input.root.runtime.registerProviderThreadBinding({
+      providerThreadId: input.providerThreadId,
+      threadId: input.threadId,
+      parentThreadId: input.parentThreadId,
+    });
+    input.root.childThreadIds.add(input.threadId);
+    sessions.set(input.threadId, {
+      kind: "child",
+      threadId: input.threadId,
+      parentThreadId: input.parentThreadId,
+      rootThreadId: input.root.threadId,
+      providerThreadId: input.providerThreadId,
+      runtime: input.root.runtime,
+      stopped: false,
+    });
+  });
+
+  const emitMaterializedChildThreadStarted = Effect.fn("emitMaterializedChildThreadStarted")(
+    function* (input: {
+      readonly root: CodexAdapterRootSessionContext;
+      readonly threadId: ThreadId;
+      readonly providerThreadId: string;
+      readonly createdAt: string;
+      readonly subagentNickname?: string | undefined;
+      readonly subagentRole?: string | undefined;
+      readonly subagentPath?: string | undefined;
+      readonly raw?: ProviderRuntimeEvent["raw"] | undefined;
+      readonly providerRefs?: ProviderRuntimeEvent["providerRefs"] | undefined;
+    }) {
+      const providerParentThreadId = input.root.providerThreadId;
+      if (!providerParentThreadId) {
+        return;
+      }
+      const metadataKey = childThreadStartedMetadataKey({
+        providerThreadId: input.providerThreadId,
+        providerParentThreadId,
+        parentThreadId: input.root.threadId,
+        subagentNickname: input.subagentNickname,
+        subagentRole: input.subagentRole,
+        subagentPath: input.subagentPath,
+      });
+      const metadataScore = childThreadStartedMetadataScore(input);
+      const previousMetadata = input.root.childThreadStartedMetadataByProviderThreadId.get(
+        input.providerThreadId,
+      );
+      if (
+        previousMetadata?.key === metadataKey ||
+        (previousMetadata?.score ?? -1) > metadataScore
+      ) {
+        return;
+      }
+      input.root.childThreadStartedMetadataByProviderThreadId.set(input.providerThreadId, {
+        key: metadataKey,
+        score: metadataScore,
+      });
+
+      yield* Queue.offer(runtimeEventQueue, {
+        eventId: childThreadStartedEventId({
+          providerParentThreadId,
+          providerThreadId: input.providerThreadId,
+          metadataKey,
+        }),
+        provider: PROVIDER,
+        providerInstanceId: boundInstanceId,
+        threadId: input.threadId,
+        createdAt: input.createdAt,
+        type: "thread.started",
+        payload: {
+          providerThreadId: input.providerThreadId,
+          providerParentThreadId,
+          parentThreadId: input.root.threadId,
+          subagentKind: "thread_spawn",
+          hiddenFromThreadList: false,
+          ...(input.subagentNickname ? { subagentNickname: input.subagentNickname } : {}),
+          ...(input.subagentRole ? { subagentRole: input.subagentRole } : {}),
+          ...(input.subagentPath ? { subagentPath: input.subagentPath } : {}),
+        },
+        ...(input.providerRefs ? { providerRefs: input.providerRefs } : {}),
+        ...(input.raw ? { raw: input.raw } : {}),
+      });
+    },
+  );
+
+  const ensureMaterializedReceiverChildSessions = Effect.fn(
+    "ensureMaterializedReceiverChildSessions",
+  )(function* (
+    root: CodexAdapterRootSessionContext,
+    event: ProviderEvent,
+    hydration: CodexChildHydrationWork,
+  ) {
+    if (!root.providerThreadId || !hydration.candidateProviderThreadIds) {
+      return;
+    }
+
+    yield* Effect.forEach(
+      hydration.candidateProviderThreadIds,
+      (providerThreadId) =>
+        Effect.gen(function* () {
+          if (root.stoppedChildProviderThreadIds.has(providerThreadId)) {
+            return;
+          }
+
+          const threadId = codexChildThreadId(boundInstanceId, providerThreadId);
+          if (root.stoppedChildThreadIds.has(threadId)) {
+            return;
+          }
+
+          const existing = sessions.get(threadId);
+          if (
+            !existing ||
+            existing.stopped ||
+            existing.kind !== "child" ||
+            existing.providerThreadId !== providerThreadId
+          ) {
+            yield* registerVirtualChildSession({
+              root,
+              threadId,
+              parentThreadId: root.threadId,
+              providerThreadId,
+            });
+          }
+
+          const metadata = collabAgentThreadSpawnMetadataFromEvent(event, providerThreadId);
+          yield* emitMaterializedChildThreadStarted({
+            root,
+            threadId,
+            providerThreadId,
+            createdAt: event.createdAt,
+            ...metadata,
+            providerRefs: providerRefsFromEvent(event),
+            raw: {
+              source: eventRawSource(event),
+              method: event.method,
+              payload: event.payload ?? {},
+            },
+          });
+          yield* enqueueChildBackfillRecovery(root, { threadId, providerThreadId });
+        }),
+      { concurrency: 1, discard: true },
+    );
+  });
+
+  const enqueueChildThreadSnapshotBackfill = Effect.fn("enqueueChildThreadSnapshotBackfill")(
+    function* (input: {
+      readonly root: CodexAdapterRootSessionContext;
+      readonly threadId: ThreadId;
+      readonly providerThreadId: string;
+    }) {
+      const rootSession = yield* input.root.runtime.getSession;
+      const snapshot = yield* input.root.runtime.readProviderThread(input.providerThreadId);
+      const runtimeEvents = codexThreadSnapshotBackfillEvents({
+        threadId: input.threadId,
+        providerInstanceId: boundInstanceId,
+        snapshot,
+        fallbackCreatedAt: rootSession.updatedAt,
+      });
+      if (runtimeEvents.length > 0) {
+        yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
+      }
+    },
+  );
+
+  const registerVirtualChildFromThreadStartedEvent = Effect.fn(
+    "registerVirtualChildFromThreadStartedEvent",
+  )(function* (root: CodexAdapterRootSessionContext, event: ProviderEvent) {
+    if (event.method !== "thread/started" || event.threadId === root.threadId) {
+      return;
+    }
+    if (root.stoppedChildThreadIds.has(event.threadId)) {
+      return;
+    }
+    const payload = readPayload(EffectCodexSchema.V2ThreadStartedNotification, event.payload);
+    if (!payload) {
+      return;
+    }
+    if (root.stoppedChildProviderThreadIds.has(payload.thread.id)) {
+      return;
+    }
+    const metadata = extractCodexThreadSpawnMetadata(payload.thread);
+    if (!metadata) {
+      return;
+    }
+    yield* registerVirtualChildSession({
+      root,
+      threadId: event.threadId,
+      parentThreadId: readSalchiParentThreadId(event.payload) ?? root.threadId,
+      providerThreadId: payload.thread.id,
+    });
+  });
+
+  const hydrateSpawnedChildSessions = Effect.fn("hydrateSpawnedChildSessions")(function* (
+    root: CodexAdapterRootSessionContext,
+    options?: CodexSpawnedChildThreadListOptions & {
+      readonly reason?: string;
+    },
+  ) {
+    if (!root.providerThreadId) {
+      return;
+    }
+    const children = yield* root.runtime.listSpawnedChildThreads(root.providerThreadId, options);
+    const rootSession = yield* root.runtime.getSession;
+    yield* Effect.forEach(
+      children,
+      (thread) =>
+        Effect.gen(function* () {
+          const metadata = extractCodexThreadSpawnMetadata(thread);
+          if (!metadata) {
+            return;
+          }
+          if (
+            options?.candidateProviderThreadIds &&
+            !options.candidateProviderThreadIds.has(thread.id)
+          ) {
+            return;
+          }
+          if (root.stoppedChildProviderThreadIds.has(thread.id)) {
+            return;
+          }
+          const threadId = codexChildThreadId(boundInstanceId, thread.id);
+          if (root.stoppedChildThreadIds.has(threadId)) {
+            return;
+          }
+          const existing = sessions.get(threadId);
+          if (
+            !existing ||
+            existing.stopped ||
+            existing.kind !== "child" ||
+            existing.providerThreadId !== thread.id
+          ) {
+            yield* registerVirtualChildSession({
+              root,
+              threadId,
+              parentThreadId: root.threadId,
+              providerThreadId: thread.id,
+            });
+          }
+          yield* emitMaterializedChildThreadStarted({
+            root,
+            threadId,
+            providerThreadId: thread.id,
+            createdAt: rootSession.updatedAt,
+            subagentNickname: metadata.subagentNickname,
+            subagentRole: metadata.subagentRole,
+            subagentPath: metadata.subagentPath,
+            raw: {
+              source: "codex.app-server.notification",
+              method: "thread/started",
+              payload: {
+                thread,
+                salchiParentThreadId: root.threadId,
+              },
+            },
+          });
+          yield* enqueueChildBackfillRecovery(root, {
+            threadId,
+            providerThreadId: thread.id,
+          });
+        }),
+      { concurrency: 1, discard: true },
+    );
+  });
+
+  const emptyRecoveryWork = (root: CodexAdapterRootSessionContext): CodexChildRecoveryWork => ({
+    root,
+    backfills: new Map(),
+    hydrations: [],
+  });
+
+  const mergeRecoveryWork = (
+    current: CodexChildRecoveryWork,
+    next: CodexChildRecoveryWork,
+  ): CodexChildRecoveryWork => {
+    const backfills = new Map(current.backfills);
+    for (const [providerThreadId, backfill] of next.backfills) {
+      backfills.set(providerThreadId, backfill);
+    }
+    return {
+      root: next.root,
+      backfills,
+      hydrations: [...current.hydrations, ...next.hydrations],
+    };
+  };
+
+  const processChildRecoveryWork = (work: CodexChildRecoveryWork) =>
+    Effect.gen(function* () {
+      if (work.root.stopped) {
+        return;
+      }
+      yield* Effect.forEach(
+        Array.from(work.backfills.values()),
+        (backfill) =>
+          enqueueChildThreadSnapshotBackfill({
+            root: work.root,
+            threadId: backfill.threadId,
+            providerThreadId: backfill.providerThreadId,
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to backfill Codex spawned child thread", {
+                threadId: backfill.threadId,
+                providerThreadId: backfill.providerThreadId,
+                cause,
+              }),
+            ),
+          ),
+        { concurrency: 1, discard: true },
+      );
+      yield* Effect.forEach(
+        work.hydrations,
+        (hydration) =>
+          hydrateSpawnedChildSessions(work.root, hydration).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to hydrate Codex spawned child threads", {
+                threadId: work.root.threadId,
+                reason: hydration.reason,
+                receiverThreadIds: hydration.candidateProviderThreadIds
+                  ? [...hydration.candidateProviderThreadIds]
+                  : undefined,
+                cause,
+              }),
+            ),
+          ),
+        { concurrency: 1, discard: true },
+      );
+    });
+
+  const enqueueChildBackfillRecovery = (
+    root: CodexAdapterRootSessionContext,
+    backfill: CodexChildBackfillWork,
+  ) =>
+    root.recoveryWorker.enqueue(root.threadId, {
+      ...emptyRecoveryWork(root),
+      backfills: new Map([[backfill.providerThreadId, backfill]]),
+    });
+
+  const enqueueChildHydrationRecovery = (
+    root: CodexAdapterRootSessionContext,
+    hydration: CodexChildHydrationWork = {},
+  ) =>
+    root.recoveryWorker.enqueue(root.threadId, {
+      ...emptyRecoveryWork(root),
+      hydrations: [hydration],
+    });
+
   const startSession: CodexAdapterShape["startSession"] = (input) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -1533,10 +2457,27 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               }),
           ),
         );
+        const recoveryWorker = yield* makeKeyedCoalescingWorker({
+          merge: mergeRecoveryWork,
+          process: (_rootThreadId: ThreadId, work: CodexChildRecoveryWork) =>
+            processChildRecoveryWork(work),
+        }).pipe(Effect.provideService(Scope.Scope, sessionScope));
 
+        let rootSession: CodexAdapterRootSessionContext | undefined;
         const eventFiber = yield* Stream.runForEach(runtime.events, (event) =>
           Effect.gen(function* () {
             yield* writeNativeEvent(event);
+            const root = rootSession;
+            if (root?.stoppedChildThreadIds.has(event.threadId)) {
+              return;
+            }
+            if (root) {
+              yield* registerVirtualChildFromThreadStartedEvent(root, event);
+            }
+            const hydrationInput = root ? collabAgentChildHydrationInputFromEvent(event) : null;
+            if (root && hydrationInput) {
+              yield* ensureMaterializedReceiverChildSessions(root, event, hydrationInput);
+            }
             const runtimeEvents = mapToRuntimeEvents(event, event.threadId);
             if (runtimeEvents.length === 0) {
               yield* Effect.logDebug("ignoring unhandled Codex provider event", {
@@ -1545,11 +2486,39 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                 turnId: event.turnId,
                 itemId: event.itemId,
               });
-              return;
+            } else {
+              yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
             }
-            yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
+            if (runtimeEvents.length > 0 && event.method === "thread/started" && root) {
+              const childSession = sessions.get(event.threadId);
+              if (childSession?.kind === "child") {
+                yield* enqueueChildBackfillRecovery(root, {
+                  threadId: childSession.threadId,
+                  providerThreadId: childSession.providerThreadId,
+                });
+              }
+            }
+            if (root && hydrationInput) {
+              yield* enqueueChildHydrationRecovery(root, {
+                ...hydrationInput,
+                allowScanRepair: true,
+              });
+            }
           }),
         ).pipe(Effect.forkChild);
+        rootSession = {
+          kind: "root",
+          threadId: input.threadId,
+          scope: sessionScope,
+          runtime,
+          eventFiber,
+          childThreadIds: new Set(),
+          stoppedChildThreadIds: new Set(),
+          stoppedChildProviderThreadIds: new Set(),
+          childThreadStartedMetadataByProviderThreadId: new Map(),
+          recoveryWorker,
+          stopped: false,
+        };
 
         const started = yield* runtime.start().pipe(
           Effect.mapError(
@@ -1570,12 +2539,22 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ),
         );
 
-        sessions.set(input.threadId, {
-          threadId: input.threadId,
-          scope: sessionScope,
-          runtime,
-          eventFiber,
-          stopped: false,
+        const startedProviderThreadId = isCodexResumeCursorSchema(started.resumeCursor)
+          ? started.resumeCursor.threadId
+          : undefined;
+        if (startedProviderThreadId) {
+          rootSession.providerThreadId = startedProviderThreadId;
+        }
+        sessions.set(input.threadId, rootSession);
+        if (startedProviderThreadId && String(input.threadId).startsWith("codex-child-")) {
+          yield* enqueueChildBackfillRecovery(rootSession, {
+            threadId: input.threadId,
+            providerThreadId: startedProviderThreadId,
+          });
+        }
+        yield* enqueueChildHydrationRecovery(rootSession, {
+          allowScanRepair: true,
+          reason: "root-start",
         });
         sessionScopeTransferred = true;
 
@@ -1632,23 +2611,29 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         ? getCodexServiceTierOptionValue(input.modelSelection)
         : undefined;
     const approvalsReviewer = resolveCodexApprovalsReviewer(input.modelSelection, boundInstanceId);
-    return yield* session.runtime
-      .sendTurn({
-        ...(input.input !== undefined ? { input: input.input } : {}),
-        ...(input.modelSelection?.instanceId === boundInstanceId
-          ? { model: input.modelSelection.model }
-          : {}),
-        ...(reasoningEffort
-          ? {
-              effort: reasoningEffort as EffectCodexSchema.V2TurnStartParams__ReasoningEffort,
-            }
-          : {}),
-        ...(serviceTier ? { serviceTier } : {}),
-        ...(approvalsReviewer ? { approvalsReviewer } : {}),
-        ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
-        ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
-      })
-      .pipe(Effect.mapError((cause) => mapCodexRuntimeError(input.threadId, "turn/start", cause)));
+    const runtimeTurnInput = {
+      ...(input.input !== undefined ? { input: input.input } : {}),
+      ...(input.modelSelection?.instanceId === boundInstanceId
+        ? { model: input.modelSelection.model }
+        : {}),
+      ...(reasoningEffort
+        ? {
+            effort: reasoningEffort as EffectCodexSchema.V2TurnStartParams__ReasoningEffort,
+          }
+        : {}),
+      ...(serviceTier ? { serviceTier } : {}),
+      ...(approvalsReviewer ? { approvalsReviewer } : {}),
+      ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
+    };
+    const turn =
+      session.kind === "child"
+        ? session.runtime.sendTurnToProviderThread(session.providerThreadId, runtimeTurnInput)
+        : session.runtime.sendTurn(runtimeTurnInput);
+    return yield* turn.pipe(
+      Effect.map((result) => ({ ...result, threadId: input.threadId })),
+      Effect.mapError((cause) => mapCodexRuntimeError(input.threadId, "turn/start", cause)),
+    );
   });
 
   const requireSession = Effect.fn("requireSession")(function* (threadId: ThreadId) {
@@ -1664,7 +2649,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const interruptTurn: CodexAdapterShape["interruptTurn"] = (threadId, turnId) =>
     requireSession(threadId).pipe(
-      Effect.flatMap((session) => session.runtime.interruptTurn(turnId)),
+      Effect.flatMap((session) =>
+        session.kind === "child"
+          ? session.runtime.interruptProviderThreadTurn(session.providerThreadId, turnId)
+          : session.runtime.interruptTurn(turnId),
+      ),
       Effect.mapError((cause) =>
         cause._tag === "ProviderAdapterSessionNotFoundError"
           ? cause
@@ -1674,7 +2663,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const readThread: CodexAdapterShape["readThread"] = (threadId) =>
     requireSession(threadId).pipe(
-      Effect.flatMap((session) => session.runtime.readThread),
+      Effect.flatMap((session) =>
+        session.kind === "child"
+          ? session.runtime.readProviderThread(session.providerThreadId)
+          : session.runtime.readThread,
+      ),
       Effect.mapError((cause) =>
         cause._tag === "ProviderAdapterSessionNotFoundError"
           ? cause
@@ -1698,7 +2691,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     }
 
     return requireSession(threadId).pipe(
-      Effect.flatMap((session) => session.runtime.rollbackThread(numTurns)),
+      Effect.flatMap((session) =>
+        session.kind === "child"
+          ? session.runtime.rollbackProviderThread(session.providerThreadId, numTurns)
+          : session.runtime.rollbackThread(numTurns),
+      ),
       Effect.mapError((cause) =>
         cause._tag === "ProviderAdapterSessionNotFoundError"
           ? cause
@@ -1748,8 +2745,30 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     if (session.stopped) {
       return;
     }
+    if (session.kind === "child") {
+      session.stopped = true;
+      sessions.delete(session.threadId);
+      const root = sessions.get(session.rootThreadId);
+      if (root?.kind === "root") {
+        root.childThreadIds.delete(session.threadId);
+        root.stoppedChildThreadIds.add(session.threadId);
+        root.stoppedChildProviderThreadIds.add(session.providerThreadId);
+      }
+      return;
+    }
+
     session.stopped = true;
     sessions.delete(session.threadId);
+    for (const childThreadId of session.childThreadIds) {
+      const child = sessions.get(childThreadId);
+      if (child?.kind === "child") {
+        child.stopped = true;
+        session.stoppedChildThreadIds.add(child.threadId);
+        session.stoppedChildProviderThreadIds.add(child.providerThreadId);
+        sessions.delete(childThreadId);
+      }
+    }
+    session.childThreadIds.clear();
     yield* session.runtime.close.pipe(Effect.ignore);
     yield* Effect.ignore(Scope.close(session.scope, Exit.void));
     yield* Fiber.interrupt(session.eventFiber).pipe(Effect.ignore);
@@ -1767,7 +2786,17 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const listSessions: CodexAdapterShape["listSessions"] = () =>
     Effect.forEach(
       Array.from(sessions.values()).filter((session) => !session.stopped),
-      (session) => session.runtime.getSession,
+      (session) =>
+        session.kind === "child"
+          ? session.runtime.getSession.pipe(
+              Effect.map((rootSession) => ({
+                ...rootSession,
+                threadId: session.threadId,
+                resumeCursor: { threadId: session.providerThreadId },
+                status: session.stopped ? "closed" : rootSession.status,
+              })),
+            )
+          : session.runtime.getSession,
       { concurrency: 1 },
     );
 
@@ -1776,7 +2805,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const refreshUsage: NonNullable<CodexAdapterShape["refreshUsage"]> = () =>
     Effect.forEach(
-      Array.from(sessions.values()).filter((session) => !session.stopped),
+      Array.from(sessions.values()).filter(
+        (session): session is CodexAdapterRootSessionContext =>
+          session.kind === "root" && !session.stopped,
+      ),
       (session) =>
         session.runtime.refreshUsage.pipe(
           Effect.catchCause((cause) =>
@@ -1829,10 +2861,16 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     );
 
   const stopAll: CodexAdapterShape["stopAll"] = () =>
-    Effect.forEach(Array.from(sessions.values()), stopSessionInternal, {
-      concurrency: 1,
-      discard: true,
-    }).pipe(Effect.asVoid);
+    Effect.forEach(
+      Array.from(sessions.values()).filter(
+        (session): session is CodexAdapterRootSessionContext => session.kind === "root",
+      ),
+      stopSessionInternal,
+      {
+        concurrency: 1,
+        discard: true,
+      },
+    ).pipe(Effect.asVoid);
 
   const closeAccountClient = Effect.gen(function* () {
     if (!accountClient) {
@@ -1856,6 +2894,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      childThreadMode: "materialized",
     },
     startSession,
     sendTurn,

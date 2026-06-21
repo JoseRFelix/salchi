@@ -395,6 +395,7 @@ describe("ProviderCommandReactor", () => {
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
+          childThreadMode: "none",
         }),
       getInstanceInfo: (instanceId) => {
         const raw = String(instanceId);
@@ -415,6 +416,7 @@ describe("ProviderCommandReactor", () => {
           },
         });
       },
+      registerMaterializedSessionBinding: () => Effect.void,
       rollbackConversation: () => unsupported(),
       refreshUsage: () => Effect.succeed({ accountRateLimits: [] }),
       get streamEvents() {

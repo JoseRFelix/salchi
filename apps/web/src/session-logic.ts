@@ -9,7 +9,7 @@ import {
   ProviderDriverKind,
   type ToolLifecycleItemType,
   type UserInputQuestion,
-  type ThreadId,
+  ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
 
@@ -22,6 +22,7 @@ import type {
   TurnDiffSummary,
 } from "./types";
 import { compareThreadActivitiesByOrder } from "./threadActivityOrdering";
+import { normalizeSubagentDisplayName } from "./threadTitle";
 
 export type ProviderPickerKind = ProviderDriverKind;
 
@@ -111,6 +112,35 @@ export interface ActivePlanState {
     step: string;
     status: "pending" | "inProgress" | "completed";
   }>;
+}
+
+export type SubagentStatus =
+  | "starting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "stopped"
+  | "interrupted";
+
+export interface SubagentSummary {
+  id: string;
+  label: string;
+  status: SubagentStatus;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  turnId?: TurnId | null;
+  providerThreadId?: string;
+  materializedThreadId?: ThreadId;
+  sourceItemId?: string;
+  role?: string;
+  nickname?: string;
+  model?: string;
+  summary?: string;
+  detail?: string;
+  lastToolName?: string;
+  usage?: unknown;
+  tone: "info" | "error";
 }
 
 export interface LatestProposedPlanState {
@@ -590,6 +620,169 @@ export function deriveActivePlanState(
   };
 }
 
+export function deriveSubagentSummaries(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): SubagentSummary[] {
+  const byKey = new Map<string, SubagentSummary>();
+  const keyBySubagentId = new Map<string, string>();
+  const keyByProviderThreadId = new Map<string, string>();
+  const ordered = [...activities].toSorted(compareThreadActivitiesByOrder);
+
+  for (const activity of ordered) {
+    if (
+      activity.kind !== "subagent.started" &&
+      activity.kind !== "subagent.updated" &&
+      activity.kind !== "subagent.completed" &&
+      activity.kind !== "subagent.thread.spawned"
+    ) {
+      continue;
+    }
+
+    const payload = asRecord(activity.payload);
+    if (activity.kind === "subagent.thread.spawned") {
+      const materializedThreadIdText = asTrimmedString(payload?.threadId);
+      const providerThreadId = asTrimmedString(payload?.providerThreadId);
+      const sourceItemId = asTrimmedString(payload?.sourceItemId);
+      const subagentId = providerThreadId ?? materializedThreadIdText;
+      if (!subagentId) {
+        continue;
+      }
+
+      const existingKey =
+        (providerThreadId ? keyByProviderThreadId.get(providerThreadId) : undefined) ??
+        (materializedThreadIdText ? keyBySubagentId.get(materializedThreadIdText) : undefined) ??
+        (sourceItemId ? keyBySubagentId.get(sourceItemId) : undefined);
+      const key = existingKey ?? subagentId;
+      if (providerThreadId) {
+        keyByProviderThreadId.set(providerThreadId, key);
+      }
+      if (materializedThreadIdText) {
+        keyBySubagentId.set(materializedThreadIdText, key);
+      }
+      if (sourceItemId) {
+        keyBySubagentId.set(sourceItemId, key);
+      }
+
+      const previous = byKey.get(key);
+      const role = asTrimmedString(payload?.subagentRole) ?? previous?.role;
+      const nickname = asTrimmedString(payload?.subagentNickname) ?? previous?.nickname;
+      const subagentPath = asTrimmedString(payload?.subagentPath);
+      const summary = subagentPath ?? previous?.summary ?? activity.summary;
+      const detail = subagentPath ?? previous?.detail ?? previous?.summary;
+      const materializedThreadId = materializedThreadIdText
+        ? ThreadId.make(materializedThreadIdText)
+        : previous?.materializedThreadId;
+      const status = previous?.status ?? "running";
+      const resolvedSourceItemId = sourceItemId ?? previous?.sourceItemId;
+      const label =
+        normalizeSubagentDisplayName(nickname) ??
+        normalizeSubagentDisplayName(role) ??
+        normalizeSubagentDisplayName(subagentPath) ??
+        providerThreadId ??
+        materializedThreadIdText ??
+        previous?.label ??
+        activity.summary;
+      const resolvedProviderThreadId = providerThreadId ?? previous?.providerThreadId;
+      const turnId = activity.turnId ?? previous?.turnId;
+
+      byKey.set(key, {
+        id: previous?.id ?? subagentId,
+        label,
+        status,
+        createdAt: previous?.createdAt ?? activity.createdAt,
+        updatedAt: activity.createdAt,
+        ...(previous?.completedAt ? { completedAt: previous.completedAt } : {}),
+        ...(turnId !== undefined ? { turnId } : {}),
+        ...(resolvedProviderThreadId ? { providerThreadId: resolvedProviderThreadId } : {}),
+        ...(materializedThreadId ? { materializedThreadId } : {}),
+        ...(resolvedSourceItemId ? { sourceItemId: resolvedSourceItemId } : {}),
+        ...(role ? { role } : {}),
+        ...(nickname ? { nickname } : {}),
+        ...(previous?.model ? { model: previous.model } : {}),
+        ...(summary ? { summary } : {}),
+        ...(detail ? { detail } : {}),
+        ...(previous?.lastToolName ? { lastToolName: previous.lastToolName } : {}),
+        ...(previous?.usage !== undefined ? { usage: previous.usage } : {}),
+        tone: previous?.tone ?? "info",
+      });
+      continue;
+    }
+
+    const subagentId = asTrimmedString(payload?.subagentId);
+    if (!subagentId) {
+      continue;
+    }
+    const rawProviderThreadId = asTrimmedString(payload?.providerThreadId);
+    const existingKey =
+      (rawProviderThreadId ? keyByProviderThreadId.get(rawProviderThreadId) : undefined) ??
+      keyBySubagentId.get(subagentId);
+    const key = existingKey ?? rawProviderThreadId ?? subagentId;
+    keyBySubagentId.set(subagentId, key);
+    if (rawProviderThreadId) {
+      keyByProviderThreadId.set(rawProviderThreadId, key);
+    }
+
+    const previous = byKey.get(key);
+    const status = normalizeSubagentStatus(
+      asTrimmedString(payload?.status),
+      activity.kind,
+      previous?.status,
+      activity.tone,
+    );
+    const nickname = asTrimmedString(payload?.nickname) ?? previous?.nickname;
+    const role = asTrimmedString(payload?.role) ?? previous?.role;
+    const providerThreadId = rawProviderThreadId ?? previous?.providerThreadId;
+    const sourceItemId = asTrimmedString(payload?.sourceItemId) ?? previous?.sourceItemId;
+    const model = asTrimmedString(payload?.model) ?? previous?.model;
+    const summary = asTrimmedString(payload?.summary) ?? previous?.summary;
+    const detail = asTrimmedString(payload?.detail) ?? summary ?? previous?.detail;
+    const lastToolName = asTrimmedString(payload?.lastToolName) ?? previous?.lastToolName;
+    const usage = payload && "usage" in payload ? payload.usage : previous?.usage;
+    const tone = activity.tone === "error" || status === "failed" ? "error" : "info";
+    const label =
+      normalizeSubagentDisplayName(nickname) ??
+      normalizeSubagentDisplayName(role) ??
+      providerThreadId ??
+      (previous?.materializedThreadId ? String(previous.materializedThreadId) : undefined) ??
+      subagentId;
+    const turnId = previous?.turnId ?? activity.turnId;
+
+    byKey.set(key, {
+      id: previous?.id ?? subagentId,
+      label,
+      status,
+      createdAt: previous?.createdAt ?? activity.createdAt,
+      updatedAt: activity.createdAt,
+      ...(activity.kind === "subagent.completed"
+        ? { completedAt: activity.createdAt }
+        : previous?.completedAt
+          ? { completedAt: previous.completedAt }
+          : {}),
+      ...(turnId !== undefined ? { turnId } : {}),
+      ...(providerThreadId ? { providerThreadId } : {}),
+      ...(previous?.materializedThreadId
+        ? { materializedThreadId: previous.materializedThreadId }
+        : {}),
+      ...(sourceItemId ? { sourceItemId } : {}),
+      ...(role ? { role } : {}),
+      ...(nickname ? { nickname } : {}),
+      ...(model ? { model } : {}),
+      ...(summary ? { summary } : {}),
+      ...(detail ? { detail } : {}),
+      ...(lastToolName ? { lastToolName } : {}),
+      ...(usage !== undefined ? { usage } : {}),
+      tone,
+    });
+  }
+
+  return [...byKey.values()].toSorted(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) ||
+      left.updatedAt.localeCompare(right.updatedAt) ||
+      left.id.localeCompare(right.id),
+  );
+}
+
 export function findLatestProposedPlan(
   proposedPlans: ReadonlyArray<ProposedPlan>,
   latestTurnId: TurnId | string | null | undefined,
@@ -965,6 +1158,28 @@ function toLatestProposedPlanState(proposedPlan: ProposedPlan): LatestProposedPl
     implementedAt: proposedPlan.implementedAt,
     implementationThreadId: proposedPlan.implementationThreadId,
   };
+}
+
+function normalizeSubagentStatus(
+  value: string | null,
+  kind: OrchestrationThreadActivity["kind"],
+  fallback: SubagentStatus | undefined,
+  tone: OrchestrationThreadActivity["tone"],
+): SubagentStatus {
+  switch (value) {
+    case "starting":
+    case "running":
+    case "completed":
+    case "failed":
+    case "stopped":
+    case "interrupted":
+      return value;
+    default:
+      if (kind === "subagent.completed") {
+        return tone === "error" ? "failed" : "completed";
+      }
+      return fallback ?? "running";
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

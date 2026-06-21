@@ -21,7 +21,9 @@ import type {
   ProviderSendTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  ProviderSessionRuntimeStatus,
   ProviderStopSessionInput,
+  RuntimeMode,
   ThreadId,
   ProviderTurnStartResult,
 } from "@t3tools/contracts";
@@ -32,6 +34,16 @@ import type * as Stream from "effect/Stream";
 import type { ProviderServiceError } from "../Errors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
+
+export interface RegisterMaterializedSessionBindingInput {
+  readonly threadId: ThreadId;
+  readonly provider: ProviderDriverKind;
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly runtimeMode: RuntimeMode;
+  readonly resumeCursor: unknown;
+  readonly runtimePayload: unknown;
+  readonly status: ProviderSessionRuntimeStatus;
+}
 
 /**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
@@ -44,6 +56,14 @@ export interface ProviderServiceShape {
     threadId: ThreadId,
     input: ProviderSessionStartInput,
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
+
+  /**
+   * Register a durable provider binding for a materialized virtual child
+   * session without starting another provider process.
+   */
+  readonly registerMaterializedSessionBinding: (
+    input: RegisterMaterializedSessionBindingInput,
+  ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
    * Send a provider turn.

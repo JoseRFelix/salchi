@@ -12,9 +12,11 @@ import {
   reorderProjects,
   setDefaultAdvertisedEndpointKey,
   setProjectExpanded,
+  setThreadExpanded,
   setThreadChangedFilesExpanded,
   syncProjects,
   syncThreads,
+  toggleThreadExpanded,
   type UiState,
 } from "./uiStateStore";
 
@@ -22,6 +24,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
   return {
     projectExpandedById: {},
     projectOrder: [],
+    threadExpandedById: {},
     threadLastVisitedAtById: {},
     seededThreadVisitedKeys: new Set<string>(),
     threadChangedFilesExpandedById: {},
@@ -358,6 +361,10 @@ describe("uiStateStore pure functions", () => {
     const thread1 = ThreadId.make("thread-1");
     const thread2 = ThreadId.make("thread-2");
     const initialState = makeUiState({
+      threadExpandedById: {
+        [thread1]: false,
+        [thread2]: false,
+      },
       threadLastVisitedAtById: {
         [thread1]: "2026-02-25T12:35:00.000Z",
         [thread2]: "2026-02-25T12:36:00.000Z",
@@ -374,6 +381,9 @@ describe("uiStateStore pure functions", () => {
 
     const next = syncThreads(initialState, [{ key: thread1 }]);
 
+    expect(next.threadExpandedById).toEqual({
+      [thread1]: false,
+    });
     expect(next.threadLastVisitedAtById).toEqual({
       [thread1]: "2026-02-25T12:35:00.000Z",
     });
@@ -523,9 +533,38 @@ describe("uiStateStore pure functions", () => {
     expect(next.projectOrder).toEqual([project1]);
   });
 
+  it("toggleThreadExpanded stores collapsed thread groups as false overrides", () => {
+    const thread1 = ThreadId.make("thread-1");
+    const collapsed = toggleThreadExpanded(makeUiState(), thread1);
+
+    expect(collapsed.threadExpandedById).toEqual({
+      [thread1]: false,
+    });
+
+    const expanded = toggleThreadExpanded(collapsed, thread1);
+
+    expect(expanded.threadExpandedById).toEqual({});
+  });
+
+  it("setThreadExpanded removes expanded thread overrides", () => {
+    const thread1 = ThreadId.make("thread-1");
+    const initialState = makeUiState({
+      threadExpandedById: {
+        [thread1]: false,
+      },
+    });
+
+    const next = setThreadExpanded(initialState, thread1, true);
+
+    expect(next.threadExpandedById).toEqual({});
+  });
+
   it("clearThreadUi removes visit state for deleted threads", () => {
     const thread1 = ThreadId.make("thread-1");
     const initialState = makeUiState({
+      threadExpandedById: {
+        [thread1]: false,
+      },
       threadLastVisitedAtById: {
         [thread1]: "2026-02-25T12:35:00.000Z",
       },
@@ -538,6 +577,7 @@ describe("uiStateStore pure functions", () => {
 
     const next = clearThreadUi(initialState, thread1);
 
+    expect(next.threadExpandedById).toEqual({});
     expect(next.threadLastVisitedAtById).toEqual({});
     expect(next.seededThreadVisitedKeys).toEqual(new Set());
     expect(next.threadChangedFilesExpandedById).toEqual({});
@@ -715,6 +755,24 @@ describe("uiStateStore persistence round-trip", () => {
       localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
     ) as PersistedUiState;
     expect(persisted.defaultAdvertisedEndpointKey).toBe("desktop-core:lan:http");
+  });
+
+  it("persists collapsed thread groups across restart", async () => {
+    const thread1 = ThreadId.make("thread-1");
+    const state = setThreadExpanded(makeUiState(), thread1, false);
+
+    persistState(state);
+
+    const persisted = JSON.parse(
+      localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
+    ) as PersistedUiState;
+
+    expect(persisted.collapsedThreadKeys).toEqual([thread1]);
+
+    expect(makeUiState().threadExpandedById).toEqual({});
+    vi.resetModules();
+    const { useUiStateStore } = await import("./uiStateStore");
+    expect(useUiStateStore.getState().threadExpandedById).toEqual({ [thread1]: false });
   });
 
   it("preserves expand state across restart when project's logical key changes", () => {

@@ -19,9 +19,25 @@ import {
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 
 import type { ProjectionRepositoryError } from "../Errors.ts";
+
+const DefaultedProjectionParentThreadId = Schema.NullOr(ThreadId).pipe(
+  Schema.optionalKey,
+  Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  Schema.withConstructorDefault(Effect.succeed(null)),
+);
+const DefaultedProjectionSubagentText = Schema.NullOr(Schema.String).pipe(
+  Schema.optionalKey,
+  Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  Schema.withConstructorDefault(Effect.succeed(null)),
+);
+const DefaultedProjectionHiddenFromThreadList = NonNegativeInt.pipe(
+  Schema.optionalKey,
+  Schema.withDecodingDefaultKey(Effect.succeed(0)),
+  Schema.withConstructorDefault(Effect.succeed(0)),
+);
 
 export const ProjectionThread = Schema.Struct({
   threadId: ThreadId,
@@ -30,6 +46,11 @@ export const ProjectionThread = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  parentThreadId: DefaultedProjectionParentThreadId,
+  subagentKind: DefaultedProjectionSubagentText,
+  subagentNickname: DefaultedProjectionSubagentText,
+  subagentRole: DefaultedProjectionSubagentText,
+  hiddenFromThreadList: DefaultedProjectionHiddenFromThreadList,
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   latestTurnId: Schema.NullOr(TurnId),

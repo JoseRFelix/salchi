@@ -23,6 +23,10 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
 );
 type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
 
+function sqliteBoolean(value: boolean | number | null | undefined): number {
+  return value === true || value === 1 ? 1 : 0;
+}
+
 const makeProjectionThreadRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
@@ -37,6 +41,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           model_selection_json,
           runtime_mode,
           interaction_mode,
+          parent_thread_id,
+          subagent_kind,
+          subagent_nickname,
+          subagent_role,
+          hidden_from_thread_list,
           branch,
           worktree_path,
           latest_turn_id,
@@ -56,6 +65,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${JSON.stringify(row.modelSelection)},
           ${row.runtimeMode},
           ${row.interactionMode},
+          ${row.parentThreadId ?? null},
+          ${row.subagentKind ?? null},
+          ${row.subagentNickname ?? null},
+          ${row.subagentRole ?? null},
+          ${sqliteBoolean(row.hiddenFromThreadList)},
           ${row.branch},
           ${row.worktreePath},
           ${row.latestTurnId},
@@ -75,6 +89,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           model_selection_json = excluded.model_selection_json,
           runtime_mode = excluded.runtime_mode,
           interaction_mode = excluded.interaction_mode,
+          parent_thread_id = excluded.parent_thread_id,
+          subagent_kind = excluded.subagent_kind,
+          subagent_nickname = excluded.subagent_nickname,
+          subagent_role = excluded.subagent_role,
+          hidden_from_thread_list = excluded.hidden_from_thread_list,
           branch = excluded.branch,
           worktree_path = excluded.worktree_path,
           latest_turn_id = excluded.latest_turn_id,
@@ -101,6 +120,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          parent_thread_id AS "parentThreadId",
+          subagent_kind AS "subagentKind",
+          subagent_nickname AS "subagentNickname",
+          subagent_role AS "subagentRole",
+          hidden_from_thread_list AS "hiddenFromThreadList",
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
@@ -129,6 +153,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          parent_thread_id AS "parentThreadId",
+          subagent_kind AS "subagentKind",
+          subagent_nickname AS "subagentNickname",
+          subagent_role AS "subagentRole",
+          hidden_from_thread_list AS "hiddenFromThreadList",
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",

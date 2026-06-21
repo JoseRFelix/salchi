@@ -76,6 +76,22 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
 type ProjectorName =
   (typeof ORCHESTRATION_PROJECTOR_NAMES)[keyof typeof ORCHESTRATION_PROJECTOR_NAMES];
 
+function maxIsoTimestamp(left: string | null | undefined, right: string): string {
+  if (!left) {
+    return right;
+  }
+
+  const leftTimestamp = Date.parse(left);
+  const rightTimestamp = Date.parse(right);
+  if (!Number.isFinite(leftTimestamp)) {
+    return right;
+  }
+  if (!Number.isFinite(rightTimestamp)) {
+    return left;
+  }
+  return rightTimestamp > leftTimestamp ? right : left;
+}
+
 /**
  * Turn state to settle still-running turns with when their session leaves the
  * "running" status, or null while the session is (re)starting or running and
@@ -631,6 +647,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             modelSelection: event.payload.modelSelection,
             runtimeMode: event.payload.runtimeMode,
             interactionMode: event.payload.interactionMode,
+            parentThreadId: event.payload.parentThreadId ?? null,
+            subagentKind: event.payload.subagentKind ?? null,
+            subagentNickname: event.payload.subagentNickname ?? null,
+            subagentRole: event.payload.subagentRole ?? null,
+            hiddenFromThreadList: event.payload.hiddenFromThreadList ? 1 : 0,
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
             latestTurnId: null,
@@ -655,7 +676,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             archivedAt: event.payload.archivedAt,
-            updatedAt: event.payload.updatedAt,
+            updatedAt: maxIsoTimestamp(existingRow.value.updatedAt, event.payload.updatedAt),
           });
           return;
         }
@@ -670,7 +691,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             archivedAt: null,
-            updatedAt: event.payload.updatedAt,
+            updatedAt: maxIsoTimestamp(existingRow.value.updatedAt, event.payload.updatedAt),
           });
           return;
         }
@@ -692,7 +713,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.worktreePath !== undefined
               ? { worktreePath: event.payload.worktreePath }
               : {}),
-            updatedAt: event.payload.updatedAt,
+            updatedAt: maxIsoTimestamp(existingRow.value.updatedAt, event.payload.updatedAt),
           });
           return;
         }
@@ -707,7 +728,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             runtimeMode: event.payload.runtimeMode,
-            updatedAt: event.payload.updatedAt,
+            updatedAt: maxIsoTimestamp(existingRow.value.updatedAt, event.payload.updatedAt),
           });
           return;
         }
@@ -722,7 +743,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             interactionMode: event.payload.interactionMode,
-            updatedAt: event.payload.updatedAt,
+            updatedAt: maxIsoTimestamp(existingRow.value.updatedAt, event.payload.updatedAt),
           });
           return;
         }
@@ -738,7 +759,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             deletedAt: event.payload.deletedAt,
-            updatedAt: event.payload.deletedAt,
+            updatedAt: maxIsoTimestamp(existingRow.value.updatedAt, event.payload.deletedAt),
           });
           return;
         }
@@ -759,7 +780,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
-            updatedAt: event.occurredAt,
+            updatedAt: maxIsoTimestamp(existingRow.value.updatedAt, event.occurredAt),
           });
           yield* refreshThreadShellSummary(event.payload.threadId);
           return;
@@ -775,7 +796,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             latestTurnId: event.payload.session.activeTurnId ?? existingRow.value.latestTurnId,
-            updatedAt: event.occurredAt,
+            updatedAt: maxIsoTimestamp(existingRow.value.updatedAt, event.occurredAt),
           });
           yield* refreshThreadShellSummary(event.payload.threadId);
           return;
@@ -791,7 +812,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             latestTurnId: event.payload.turnId,
-            updatedAt: event.occurredAt,
+            updatedAt: maxIsoTimestamp(existingRow.value.updatedAt, event.occurredAt),
           });
           yield* refreshThreadShellSummary(event.payload.threadId);
           return;
@@ -829,7 +850,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             latestTurnId,
-            updatedAt: event.occurredAt,
+            updatedAt: maxIsoTimestamp(existingRow.value.updatedAt, event.occurredAt),
           });
           yield* refreshThreadShellSummary(event.payload.threadId);
           return;

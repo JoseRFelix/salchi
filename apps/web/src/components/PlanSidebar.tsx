@@ -270,7 +270,7 @@ const PlanSidebar = memo(function PlanSidebar({
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
               <p className="mt-1 text-[11px] text-muted-foreground/30">
-                Plans will appear here when generated.
+                Activity will appear here when generated.
               </p>
             </div>
           ) : null}

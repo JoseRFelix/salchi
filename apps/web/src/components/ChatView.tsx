@@ -83,6 +83,7 @@ import {
 import { resyncAppBadge } from "../pwa/appBadge";
 import { closeThreadNotifications } from "../push/notifications";
 import { viewedThreadVisitedAt } from "../threadCompletion";
+import { resolveThreadDisplayTitle } from "../threadTitle";
 import {
   type AppState,
   selectProjectsAcrossEnvironments,
@@ -990,9 +991,42 @@ export default function ChatView(props: ChatViewProps) {
     () => (activeThread ? scopeThreadRef(activeThread.environmentId, activeThread.id) : null),
     [activeThread],
   );
+  const activeParentThreadRef = useMemo(
+    () =>
+      activeThread?.parentThreadId
+        ? scopeThreadRef(activeThread.environmentId, activeThread.parentThreadId)
+        : null,
+    [activeThread?.environmentId, activeThread?.parentThreadId],
+  );
+  const activeParentThread = useStore(
+    useMemo(() => createThreadSelectorByRef(activeParentThreadRef), [activeParentThreadRef]),
+  );
+  const activeParentThreadId = activeThread?.parentThreadId ?? null;
+  const activeThreadDisplayTitle = useMemo(
+    () => (activeThread ? resolveThreadDisplayTitle(activeThread) : ""),
+    [activeThread],
+  );
+  const activeParentThreadDisplayTitle = useMemo(() => {
+    if (activeParentThread) {
+      return resolveThreadDisplayTitle(activeParentThread);
+    }
+    return activeParentThreadId;
+  }, [activeParentThread, activeParentThreadId]);
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
   const activeThreadEnvironmentId = activeThreadRef?.environmentId ?? null;
   const activeThreadIdForTerminalSnapshot = activeThreadRef?.threadId ?? null;
+  const navigateToActiveParentThread = useCallback(() => {
+    if (!activeParentThreadRef) {
+      return;
+    }
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: {
+        environmentId: activeParentThreadRef.environmentId,
+        threadId: activeParentThreadRef.threadId,
+      },
+    });
+  }, [activeParentThreadRef, navigate]);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const savedEnvironmentRegistry = useSavedEnvironmentRegistryStore((s) => s.byId);
   const savedEnvironmentRuntimeById = useSavedEnvironmentRuntimeStore((s) => s.byId);
@@ -1717,6 +1751,10 @@ export default function ChatView(props: ChatViewProps) {
     [activeLatestTurn?.turnId, threadActivities],
   );
   const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
+  const currentPlanSidebarDismissalKey = useMemo(() => {
+    const key = activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
+    return String(key);
+  }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -2786,8 +2824,7 @@ export default function ChatView(props: ChatViewProps) {
   const togglePlanSidebar = useCallback(() => {
     setPlanSidebarOpen((open) => {
       if (open) {
-        planSidebarDismissedForTurnRef.current =
-          activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
+        planSidebarDismissedForTurnRef.current = currentPlanSidebarDismissalKey;
       } else {
         planSidebarDismissedForTurnRef.current = null;
         closeWorkspaceFilePreview();
@@ -2796,12 +2833,11 @@ export default function ChatView(props: ChatViewProps) {
       }
       return !open;
     });
-  }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
+  }, [currentPlanSidebarDismissalKey]);
   const closePlanSidebar = useCallback(() => {
     setPlanSidebarOpen(false);
-    planSidebarDismissedForTurnRef.current =
-      activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
-  }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
+    planSidebarDismissedForTurnRef.current = currentPlanSidebarDismissalKey;
+  }, [currentPlanSidebarDismissalKey]);
 
   useRegisterRightPanel({
     close: hidePlanSidebar,
@@ -3086,15 +3122,14 @@ export default function ChatView(props: ChatViewProps) {
     if (planSidebarOpen) return;
     const latestTurnId = activeLatestTurn?.turnId ?? null;
     if (latestTurnId && activePlan.turnId !== latestTurnId) return;
-    const turnKey = activePlan.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
-    if (planSidebarDismissedForTurnRef.current === turnKey) return;
+    if (planSidebarDismissedForTurnRef.current === currentPlanSidebarDismissalKey) return;
     setPlanSidebarOpen(true);
   }, [
     activePlan,
     activeLatestTurn?.turnId,
     canAutoOpenPlanSidebar,
+    currentPlanSidebarDismissalKey,
     planSidebarOpen,
-    sidebarProposedPlan?.turnId,
   ]);
 
   useEffect(() => {
@@ -4582,7 +4617,9 @@ export default function ChatView(props: ChatViewProps) {
       >
         <ChatHeader
           activeThreadEnvironmentId={activeThread.environmentId}
-          activeThreadTitle={activeThread.title}
+          activeThreadTitle={activeThreadDisplayTitle}
+          isSubagentThread={activeParentThreadId !== null}
+          parentThreadTitle={activeParentThreadId !== null ? activeParentThreadDisplayTitle : null}
           activeProjectName={activeProject?.name}
           isGitRepo={isGitRepo}
           openInCwd={gitCwd}
@@ -4613,6 +4650,9 @@ export default function ChatView(props: ChatViewProps) {
           onToggleTerminal={toggleTerminalVisibility}
           onToggleDiff={onToggleDiff}
           onToggleSourceControl={onToggleSourceControl}
+          {...(activeParentThreadId !== null
+            ? { onNavigateToParentThread: navigateToActiveParentThread }
+            : {})}
         />
       </header>
 

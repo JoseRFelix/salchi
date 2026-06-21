@@ -9,6 +9,7 @@ import {
 import type { SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
 import { hasActiveSessionWork, isLatestTurnSettled } from "../session-logic";
+import { resolveThreadDisplayTitle } from "../threadTitle";
 import { hasUnseenCompletion as hasUnseenThreadCompletion } from "../threadCompletion";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
@@ -245,6 +246,104 @@ export function getVisibleSidebarThreadIds<TThreadId>(
   return renderedProjects.flatMap((renderedProject) =>
     renderedProject.shouldShowThreadPanel === false ? [] : renderedProject.renderedThreadIds,
   );
+}
+
+export interface SidebarThreadTreeItem<TThread> {
+  readonly thread: TThread;
+  readonly depth: number;
+  readonly rootThreadId: string;
+  readonly childCount: number;
+}
+
+export function flattenSidebarThreadTree<
+  TThread extends {
+    readonly id: string;
+    readonly parentThreadId?: string | null;
+    readonly hiddenFromThreadList?: boolean;
+  },
+>(
+  threads: readonly TThread[],
+  options: {
+    readonly collapsedThreadIds?: ReadonlySet<string>;
+    readonly isThreadCollapsed?: (thread: TThread) => boolean;
+  } = {},
+): SidebarThreadTreeItem<TThread>[] {
+  const visibleThreads = threads.filter((thread) => thread.hiddenFromThreadList !== true);
+  const byId = new Map(visibleThreads.map((thread) => [thread.id, thread] as const));
+  const childrenByParentId = new Map<string, TThread[]>();
+  const roots: TThread[] = [];
+
+  for (const thread of visibleThreads) {
+    if (thread.parentThreadId && byId.has(thread.parentThreadId)) {
+      const children = childrenByParentId.get(thread.parentThreadId) ?? [];
+      children.push(thread);
+      childrenByParentId.set(thread.parentThreadId, children);
+      continue;
+    }
+    roots.push(thread);
+  }
+
+  const flattened: SidebarThreadTreeItem<TThread>[] = [];
+  const appendThread = (
+    thread: TThread,
+    depth: number,
+    rootThreadId: string,
+    visited: Set<string>,
+  ) => {
+    if (visited.has(thread.id)) {
+      return;
+    }
+    const nextVisited = new Set(visited);
+    nextVisited.add(thread.id);
+    const children = childrenByParentId.get(thread.id) ?? [];
+    flattened.push({ thread, depth, rootThreadId, childCount: children.length });
+    if (options.collapsedThreadIds?.has(thread.id) || options.isThreadCollapsed?.(thread)) {
+      return;
+    }
+    for (const child of children) {
+      appendThread(child, depth + 1, rootThreadId, nextVisited);
+    }
+  };
+
+  for (const root of roots) {
+    appendThread(root, 0, root.id, new Set());
+  }
+
+  return flattened;
+}
+
+export function countSidebarRootThreadItems<TThread>(
+  items: readonly SidebarThreadTreeItem<TThread>[],
+): number {
+  return items.reduce((count, item) => (item.depth === 0 ? count + 1 : count), 0);
+}
+
+export function getSidebarPreviewRootThreadIds<TThread>(
+  items: readonly SidebarThreadTreeItem<TThread>[],
+  previewLimit: number,
+): string[] {
+  if (previewLimit <= 0) {
+    return [];
+  }
+  const rootThreadIds: string[] = [];
+  for (const item of items) {
+    if (item.depth === 0) {
+      rootThreadIds.push(item.rootThreadId);
+    }
+    if (rootThreadIds.length >= previewLimit) {
+      break;
+    }
+  }
+  return rootThreadIds;
+}
+
+export function resolveSidebarThreadDisplayTitle(
+  thread: Pick<
+    SidebarThreadSummary,
+    "parentThreadId" | "subagentNickname" | "subagentRole" | "title"
+  >,
+): string {
+  return resolveThreadDisplayTitle(thread);
 }
 
 export function getSidebarThreadIdsToPrewarm<TThreadId>(

@@ -11,13 +11,9 @@ import {
   useStore,
 } from "../store";
 import { formatRelativeTimeLabel } from "../timestampFormat";
-import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
+import { getThreadActivityTimestamp } from "../lib/threadSort";
 import { deriveRecentThreadProjectGroups } from "./NoActiveThreadState.logic";
-
-function threadActivityTimestamp(thread: SidebarThreadSummary): string {
-  return thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt;
-}
 
 function RecentChats() {
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
@@ -47,7 +43,7 @@ function RecentChats() {
             </div>
             <div className="mt-2 divide-y divide-border/70 overflow-hidden rounded-md border border-border/65 bg-background/55">
               {group.threads.map((thread) => {
-                const timestamp = threadActivityTimestamp(thread);
+                const timestamp = getThreadActivityTimestamp(thread);
                 return (
                   <Link
                     key={`${thread.environmentId}:${thread.id}`}

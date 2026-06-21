@@ -362,6 +362,22 @@ export const OrchestrationLatestTurn = Schema.Struct({
 });
 export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 
+const DefaultedParentThreadId = Schema.NullOr(ThreadId).pipe(
+  Schema.optionalKey,
+  Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  Schema.withConstructorDefault(Effect.succeed(null)),
+);
+const DefaultedSubagentText = Schema.NullOr(TrimmedNonEmptyString).pipe(
+  Schema.optionalKey,
+  Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  Schema.withConstructorDefault(Effect.succeed(null)),
+);
+const DefaultedHiddenFromThreadList = Schema.Boolean.pipe(
+  Schema.optionalKey,
+  Schema.withDecodingDefaultKey(Effect.succeed(false)),
+  Schema.withConstructorDefault(Effect.succeed(false)),
+);
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -371,6 +387,11 @@ export const OrchestrationThread = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  parentThreadId: DefaultedParentThreadId,
+  subagentKind: DefaultedSubagentText,
+  subagentNickname: DefaultedSubagentText,
+  subagentRole: DefaultedSubagentText,
+  hiddenFromThreadList: DefaultedHiddenFromThreadList,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
@@ -420,6 +441,11 @@ export const OrchestrationThreadShell = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  parentThreadId: DefaultedParentThreadId,
+  subagentKind: DefaultedSubagentText,
+  subagentNickname: DefaultedSubagentText,
+  subagentRole: DefaultedSubagentText,
+  hiddenFromThreadList: DefaultedHiddenFromThreadList,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
@@ -603,6 +629,11 @@ const ThreadCreateCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  parentThreadId: DefaultedParentThreadId,
+  subagentKind: DefaultedSubagentText,
+  subagentNickname: DefaultedSubagentText,
+  subagentRole: DefaultedSubagentText,
+  hiddenFromThreadList: DefaultedHiddenFromThreadList,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -1022,6 +1053,11 @@ export const ThreadCreatedPayload = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  parentThreadId: DefaultedParentThreadId,
+  subagentKind: DefaultedSubagentText,
+  subagentNickname: DefaultedSubagentText,
+  subagentRole: DefaultedSubagentText,
+  hiddenFromThreadList: DefaultedHiddenFromThreadList,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,

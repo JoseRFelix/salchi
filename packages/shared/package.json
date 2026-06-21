@@ -114,6 +114,10 @@
     "./orchestrationThreadDetailFingerprint": {
       "types": "./src/orchestrationThreadDetailFingerprint.ts",
       "import": "./src/orchestrationThreadDetailFingerprint.ts"
+    },
+    "./Record": {
+      "types": "./src/Record.ts",
+      "import": "./src/Record.ts"
     }
   },
   "scripts": {

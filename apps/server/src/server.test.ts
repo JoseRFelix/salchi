@@ -563,7 +563,8 @@ const buildAppUnderTest = (options?: {
           respondToUserInput: () => Effect.die("Unsupported provider service call in test"),
           stopSession: () => Effect.die("Unsupported provider service call in test"),
           listSessions: () => Effect.succeed([]),
-          getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+          getCapabilities: () =>
+            Effect.succeed({ sessionModelSwitch: "in-session", childThreadMode: "none" }),
           getInstanceInfo: (instanceId) =>
             Effect.succeed({
               instanceId,

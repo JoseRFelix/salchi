@@ -24,12 +24,18 @@ import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "unsupported";
+export type ProviderChildThreadMode = "none" | "activity-only" | "materialized";
 
 export interface ProviderAdapterCapabilities {
   /**
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+
+  /**
+   * Declares how provider-native child/subagent work should be represented.
+   */
+  readonly childThreadMode: ProviderChildThreadMode;
 }
 
 export interface ProviderThreadTurnSnapshot {

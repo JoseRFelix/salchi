@@ -50,6 +50,7 @@ export interface LatestProjectedThreadContent {
 
 const TRACKED_RUNTIME_CONTENT_MAX_CHARS = 4_000;
 const INTERRUPTED_ACTION_BODY = "Agent interrupted. Open Salchi to choose the next action.";
+const EMPTY_ENGAGED_THREAD_IDS: ReadonlySet<ThreadId> = new Set();
 const THREAD_NOTIFICATION_DETAIL_PAGE = {
   limits: {
     messages: 16,
@@ -356,11 +357,51 @@ export function isManualStopTurnCompletion(
   );
 }
 
+function isMaterializedSubagentChildThread(thread: OrchestrationThreadShell): boolean {
+  return thread.parentThreadId !== null && thread.subagentKind === "thread_spawn";
+}
+
+function isThreadUserEngaged(
+  thread: OrchestrationThreadShell,
+  engagedThreadIds: ReadonlySet<ThreadId>,
+): boolean {
+  return thread.latestUserMessageAt !== null || engagedThreadIds.has(thread.id);
+}
+
+function shouldSuppressUnengagedSubagentCompletion(input: {
+  readonly event: Extract<ProviderRuntimeEvent, { type: "turn.completed" }>;
+  readonly thread: Option.Option<OrchestrationThreadShell>;
+  readonly engagedThreadIds: ReadonlySet<ThreadId>;
+}): boolean {
+  if (input.event.payload.state !== "completed" || Option.isNone(input.thread)) {
+    return false;
+  }
+
+  const thread = input.thread.value;
+  return (
+    isMaterializedSubagentChildThread(thread) &&
+    !isThreadUserEngaged(thread, input.engagedThreadIds)
+  );
+}
+
 export function shouldNotifyRuntimeTurnCompletion(
   event: Extract<ProviderRuntimeEvent, { type: "turn.completed" }>,
   thread: Option.Option<OrchestrationThreadShell>,
+  options?: {
+    readonly engagedThreadIds?: ReadonlySet<ThreadId>;
+  },
 ): boolean {
   if (isManualStopTurnCompletion(event, thread)) {
+    return false;
+  }
+  const engagedThreadIds = options?.engagedThreadIds ?? EMPTY_ENGAGED_THREAD_IDS;
+  if (
+    shouldSuppressUnengagedSubagentCompletion({
+      event,
+      thread,
+      engagedThreadIds,
+    })
+  ) {
     return false;
   }
   if (Option.isNone(thread)) {
@@ -428,6 +469,7 @@ const make = Effect.gen(function* () {
   const push = yield* WebPushService;
   const serverEnvironment = yield* ServerEnvironment;
   const runtimeContentByTurn = new Map<string, RuntimeTurnNotificationContent>();
+  const userEngagedThreadIds = new Set<ThreadId>();
 
   const resolveThread = (threadId: ThreadId) =>
     projectionSnapshotQuery
@@ -491,7 +533,12 @@ const make = Effect.gen(function* () {
       serverEnvironment.getDescriptor,
       resolveThread(threadId),
     ]);
-    if (event.type === "turn.completed" && !shouldNotifyRuntimeTurnCompletion(event, thread)) {
+    if (
+      event.type === "turn.completed" &&
+      !shouldNotifyRuntimeTurnCompletion(event, thread, {
+        engagedThreadIds: userEngagedThreadIds,
+      })
+    ) {
       yield* takeRuntimeThreadContent(event).pipe(Effect.asVoid);
       return;
     }
@@ -539,6 +586,16 @@ const make = Effect.gen(function* () {
     start: Effect.fn("startWebPushNotificationReactor")(function* () {
       yield* Effect.forkScoped(
         Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+          if (event.type === "thread.message-sent" && event.payload.role === "user") {
+            return Effect.sync(() => {
+              userEngagedThreadIds.add(event.payload.threadId);
+            });
+          }
+          if (event.type === "thread.turn-queued") {
+            return Effect.sync(() => {
+              userEngagedThreadIds.add(event.payload.threadId);
+            });
+          }
           if (event.type !== "thread.activity-appended") {
             return Effect.void;
           }

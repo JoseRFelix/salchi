@@ -12,6 +12,7 @@ import {
   deriveActivePlanState,
   derivePendingApprovals,
   derivePendingUserInputs,
+  deriveSubagentSummaries,
   deriveTimelineEntries,
   deriveWorkLogEntries,
   findLatestProposedPlan,
@@ -367,6 +368,367 @@ describe("deriveActivePlanState", () => {
       createdAt: "2026-02-23T00:00:01.000Z",
       turnId: "turn-1",
       steps: [{ step: "Write tests", status: "completed" }],
+    });
+  });
+});
+
+describe("deriveSubagentSummaries", () => {
+  it("derives current subagent state from ordered activity history", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "subagent-completed",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "subagent.completed",
+        summary: "Subagent completed",
+        tone: "info",
+        payload: {
+          subagentId: "agent-1",
+          status: "completed",
+          summary: "Found the issue",
+        },
+        sequence: 3,
+      }),
+      makeActivity({
+        id: "subagent-started",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "subagent.started",
+        summary: "Subagent started",
+        tone: "info",
+        payload: {
+          subagentId: "agent-1",
+          status: "running",
+          nickname: "reviewer",
+          role: "code-reviewer",
+          providerThreadId: "provider-agent-1",
+          sourceItemId: "tool-1",
+          summary: "Review database changes",
+        },
+        sequence: 1,
+      }),
+      makeActivity({
+        id: "subagent-updated",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "subagent.updated",
+        summary: "Subagent update",
+        tone: "info",
+        payload: {
+          subagentId: "agent-1",
+          status: "running",
+          detail: "Reading migrations",
+          lastToolName: "Read",
+        },
+        sequence: 2,
+      }),
+    ];
+
+    expect(deriveSubagentSummaries(activities)).toEqual([
+      {
+        id: "agent-1",
+        label: "reviewer",
+        status: "completed",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        updatedAt: "2026-02-23T00:00:03.000Z",
+        completedAt: "2026-02-23T00:00:03.000Z",
+        turnId: null,
+        providerThreadId: "provider-agent-1",
+        sourceItemId: "tool-1",
+        role: "code-reviewer",
+        nickname: "reviewer",
+        summary: "Found the issue",
+        detail: "Found the issue",
+        lastToolName: "Read",
+        tone: "info",
+      },
+    ]);
+  });
+
+  it("marks failed subagents with error tone and falls back to role labels", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "subagent-started",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "subagent.started",
+        summary: "Subagent started",
+        tone: "info",
+        payload: {
+          subagentId: "agent-2",
+          role: "tester",
+        },
+      }),
+      makeActivity({
+        id: "subagent-failed",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "subagent.completed",
+        summary: "Subagent failed",
+        tone: "error",
+        payload: {
+          subagentId: "agent-2",
+          status: "failed",
+          detail: "Test command failed",
+        },
+      }),
+    ];
+
+    const [summary] = deriveSubagentSummaries(activities);
+    expect(summary?.label).toBe("tester");
+    expect(summary?.status).toBe("failed");
+    expect(summary?.tone).toBe("error");
+    expect(summary?.detail).toBe("Test command failed");
+  });
+
+  it("marks error-tone subagent completions without status as failed", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "subagent-started",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "subagent.started",
+        summary: "Subagent started",
+        tone: "info",
+        payload: {
+          subagentId: "agent-error-tone",
+          role: "tester",
+        },
+      }),
+      makeActivity({
+        id: "subagent-completed-error",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "subagent.completed",
+        summary: "Subagent failed",
+        tone: "error",
+        payload: {
+          subagentId: "agent-error-tone",
+          detail: "Subagent exited with an error",
+        },
+      }),
+    ];
+
+    const [summary] = deriveSubagentSummaries(activities);
+    expect(summary?.status).toBe("failed");
+    expect(summary?.tone).toBe("error");
+  });
+
+  it("derives materialized spawned subagents from parent thread activities", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "subagent-thread-spawned",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "subagent.thread.spawned",
+        summary: "Subagent: Planning",
+        tone: "info",
+        payload: {
+          threadId: "child-thread-1",
+          providerThreadId: "provider-child-1",
+          providerParentThreadId: "provider-parent-1",
+          subagentKind: "thread_spawn",
+          subagentNickname: "planner",
+          subagentRole: "Planning",
+          subagentPath: "agents/planner.md",
+        },
+      }),
+    ];
+
+    expect(deriveSubagentSummaries(activities)).toEqual([
+      {
+        id: "provider-child-1",
+        label: "planner",
+        status: "running",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        updatedAt: "2026-02-23T00:00:01.000Z",
+        providerThreadId: "provider-child-1",
+        materializedThreadId: ThreadId.make("child-thread-1"),
+        role: "Planning",
+        nickname: "planner",
+        summary: "agents/planner.md",
+        detail: "agents/planner.md",
+        tone: "info",
+      },
+    ]);
+  });
+
+  it("coalesces materialized spawned subagents with existing provider-thread activity", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "subagent-started",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "subagent.started",
+        summary: "Subagent started",
+        tone: "info",
+        payload: {
+          subagentId: "tool-call-1",
+          providerThreadId: "provider-child-1",
+          status: "running",
+          summary: "Subagent started",
+        },
+      }),
+      makeActivity({
+        id: "subagent-thread-spawned",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "subagent.thread.spawned",
+        summary: "Subagent: Planning",
+        tone: "info",
+        payload: {
+          threadId: "child-thread-1",
+          providerThreadId: "provider-child-1",
+          subagentNickname: "planner",
+          subagentRole: "Planning",
+        },
+      }),
+    ];
+
+    const summaries = deriveSubagentSummaries(activities);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({
+      id: "tool-call-1",
+      label: "planner",
+      status: "running",
+      providerThreadId: "provider-child-1",
+      materializedThreadId: ThreadId.make("child-thread-1"),
+      role: "Planning",
+      nickname: "planner",
+    });
+  });
+
+  it("coalesces materialized spawned subagents with source tool-call activity", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "subagent-started",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "subagent.started",
+        summary: "Subagent started",
+        tone: "info",
+        payload: {
+          subagentId: "call_spawn_1",
+          status: "running",
+          prompt: "Your nickname is Aquinas. Inspect the repo.",
+          summary: "Subagent started",
+        },
+      }),
+      makeActivity({
+        id: "subagent-thread-spawned",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "subagent.thread.spawned",
+        summary: "Aquinas",
+        tone: "info",
+        payload: {
+          threadId: "child-thread-1",
+          providerThreadId: "provider-child-1",
+          subagentNickname: "Aquinas",
+          sourceItemId: "call_spawn_1",
+        },
+      }),
+    ];
+
+    const summaries = deriveSubagentSummaries(activities);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({
+      id: "call_spawn_1",
+      label: "Aquinas",
+      status: "running",
+      providerThreadId: "provider-child-1",
+      materializedThreadId: ThreadId.make("child-thread-1"),
+      sourceItemId: "call_spawn_1",
+    });
+  });
+
+  it("preserves turn metadata from spawn-only materialized subagents", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "subagent-thread-spawned",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "subagent.thread.spawned",
+        summary: "Aquinas",
+        tone: "info",
+        turnId: "turn-spawn",
+        payload: {
+          threadId: "child-thread-1",
+          providerThreadId: "provider-child-1",
+          subagentNickname: "Aquinas",
+        },
+      }),
+    ];
+
+    const summaries = deriveSubagentSummaries(activities);
+    expect(summaries[0]?.turnId).toBe(TurnId.make("turn-spawn"));
+  });
+
+  it("updates materialized spawned subagents when provider-thread completion arrives", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "subagent-thread-spawned",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "subagent.thread.spawned",
+        summary: "Subagent: Planning",
+        tone: "info",
+        payload: {
+          threadId: "child-thread-1",
+          providerThreadId: "provider-child-1",
+          subagentRole: "Planning",
+        },
+      }),
+      makeActivity({
+        id: "subagent-completed",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "subagent.completed",
+        summary: "Subagent completed",
+        tone: "info",
+        payload: {
+          subagentId: "tool-call-1",
+          providerThreadId: "provider-child-1",
+          status: "completed",
+          summary: "Finished planning",
+        },
+      }),
+    ];
+
+    const summaries = deriveSubagentSummaries(activities);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({
+      id: "provider-child-1",
+      label: "Planning",
+      status: "completed",
+      providerThreadId: "provider-child-1",
+      materializedThreadId: ThreadId.make("child-thread-1"),
+      summary: "Finished planning",
+      detail: "Finished planning",
+    });
+  });
+
+  it("ignores generic subagent names when later activity provides a real nickname", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "subagent-thread-spawned",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "subagent.thread.spawned",
+        summary: "default",
+        tone: "info",
+        payload: {
+          threadId: "child-thread-1",
+          providerThreadId: "provider-child-1",
+          subagentRole: "default",
+          subagentNickname: "default",
+        },
+      }),
+      makeActivity({
+        id: "subagent-updated",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "subagent.updated",
+        summary: "Subagent update",
+        tone: "info",
+        payload: {
+          subagentId: "provider-child-1",
+          providerThreadId: "provider-child-1",
+          status: "running",
+          nickname: "Mill",
+        },
+      }),
+    ];
+
+    const summaries = deriveSubagentSummaries(activities);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({
+      label: "Mill",
+      materializedThreadId: ThreadId.make("child-thread-1"),
+      providerThreadId: "provider-child-1",
     });
   });
 });

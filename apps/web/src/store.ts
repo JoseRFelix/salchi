@@ -322,6 +322,11 @@ function mapThread(
     modelSelection: normalizeModelSelection(thread.modelSelection),
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
+    parentThreadId: thread.parentThreadId ?? null,
+    subagentKind: thread.subagentKind ?? null,
+    subagentNickname: thread.subagentNickname ?? null,
+    subagentRole: thread.subagentRole ?? null,
+    hiddenFromThreadList: thread.hiddenFromThreadList ?? false,
     session: thread.session ? mapSession(thread.session) : null,
     messages: thread.messages.map((message) => mapMessage(environmentId, message)),
     queuedTurns: thread.queuedTurns.map((queuedTurn) => mapQueuedTurn(environmentId, queuedTurn)),
@@ -358,6 +363,11 @@ function mapThreadShell(
     modelSelection: normalizeModelSelection(thread.modelSelection),
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
+    parentThreadId: thread.parentThreadId ?? null,
+    subagentKind: thread.subagentKind ?? null,
+    subagentNickname: thread.subagentNickname ?? null,
+    subagentRole: thread.subagentRole ?? null,
+    hiddenFromThreadList: thread.hiddenFromThreadList ?? false,
     error: sanitizeThreadErrorMessage(thread.session?.lastError),
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt,
@@ -376,6 +386,11 @@ function mapThreadShell(
     projectId: thread.projectId,
     title: thread.title,
     interactionMode: thread.interactionMode,
+    parentThreadId: thread.parentThreadId ?? null,
+    subagentKind: thread.subagentKind ?? null,
+    subagentNickname: thread.subagentNickname ?? null,
+    subagentRole: thread.subagentRole ?? null,
+    hiddenFromThreadList: thread.hiddenFromThreadList ?? false,
     session,
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt,
@@ -406,6 +421,11 @@ function toThreadShell(thread: Thread): ThreadShell {
     modelSelection: thread.modelSelection,
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
+    parentThreadId: thread.parentThreadId ?? null,
+    subagentKind: thread.subagentKind ?? null,
+    subagentNickname: thread.subagentNickname ?? null,
+    subagentRole: thread.subagentRole ?? null,
+    hiddenFromThreadList: thread.hiddenFromThreadList ?? false,
     error: thread.error,
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt,
@@ -500,6 +520,11 @@ function sidebarThreadSummariesEqual(
     left.projectId === right.projectId &&
     left.title === right.title &&
     left.interactionMode === right.interactionMode &&
+    (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
+    (left.subagentKind ?? null) === (right.subagentKind ?? null) &&
+    (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
+    (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
+    (left.hiddenFromThreadList ?? false) === (right.hiddenFromThreadList ?? false) &&
     threadSessionsEqual(left.session, right.session) &&
     left.createdAt === right.createdAt &&
     left.archivedAt === right.archivedAt &&
@@ -525,6 +550,11 @@ function threadShellsEqual(left: ThreadShell | undefined, right: ThreadShell): b
     modelSelectionsEqual(left.modelSelection, right.modelSelection) &&
     left.runtimeMode === right.runtimeMode &&
     left.interactionMode === right.interactionMode &&
+    (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
+    (left.subagentKind ?? null) === (right.subagentKind ?? null) &&
+    (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
+    (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
+    (left.hiddenFromThreadList ?? false) === (right.hiddenFromThreadList ?? false) &&
     left.error === right.error &&
     left.createdAt === right.createdAt &&
     left.archivedAt === right.archivedAt &&
@@ -1412,6 +1442,11 @@ function syncSidebarThreadSummaryFromThreadState(
     projectId: shell.projectId,
     title: shell.title,
     interactionMode: shell.interactionMode,
+    parentThreadId: shell.parentThreadId ?? null,
+    subagentKind: shell.subagentKind ?? null,
+    subagentNickname: shell.subagentNickname ?? null,
+    subagentRole: shell.subagentRole ?? null,
+    hiddenFromThreadList: shell.hiddenFromThreadList ?? false,
     session: state.threadSessionById[threadId] ?? null,
     createdAt: shell.createdAt,
     archivedAt: shell.archivedAt,

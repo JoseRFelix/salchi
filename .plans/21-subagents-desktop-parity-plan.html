@@ -1,0 +1,863 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Subagents Desktop Parity Implementation Plan</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f8fa;
+        --surface: #ffffff;
+        --surface-soft: #eef3f8;
+        --ink: #17202a;
+        --muted: #607080;
+        --line: #d8e0e8;
+        --accent: #0f766e;
+        --accent-strong: #115e59;
+        --blue: #2563eb;
+        --amber: #b45309;
+        --red: #b91c1c;
+        --green: #15803d;
+        --shadow: 0 18px 55px rgba(23, 32, 42, 0.1);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.5;
+      }
+
+      a {
+        color: var(--accent-strong);
+      }
+
+      code {
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: #f4f7fa;
+        padding: 0.08rem 0.32rem;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 0.92em;
+      }
+
+      .page {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 32px 24px 56px;
+      }
+      header {
+        padding: 28px 0 26px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .eyebrow {
+        margin: 0 0 10px;
+        color: var(--accent-strong);
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        max-width: 850px;
+        margin: 0;
+        font-size: clamp(2rem, 4vw, 4rem);
+        line-height: 1.02;
+        letter-spacing: 0;
+      }
+
+      .subtitle {
+        max-width: 760px;
+        margin: 18px 0 0;
+        color: var(--muted);
+        font-size: 1.05rem;
+      }
+
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 20px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 30px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--surface);
+        color: var(--muted);
+        padding: 4px 11px;
+        font-size: 0.85rem;
+        font-weight: 650;
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 22px;
+        margin-top: 24px;
+      }
+
+      section {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+        padding: 22px;
+      }
+
+      h2 {
+        margin: 0 0 14px;
+        font-size: 1.2rem;
+        letter-spacing: 0;
+      }
+
+      h3 {
+        margin: 18px 0 9px;
+        font-size: 1rem;
+        letter-spacing: 0;
+      }
+
+      p {
+        margin: 0 0 12px;
+      }
+
+      ul,
+      ol {
+        margin: 10px 0 0;
+        padding-left: 1.2rem;
+      }
+
+      li {
+        margin: 7px 0;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 12px;
+        font-size: 0.94rem;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid var(--line);
+        padding: 10px 8px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: #334155;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .span-4 {
+        grid-column: span 4;
+      }
+
+      .span-6 {
+        grid-column: span 6;
+      }
+
+      .span-8 {
+        grid-column: span 8;
+      }
+
+      .span-12 {
+        grid-column: span 12;
+      }
+
+      .callout {
+        border-left: 4px solid var(--accent);
+        background: var(--surface-soft);
+        padding: 14px 16px;
+      }
+
+      .callout strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+        font-weight: 700;
+      }
+
+      .status::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: currentColor;
+      }
+
+      .status.now {
+        color: var(--amber);
+      }
+
+      .status.target {
+        color: var(--green);
+      }
+
+      .status.risk {
+        color: var(--red);
+      }
+
+      .diagram {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 12px;
+        align-items: stretch;
+        margin-top: 14px;
+      }
+
+      .node {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfe;
+        padding: 14px;
+        min-height: 120px;
+      }
+
+      .node h3 {
+        margin-top: 0;
+      }
+
+      .node p {
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      .flow {
+        position: relative;
+      }
+
+      .flow::after {
+        content: ">";
+        position: absolute;
+        top: 42%;
+        right: -11px;
+        color: var(--accent-strong);
+        font-size: 1.4rem;
+        font-weight: 800;
+      }
+
+      .flow:last-child::after {
+        content: "";
+      }
+
+      .phase {
+        display: grid;
+        grid-template-columns: 94px minmax(0, 1fr);
+        gap: 14px;
+        padding: 16px 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .phase:first-of-type {
+        border-top: 0;
+      }
+
+      .phase-number {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 76px;
+        height: 76px;
+        border-radius: 8px;
+        background: #dff3f0;
+        color: var(--accent-strong);
+        font-size: 1.4rem;
+        font-weight: 800;
+      }
+
+      .phase h3 {
+        margin-top: 0;
+      }
+
+      .file-list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .file-list code {
+        display: block;
+        overflow-wrap: anywhere;
+        padding: 8px;
+      }
+
+      .decision-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .decision {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px;
+        background: #fbfcfe;
+      }
+
+      .decision h3 {
+        margin-top: 0;
+      }
+
+      .checklist li::marker {
+        color: var(--accent-strong);
+      }
+
+      @media (max-width: 900px) {
+        .span-4,
+        .span-6,
+        .span-8,
+        .span-12 {
+          grid-column: span 12;
+        }
+
+        .diagram,
+        .decision-grid,
+        .file-list {
+          grid-template-columns: 1fr;
+        }
+
+        .flow::after {
+          content: "v";
+          top: auto;
+          right: 16px;
+          bottom: -17px;
+        }
+      }
+
+      @media (max-width: 620px) {
+        .page {
+          padding: 18px 14px 34px;
+        }
+
+        section {
+          padding: 16px;
+        }
+
+        .phase {
+          grid-template-columns: 1fr;
+        }
+
+        .phase-number {
+          width: 100%;
+          height: 48px;
+        }
+
+        table {
+          display: block;
+          overflow-x: auto;
+          white-space: nowrap;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header>
+        <p class="eyebrow">Salchi implementation plan</p>
+        <h1>First-class subagents with Codex desktop parity</h1>
+        <p class="subtitle">
+          A phased plan to move Salchi from flattened subagent events to inspectable, steerable,
+          provider-neutral subagent workflows for Codex and Claude.
+        </p>
+        <div class="meta" aria-label="Plan metadata">
+          <span class="pill">Created: 2026-06-19</span>
+          <span class="pill">Scope: apps/server, apps/web, packages/contracts</span>
+          <span class="pill">Verification: bun fmt, bun lint, bun typecheck, bun run test</span>
+        </div>
+      </header>
+
+      <main>
+        <section>
+          <h2>Executive Summary</h2>
+          <div class="grid">
+            <div class="span-8">
+              <p>
+                Salchi already recognizes some subagent work. Codex
+                <code>collabAgentToolCall</code> items become
+                <code>collab_agent_tool_call</code>, and Claude task or subagent events become
+                generic <code>task.*</code> updates. The missing piece is a first-class subagent
+                model that keeps each child agent visible as an entity with status, role, nickname,
+                source thread, token usage, approvals, and optional steering actions.
+              </p>
+              <p>
+                The recommended implementation preserves provider-neutral contracts while using
+                provider-specific adapters to recover richer native metadata. Codex remains the
+                lead implementation because app-server already exposes child threads and native
+                subagent fields. Claude follows by mapping SDK task and tool events into the same
+                canonical shape.
+              </p>
+            </div>
+            <div class="span-4 callout">
+              <strong>Target behavior</strong>
+              Users can see active subagents, inspect their summaries, identify which agent raised
+              an approval, and steer or stop supported child agents without losing the clean parent
+              conversation.
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2>Current State</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Area</th>
+                <th>Current behavior</th>
+                <th>Gap</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Codex adapter</td>
+                <td>
+                  Maps <code>collabAgentToolCall</code> to
+                  <code>collab_agent_tool_call</code> and routes known receiver thread ids back to
+                  the parent turn.
+                </td>
+                <td>
+                  Does not model child agents as persisted entities. Native
+                  <code>subAgentActivity</code> and child thread metadata are not surfaced as a
+                  dedicated UI state.
+                </td>
+              </tr>
+              <tr>
+                <td>Claude adapter</td>
+                <td>
+                  Classifies <code>Task</code>, agent, and subagent-like tool calls as
+                  <code>collab_agent_tool_call</code>. Maps SDK
+                  <code>task_started</code>, <code>task_progress</code>, and
+                  <code>task_notification</code> to <code>task.*</code>.
+                </td>
+                <td>
+                  Task updates are work-log entries, not inspectable child agent records. Tool-use
+                  ids, task ids, and parent tool ids are not unified.
+                </td>
+              </tr>
+              <tr>
+                <td>Orchestration ingestion</td>
+                <td>Projects item and task runtime events into thread activities.</td>
+                <td>
+                  No subagent store, no status coalescing by agent id, and no parent-child
+                  relationship exposed to clients.
+                </td>
+              </tr>
+              <tr>
+                <td>Web UI</td>
+                <td>
+                  Hides <code>task.started</code>, shows progress and completion as work-log rows,
+                  and renders subagent tool calls like generic tool cards.
+                </td>
+                <td>
+                  No agent list, no thread switcher, no source labels on approvals, and no
+                  steer/stop/close controls.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section>
+          <h2>Target Architecture</h2>
+          <div class="diagram" aria-label="Target event flow">
+            <div class="node flow">
+              <h3>Provider Native Events</h3>
+              <p>
+                Codex app-server emits <code>collabAgentToolCall</code>,
+                <code>subAgentActivity</code>, child thread metadata, and approvals. Claude SDK
+                emits task messages and tool-use events.
+              </p>
+            </div>
+            <div class="node flow">
+              <h3>Provider Runtime Events</h3>
+              <p>
+                Adapters normalize native data into <code>subagent.started</code>,
+                <code>subagent.updated</code>, <code>subagent.completed</code>, existing
+                <code>item.*</code>, and existing approval events.
+              </p>
+            </div>
+            <div class="node">
+              <h3>Orchestration and UI</h3>
+              <p>
+                The server stores subagent state per thread. The web app renders an agents panel,
+                source-aware work log rows, and provider-supported steering actions.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2>Contract Additions</h2>
+          <p>
+            Add provider-neutral subagent events to <code>packages/contracts/src/providerRuntime.ts</code>.
+            Keep existing <code>collab_agent_tool_call</code> item lifecycle events for compatibility.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Event</th>
+                <th>Required payload</th>
+                <th>Optional payload</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>subagent.started</code></td>
+                <td><code>subagentId</code>, <code>parentTurnId</code>, <code>status</code></td>
+                <td>
+                  <code>providerThreadId</code>, <code>sourceItemId</code>, <code>role</code>,
+                  <code>nickname</code>, <code>model</code>, <code>prompt</code>
+                </td>
+              </tr>
+              <tr>
+                <td><code>subagent.updated</code></td>
+                <td><code>subagentId</code>, <code>status</code></td>
+                <td>
+                  <code>summary</code>, <code>lastToolName</code>, <code>usage</code>,
+                  <code>providerThreadId</code>, <code>detail</code>
+                </td>
+              </tr>
+              <tr>
+                <td><code>subagent.completed</code></td>
+                <td><code>subagentId</code>, <code>status</code></td>
+                <td><code>summary</code>, <code>usage</code>, <code>error</code></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="callout">
+            <strong>Compatibility rule</strong>
+            Do not remove or reinterpret <code>task.*</code> until both Codex and Claude emit
+            reliable <code>subagent.*</code> events. During rollout, emit both where useful and
+            let the UI prefer <code>subagent.*</code> for agent-specific displays.
+          </div>
+        </section>
+
+        <section>
+          <h2>Implementation Phases</h2>
+
+          <div class="phase">
+            <div class="phase-number">0</div>
+            <div>
+              <h3>Fixture-first discovery</h3>
+              <p>
+                Capture representative Codex app-server events for a prompt that spawns two agents,
+                raises one approval from a child, and completes with a consolidated summary. Capture
+                Claude SDK task events for the same flow.
+              </p>
+              <ul class="checklist">
+                <li>Add red tests for Codex <code>subAgentActivity</code> and child thread metadata.</li>
+                <li>Add red tests for child-origin approvals retaining the child agent label.</li>
+                <li>Add Claude tests for mapping <code>Task</code> tool-use ids to task progress ids.</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-number">1</div>
+            <div>
+              <h3>Provider-neutral contracts</h3>
+              <p>
+                Add subagent runtime events and orchestration schemas before touching UI. Include
+                stable ids, parent turn references, provider refs, status, role, nickname, model,
+                summaries, and usage.
+              </p>
+              <ul class="checklist">
+                <li>Create branded <code>RuntimeSubagentId</code> in <code>baseSchemas.ts</code>.</li>
+                <li>Add <code>ProviderRuntimeSubagent*</code> event schemas.</li>
+                <li>Add orchestration activity payloads and persisted detail page fields.</li>
+                <li>Keep schema-only rules in <code>packages/contracts</code>.</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-number">2</div>
+            <div>
+              <h3>Codex native mapping</h3>
+              <p>
+                Treat Codex as the reference provider. Build a child-agent registry inside the
+                Codex runtime adapter using <code>collabAgentToolCall.receiverThreadIds</code>,
+                thread <code>parentThreadId</code>, <code>agentNickname</code>, and
+                <code>agentRole</code>.
+              </p>
+              <ul class="checklist">
+                <li>Parse native <code>subAgentActivity</code> lifecycle events.</li>
+                <li>Retain child <code>thread/started</code> metadata before suppressing timeline noise.</li>
+                <li>Attach child agent labels to approvals and user-input requests.</li>
+                <li>Emit <code>subagent.started</code>, <code>subagent.updated</code>, and <code>subagent.completed</code>.</li>
+                <li>Preserve existing parent-turn routing and current flattened work-log behavior.</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-number">3</div>
+            <div>
+              <h3>Claude normalization</h3>
+              <p>
+                Map Claude task and tool-use behavior into the same subagent contract without
+                pretending Claude has Codex-style child threads when it does not expose them.
+              </p>
+              <ul class="checklist">
+                <li>Use Claude <code>task_id</code> as <code>subagentId</code> when available.</li>
+                <li>Use tool-use id as a fallback id for <code>Task</code> tool calls.</li>
+                <li>Map <code>task_progress.summary</code>, usage, and last tool into updates.</li>
+                <li>Keep synthetic-turn logic for background task output unchanged.</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-number">4</div>
+            <div>
+              <h3>Orchestration state</h3>
+              <p>
+                Store subagents as thread-detail entities instead of only activities. The activity
+                stream remains append-only, while a coalesced subagent map powers the UI.
+              </p>
+              <ul class="checklist">
+                <li>Add <code>subagentIdsByThreadId</code> and <code>subagentByThreadId</code> state.</li>
+                <li>Coalesce updates by <code>subagentId</code> while retaining raw activities.</li>
+                <li>Expose subagents in thread detail responses and recovery resync paths.</li>
+                <li>Ensure reconnects reconstruct active subagents from persisted events.</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-number">5</div>
+            <div>
+              <h3>Web UI parity slice</h3>
+              <p>
+                Add a compact agents surface that fits Salchi's existing work-focused UI. Avoid a
+                separate landing page or noisy decorative treatment.
+              </p>
+              <ul class="checklist">
+                <li>Add an "Agents" section near the work log or right panel.</li>
+                <li>Show role, nickname, status, latest summary, token usage, and source item.</li>
+                <li>Let users filter or expand the timeline to one child agent where data exists.</li>
+                <li>Show source agent labels on approvals and user-input prompts.</li>
+                <li>Render completed agents collapsed by default with their final summaries visible.</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="phase">
+            <div class="phase-number">6</div>
+            <div>
+              <h3>Steer, stop, and close controls</h3>
+              <p>
+                Add controls only after read-only visibility is reliable. Codex should get the
+                first implementation because app-server exposes child thread ids. Claude can expose
+                controls only when the SDK supports equivalent actions.
+              </p>
+              <ul class="checklist">
+                <li>Add provider capability flags for <code>subagentSteer</code>, <code>subagentStop</code>, and <code>subagentClose</code>.</li>
+                <li>Implement Codex steering through the child provider thread when supported.</li>
+                <li>Route cancellation through existing interrupt paths where possible.</li>
+                <li>Require clear disabled states when a provider lacks support.</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2>Files To Touch</h2>
+          <div class="file-list">
+            <code>packages/contracts/src/baseSchemas.ts</code>
+            <code>packages/contracts/src/providerRuntime.ts</code>
+            <code>packages/contracts/src/orchestration.ts</code>
+            <code>apps/server/src/provider/Layers/CodexSessionRuntime.ts</code>
+            <code>apps/server/src/provider/Layers/CodexAdapter.ts</code>
+            <code>apps/server/src/provider/Layers/ClaudeAdapter.ts</code>
+            <code>apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts</code>
+            <code>apps/web/src/store.ts</code>
+            <code>apps/web/src/threadDerivation.ts</code>
+            <code>apps/web/src/session-logic.ts</code>
+            <code>apps/web/src/components/chat/MessagesTimeline.tsx</code>
+            <code>apps/web/src/components/PlanSidebar.tsx</code>
+          </div>
+        </section>
+
+        <section>
+          <h2>UX Model</h2>
+          <div class="decision-grid">
+            <div class="decision">
+              <h3>Default view</h3>
+              <p>
+                Parent conversation remains the primary surface. The agents section is a compact
+                operational summary, not a second chat transcript by default.
+              </p>
+            </div>
+            <div class="decision">
+              <h3>Expanded view</h3>
+              <p>
+                Opening an agent shows its latest summary, lifecycle history, tool activity, and
+                provider thread id. Transcript-level inspection can be added after event recovery is
+                reliable.
+              </p>
+            </div>
+            <div class="decision">
+              <h3>Approvals</h3>
+              <p>
+                Approval prompts include the source agent label and a short source summary. Users
+                should not have to infer which child agent requested a command or edit.
+              </p>
+            </div>
+            <div class="decision">
+              <h3>Controls</h3>
+              <p>
+                Steer, stop, and close use icon buttons with tooltips. Unsupported controls remain
+                hidden or disabled based on provider capability flags.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2>Testing Matrix</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Layer</th>
+                <th>Required tests</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Contracts</td>
+                <td>
+                  Schema decode and encode tests for every <code>subagent.*</code> event and
+                  thread-detail subagent state.
+                </td>
+              </tr>
+              <tr>
+                <td>Codex runtime</td>
+                <td>
+                  Child thread mapping, <code>subAgentActivity</code>, receiver-thread routing,
+                  suppressed child lifecycle noise, child approval labeling, reconnect recovery.
+                </td>
+              </tr>
+              <tr>
+                <td>Claude runtime</td>
+                <td>
+                  <code>Task</code> tool-use classification, task id correlation, progress summaries,
+                  usage snapshots, synthetic-turn preservation.
+                </td>
+              </tr>
+              <tr>
+                <td>Orchestration</td>
+                <td>
+                  Coalesced subagent state, append-only activities, ordering, dedupe, detail-page
+                  pagination and recovery.
+                </td>
+              </tr>
+              <tr>
+                <td>Web</td>
+                <td>
+                  Agent list rendering, status transitions, approval source labels, collapsed
+                  completed agents, unsupported action states.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section>
+          <h2>Risks And Mitigations</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Risk</th>
+                <th>Mitigation</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Event ordering differs between app-server versions.</td>
+                <td>
+                  Build idempotent correlation keyed by provider thread id, item id, and task id.
+                  Emit placeholder subagents when metadata arrives late, then update them.
+                </td>
+              </tr>
+              <tr>
+                <td>Child thread lifecycle changes touch high-risk Effect code.</td>
+                <td>
+                  Keep transport and scope ownership unchanged. Add focused regression tests before
+                  changing runtime routing.
+                </td>
+              </tr>
+              <tr>
+                <td>Claude and Codex expose different levels of control.</td>
+                <td>
+                  Model controls as provider capabilities. Visibility is common; steering is
+                  provider-specific.
+                </td>
+              </tr>
+              <tr>
+                <td>UI becomes noisy for many short-lived agents.</td>
+                <td>
+                  Collapse completed agents, show latest summary first, and keep raw event detail in
+                  an expandable drawer.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section>
+          <h2>Definition Of Done</h2>
+          <ul class="checklist">
+            <li>
+              Codex spawned agents appear as first-class entries with role, nickname, status, final
+              summary, and provider thread id.
+            </li>
+            <li>
+              Claude task/subagent work appears in the same UI shape with graceful omissions for
+              unavailable metadata.
+            </li>
+            <li>Approvals and user-input prompts identify the source child agent.</li>
+            <li>Existing parent timeline behavior and current tests keep passing.</li>
+            <li>
+              Focused regression tests cover Codex child-thread routing, Codex
+              <code>subAgentActivity</code>, Claude task progress, and orchestration recovery.
+            </li>
+            <li>
+              <code>bun fmt</code>, <code>bun lint</code>, <code>bun typecheck</code>, and
+              <code>bun run test</code> pass.
+            </li>
+          </ul>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

@@ -24,6 +24,25 @@ function getFirstSortableTimestamp(...values: Array<string | null | undefined>):
   return null;
 }
 
+export function getThreadActivityTimestamp(thread: ThreadSortInput): string {
+  const fallback = thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt;
+  let latestValue: string | null = null;
+  let latestTimestamp: number | null = null;
+
+  for (const value of [thread.latestUserMessageAt, thread.updatedAt, thread.createdAt]) {
+    const timestamp = toSortableTimestamp(value ?? undefined);
+    if (timestamp === null || !value) {
+      continue;
+    }
+    if (latestTimestamp === null || timestamp > latestTimestamp) {
+      latestTimestamp = timestamp;
+      latestValue = value;
+    }
+  }
+
+  return latestValue ?? fallback;
+}
+
 function getLatestUserMessageTimestamp(thread: ThreadSortInput): number {
   if (thread.latestUserMessageAt) {
     return toSortableTimestamp(thread.latestUserMessageAt) ?? Number.NEGATIVE_INFINITY;
@@ -45,7 +64,7 @@ function getLatestUserMessageTimestamp(thread: ThreadSortInput): number {
     return latestUserMessageTimestamp;
   }
 
-  return getFirstSortableTimestamp(thread.updatedAt, thread.createdAt) ?? Number.NEGATIVE_INFINITY;
+  return toSortableTimestamp(getThreadActivityTimestamp(thread)) ?? Number.NEGATIVE_INFINITY;
 }
 
 export function getThreadSortTimestamp(

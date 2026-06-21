@@ -34,6 +34,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
+import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -42,6 +43,7 @@ import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import {
   type CodexAppServerClientHandle,
+  type CodexSpawnedChildThreadListOptions,
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeSendTurnInput,
   type CodexSessionRuntimeShape,
@@ -49,6 +51,11 @@ import {
 } from "./CodexSessionRuntime.ts";
 import type { ChildProcessHandle } from "effect/unstable/process/ChildProcessSpawner";
 import { makeCodexAdapter } from "./CodexAdapter.ts";
+import {
+  codexChildThreadId,
+  extractCodexSubagentMetadata,
+  extractCodexThreadSpawnMetadata,
+} from "./CodexChildThreads.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 // Test-local service tag so the rest of the file can keep using `yield* CodexAdapter`.
@@ -60,6 +67,239 @@ const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.make(value);
+
+function makeCodexSpawnedThread(input: {
+  readonly providerThreadId: string;
+  readonly providerParentThreadId: string;
+  readonly nickname?: string | undefined;
+  readonly role?: string | undefined;
+  readonly path?: string | undefined;
+}): Record<string, unknown> {
+  return {
+    id: input.providerThreadId,
+    cliVersion: "test",
+    createdAt: 1_778_000_000,
+    cwd: process.cwd(),
+    ephemeral: false,
+    modelProvider: "openai",
+    preview: "",
+    sessionId: "session-1",
+    source: {
+      subAgent: {
+        thread_spawn: {
+          parent_thread_id: input.providerParentThreadId,
+          agent_nickname: input.nickname ?? null,
+          agent_role: input.role ?? null,
+          agent_path: input.path ?? null,
+          depth: 1,
+        },
+      },
+    },
+    status: { type: "idle" },
+    turns: [],
+    updatedAt: 1_778_000_000,
+  };
+}
+
+function makeCodexChildThreadStartedEvent(input: {
+  readonly eventId: string;
+  readonly threadId: ThreadId;
+  readonly providerThreadId: string;
+  readonly parentThreadId: ThreadId;
+  readonly providerParentThreadId?: string | undefined;
+  readonly nickname?: string | undefined;
+  readonly role?: string | undefined;
+  readonly path?: string | undefined;
+}): ProviderEvent {
+  const providerParentThreadId = input.providerParentThreadId ?? "provider-thread-1";
+  return {
+    id: asEventId(input.eventId),
+    kind: "notification",
+    provider: ProviderDriverKind.make("codex"),
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    createdAt: "2026-01-01T00:00:00.000Z",
+    method: "thread/started",
+    threadId: input.threadId,
+    payload: {
+      thread: makeCodexSpawnedThread({
+        providerThreadId: input.providerThreadId,
+        providerParentThreadId,
+        nickname: input.nickname,
+        role: input.role,
+        path: input.path,
+      }),
+      salchiParentThreadId: input.parentThreadId,
+    },
+  };
+}
+
+function makeCollabAgentCompletedEvent(input: {
+  readonly eventId: string;
+  readonly itemId: string;
+  readonly threadId: ThreadId;
+  readonly tool: "spawnAgent" | "wait" | "closeAgent";
+  readonly receiverThreadIds: readonly string[];
+  readonly status?: string | undefined;
+  readonly nickname?: string | undefined;
+  readonly role?: string | undefined;
+  readonly path?: string | undefined;
+  readonly prompt?: string | undefined;
+}): ProviderEvent {
+  const agentsStates = Object.fromEntries(
+    input.receiverThreadIds.map((receiverThreadId) => [
+      receiverThreadId,
+      {
+        status: "running",
+        ...(input.nickname ? { agentNickname: input.nickname } : {}),
+        ...(input.role ? { agentRole: input.role } : {}),
+        ...(input.path ? { agentPath: input.path } : {}),
+      },
+    ]),
+  );
+  return {
+    id: asEventId(input.eventId),
+    kind: "notification",
+    provider: ProviderDriverKind.make("codex"),
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    createdAt: "2026-01-01T00:00:00.000Z",
+    method: "item/completed",
+    threadId: input.threadId,
+    turnId: asTurnId("turn-1"),
+    itemId: asItemId(input.itemId),
+    payload: {
+      completedAtMs: 1_778_000_000_000,
+      threadId: String(input.threadId),
+      turnId: "turn-1",
+      item: {
+        type: "collabAgentToolCall",
+        id: input.itemId,
+        agentsStates,
+        model: "gpt-5",
+        prompt: input.prompt ?? "Run the subagent",
+        reasoningEffort: null,
+        receiverThreadIds: [...input.receiverThreadIds],
+        senderThreadId: String(input.threadId),
+        status: input.status ?? "completed",
+        tool: input.tool,
+      },
+    },
+  };
+}
+
+it("maps Codex child provider thread ids to deterministic Salchi thread ids", () => {
+  const first = codexChildThreadId(ProviderInstanceId.make("codex-main"), "provider-child");
+  const second = codexChildThreadId(ProviderInstanceId.make("codex-main"), "provider-child");
+  const differentInstance = codexChildThreadId(
+    ProviderInstanceId.make("codex-other"),
+    "provider-child",
+  );
+
+  assert.equal(first, second);
+  assert.match(first, /^codex-child-[a-f0-9]{32}$/);
+  assert.notEqual(first, differentInstance);
+});
+
+it("extracts Codex thread_spawn metadata from thread objects", () => {
+  const metadata = extractCodexThreadSpawnMetadata({
+    id: "provider-child",
+    source: {
+      subAgent: {
+        thread_spawn: {
+          parent_thread_id: "provider-parent",
+          agent_nickname: "planner",
+          agent_role: "Planning",
+          agent_path: "agents/planner.md",
+          depth: 1,
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(metadata, {
+    providerParentThreadId: "provider-parent",
+    subagentKind: "thread_spawn",
+    subagentNickname: "planner",
+    subagentRole: "Planning",
+    subagentPath: "agents/planner.md",
+    hiddenFromThreadList: false,
+  });
+});
+
+it("extracts Codex thread_spawn metadata from alternate persisted shapes", () => {
+  assert.deepEqual(
+    extractCodexThreadSpawnMetadata({
+      id: "provider-child-lowercase",
+      source: {
+        subagent: {
+          thread_spawn: {
+            parent_thread_id: "provider-parent",
+            agent_nickname: "aquinas",
+          },
+        },
+      },
+    }),
+    {
+      providerParentThreadId: "provider-parent",
+      subagentKind: "thread_spawn",
+      subagentNickname: "aquinas",
+      hiddenFromThreadList: false,
+    },
+  );
+
+  assert.deepEqual(
+    extractCodexThreadSpawnMetadata({
+      id: "provider-child-json",
+      source: JSON.stringify({
+        subagent: {
+          thread_spawn: {
+            parent_thread_id: "provider-parent",
+            agent_role: "Research",
+          },
+        },
+      }),
+    }),
+    {
+      providerParentThreadId: "provider-parent",
+      subagentKind: "thread_spawn",
+      subagentRole: "Research",
+      hiddenFromThreadList: false,
+    },
+  );
+
+  assert.deepEqual(
+    extractCodexThreadSpawnMetadata({
+      id: "provider-child-top-level",
+      threadSource: "subagent",
+      parent_thread_id: "provider-parent",
+      agent_nickname: "noether",
+      agent_role: "Math",
+    }),
+    {
+      providerParentThreadId: "provider-parent",
+      subagentKind: "thread_spawn",
+      subagentNickname: "noether",
+      subagentRole: "Math",
+      hiddenFromThreadList: false,
+    },
+  );
+});
+
+it("keeps Codex review, compact, and memory subagents hidden", () => {
+  for (const subagentKind of ["review", "compact", "memory_consolidation"]) {
+    assert.deepEqual(
+      extractCodexSubagentMetadata({
+        id: `provider-${subagentKind}`,
+        source: {
+          subAgent: subagentKind,
+        },
+      }),
+      {
+        subagentKind,
+        hiddenFromThreadList: true,
+      },
+    );
+  }
+});
 
 class FakeCodexRuntime implements CodexSessionRuntimeShape {
   private readonly eventQueue = Effect.runSync(Queue.unbounded<ProviderEvent>());
@@ -73,6 +313,7 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
       threadId: this.options.threadId,
       cwd: this.options.cwd,
       ...(this.options.model ? { model: this.options.model } : {}),
+      ...(this.options.resumeCursor ? { resumeCursor: this.options.resumeCursor } : {}),
       createdAt: this.now,
       updatedAt: this.now,
     } satisfies ProviderSession),
@@ -85,15 +326,39 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
         turnId: asTurnId("turn-1"),
       }),
   );
+  public readonly sendTurnToProviderThreadImpl = vi.fn(
+    (
+      providerThreadId: string,
+      _input: CodexSessionRuntimeSendTurnInput,
+    ): Promise<ProviderTurnStartResult> =>
+      Promise.resolve({
+        threadId:
+          providerThreadId === this.options.resumeCursor?.threadId
+            ? this.options.threadId
+            : asThreadId(`child:${providerThreadId}`),
+        turnId: asTurnId("turn-1"),
+        resumeCursor: { threadId: providerThreadId },
+      }),
+  );
 
   public readonly interruptTurnImpl = vi.fn(
     (_turnId?: TurnId): Promise<void> => Promise.resolve(undefined),
+  );
+  public readonly interruptProviderThreadTurnImpl = vi.fn(
+    (_providerThreadId: string, _turnId?: TurnId): Promise<void> => Promise.resolve(undefined),
   );
 
   public readonly readThreadImpl = vi.fn(
     (): Promise<CodexThreadSnapshot> =>
       Promise.resolve({
         threadId: "provider-thread-1",
+        turns: [],
+      }),
+  );
+  public readonly readProviderThreadImpl = vi.fn(
+    (providerThreadId: string): Promise<CodexThreadSnapshot> =>
+      Promise.resolve({
+        threadId: providerThreadId,
         turns: [],
       }),
   );
@@ -104,6 +369,28 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
         threadId: "provider-thread-1",
         turns: [],
       }),
+  );
+  public readonly rollbackProviderThreadImpl = vi.fn(
+    (providerThreadId: string, _numTurns: number): Promise<CodexThreadSnapshot> =>
+      Promise.resolve({
+        threadId: providerThreadId,
+        turns: [],
+      }),
+  );
+
+  public readonly registerProviderThreadBindingImpl = vi.fn(
+    (_input: {
+      readonly providerThreadId: string;
+      readonly threadId: ThreadId;
+      readonly parentThreadId?: ThreadId;
+    }): Promise<void> => Promise.resolve(undefined),
+  );
+  public readonly listSpawnedChildThreadsImpl = vi.fn(
+    (
+      _parentProviderThreadId: string,
+      _options?: CodexSpawnedChildThreadListOptions,
+    ): Promise<ReadonlyArray<EffectCodexSchema.V2ThreadListResponse["data"][number]>> =>
+      Promise.resolve([]),
   );
 
   public readonly respondToRequestImpl = vi.fn(
@@ -130,18 +417,51 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
 
   getSession = Effect.promise(() => this.startImpl());
 
+  registerProviderThreadBinding(input: {
+    readonly providerThreadId: string;
+    readonly threadId: ThreadId;
+    readonly parentThreadId?: ThreadId;
+  }) {
+    return Effect.promise(() => this.registerProviderThreadBindingImpl(input));
+  }
+
   sendTurn(input: CodexSessionRuntimeSendTurnInput) {
     return Effect.promise(() => this.sendTurnImpl(input));
+  }
+
+  sendTurnToProviderThread(providerThreadId: string, input: CodexSessionRuntimeSendTurnInput) {
+    return Effect.promise(() => this.sendTurnToProviderThreadImpl(providerThreadId, input));
   }
 
   interruptTurn(turnId?: TurnId) {
     return Effect.promise(() => this.interruptTurnImpl(turnId));
   }
 
+  interruptProviderThreadTurn(providerThreadId: string, turnId?: TurnId) {
+    return Effect.promise(() => this.interruptProviderThreadTurnImpl(providerThreadId, turnId));
+  }
+
   readThread = Effect.promise(() => this.readThreadImpl());
+
+  readProviderThread(providerThreadId: string) {
+    return Effect.promise(() => this.readProviderThreadImpl(providerThreadId));
+  }
 
   rollbackThread(numTurns: number) {
     return Effect.promise(() => this.rollbackThreadImpl(numTurns));
+  }
+
+  rollbackProviderThread(providerThreadId: string, numTurns: number) {
+    return Effect.promise(() => this.rollbackProviderThreadImpl(providerThreadId, numTurns));
+  }
+
+  listSpawnedChildThreads(
+    _parentProviderThreadId: string,
+    _options?: CodexSpawnedChildThreadListOptions,
+  ) {
+    return Effect.promise(() =>
+      this.listSpawnedChildThreadsImpl(_parentProviderThreadId, _options),
+    );
   }
 
   readonly refreshUsage = Effect.void;
@@ -502,6 +822,438 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("maps Codex collab agent tool calls to subagent started events", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 2)).pipe(
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit({
+        id: asEventId("evt-subagent-spawn"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "item/started",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("collab_1"),
+        payload: {
+          startedAtMs: 1_778_000_000_000,
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "collabAgentToolCall",
+            id: "collab_1",
+            agentsStates: {
+              "child-thread-1": {
+                status: "running",
+                agentPath: "agents/Mill.md",
+              },
+            },
+            model: "gpt-5",
+            prompt: "Inspect the failing tests",
+            reasoningEffort: null,
+            receiverThreadIds: ["child-thread-1"],
+            senderThreadId: "thread-1",
+            status: "inProgress",
+            tool: "spawnAgent",
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(events.length, 2);
+
+      const itemEvent = events[0];
+      assert.equal(itemEvent?.type, "item.started");
+      if (itemEvent?.type === "item.started") {
+        assert.equal(itemEvent.payload.itemType, "collab_agent_tool_call");
+      }
+
+      const subagentEvent = events[1];
+      assert.equal(subagentEvent?.type, "subagent.started");
+      if (subagentEvent?.type === "subagent.started") {
+        assert.equal(subagentEvent.payload.subagentId, "child-thread-1");
+        assert.equal(subagentEvent.payload.providerThreadId, "child-thread-1");
+        assert.equal(subagentEvent.payload.sourceItemId, "collab_1");
+        assert.equal(subagentEvent.payload.model, "gpt-5");
+        assert.equal(subagentEvent.payload.prompt, "Inspect the failing tests");
+        assert.equal(subagentEvent.payload.role, "agents/Mill.md");
+        assert.equal(subagentEvent.payload.nickname, "Mill");
+        assert.equal(subagentEvent.payload.status, "running");
+      }
+    }),
+  );
+
+  it.effect("hydrates collab-agent spawn receiver children immediately", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const parentThreadId = asThreadId("thread-live-spawn-parent");
+      const providerParentThreadId = "provider-parent-live-spawn";
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: parentThreadId,
+        resumeCursor: { threadId: providerParentThreadId },
+        runtimeMode: "full-access",
+      });
+      const runtime = lifecycleRuntimeFactory.lastRuntime;
+      assert.ok(runtime);
+
+      const providerChildThreadId = "provider-child-bohr";
+      const childThreadId = codexChildThreadId(
+        ProviderInstanceId.make("codex"),
+        providerChildThreadId,
+      );
+      runtime.listSpawnedChildThreadsImpl.mockImplementation(() =>
+        Promise.resolve([
+          makeCodexSpawnedThread({
+            providerThreadId: "provider-child-unrelated",
+            providerParentThreadId,
+            nickname: "Unrelated",
+          }) as EffectCodexSchema.V2ThreadListResponse["data"][number],
+          makeCodexSpawnedThread({
+            providerThreadId: providerChildThreadId,
+            providerParentThreadId,
+            nickname: "Bohr",
+            role: "default",
+            path: "agents/Bohr.md",
+          }) as EffectCodexSchema.V2ThreadListResponse["data"][number],
+        ]),
+      );
+
+      const threadStartedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "thread.started" &&
+            event.payload.providerThreadId === providerChildThreadId,
+        ),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit(
+        makeCollabAgentCompletedEvent({
+          eventId: "evt-collab-spawn-bohr",
+          itemId: "collab_bohr",
+          threadId: parentThreadId,
+          tool: "spawnAgent",
+          receiverThreadIds: [providerChildThreadId],
+          status: "completed",
+          nickname: "Bohr",
+          role: "default",
+          path: "agents/Bohr.md",
+        }),
+      );
+
+      const threadStartedOption = yield* Fiber.join(threadStartedFiber);
+      assert.equal(threadStartedOption._tag, "Some");
+      const threadStarted = threadStartedOption._tag === "Some" ? threadStartedOption.value : null;
+      assert.ok(threadStarted);
+      assert.equal(threadStarted.threadId, childThreadId);
+      if (threadStarted.type === "thread.started") {
+        assert.equal(threadStarted.payload.parentThreadId, parentThreadId);
+        assert.equal(threadStarted.payload.providerThreadId, providerChildThreadId);
+        assert.equal(threadStarted.payload.providerParentThreadId, providerParentThreadId);
+        assert.equal(threadStarted.payload.subagentNickname, "Bohr");
+        assert.equal(threadStarted.payload.subagentRole, "default");
+      }
+
+      assert.deepStrictEqual(
+        runtime.registerProviderThreadBindingImpl.mock.calls
+          .map(([input]) => ({
+            providerThreadId: input.providerThreadId,
+            threadId: input.threadId,
+            parentThreadId: input.parentThreadId,
+          }))
+          .filter((binding) => binding.providerThreadId === providerChildThreadId),
+        [
+          {
+            providerThreadId: providerChildThreadId,
+            threadId: childThreadId,
+            parentThreadId,
+          },
+        ],
+      );
+    }),
+  );
+
+  it.effect("materializes collab-agent receiver children when thread/list is empty", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const parentThreadId = asThreadId("thread-live-placeholder-parent");
+      const providerParentThreadId = "provider-parent-live-placeholder";
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: parentThreadId,
+        resumeCursor: { threadId: providerParentThreadId },
+        runtimeMode: "full-access",
+      });
+      const runtime = lifecycleRuntimeFactory.lastRuntime;
+      assert.ok(runtime);
+
+      const providerChildThreadId = "provider-child-placeholder";
+      const childThreadId = codexChildThreadId(
+        ProviderInstanceId.make("codex"),
+        providerChildThreadId,
+      );
+      runtime.listSpawnedChildThreadsImpl.mockResolvedValue([]);
+
+      const threadStartedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "thread.started" &&
+            event.payload.providerThreadId === providerChildThreadId,
+        ),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit(
+        makeCollabAgentCompletedEvent({
+          eventId: "evt-collab-placeholder",
+          itemId: "collab_placeholder",
+          threadId: parentThreadId,
+          tool: "spawnAgent",
+          receiverThreadIds: [providerChildThreadId],
+          status: "completed",
+          prompt: "Your nickname is Aquinas. Work independently and report back.",
+        }),
+      );
+
+      const threadStartedOption = yield* Fiber.join(threadStartedFiber);
+      assert.equal(threadStartedOption._tag, "Some");
+      const threadStarted = threadStartedOption._tag === "Some" ? threadStartedOption.value : null;
+      assert.ok(threadStarted);
+      assert.equal(threadStarted.threadId, childThreadId);
+      if (threadStarted.type === "thread.started") {
+        assert.equal(threadStarted.payload.parentThreadId, parentThreadId);
+        assert.equal(threadStarted.payload.providerThreadId, providerChildThreadId);
+        assert.equal(threadStarted.payload.providerParentThreadId, providerParentThreadId);
+        assert.equal(threadStarted.payload.subagentKind, "thread_spawn");
+        assert.equal(threadStarted.payload.hiddenFromThreadList, false);
+        assert.equal(threadStarted.payload.subagentNickname, "Aquinas");
+      }
+
+      assert.deepStrictEqual(
+        runtime.registerProviderThreadBindingImpl.mock.calls
+          .map(([input]) => input.providerThreadId)
+          .filter((providerThreadId) => providerThreadId === providerChildThreadId),
+        [providerChildThreadId],
+      );
+    }),
+  );
+
+  it.effect("retries collab-agent child hydration from wait events", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const parentThreadId = asThreadId("thread-live-wait-parent");
+      const providerParentThreadId = "provider-parent-live-wait";
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: parentThreadId,
+        resumeCursor: { threadId: providerParentThreadId },
+        runtimeMode: "full-access",
+      });
+      const runtime = lifecycleRuntimeFactory.lastRuntime;
+      assert.ok(runtime);
+
+      const providerChildThreadId = "provider-child-wait-bohr";
+      const childThreadId = codexChildThreadId(
+        ProviderInstanceId.make("codex"),
+        providerChildThreadId,
+      );
+      let candidateListCalls = 0;
+      runtime.listSpawnedChildThreadsImpl.mockImplementation((_parentThreadId, options) => {
+        if (!options?.candidateProviderThreadIds?.has(providerChildThreadId)) {
+          return Promise.resolve([]);
+        }
+        candidateListCalls += 1;
+        return Promise.resolve(
+          candidateListCalls === 1
+            ? []
+            : [
+                makeCodexSpawnedThread({
+                  providerThreadId: providerChildThreadId,
+                  providerParentThreadId,
+                  nickname: "Bohr",
+                  role: "default",
+                }) as EffectCodexSchema.V2ThreadListResponse["data"][number],
+              ],
+        );
+      });
+
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 6)).pipe(
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit(
+        makeCollabAgentCompletedEvent({
+          eventId: "evt-collab-spawn-not-ready",
+          itemId: "collab_wait_spawn",
+          threadId: parentThreadId,
+          tool: "spawnAgent",
+          receiverThreadIds: [providerChildThreadId],
+          status: "completed",
+        }),
+      );
+      yield* runtime.emit(
+        makeCollabAgentCompletedEvent({
+          eventId: "evt-collab-wait-ready",
+          itemId: "collab_wait_ready",
+          threadId: parentThreadId,
+          tool: "wait",
+          receiverThreadIds: [providerChildThreadId],
+          status: "completed",
+        }),
+      );
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const threadStartedEvents = events.filter((event) => event.type === "thread.started");
+      assert.equal(threadStartedEvents.length, 2);
+      assert.equal(threadStartedEvents[0]?.threadId, childThreadId);
+      assert.equal(threadStartedEvents[1]?.threadId, childThreadId);
+      if (threadStartedEvents[0]?.type === "thread.started") {
+        assert.equal(threadStartedEvents[0].payload.subagentNickname, undefined);
+      }
+      if (threadStartedEvents[1]?.type === "thread.started") {
+        assert.equal(threadStartedEvents[1].payload.subagentNickname, "Bohr");
+        assert.equal(threadStartedEvents[1].payload.subagentRole, "default");
+      }
+      assert.deepStrictEqual(
+        runtime.registerProviderThreadBindingImpl.mock.calls.map(
+          ([input]) => input.providerThreadId,
+        ),
+        [providerChildThreadId],
+      );
+    }),
+  );
+
+  it.effect("does not duplicate hydrated children from repeated wait and close events", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const parentThreadId = asThreadId("thread-live-duplicate-parent");
+      const providerParentThreadId = "provider-parent-live-duplicate";
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: parentThreadId,
+        resumeCursor: { threadId: providerParentThreadId },
+        runtimeMode: "full-access",
+      });
+      const runtime = lifecycleRuntimeFactory.lastRuntime;
+      assert.ok(runtime);
+
+      const providerChildThreadId = "provider-child-duplicate-bohr";
+      const childThread = makeCodexSpawnedThread({
+        providerThreadId: providerChildThreadId,
+        providerParentThreadId,
+        nickname: "Bohr",
+        role: "default",
+      }) as EffectCodexSchema.V2ThreadListResponse["data"][number];
+      runtime.listSpawnedChildThreadsImpl.mockResolvedValue([childThread]);
+
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 7)).pipe(
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit(
+        makeCollabAgentCompletedEvent({
+          eventId: "evt-collab-duplicate-spawn",
+          itemId: "collab_duplicate_spawn",
+          threadId: parentThreadId,
+          tool: "spawnAgent",
+          receiverThreadIds: [providerChildThreadId],
+          status: "completed",
+          nickname: "Bohr",
+          role: "default",
+        }),
+      );
+      yield* runtime.emit(
+        makeCollabAgentCompletedEvent({
+          eventId: "evt-collab-duplicate-wait",
+          itemId: "collab_duplicate_wait",
+          threadId: parentThreadId,
+          tool: "wait",
+          receiverThreadIds: [providerChildThreadId],
+          status: "completed",
+          nickname: "Bohr",
+          role: "default",
+        }),
+      );
+      yield* runtime.emit(
+        makeCollabAgentCompletedEvent({
+          eventId: "evt-collab-duplicate-close",
+          itemId: "collab_duplicate_close",
+          threadId: parentThreadId,
+          tool: "closeAgent",
+          receiverThreadIds: [providerChildThreadId],
+          status: "completed",
+          nickname: "Bohr",
+          role: "default",
+        }),
+      );
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(events.filter((event) => event.type === "thread.started").length, 1);
+      assert.deepStrictEqual(
+        runtime.registerProviderThreadBindingImpl.mock.calls.map(
+          ([input]) => input.providerThreadId,
+        ),
+        [providerChildThreadId],
+      );
+    }),
+  );
+
+  it.effect("maps Codex subagent activity items to terminal subagent events", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 2)).pipe(
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit({
+        id: asEventId("evt-subagent-interrupted"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("activity_1"),
+        payload: {
+          completedAtMs: 1_778_000_000_000,
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "subAgentActivity",
+            id: "activity_1",
+            agentPath: "root/reviewer.md",
+            agentThreadId: "child-thread-1",
+            kind: "interrupted",
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(events.length, 2);
+
+      const itemEvent = events[0];
+      assert.equal(itemEvent?.type, "item.completed");
+      if (itemEvent?.type === "item.completed") {
+        assert.equal(itemEvent.payload.itemType, "collab_agent_tool_call");
+      }
+
+      const subagentEvent = events[1];
+      assert.equal(subagentEvent?.type, "subagent.completed");
+      if (subagentEvent?.type === "subagent.completed") {
+        assert.equal(subagentEvent.payload.subagentId, "child-thread-1");
+        assert.equal(subagentEvent.payload.status, "interrupted");
+        assert.equal(subagentEvent.payload.role, "root/reviewer.md");
+        assert.equal(subagentEvent.payload.nickname, "reviewer");
+      }
+    }),
+  );
+
   it.effect("maps completed plan items to canonical proposed-plan completion events", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();
@@ -754,6 +1506,103 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }
       assert.equal(firstEvent.value.threadId, "thread-1");
       assert.equal(firstEvent.value.payload.reason, "Session stopped");
+    }),
+  );
+
+  it.effect("registers Codex spawned child threads as virtual sessions", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const childThreadId = codexChildThreadId(
+        ProviderInstanceId.make("codex"),
+        "provider-child-1",
+      );
+      const eventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit(
+        makeCodexChildThreadStartedEvent({
+          eventId: "evt-child-thread-started",
+          threadId: childThreadId,
+          providerThreadId: "provider-child-1",
+          parentThreadId: asThreadId("thread-1"),
+          nickname: "planner",
+          role: "Planning",
+          path: "agents/planner.md",
+        }),
+      );
+      const event = yield* Fiber.join(eventFiber);
+
+      assert.equal(event._tag, "Some");
+      if (event._tag !== "Some") {
+        return;
+      }
+      assert.equal(event.value.type, "thread.started");
+      if (event.value.type === "thread.started") {
+        assert.equal(event.value.threadId, childThreadId);
+        assert.equal(event.value.payload.providerThreadId, "provider-child-1");
+        assert.equal(event.value.payload.parentThreadId, "thread-1");
+        assert.equal(event.value.payload.providerParentThreadId, "provider-thread-1");
+        assert.equal(event.value.payload.subagentKind, "thread_spawn");
+        assert.equal(event.value.payload.subagentNickname, "planner");
+        assert.equal(event.value.payload.subagentRole, "Planning");
+        assert.equal(event.value.payload.subagentPath, "agents/planner.md");
+        assert.equal(event.value.payload.hiddenFromThreadList, false);
+      }
+      assert.equal(yield* adapter.hasSession(childThreadId), true);
+      assert.deepStrictEqual(runtime.registerProviderThreadBindingImpl.mock.calls.at(-1)?.[0], {
+        providerThreadId: "provider-child-1",
+        threadId: childThreadId,
+        parentThreadId: asThreadId("thread-1"),
+      });
+    }),
+  );
+
+  it.effect("routes child turns and thread operations to the child provider thread id", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const childThreadId = codexChildThreadId(
+        ProviderInstanceId.make("codex"),
+        "provider-child-2",
+      );
+      const eventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit(
+        makeCodexChildThreadStartedEvent({
+          eventId: "evt-child-thread-routing",
+          threadId: childThreadId,
+          providerThreadId: "provider-child-2",
+          parentThreadId: asThreadId("thread-1"),
+        }),
+      );
+      yield* Fiber.join(eventFiber);
+
+      const turn = yield* adapter.sendTurn({
+        threadId: childThreadId,
+        input: "continue in child",
+        attachments: [],
+      });
+      const read = yield* adapter.readThread(childThreadId);
+      const rolledBack = yield* adapter.rollbackThread(childThreadId, 1);
+      yield* adapter.interruptTurn(childThreadId, asTurnId("turn-child-2"));
+
+      assert.equal(turn.threadId, childThreadId);
+      assert.equal(read.threadId, childThreadId);
+      assert.equal(rolledBack.threadId, childThreadId);
+      assert.equal(runtime.sendTurnImpl.mock.calls.length, 0);
+      assert.equal(runtime.sendTurnToProviderThreadImpl.mock.calls.at(-1)?.[0], "provider-child-2");
+      assert.deepStrictEqual(runtime.sendTurnToProviderThreadImpl.mock.calls.at(-1)?.[1], {
+        input: "continue in child",
+      });
+      assert.equal(runtime.readProviderThreadImpl.mock.calls.at(-1)?.[0], "provider-child-2");
+      assert.equal(runtime.rollbackProviderThreadImpl.mock.calls.at(-1)?.[0], "provider-child-2");
+      assert.equal(runtime.rollbackProviderThreadImpl.mock.calls.at(-1)?.[1], 1);
+      assert.equal(
+        runtime.interruptProviderThreadTurnImpl.mock.calls.at(-1)?.[0],
+        "provider-child-2",
+      );
+      assert.equal(
+        runtime.interruptProviderThreadTurnImpl.mock.calls.at(-1)?.[1],
+        asTurnId("turn-child-2"),
+      );
     }),
   );
 
@@ -1186,6 +2035,280 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
   );
 });
 
+it.effect("hydrates existing Codex spawned child threads via thread/list on root start", () => {
+  const childThread = makeCodexSpawnedThread({
+    providerThreadId: "provider-child-hydrated",
+    providerParentThreadId: "provider-parent-hydrate",
+    nickname: "researcher",
+    role: "Research",
+    path: "agents/researcher.md",
+  });
+  const hydratedRuntimes: FakeCodexRuntime[] = [];
+  const hydratedRuntimeFactory = vi.fn((options: CodexSessionRuntimeOptions) => {
+    const runtime = new FakeCodexRuntime(options);
+    runtime.listSpawnedChildThreadsImpl.mockImplementation(() =>
+      Promise.resolve([childThread as EffectCodexSchema.V2ThreadListResponse["data"][number]]),
+    );
+    runtime.readProviderThreadImpl.mockImplementation((providerThreadId) =>
+      Promise.resolve({
+        threadId: providerThreadId,
+        turns:
+          providerThreadId === "provider-child-hydrated"
+            ? [
+                {
+                  id: asTurnId("turn-child-hydrated"),
+                  status: "completed",
+                  startedAt: 1_778_000_001,
+                  completedAt: 1_778_000_002,
+                  items: [
+                    {
+                      id: "msg-child-hydrated",
+                      text: "Child analysis complete.",
+                      type: "agentMessage",
+                    },
+                  ],
+                },
+              ]
+            : [],
+      }),
+    );
+    hydratedRuntimes.push(runtime);
+    return Effect.succeed(runtime);
+  });
+  const layer = Layer.effect(
+    CodexAdapter,
+    Effect.gen(function* () {
+      const codexConfig = decodeCodexSettings({});
+      return yield* makeCodexAdapter(codexConfig, {
+        makeRuntime: hydratedRuntimeFactory,
+      });
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  );
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    const parentThreadId = asThreadId("thread-hydrate-parent");
+    const childThreadId = codexChildThreadId(
+      ProviderInstanceId.make("codex"),
+      "provider-child-hydrated",
+    );
+    const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+      Effect.forkChild,
+    );
+
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId: parentThreadId,
+      resumeCursor: { threadId: "provider-parent-hydrate" },
+      runtimeMode: "full-access",
+    });
+
+    const events = Array.from(yield* Fiber.join(eventsFiber));
+    const runtime = hydratedRuntimes[0];
+    assert.ok(runtime);
+
+    const threadStarted = events.find((event) => event.type === "thread.started");
+    assert.ok(threadStarted);
+    assert.equal(threadStarted.threadId, childThreadId);
+    if (threadStarted.type === "thread.started") {
+      assert.equal(threadStarted.payload.parentThreadId, parentThreadId);
+      assert.equal(threadStarted.payload.providerThreadId, "provider-child-hydrated");
+      assert.equal(threadStarted.payload.providerParentThreadId, "provider-parent-hydrate");
+      assert.equal(threadStarted.payload.subagentNickname, "researcher");
+      assert.equal(threadStarted.payload.subagentRole, "Research");
+    }
+
+    const assistantMessage = events.find(
+      (event) =>
+        event.type === "item.completed" &&
+        event.itemId === "msg-child-hydrated" &&
+        event.payload.itemType === "assistant_message",
+    );
+    assert.ok(assistantMessage);
+    assert.equal(assistantMessage.threadId, childThreadId);
+    if (assistantMessage.type === "item.completed") {
+      assert.equal(assistantMessage.payload.detail, "Child analysis complete.");
+    }
+
+    assert.equal(yield* adapter.hasSession(childThreadId), true);
+    assert.deepStrictEqual(
+      runtime.listSpawnedChildThreadsImpl.mock.calls.map(([parentThreadId]) => parentThreadId),
+      ["provider-parent-hydrate"],
+    );
+    assert.equal(runtime.listSpawnedChildThreadsImpl.mock.calls[0]?.[1]?.allowScanRepair, true);
+    assert.deepStrictEqual(runtime.readProviderThreadImpl.mock.calls, [
+      ["provider-child-hydrated"],
+    ]);
+    const sessions = yield* adapter.listSessions();
+    const childSession = sessions.find((session) => session.threadId === childThreadId);
+    assert.ok(childSession);
+    assert.deepStrictEqual(childSession.resumeCursor, { threadId: "provider-child-hydrated" });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("backfills resumed materialized Codex child thread snapshots on direct start", () => {
+  const resumedRuntimes: FakeCodexRuntime[] = [];
+  const resumedRuntimeFactory = vi.fn((options: CodexSessionRuntimeOptions) => {
+    const runtime = new FakeCodexRuntime(options);
+    runtime.readProviderThreadImpl.mockImplementation((providerThreadId) =>
+      Promise.resolve({
+        threadId: providerThreadId,
+        turns:
+          providerThreadId === "provider-child-resumed"
+            ? [
+                {
+                  id: asTurnId("turn-child-resumed"),
+                  status: "completed",
+                  startedAt: 1_778_000_011,
+                  completedAt: 1_778_000_012,
+                  items: [
+                    {
+                      id: "msg-child-resumed",
+                      text: "Resumed child analysis.",
+                      type: "agentMessage",
+                    },
+                  ],
+                },
+              ]
+            : [],
+      }),
+    );
+    resumedRuntimes.push(runtime);
+    return Effect.succeed(runtime);
+  });
+  const layer = Layer.effect(
+    CodexAdapter,
+    Effect.gen(function* () {
+      const codexConfig = decodeCodexSettings({});
+      return yield* makeCodexAdapter(codexConfig, {
+        makeRuntime: resumedRuntimeFactory,
+      });
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  );
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    const childThreadId = codexChildThreadId(
+      ProviderInstanceId.make("codex"),
+      "provider-child-resumed",
+    );
+    const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 3)).pipe(
+      Effect.forkChild,
+    );
+
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId: childThreadId,
+      resumeCursor: { threadId: "provider-child-resumed" },
+      runtimeMode: "full-access",
+    });
+
+    const events = Array.from(yield* Fiber.join(eventsFiber));
+    const runtime = resumedRuntimes[0];
+    assert.ok(runtime);
+
+    const assistantMessage = events.find(
+      (event) =>
+        event.type === "item.completed" &&
+        event.itemId === "msg-child-resumed" &&
+        event.payload.itemType === "assistant_message",
+    );
+    assert.ok(assistantMessage);
+    assert.equal(assistantMessage.threadId, childThreadId);
+    if (assistantMessage.type === "item.completed") {
+      assert.equal(assistantMessage.payload.detail, "Resumed child analysis.");
+    }
+    assert.deepStrictEqual(runtime.readProviderThreadImpl.mock.calls, [["provider-child-resumed"]]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("backfills in-progress Codex child snapshot items as updates", () => {
+  const resumedRuntimes: FakeCodexRuntime[] = [];
+  const resumedRuntimeFactory = vi.fn((options: CodexSessionRuntimeOptions) => {
+    const runtime = new FakeCodexRuntime(options);
+    runtime.readProviderThreadImpl.mockImplementation((providerThreadId) =>
+      Promise.resolve({
+        threadId: providerThreadId,
+        turns:
+          providerThreadId === "provider-child-in-progress"
+            ? [
+                {
+                  id: asTurnId("turn-child-in-progress"),
+                  status: "running",
+                  startedAt: 1_778_000_021,
+                  completedAt: null,
+                  items: [
+                    {
+                      id: "msg-child-in-progress",
+                      text: "Still working.",
+                      type: "agentMessage",
+                      status: "inProgress",
+                    },
+                  ],
+                },
+              ]
+            : [],
+      }),
+    );
+    resumedRuntimes.push(runtime);
+    return Effect.succeed(runtime);
+  });
+  const layer = Layer.effect(
+    CodexAdapter,
+    Effect.gen(function* () {
+      const codexConfig = decodeCodexSettings({});
+      return yield* makeCodexAdapter(codexConfig, {
+        makeRuntime: resumedRuntimeFactory,
+      });
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  );
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    const childThreadId = codexChildThreadId(
+      ProviderInstanceId.make("codex"),
+      "provider-child-in-progress",
+    );
+    const eventFiber = yield* adapter.streamEvents.pipe(
+      Stream.filter(
+        (event) => event.type === "item.updated" && event.itemId === "msg-child-in-progress",
+      ),
+      Stream.runHead,
+      Effect.forkChild,
+    );
+
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId: childThreadId,
+      resumeCursor: { threadId: "provider-child-in-progress" },
+      runtimeMode: "full-access",
+    });
+
+    const event = yield* Fiber.join(eventFiber);
+    assert.equal(event._tag, "Some");
+    if (event._tag === "Some") {
+      assert.equal(event.value.threadId, childThreadId);
+      assert.equal(event.value.type, "item.updated");
+      assert.equal(event.value.payload.status, "inProgress");
+    }
+  }).pipe(Effect.provide(layer));
+});
+
 const scopedLifecycleRuntimeFactory = makeScopedRuntimeFactory();
 const scopedLifecycleLayer = it.layer(
   Layer.effect(
@@ -1226,6 +2349,130 @@ scopedLifecycleLayer("CodexAdapterLive scoped lifecycle", (it) => {
         asThreadId("thread-stop"),
       ]);
       assert.equal(yield* adapter.hasSession(asThreadId("thread-stop")), false);
+    }),
+  );
+
+  it.effect("stopping a virtual child keeps the parent runtime and scope alive", () =>
+    Effect.gen(function* () {
+      scopedLifecycleRuntimeFactory.releasedThreadIds.length = 0;
+      const adapter = yield* CodexAdapter;
+      const parentThreadId = asThreadId("thread-parent-stop-child");
+      const childThreadId = codexChildThreadId(
+        ProviderInstanceId.make("codex"),
+        "provider-child-stop",
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: parentThreadId,
+        runtimeMode: "full-access",
+      });
+
+      const runtime = scopedLifecycleRuntimeFactory.lastRuntime;
+      assert.ok(runtime);
+
+      const eventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+      yield* runtime.emit(
+        makeCodexChildThreadStartedEvent({
+          eventId: "evt-child-thread-stop",
+          threadId: childThreadId,
+          providerThreadId: "provider-child-stop",
+          parentThreadId,
+        }),
+      );
+      yield* Fiber.join(eventFiber);
+
+      assert.equal(yield* adapter.hasSession(parentThreadId), true);
+      assert.equal(yield* adapter.hasSession(childThreadId), true);
+
+      yield* adapter.stopSession(childThreadId);
+
+      assert.equal(runtime.closeImpl.mock.calls.length, 0);
+      assert.deepStrictEqual(scopedLifecycleRuntimeFactory.releasedThreadIds, []);
+      assert.equal(yield* adapter.hasSession(parentThreadId), true);
+      assert.equal(yield* adapter.hasSession(childThreadId), false);
+
+      yield* adapter.stopSession(parentThreadId);
+
+      assert.equal(runtime.closeImpl.mock.calls.length, 1);
+      assert.deepStrictEqual(scopedLifecycleRuntimeFactory.releasedThreadIds, [parentThreadId]);
+      assert.equal(yield* adapter.hasSession(parentThreadId), false);
+    }),
+  );
+
+  it.effect("does not block runtime events behind child snapshot backfill", () =>
+    Effect.gen(function* () {
+      scopedLifecycleRuntimeFactory.releasedThreadIds.length = 0;
+      const adapter = yield* CodexAdapter;
+      const parentThreadId = asThreadId("thread-parent-nonblocking-child-backfill");
+      const childThreadId = codexChildThreadId(
+        ProviderInstanceId.make("codex"),
+        "provider-child-nonblocking",
+      );
+      let finishBackfill: ((snapshot: CodexThreadSnapshot) => void) | undefined;
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: parentThreadId,
+        runtimeMode: "full-access",
+      });
+
+      const runtime = scopedLifecycleRuntimeFactory.lastRuntime;
+      assert.ok(runtime);
+      runtime.readProviderThreadImpl.mockImplementation(
+        (providerThreadId) =>
+          new Promise<CodexThreadSnapshot>((resolve) => {
+            finishBackfill = resolve;
+            assert.equal(providerThreadId, "provider-child-nonblocking");
+          }),
+      );
+
+      const turnStartedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "turn.started" && event.turnId === asTurnId("turn-root-after-child"),
+        ),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit(
+        makeCodexChildThreadStartedEvent({
+          eventId: "evt-child-thread-nonblocking",
+          threadId: childThreadId,
+          providerThreadId: "provider-child-nonblocking",
+          parentThreadId,
+        }),
+      );
+      yield* runtime.emit({
+        id: asEventId("evt-root-turn-after-child"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        createdAt: "2026-01-01T00:00:01.000Z",
+        method: "turn/started",
+        threadId: parentThreadId,
+        turnId: asTurnId("turn-root-after-child"),
+        payload: {
+          threadId: "provider-thread-1",
+          turn: {
+            id: "turn-root-after-child",
+            status: "running",
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const turnStarted = yield* Fiber.join(turnStartedFiber);
+      assert.equal(turnStarted._tag, "Some");
+      if (turnStarted._tag === "Some") {
+        assert.equal(turnStarted.value.threadId, parentThreadId);
+      }
+
+      assert.ok(finishBackfill);
+      finishBackfill({
+        threadId: "provider-child-nonblocking",
+        turns: [],
+      });
     }),
   );
 });
