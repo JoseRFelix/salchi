@@ -32,6 +32,7 @@ import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { respondToAuthError } from "./auth/http.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import { imageMimeTypeFromFileName } from "./imageMime.ts";
+import { videoMimeTypeFromFileName } from "./videoMime.ts";
 import {
   browserApiCorsAllowedHeaders,
   browserApiCorsAllowedMethods,
@@ -44,8 +45,23 @@ const FALLBACK_PROJECT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" vi
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 export const WORKSPACE_IMAGE_ROUTE_PATH = "/api/workspace-image";
 export const WORKSPACE_GIT_IMAGE_ROUTE_PATH = "/api/workspace-git-image";
+export const WORKSPACE_VIDEO_ROUTE_PATH = "/api/workspace-video";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const GIT_OBJECT_ID_PATTERN = /^[0-9a-f]{7,64}$/i;
+
+export type WorkspaceMediaByteRange =
+  | {
+      readonly kind: "full";
+    }
+  | {
+      readonly kind: "partial";
+      readonly start: number;
+      readonly end: number;
+      readonly contentLength: number;
+    }
+  | {
+      readonly kind: "unsatisfiable";
+    };
 
 class WorkspaceGitImageError extends Data.TaggedError("WorkspaceGitImageError")<{
   readonly detail: string;
@@ -136,6 +152,166 @@ function readGitImageObject(cwd: string, objectId: string, maxBuffer: number) {
         detail: "Failed to read git object.",
         cause,
       }),
+  });
+}
+
+function parseNonNegativeInteger(value: string): number | null {
+  if (!/^\d+$/.test(value)) {
+    return null;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+export function resolveWorkspaceMediaByteRange(
+  rangeHeader: string | undefined,
+  fileSize: number,
+): WorkspaceMediaByteRange {
+  const trimmedRange = rangeHeader?.trim();
+  if (!trimmedRange) {
+    return { kind: "full" };
+  }
+  if (!Number.isSafeInteger(fileSize) || fileSize <= 0) {
+    return { kind: "unsatisfiable" };
+  }
+
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(trimmedRange);
+  if (!match || trimmedRange.includes(",")) {
+    return { kind: "unsatisfiable" };
+  }
+
+  const startValue = match[1] ?? "";
+  const endValue = match[2] ?? "";
+  if (!startValue && !endValue) {
+    return { kind: "unsatisfiable" };
+  }
+
+  if (!startValue) {
+    const suffixLength = parseNonNegativeInteger(endValue);
+    if (suffixLength === null || suffixLength <= 0) {
+      return { kind: "unsatisfiable" };
+    }
+    const contentLength = Math.min(suffixLength, fileSize);
+    const start = fileSize - contentLength;
+    return {
+      kind: "partial",
+      start,
+      end: fileSize - 1,
+      contentLength,
+    };
+  }
+
+  const start = parseNonNegativeInteger(startValue);
+  if (start === null || start >= fileSize) {
+    return { kind: "unsatisfiable" };
+  }
+
+  const explicitEnd = endValue ? parseNonNegativeInteger(endValue) : null;
+  if (endValue && explicitEnd === null) {
+    return { kind: "unsatisfiable" };
+  }
+  const end = Math.min(explicitEnd ?? fileSize - 1, fileSize - 1);
+  if (end < start) {
+    return { kind: "unsatisfiable" };
+  }
+
+  return {
+    kind: "partial",
+    start,
+    end,
+    contentLength: end - start + 1,
+  };
+}
+
+function workspaceMediaHeaders(input: { supportsRanges: boolean }): Record<string, string> {
+  return {
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    ...(input.supportsRanges ? { "Accept-Ranges": "bytes" } : {}),
+  };
+}
+
+function serveWorkspaceMediaFile(input: {
+  readonly cwd: string;
+  readonly relativePath: string;
+  readonly mimeType: string;
+  readonly routeLabel: "image" | "video";
+  readonly rangeHeader?: string | undefined;
+  readonly maxBytes?: number | undefined;
+  readonly supportsRanges: boolean;
+}) {
+  return Effect.gen(function* () {
+    const workspacePaths = yield* WorkspacePaths;
+    const target = yield* workspacePaths
+      .resolveRelativePathWithinRoot({
+        workspaceRoot: input.cwd,
+        relativePath: input.relativePath,
+      })
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!target) {
+      return HttpServerResponse.text(`Invalid workspace ${input.routeLabel} path`, {
+        status: 400,
+      });
+    }
+
+    const fileSystem = yield* FileSystem.FileSystem;
+    const fileInfo = yield* fileSystem
+      .stat(target.absolutePath)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!fileInfo || fileInfo.type !== "File") {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    const fileSize = Number(fileInfo.size);
+    if (!Number.isSafeInteger(fileSize) || fileSize <= 0) {
+      return HttpServerResponse.text(`Workspace ${input.routeLabel} is empty`, { status: 413 });
+    }
+    if (input.maxBytes !== undefined && fileSize > input.maxBytes) {
+      return HttpServerResponse.text(`Workspace ${input.routeLabel} is too large`, {
+        status: 413,
+      });
+    }
+
+    const byteRange = input.supportsRanges
+      ? resolveWorkspaceMediaByteRange(input.rangeHeader, fileSize)
+      : ({ kind: "full" } as const);
+    const baseHeaders = workspaceMediaHeaders({ supportsRanges: input.supportsRanges });
+
+    if (byteRange.kind === "unsatisfiable") {
+      return HttpServerResponse.text("Range Not Satisfiable", {
+        status: 416,
+        headers: {
+          ...baseHeaders,
+          "Content-Range": `bytes */${fileSize}`,
+        },
+      });
+    }
+
+    const responseOptions =
+      byteRange.kind === "partial"
+        ? {
+            status: 206,
+            contentType: input.mimeType,
+            contentLength: byteRange.contentLength,
+            offset: byteRange.start,
+            bytesToRead: byteRange.contentLength,
+            headers: {
+              ...baseHeaders,
+              "Content-Range": `bytes ${byteRange.start}-${byteRange.end}/${fileSize}`,
+            },
+          }
+        : {
+            status: 200,
+            contentType: input.mimeType,
+            contentLength: fileSize,
+            headers: baseHeaders,
+          };
+
+    return yield* HttpServerResponse.file(target.absolutePath, responseOptions).pipe(
+      Effect.catch(() =>
+        Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
+      ),
+    );
   });
 }
 
@@ -326,43 +502,46 @@ export const workspaceImageRouteLayer = HttpRouter.add(
       return HttpServerResponse.text("Unsupported workspace image type", { status: 415 });
     }
 
-    const workspacePaths = yield* WorkspacePaths;
-    const target = yield* workspacePaths
-      .resolveRelativePathWithinRoot({
-        workspaceRoot: cwd,
-        relativePath,
-      })
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!target) {
-      return HttpServerResponse.text("Invalid workspace image path", { status: 400 });
+    return yield* serveWorkspaceMediaFile({
+      cwd,
+      relativePath,
+      mimeType,
+      routeLabel: "image",
+      maxBytes: PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+      supportsRanges: false,
+    });
+  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+);
+
+export const workspaceVideoRouteLayer = HttpRouter.add(
+  "GET",
+  WORKSPACE_VIDEO_ROUTE_PATH,
+  Effect.gen(function* () {
+    yield* requireAuthenticatedRequest;
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) {
+      return HttpServerResponse.text("Bad Request", { status: 400 });
     }
 
-    const fileSystem = yield* FileSystem.FileSystem;
-    const fileInfo = yield* fileSystem
-      .stat(target.absolutePath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!fileInfo || fileInfo.type !== "File") {
-      return HttpServerResponse.text("Not Found", { status: 404 });
-    }
-    const fileSize = Number(fileInfo.size);
-    if (fileSize <= 0 || fileSize > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
-      return HttpServerResponse.text("Workspace image is empty or too large", { status: 413 });
+    const cwd = url.value.searchParams.get("cwd")?.trim();
+    const relativePath = url.value.searchParams.get("relativePath")?.trim();
+    if (!cwd || !relativePath) {
+      return HttpServerResponse.text("Missing workspace video parameters", { status: 400 });
     }
 
-    const bytes = yield* fileSystem
-      .readFile(target.absolutePath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!bytes) {
-      return HttpServerResponse.text("Internal Server Error", { status: 500 });
+    const mimeType = videoMimeTypeFromFileName(relativePath);
+    if (!mimeType) {
+      return HttpServerResponse.text("Unsupported workspace video type", { status: 415 });
     }
 
-    return HttpServerResponse.uint8Array(bytes, {
-      status: 200,
-      contentType: mimeType,
-      headers: {
-        "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff",
-      },
+    return yield* serveWorkspaceMediaFile({
+      cwd,
+      relativePath,
+      mimeType,
+      routeLabel: "video",
+      rangeHeader: request.headers["range"],
+      supportsRanges: true,
     });
   }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
 );

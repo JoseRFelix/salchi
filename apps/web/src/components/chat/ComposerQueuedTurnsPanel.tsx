@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { ChevronDownIcon, ImageIcon, Trash2Icon } from "lucide-react";
+import { ChevronDownIcon, FileTextIcon, ImageIcon, PaperclipIcon, Trash2Icon } from "lucide-react";
 
 import type { MessageId } from "@t3tools/contracts";
 import type { QueuedTurn } from "../../types";
@@ -72,7 +72,7 @@ export const ComposerQueuedTurnsPanel = memo(function ComposerQueuedTurnsPanel(
                     <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-muted-foreground text-xs">
                       {attachmentCount > 0 ? (
                         <span className="inline-flex items-center gap-1">
-                          <ImageIcon className="size-3.5" aria-hidden="true" />
+                          <PaperclipIcon className="size-3.5" aria-hidden="true" />
                           {attachmentCount}
                         </span>
                       ) : null}
@@ -86,14 +86,24 @@ export const ComposerQueuedTurnsPanel = memo(function ComposerQueuedTurnsPanel(
                             className="size-9 overflow-hidden rounded border border-border/65 bg-background"
                           >
                             {attachment.previewUrl ? (
-                              <img
-                                src={attachment.previewUrl}
-                                alt={attachment.name}
-                                className="h-full w-full object-cover"
-                              />
+                              attachment.type === "image" ? (
+                                <img
+                                  src={attachment.previewUrl}
+                                  alt={attachment.name}
+                                  className="h-full w-full object-cover"
+                                />
+                              ) : (
+                                <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+                                  <FileTextIcon className="size-4" aria-hidden="true" />
+                                </div>
+                              )
                             ) : (
                               <div className="flex h-full w-full items-center justify-center text-muted-foreground">
-                                <ImageIcon className="size-4" aria-hidden="true" />
+                                {attachment.type === "pdf" ? (
+                                  <FileTextIcon className="size-4" aria-hidden="true" />
+                                ) : (
+                                  <ImageIcon className="size-4" aria-hidden="true" />
+                                )}
                               </div>
                             )}
                           </div>

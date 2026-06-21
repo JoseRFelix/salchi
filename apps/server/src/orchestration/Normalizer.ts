@@ -6,7 +6,9 @@ import {
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  PROVIDER_SEND_TURN_MAX_PDF_BYTES,
 } from "@t3tools/contracts";
+import { PDF_MIME_TYPE } from "@t3tools/shared/attachmentMime";
 
 import { createAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
@@ -74,16 +76,26 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       (attachment) =>
         Effect.gen(function* () {
           const parsed = parseBase64DataUrl(attachment.dataUrl);
-          if (!parsed || !parsed.mimeType.startsWith("image/")) {
+          const attachmentKind = attachment.type === "pdf" ? "PDF" : "Image";
+          const normalizedMimeType = parsed?.mimeType.toLowerCase() ?? "";
+          const isValidMime =
+            attachment.type === "image"
+              ? normalizedMimeType.startsWith("image/")
+              : normalizedMimeType === PDF_MIME_TYPE;
+          const maxBytes =
+            attachment.type === "image"
+              ? PROVIDER_SEND_TURN_MAX_IMAGE_BYTES
+              : PROVIDER_SEND_TURN_MAX_PDF_BYTES;
+          if (!parsed || !isValidMime) {
             return yield* new OrchestrationDispatchCommandError({
-              message: `Invalid image attachment payload for '${attachment.name}'.`,
+              message: `Invalid ${attachmentKind.toLowerCase()} attachment payload for '${attachment.name}'.`,
             });
           }
 
           const bytes = Buffer.from(parsed.base64, "base64");
-          if (bytes.byteLength === 0 || bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+          if (bytes.byteLength === 0 || bytes.byteLength > maxBytes) {
             return yield* new OrchestrationDispatchCommandError({
-              message: `Image attachment '${attachment.name}' is empty or too large.`,
+              message: `${attachmentKind} attachment '${attachment.name}' is empty or too large.`,
             });
           }
 
@@ -94,13 +106,22 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
             });
           }
 
-          const persistedAttachment = {
-            type: "image" as const,
-            id: attachmentId,
-            name: attachment.name,
-            mimeType: parsed.mimeType.toLowerCase(),
-            sizeBytes: bytes.byteLength,
-          };
+          const persistedAttachment =
+            attachment.type === "pdf"
+              ? {
+                  type: "pdf" as const,
+                  id: attachmentId,
+                  name: attachment.name,
+                  mimeType: "application/pdf" as const,
+                  sizeBytes: bytes.byteLength,
+                }
+              : {
+                  type: "image" as const,
+                  id: attachmentId,
+                  name: attachment.name,
+                  mimeType: normalizedMimeType,
+                  sizeBytes: bytes.byteLength,
+                };
 
           const attachmentPath = resolveAttachmentPath({
             attachmentsDir: serverConfig.attachmentsDir,

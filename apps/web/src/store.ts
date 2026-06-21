@@ -206,8 +206,7 @@ function mapChatAttachment(
   environmentId: EnvironmentId,
   attachment: NonNullable<OrchestrationMessage["attachments"]>[number],
 ): ChatAttachment {
-  return {
-    type: "image" as const,
+  const base = {
     id: attachment.id,
     name: attachment.name,
     mimeType: attachment.mimeType,
@@ -217,6 +216,16 @@ function mapChatAttachment(
       pathname: attachmentPreviewRoutePath(attachment.id),
     }),
   };
+  return attachment.type === "pdf"
+    ? {
+        ...base,
+        type: "pdf",
+        mimeType: "application/pdf",
+      }
+    : {
+        ...base,
+        type: "image",
+      };
 }
 
 function mapMessage(environmentId: EnvironmentId, message: OrchestrationMessage): ChatMessage {

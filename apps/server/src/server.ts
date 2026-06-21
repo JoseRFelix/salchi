@@ -12,6 +12,7 @@ import {
   browserApiCorsLayer,
   workspaceGitImageRouteLayer,
   workspaceImageRouteLayer,
+  workspaceVideoRouteLayer,
 } from "./http.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
@@ -347,6 +348,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   webResumeDiagnosticsRouteLayer,
   workspaceGitImageRouteLayer,
   workspaceImageRouteLayer,
+  workspaceVideoRouteLayer,
   staticAndDevRouteLayer,
   websocketRpcRouteLayer,
 ).pipe(Layer.provide(browserApiCorsLayer));

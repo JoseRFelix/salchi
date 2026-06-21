@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { cacheControlForStaticPath, isLoopbackHostname, resolveDevRedirectUrl } from "./http.ts";
+import {
+  cacheControlForStaticPath,
+  isLoopbackHostname,
+  resolveDevRedirectUrl,
+  resolveWorkspaceMediaByteRange,
+} from "./http.ts";
 
 describe("http dev routing", () => {
   it("treats localhost and loopback addresses as local", () => {
@@ -42,5 +47,53 @@ describe("static cache control", () => {
 
   it("does not treat assetsy as the assets directory", () => {
     expect(cacheControlForStaticPath("assetsy/file.js")).toBe("no-cache");
+  });
+});
+
+describe("workspace media byte ranges", () => {
+  it("uses the full file when no range is requested", () => {
+    expect(resolveWorkspaceMediaByteRange(undefined, 100)).toEqual({ kind: "full" });
+  });
+
+  it("resolves open-ended byte ranges", () => {
+    expect(resolveWorkspaceMediaByteRange("bytes=10-", 100)).toEqual({
+      kind: "partial",
+      start: 10,
+      end: 99,
+      contentLength: 90,
+    });
+  });
+
+  it("resolves bounded byte ranges", () => {
+    expect(resolveWorkspaceMediaByteRange("bytes=10-19", 100)).toEqual({
+      kind: "partial",
+      start: 10,
+      end: 19,
+      contentLength: 10,
+    });
+  });
+
+  it("resolves suffix byte ranges", () => {
+    expect(resolveWorkspaceMediaByteRange("bytes=-25", 100)).toEqual({
+      kind: "partial",
+      start: 75,
+      end: 99,
+      contentLength: 25,
+    });
+  });
+
+  it("rejects unsupported or unsatisfiable byte ranges", () => {
+    expect(resolveWorkspaceMediaByteRange("items=0-10", 100)).toEqual({
+      kind: "unsatisfiable",
+    });
+    expect(resolveWorkspaceMediaByteRange("bytes=120-130", 100)).toEqual({
+      kind: "unsatisfiable",
+    });
+    expect(resolveWorkspaceMediaByteRange("bytes=30-20", 100)).toEqual({
+      kind: "unsatisfiable",
+    });
+    expect(resolveWorkspaceMediaByteRange("bytes=0-10,20-30", 100)).toEqual({
+      kind: "unsatisfiable",
+    });
   });
 });

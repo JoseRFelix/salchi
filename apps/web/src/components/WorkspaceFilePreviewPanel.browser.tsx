@@ -552,6 +552,60 @@ async function renderImagePreview(
   };
 }
 
+async function renderVideoPreview(
+  input: { onAddFileToInput?: (relativePath: string) => void; relativePath?: string } = {},
+) {
+  const relativePath = input.relativePath ?? "captures/demo.mp4";
+  const readFile = vi.fn(async () => {
+    throw new Error("Video previews should not read text file contents.");
+  });
+  __setEnvironmentApiOverrideForTests(ENVIRONMENT_ID, createMockEnvironmentApi(readFile));
+
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+  const host = document.createElement("div");
+  host.style.height = "260px";
+  host.style.width = "720px";
+  document.body.append(host);
+
+  const screen = await render(
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(
+        DiffWorkerPoolProvider,
+        null,
+        createElement(WorkspaceFilePreviewPanel, {
+          mode: "sidebar",
+          target: createTarget({ relativePath }),
+          ...(input.onAddFileToInput ? { onAddFileToInput: input.onAddFileToInput } : {}),
+        }),
+      ),
+    ),
+    { container: host },
+  );
+
+  await vi.waitFor(() => {
+    expect(
+      document.querySelector('video[src^="http://environment.test/api/workspace-video"]'),
+    ).not.toBeNull();
+  });
+
+  return {
+    readFile,
+    async cleanup() {
+      await screen.unmount();
+      queryClient.clear();
+      host.remove();
+    },
+  };
+}
+
 async function waitForMarkerCss(lineNumber: number) {
   await vi.waitFor(() => {
     expect(fileRenderCalls.at(-1)?.options?.unsafeCSS).toContain(
@@ -1288,6 +1342,64 @@ describe("WorkspaceFilePreviewPanel", () => {
         .not.toBeInTheDocument();
       await page.getByRole("button", { name: "Add assets/chart.png to chat input" }).click();
       expect(onAddFileToInput).toHaveBeenCalledWith("assets/chart.png");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("renders video files through the workspace video route without reading them as text", async () => {
+    const onAddFileToInput = vi.fn();
+    setGitStatusMock([{ path: "captures/demo.mp4", status: "modified" }]);
+    const mounted = await renderVideoPreview({
+      onAddFileToInput,
+      relativePath: "captures/demo.mp4",
+    });
+    try {
+      const video = document.querySelector<HTMLVideoElement>(
+        'video[src^="http://environment.test/api/workspace-video"]',
+      );
+      expect(video).not.toBeNull();
+      if (!video) {
+        throw new Error("Expected workspace video preview to render.");
+      }
+      expect(video.getAttribute("aria-label")).toBe("captures/demo.mp4 preview");
+      expect(video.src).toBe(
+        "http://environment.test/api/workspace-video?cwd=%2Frepo%2Fproject&relativePath=captures%2Fdemo.mp4",
+      );
+      expect(video.controls).toBe(true);
+      expect(video.preload).toBe("metadata");
+      expect(video.dataset.loadState).toBe("loading");
+      expect(video.className).toContain("invisible");
+      // Keep Chromium from trying to load the unreachable mocked route before the
+      // synthetic metadata event exercises the component's loaded state.
+      video.addEventListener("error", (event) => event.stopImmediatePropagation(), {
+        capture: true,
+      });
+      video.removeAttribute("src");
+      video.dispatchEvent(new Event("loadedmetadata", { bubbles: true }));
+      await vi.waitFor(() => {
+        expect(video.dataset.loadState).toBe("loaded");
+        expect(video.className).not.toContain("invisible");
+      });
+      expect(mounted.readFile).not.toHaveBeenCalled();
+      expect(getWorkingTreeDiffMock).not.toHaveBeenCalled();
+      expect(resolveEnvironmentHttpUrlMock).toHaveBeenCalledWith({
+        environmentId: ENVIRONMENT_ID,
+        pathname: "/api/workspace-video",
+        searchParams: {
+          cwd: "/repo/project",
+          relativePath: "captures/demo.mp4",
+        },
+      });
+      await expect.element(page.getByRole("button", { name: "Copy file" })).not.toBeInTheDocument();
+      await expect
+        .element(page.getByRole("button", { name: "Enable word wrap" }))
+        .not.toBeInTheDocument();
+      await expect
+        .element(page.getByRole("button", { name: "Disable word wrap" }))
+        .not.toBeInTheDocument();
+      await page.getByRole("button", { name: "Add captures/demo.mp4 to chat input" }).click();
+      expect(onAddFileToInput).toHaveBeenCalledWith("captures/demo.mp4");
     } finally {
       await mounted.cleanup();
     }

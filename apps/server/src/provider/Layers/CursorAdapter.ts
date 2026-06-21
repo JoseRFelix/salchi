@@ -42,6 +42,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { toProviderAttachmentReference } from "../attachmentInputs.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -1015,6 +1016,17 @@ export function makeCursorAdapter(
                   method: "session/prompt",
                   detail: `Invalid attachment id '${attachment.id}'.`,
                 });
+              }
+              if (attachment.type === "pdf") {
+                const reference = toProviderAttachmentReference(attachment, attachmentPath);
+                promptParts.push({
+                  type: "resource_link",
+                  uri: reference.fileUrl,
+                  name: attachment.name,
+                  mimeType: attachment.mimeType,
+                  size: attachment.sizeBytes,
+                });
+                continue;
               }
               const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
                 Effect.mapError(

@@ -104,6 +104,31 @@ function makeImage(input: {
   };
 }
 
+function makePdf(input: {
+  id: string;
+  previewUrl: string;
+  name?: string;
+  sizeBytes?: number;
+  lastModified?: number;
+}): ComposerImageAttachment {
+  const name = input.name ?? "report.pdf";
+  const sizeBytes = input.sizeBytes ?? 4;
+  const lastModified = input.lastModified ?? 1_700_000_000_000;
+  const file = new File([new Uint8Array(sizeBytes).fill(1)], name, {
+    type: "application/pdf",
+    lastModified,
+  });
+  return {
+    type: "pdf",
+    id: input.id,
+    name,
+    mimeType: "application/pdf",
+    sizeBytes: file.size,
+    previewUrl: input.previewUrl,
+    file,
+  };
+}
+
 function makeTerminalContext(input: {
   id: string;
   text?: string;
@@ -255,6 +280,28 @@ describe("composerDraftStore addImages", () => {
     expect(draft?.images.map((image) => image.id)).toEqual(["img-shared"]);
     expect(revokeSpy).not.toHaveBeenCalledWith("blob:shared");
   });
+
+  it("accepts PDF attachments alongside images", () => {
+    const image = makeImage({
+      id: "img-1",
+      previewUrl: "blob:image",
+      name: "screenshot.png",
+    });
+    const pdf = makePdf({
+      id: "pdf-1",
+      previewUrl: "blob:pdf",
+      name: "report.pdf",
+    });
+
+    useComposerDraftStore.getState().addImages(threadRef, [image, pdf]);
+
+    const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
+    expect(draft?.images.map((attachment) => attachment.type)).toEqual(["image", "pdf"]);
+    expect(draft?.images.map((attachment) => attachment.name)).toEqual([
+      "screenshot.png",
+      "report.pdf",
+    ]);
+  });
 });
 
 describe("composerDraftStore clearComposerContent", () => {
@@ -331,6 +378,7 @@ describe("composerDraftStore syncPersistedAttachments", () => {
 
     useComposerDraftStore.getState().syncPersistedAttachments(threadRef, [
       {
+        type: image.type,
         id: image.id,
         name: image.name,
         mimeType: image.mimeType,
@@ -489,6 +537,53 @@ describe("composerDraftStore terminal contexts", () => {
         text: "",
       },
     ]);
+  });
+
+  it("hydrates persisted PDF draft attachments", () => {
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const mergedState = persistApi.getOptions().merge(
+      {
+        draftsByThreadId: {
+          [threadId]: {
+            prompt: "",
+            attachments: [
+              {
+                type: "pdf",
+                id: "pdf-rehydrated",
+                name: "report.pdf",
+                mimeType: "application/pdf",
+                sizeBytes: 4,
+                dataUrl: "data:application/pdf;base64,JVBERg==",
+              },
+            ],
+            terminalContexts: [],
+          },
+        },
+        draftThreadsByThreadId: {},
+        projectDraftThreadIdByProjectKey: {},
+      },
+      useComposerDraftStore.getInitialState(),
+    );
+
+    const draft = mergedState.draftsByThreadKey[threadKeyFor(threadId)];
+    expect(draft?.images).toMatchObject([
+      {
+        type: "pdf",
+        id: "pdf-rehydrated",
+        name: "report.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 4,
+        previewUrl: "data:application/pdf;base64,JVBERg==",
+      },
+    ]);
+    expect(draft?.images[0]?.file.type).toBe("application/pdf");
   });
 
   it("sanitizes malformed persisted drafts during merge", () => {

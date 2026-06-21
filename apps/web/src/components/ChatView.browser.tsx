@@ -5143,6 +5143,84 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("sends pasted PDF attachments with upload metadata", async () => {
+    const originalCreateObjectUrl = URL.createObjectURL;
+    const originalRevokeObjectUrl = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => "blob:chat-report-preview");
+    URL.revokeObjectURL = vi.fn();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-pdf-attachment-send-test" as MessageId,
+        targetText: "pdf attachment send test",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return {
+            sequence: fixture.snapshot.snapshotSequence + 1,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const pdfFile = new File([new Uint8Array([1, 2, 3, 4, 5])], "report.pdf", {
+        type: "application/pdf",
+      });
+      await pasteComposerFile(pdfFile);
+
+      await expect.element(page.getByText("report.pdf")).toBeInTheDocument();
+
+      useComposerDraftStore.getState().setPrompt(THREAD_REF, "PDF attached");
+      await waitForLayout();
+
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      await sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const turnStartRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.turn.start",
+          ) as
+            | {
+                _tag: string;
+                type?: string;
+                message?: {
+                  attachments?: Array<{
+                    type?: string;
+                    name?: string;
+                    mimeType?: string;
+                    sizeBytes?: number;
+                    dataUrl?: string;
+                  }>;
+                };
+              }
+            | undefined;
+
+          expect(turnStartRequest?.message?.attachments).toHaveLength(1);
+          expect(turnStartRequest?.message?.attachments?.[0]).toMatchObject({
+            type: "pdf",
+            name: "report.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 5,
+          });
+          expect(turnStartRequest?.message?.attachments?.[0]?.dataUrl).toMatch(
+            /^data:application\/pdf;base64,/,
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+      URL.createObjectURL = originalCreateObjectUrl;
+      URL.revokeObjectURL = originalRevokeObjectUrl;
+    }
+  });
+
   it("keeps optimistic image blobs until persisted previews preload", async () => {
     const originalCreateObjectUrl = URL.createObjectURL;
     const originalRevokeObjectUrl = URL.revokeObjectURL;

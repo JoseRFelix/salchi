@@ -6,6 +6,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  attachmentRelativePath,
   createAttachmentId,
   createStableAttachmentId,
   parseThreadSegmentFromAttachmentId,
@@ -71,6 +72,35 @@ describe("attachmentStore", () => {
         attachmentId,
       });
       expect(resolved).toBe(pngPath);
+    } finally {
+      fs.rmSync(attachmentsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses .pdf relative paths for PDF attachments", () => {
+    expect(
+      attachmentRelativePath({
+        type: "pdf",
+        id: "thread-1-attachment",
+        name: "report.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 4,
+      }),
+    ).toBe("thread-1-attachment.pdf");
+  });
+
+  it("resolves PDF attachment path by id", () => {
+    const attachmentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3code-attachment-store-"));
+    try {
+      const attachmentId = "thread-1-attachment";
+      const pdfPath = path.join(attachmentsDir, `${attachmentId}.pdf`);
+      fs.writeFileSync(pdfPath, Buffer.from("%PDF"));
+
+      const resolved = resolveAttachmentPathById({
+        attachmentsDir,
+        attachmentId,
+      });
+      expect(resolved).toBe(pdfPath);
     } finally {
       fs.rmSync(attachmentsDir, { recursive: true, force: true });
     }

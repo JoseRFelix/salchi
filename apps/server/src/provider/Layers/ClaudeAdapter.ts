@@ -74,6 +74,11 @@ import * as Clock from "effect/Clock";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import {
+  formatPdfAttachmentReferenceText,
+  toProviderAttachmentReference,
+  type ProviderAttachmentReference,
+} from "../attachmentInputs.ts";
 import { makeClaudeEnvironment, resolveClaudeHomePath } from "../Drivers/ClaudeHome.ts";
 import {
   getClaudeModelCapabilities,
@@ -1311,12 +1316,29 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
 ) {
   const text = buildPromptText(input, dependencies.boundInstanceId);
   const sdkContent: Array<Record<string, unknown>> = [];
+  const pdfReferences: ProviderAttachmentReference[] = [];
 
   if (text.length > 0) {
     sdkContent.push({ type: "text", text });
   }
 
   for (const attachment of input.attachments ?? []) {
+    if (attachment.type === "pdf") {
+      const attachmentPath = resolveAttachmentPath({
+        attachmentsDir: dependencies.attachmentsDir,
+        attachment,
+      });
+      if (!attachmentPath) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "turn/start",
+          detail: `Invalid attachment id '${attachment.id}'.`,
+        });
+      }
+      pdfReferences.push(toProviderAttachmentReference(attachment, attachmentPath));
+      continue;
+    }
+
     if (attachment.type !== "image") {
       continue;
     }
@@ -1359,6 +1381,11 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
         bytes,
       }),
     );
+  }
+
+  const pdfReferenceText = formatPdfAttachmentReferenceText(pdfReferences);
+  if (pdfReferenceText) {
+    sdkContent.push({ type: "text", text: pdfReferenceText });
   }
 
   return buildUserMessage({ sdkContent });
@@ -4360,6 +4387,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ? { [CLAUDE_STATUSLINE_CAPTURE_ENV]: statuslineCapturePath }
           : {}),
       };
+      const additionalDirectories = Array.from(
+        new Set(
+          [input.cwd, serverConfig.attachmentsDir].filter((entry): entry is string =>
+            Boolean(entry),
+          ),
+        ),
+      );
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
@@ -4383,7 +4417,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         includePartialMessages: true,
         canUseTool,
         env: queryEnvironment,
-        ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
+        ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
       };
 
@@ -4405,7 +4439,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         "claude.query.resume": existingResumeSessionId ?? "",
         "claude.query.session_id": newSessionId ?? "",
         "claude.query.include_partial_messages": true,
-        "claude.query.additional_directories": input.cwd ? [input.cwd] : [],
+        "claude.query.additional_directories": additionalDirectories,
         "claude.query.setting_sources": [...CLAUDE_SETTING_SOURCES],
         "claude.query.settings_json": encodeJsonStringForDiagnostics(settings) ?? "",
         "claude.query.extra_args_json": encodeJsonStringForDiagnostics(extraArgs) ?? "",

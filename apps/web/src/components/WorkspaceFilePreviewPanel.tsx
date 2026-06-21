@@ -60,9 +60,10 @@ import {
   workspaceFilePanelBackButtonLabel,
 } from "../workspaceFilePreview";
 import {
-  isWorkspaceImagePreviewPath,
-  resolveWorkspaceImagePreviewUrl,
-} from "../workspaceImagePreview";
+  resolveWorkspaceMediaPreviewKind,
+  resolveWorkspaceMediaPreviewUrl,
+  type WorkspaceMediaPreviewKind,
+} from "../workspaceMediaPreview";
 import {
   buildWorkspaceFileDiffMarkers,
   type WorkspaceFileDiffLineMarker,
@@ -548,6 +549,59 @@ function WorkspaceImagePreview(props: { src: string; alt: string }) {
   );
 }
 
+function WorkspaceVideoPreview(props: { src: string; label: string }) {
+  const [loadState, setLoadState] = useState<"loading" | "loaded" | "error">("loading");
+
+  useEffect(() => {
+    setLoadState("loading");
+  }, [props.src]);
+
+  return (
+    <div className="relative flex min-h-0 flex-1 overflow-auto bg-background">
+      {loadState === "loading" ? (
+        <div className="absolute inset-0 z-10 flex">
+          <DiffPanelLoadingState label="Loading video preview..." />
+        </div>
+      ) : null}
+      {loadState === "error" ? (
+        <div className="absolute inset-0 z-10 flex items-center justify-center p-4 text-center text-sm text-destructive">
+          Unable to load video preview.
+        </div>
+      ) : null}
+      <div className="flex min-h-full min-w-full items-center justify-center p-4">
+        <video
+          src={props.src}
+          controls
+          playsInline
+          preload="metadata"
+          aria-label={`${props.label} preview`}
+          data-load-state={loadState}
+          className={
+            loadState === "loaded"
+              ? "max-h-full max-w-full bg-black object-contain"
+              : "invisible pointer-events-none max-h-full max-w-full bg-black object-contain opacity-0"
+          }
+          onLoadedMetadata={() => setLoadState("loaded")}
+          onCanPlay={() => setLoadState("loaded")}
+          onError={() => setLoadState("error")}
+        />
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceMediaPreview(props: {
+  kind: WorkspaceMediaPreviewKind;
+  src: string;
+  label: string;
+}) {
+  return props.kind === "image" ? (
+    <WorkspaceImagePreview src={props.src} alt={`${props.label} preview`} />
+  ) : (
+    <WorkspaceVideoPreview src={props.src} label={props.label} />
+  );
+}
+
 function EditableWorkspaceFileSurface(props: {
   file: ProjectReadFileResult;
   previewFile: FileContents;
@@ -762,15 +816,16 @@ export function WorkspaceFilePreviewPanel(props: {
   const lastAutoScrollKeyRef = useRef<string | null>(null);
   const lastWorkingTreeSignatureRef = useRef<string | null>(null);
   const panelOpen = props.panelOpen ?? true;
-  const isImagePreviewTarget = useMemo(
-    () => (props.target ? isWorkspaceImagePreviewPath(props.target.relativePath) : false),
+  const mediaPreviewKind = useMemo(
+    () => (props.target ? resolveWorkspaceMediaPreviewKind(props.target.relativePath) : null),
     [props.target],
   );
-  const imagePreviewUrl = useMemo(() => {
+  const isMediaPreviewTarget = mediaPreviewKind !== null;
+  const mediaPreview = useMemo(() => {
     if (!props.target) {
       return null;
     }
-    return resolveWorkspaceImagePreviewUrl({
+    return resolveWorkspaceMediaPreviewUrl({
       environmentId: props.target.environmentId,
       cwd: props.target.cwd,
       relativePath: props.target.relativePath,
@@ -784,7 +839,7 @@ export function WorkspaceFilePreviewPanel(props: {
     () => workspaceFilePreviewQueryKey(props.target),
     [props.target?.cwd, props.target?.environmentId, props.target?.relativePath],
   );
-  const query = useQuery(workspaceFilePreviewQueryOptions(props.target, !isImagePreviewTarget));
+  const query = useQuery(workspaceFilePreviewQueryOptions(props.target, !isMediaPreviewTarget));
   const fileContents = query.data?.contents ?? "";
   const previewContents = useMemo(() => normalizePreviewContents(fileContents), [fileContents]);
   const previewLineCount = useMemo(() => countPreviewLines(previewContents), [previewContents]);
@@ -812,7 +867,7 @@ export function WorkspaceFilePreviewPanel(props: {
   const shouldQueryPreviewDiff =
     props.target !== null &&
     query.data !== undefined &&
-    !isImagePreviewTarget &&
+    !isMediaPreviewTarget &&
     gitStatus.data?.isRepo === true &&
     changedWorkingTreeFile !== null;
   const previewDiffQuery = useQuery(
@@ -889,7 +944,7 @@ export function WorkspaceFilePreviewPanel(props: {
     [props.target?.line],
   );
   const previewVirtualizerLayoutKey = useMemo(() => {
-    if (!props.target || !query.data || !previewFile || isImagePreviewTarget) {
+    if (!props.target || !query.data || !previewFile || isMediaPreviewTarget) {
       return null;
     }
 
@@ -903,9 +958,9 @@ export function WorkspaceFilePreviewPanel(props: {
         ? (previewFile.cacheKey ?? previewFile.name)
         : `${renderLanguage}:${diffThemeName}`,
     ].join("\u0000");
-  }, [diffThemeName, isImagePreviewTarget, previewFile, props.target, query.data, renderLanguage]);
+  }, [diffThemeName, isMediaPreviewTarget, previewFile, props.target, query.data, renderLanguage]);
   const virtualizerLayoutRevision = useFilePreviewVirtualizerLayoutRevision({
-    enabled: panelOpen && query.data !== undefined && !isImagePreviewTarget,
+    enabled: panelOpen && query.data !== undefined && !isMediaPreviewTarget,
     layoutKey: previewVirtualizerLayoutKey,
     rootRef: scrollRootRef,
   });
@@ -922,7 +977,7 @@ export function WorkspaceFilePreviewPanel(props: {
   const returnButtonLabel = props.backTarget
     ? workspaceFilePanelBackButtonLabel(props.backTarget)
     : "Back";
-  const canEditFile = query.data !== undefined && !query.data.truncated && !isImagePreviewTarget;
+  const canEditFile = query.data !== undefined && !query.data.truncated && !isMediaPreviewTarget;
 
   useEffect(() => {
     setSavePending(false);
@@ -1199,7 +1254,7 @@ export function WorkspaceFilePreviewPanel(props: {
             <PlusIcon className="size-3.5" />
           </Button>
         ) : null}
-        {!isImagePreviewTarget ? (
+        {!isMediaPreviewTarget ? (
           <>
             <Toggle
               size="xs"
@@ -1238,11 +1293,11 @@ export function WorkspaceFilePreviewPanel(props: {
 
   return (
     <DiffPanelShell mode={props.mode} header={header}>
-      {isImagePreviewTarget && imagePreviewUrl ? (
-        <WorkspaceImagePreview src={imagePreviewUrl} alt={`${subtitle} preview`} />
-      ) : isImagePreviewTarget ? (
+      {mediaPreview ? (
+        <WorkspaceMediaPreview kind={mediaPreview.kind} src={mediaPreview.url} label={subtitle} />
+      ) : isMediaPreviewTarget ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-center text-sm text-destructive">
-          Unable to resolve image preview URL.
+          Unable to resolve media preview URL.
         </div>
       ) : query.isLoading ? (
         <DiffPanelLoadingState label="Loading file preview..." />

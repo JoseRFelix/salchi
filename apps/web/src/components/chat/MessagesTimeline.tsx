@@ -61,7 +61,7 @@ import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { MessageCopyButton } from "./MessageCopyButton";
-import { MessageImageGrid } from "./MessageImageGrid";
+import { MessageAttachments } from "./MessageImageGrid";
 import {
   computeStableMessagesTimelineRows,
   MAX_VISIBLE_WORK_LOG_ENTRIES,
@@ -641,7 +641,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
 
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
-  const userImages = row.message.attachments ?? [];
+  const userAttachments = row.message.attachments ?? [];
   const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text);
   const terminalContexts = displayedUserMessage.contexts;
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
@@ -649,12 +649,17 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   return (
     <div className="group flex flex-col items-end gap-0.5">
       <div className="relative max-w-[80%] rounded-2xl border border-border bg-secondary p-3">
-        <MessageImageGrid images={userImages} onImageExpand={ctx.onImageExpand} className="mb-2" />
+        <MessageAttachments
+          attachments={userAttachments}
+          onImageExpand={ctx.onImageExpand}
+          className="mb-2"
+        />
         <CollapsibleUserMessageBody
           text={displayedUserMessage.visibleText}
           terminalContexts={terminalContexts}
           skills={ctx.skills}
           markdownCwd={ctx.markdownCwd}
+          environmentId={ctx.activeThreadEnvironmentId}
         />
       </div>
       <div className="flex h-5 w-full max-w-[80%] items-center justify-end pe-1 text-[11px] leading-none tabular-nums opacity-0 transition-opacity duration-200 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover:opacity-100 max-sm:opacity-100">
@@ -733,10 +738,11 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
 
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
-  const assistantImages = row.message.attachments ?? [];
-  const hasAssistantImages = assistantImages.length > 0;
+  const assistantAttachments = row.message.attachments ?? [];
+  const hasAssistantAttachments = assistantAttachments.length > 0;
   const messageText =
-    row.message.text || (row.message.streaming || hasAssistantImages ? "" : "(empty response)");
+    row.message.text ||
+    (row.message.streaming || hasAssistantAttachments ? "" : "(empty response)");
 
   return (
     <>
@@ -751,8 +757,8 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             onImageExpand={ctx.onImageExpand}
           />
         ) : null}
-        <MessageImageGrid
-          images={assistantImages}
+        <MessageAttachments
+          attachments={assistantAttachments}
           onImageExpand={ctx.onImageExpand}
           className={messageText.length > 0 ? "mt-1 mb-1" : "mb-1"}
         />
@@ -1102,6 +1108,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
   terminalContexts: ParsedTerminalContextEntry[];
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   markdownCwd: string | undefined;
+  environmentId: EnvironmentId;
   footer?: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -1132,6 +1139,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
             terminalContexts={props.terminalContexts}
             skills={props.skills}
             markdownCwd={props.markdownCwd}
+            environmentId={props.environmentId}
           />
         </div>
       ) : null}
@@ -1170,6 +1178,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   terminalContexts: ParsedTerminalContextEntry[];
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   markdownCwd: string | undefined;
+  environmentId: EnvironmentId;
 }) {
   const renderInlineMarkdownSegment = (text: string, key: string) => {
     const leadingWhitespace = /^\s+/.exec(text)?.[0] ?? "";
@@ -1187,6 +1196,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
           <ChatMarkdown
             text={content}
             cwd={props.markdownCwd}
+            environmentId={props.environmentId}
             skills={props.skills}
             className="text-foreground"
             lineBreaks
@@ -1208,6 +1218,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
                 <ChatMarkdown
                   text={segment.text.trim()}
                   cwd={props.markdownCwd}
+                  environmentId={props.environmentId}
                   skills={props.skills}
                   className="text-foreground"
                   lineBreaks
@@ -1295,6 +1306,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
           key="user-message-terminal-context-inline-text"
           text={props.text}
           cwd={props.markdownCwd}
+          environmentId={props.environmentId}
           skills={props.skills}
           className="text-foreground"
           lineBreaks
@@ -1319,6 +1331,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     <ChatMarkdown
       text={props.text}
       cwd={props.markdownCwd}
+      environmentId={props.environmentId}
       skills={props.skills}
       className="text-foreground"
       lineBreaks
