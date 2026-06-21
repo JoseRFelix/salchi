@@ -102,9 +102,7 @@ it.effect("reports implemented tools separately from locally available executabl
             status: "unauthenticated",
             account: Option.none(),
             host: Option.some("bitbucket.org"),
-            detail: Option.some(
-              "Set T3CODE_BITBUCKET_EMAIL and T3CODE_BITBUCKET_API_TOKEN, or T3CODE_BITBUCKET_ACCESS_TOKEN.",
-            ),
+            detail: Option.some("Set Bitbucket credentials on the server."),
           }),
         },
       }),

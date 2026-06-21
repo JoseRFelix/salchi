@@ -79,6 +79,10 @@ describe("isTemporaryWorktreeBranch", () => {
     expect(isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/DEADBEEF`)).toBe(true);
   });
 
+  it("matches legacy temporary worktree refs so they can be renamed away", () => {
+    expect(isTemporaryWorktreeBranch("t3code/deadbeef")).toBe(true);
+  });
+
   it("rejects non-temporary refName names", () => {
     expect(isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/feature/demo`)).toBe(false);
     expect(isTemporaryWorktreeBranch("main")).toBe(false);
