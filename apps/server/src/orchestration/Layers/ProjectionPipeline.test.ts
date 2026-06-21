@@ -52,6 +52,46 @@ const exists = (filePath: string) =>
     return fileInfo._tag === "Success";
   });
 
+function makeThreadCreatedProjectionEvent(input: {
+  readonly eventId: string;
+  readonly commandId: string;
+  readonly threadId: ThreadId;
+  readonly projectId: ProjectId;
+  readonly occurredAt: string;
+}) {
+  return {
+    type: "thread.created" as const,
+    eventId: EventId.make(input.eventId),
+    aggregateKind: "thread" as const,
+    aggregateId: input.threadId,
+    occurredAt: input.occurredAt,
+    commandId: CommandId.make(input.commandId),
+    causationEventId: null,
+    correlationId: CorrelationId.make(input.commandId),
+    metadata: {},
+    payload: {
+      threadId: input.threadId,
+      projectId: input.projectId,
+      title: "Thread",
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      },
+      runtimeMode: "full-access" as const,
+      interactionMode: "default" as const,
+      parentThreadId: null,
+      subagentKind: null,
+      subagentNickname: null,
+      subagentRole: null,
+      hiddenFromThreadList: false,
+      branch: null,
+      worktreePath: null,
+      createdAt: input.occurredAt,
+      updatedAt: input.occurredAt,
+    },
+  };
+}
+
 const BaseTestLayer = makeProjectionPipelinePrefixedTestLayer("t3-projection-pipeline-test-");
 const ProjectionReadTestLayer = Layer.mergeAll(
   OrchestrationProjectionPipelineLive,
@@ -186,6 +226,169 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 });
+
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-monotonic-thread-")))(
+  "OrchestrationProjectionPipeline",
+  (it) => {
+    it.effect("does not regress thread updatedAt from older backfilled child messages", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.make("thread-monotonic-message");
+        const createdAt = "2026-01-01T01:17:00.000Z";
+        const older = "2026-01-01T00:21:00.000Z";
+
+        yield* eventStore.append(
+          makeThreadCreatedProjectionEvent({
+            eventId: "evt-monotonic-message-created",
+            commandId: "cmd-monotonic-message-created",
+            threadId,
+            projectId: ProjectId.make("project-monotonic-message"),
+            occurredAt: createdAt,
+          }),
+        );
+        yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.make("evt-monotonic-message-backfill"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: older,
+          commandId: CommandId.make("cmd-monotonic-message-backfill"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-monotonic-message-backfill"),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: MessageId.make("message-monotonic-backfill"),
+            role: "assistant",
+            text: "Older child output",
+            turnId: null,
+            streaming: false,
+            createdAt: older,
+            updatedAt: older,
+          },
+        });
+
+        yield* projectionPipeline.bootstrap;
+
+        const rows = yield* sql<{ readonly updatedAt: string }>`
+          SELECT updated_at AS "updatedAt"
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+        `;
+        assert.deepEqual(rows, [{ updatedAt: createdAt }]);
+      }),
+    );
+
+    it.effect("does not regress thread updatedAt from older backfilled sessions", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.make("thread-monotonic-session");
+        const createdAt = "2026-01-01T01:17:00.000Z";
+        const older = "2026-01-01T00:21:00.000Z";
+
+        yield* eventStore.append(
+          makeThreadCreatedProjectionEvent({
+            eventId: "evt-monotonic-session-created",
+            commandId: "cmd-monotonic-session-created",
+            threadId,
+            projectId: ProjectId.make("project-monotonic-session"),
+            occurredAt: createdAt,
+          }),
+        );
+        yield* eventStore.append({
+          type: "thread.session-set",
+          eventId: EventId.make("evt-monotonic-session-backfill"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: older,
+          commandId: CommandId.make("cmd-monotonic-session-backfill"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-monotonic-session-backfill"),
+          metadata: {},
+          payload: {
+            threadId,
+            session: {
+              threadId,
+              status: "ready",
+              providerName: "codex",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: older,
+            },
+          },
+        });
+
+        yield* projectionPipeline.bootstrap;
+
+        const rows = yield* sql<{ readonly updatedAt: string }>`
+          SELECT updated_at AS "updatedAt"
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+        `;
+        assert.deepEqual(rows, [{ updatedAt: createdAt }]);
+      }),
+    );
+
+    it.effect("still advances thread updatedAt for newer normal activity", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.make("thread-monotonic-newer");
+        const createdAt = "2026-01-01T01:17:00.000Z";
+        const newer = "2026-01-01T01:22:00.000Z";
+
+        yield* eventStore.append(
+          makeThreadCreatedProjectionEvent({
+            eventId: "evt-monotonic-newer-created",
+            commandId: "cmd-monotonic-newer-created",
+            threadId,
+            projectId: ProjectId.make("project-monotonic-newer"),
+            occurredAt: createdAt,
+          }),
+        );
+        yield* eventStore.append({
+          type: "thread.activity-appended",
+          eventId: EventId.make("evt-monotonic-newer-activity"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: newer,
+          commandId: CommandId.make("cmd-monotonic-newer-activity"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-monotonic-newer-activity"),
+          metadata: {},
+          payload: {
+            threadId,
+            activity: {
+              id: EventId.make("activity-monotonic-newer"),
+              tone: "info",
+              kind: "worktree.diff.completed",
+              summary: "Diff complete",
+              payload: {},
+              turnId: null,
+              createdAt: newer,
+            },
+          },
+        });
+
+        yield* projectionPipeline.bootstrap;
+
+        const rows = yield* sql<{ readonly updatedAt: string }>`
+          SELECT updated_at AS "updatedAt"
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+        `;
+        assert.deepEqual(rows, [{ updatedAt: newer }]);
+      }),
+    );
+  },
+);
 
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-base-")))(
   "OrchestrationProjectionPipeline",

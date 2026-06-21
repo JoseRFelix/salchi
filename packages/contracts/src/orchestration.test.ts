@@ -450,6 +450,42 @@ it.effect("decodes thread.created runtime mode for historical events", () =>
 
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
     assert.strictEqual(parsed.modelSelection.instanceId, "codex");
+    assert.strictEqual(parsed.parentThreadId, null);
+    assert.strictEqual(parsed.subagentKind, null);
+    assert.strictEqual(parsed.subagentNickname, null);
+    assert.strictEqual(parsed.subagentRole, null);
+    assert.strictEqual(parsed.hiddenFromThreadList, false);
+  }),
+);
+
+it.effect("decodes thread.created child metadata", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadCreatedPayload({
+      threadId: "child-thread",
+      projectId: "project-1",
+      title: "Subagent: Planner",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5.4",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      parentThreadId: "parent-thread",
+      subagentKind: "thread_spawn",
+      subagentNickname: "planner",
+      subagentRole: "Planner",
+      hiddenFromThreadList: false,
+      branch: null,
+      worktreePath: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.parentThreadId, "parent-thread");
+    assert.strictEqual(parsed.subagentKind, "thread_spawn");
+    assert.strictEqual(parsed.subagentNickname, "planner");
+    assert.strictEqual(parsed.subagentRole, "Planner");
+    assert.strictEqual(parsed.hiddenFromThreadList, false);
   }),
 );
 

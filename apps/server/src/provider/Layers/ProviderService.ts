@@ -620,6 +620,26 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const registerMaterializedSessionBinding: ProviderServiceShape["registerMaterializedSessionBinding"] =
+    Effect.fn("registerMaterializedSessionBinding")(function* (input) {
+      const instanceInfo = yield* registry.getInstanceInfo(input.providerInstanceId);
+      if (instanceInfo.driverKind !== input.provider) {
+        return yield* toValidationError(
+          "ProviderService.registerMaterializedSessionBinding",
+          `Provider instance '${input.providerInstanceId}' belongs to driver '${instanceInfo.driverKind}', not '${input.provider}'.`,
+        );
+      }
+      yield* directory.upsert({
+        threadId: input.threadId,
+        provider: input.provider,
+        providerInstanceId: input.providerInstanceId,
+        runtimeMode: input.runtimeMode,
+        resumeCursor: input.resumeCursor,
+        runtimePayload: input.runtimePayload,
+        status: input.status,
+      });
+    });
+
   const sendTurn: ProviderServiceShape["sendTurn"] = Effect.fn("sendTurn")(function* (rawInput) {
     const parsed = yield* decodeInputOrValidationError({
       operation: "ProviderService.sendTurn",
@@ -1092,6 +1112,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   return {
     startSession,
+    registerMaterializedSessionBinding,
     sendTurn,
     interruptTurn,
     respondToRequest,

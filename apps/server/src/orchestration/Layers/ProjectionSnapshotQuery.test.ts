@@ -295,6 +295,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           },
           interactionMode: "default",
           runtimeMode: "full-access",
+          parentThreadId: null,
+          subagentKind: null,
+          subagentNickname: null,
+          subagentRole: null,
+          hiddenFromThreadList: false,
           branch: null,
           worktreePath: null,
           latestTurn: {
@@ -407,6 +412,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           },
           interactionMode: "default",
           runtimeMode: "full-access",
+          parentThreadId: null,
+          subagentKind: null,
+          subagentNickname: null,
+          subagentRole: null,
+          hiddenFromThreadList: false,
           branch: null,
           worktreePath: null,
           latestTurn: {

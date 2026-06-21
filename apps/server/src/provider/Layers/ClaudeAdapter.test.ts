@@ -300,6 +300,20 @@ const THREAD_ID = ThreadId.make("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.make("thread-claude-resume");
 
 describe("ClaudeAdapterLive", () => {
+  it.effect("declares Claude child work as activity-only", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      assert.deepEqual(adapter.capabilities, {
+        sessionModelSwitch: "in-session",
+        childThreadMode: "activity-only",
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("returns validation error for non-claude provider on startSession", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -1587,7 +1601,7 @@ describe("ClaudeAdapterLive", () => {
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 8).pipe(
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 10).pipe(
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -1626,13 +1640,19 @@ describe("ClaudeAdapterLive", () => {
       } as unknown as SDKMessage);
 
       harness.query.emit({
-        type: "assistant",
+        type: "user",
         session_id: "sdk-session-task",
-        uuid: "assistant-task-1",
+        uuid: "user-task-result-1",
         parent_tool_use_id: null,
         message: {
-          id: "assistant-message-task-1",
-          content: [{ type: "text", text: "Delegated" }],
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-task-1",
+              content: "Review complete",
+            },
+          ],
         },
       } as unknown as SDKMessage);
 
@@ -1651,6 +1671,24 @@ describe("ClaudeAdapterLive", () => {
       if (toolStarted?.type === "item.started") {
         assert.equal(toolStarted.payload.itemType, "collab_agent_tool_call");
         assert.equal(toolStarted.payload.title, "Subagent task");
+      }
+
+      const subagentStarted = runtimeEvents.find((event) => event.type === "subagent.started");
+      assert.equal(subagentStarted?.type, "subagent.started");
+      if (subagentStarted?.type === "subagent.started") {
+        assert.equal(subagentStarted.payload.subagentId, "tool-task-1");
+        assert.equal(subagentStarted.payload.sourceItemId, "tool-task-1");
+        assert.equal(subagentStarted.payload.role, "code-reviewer");
+        assert.equal(subagentStarted.payload.prompt, "Audit the SQL changes");
+        assert.equal(subagentStarted.payload.summary, "Review the database layer");
+        assert.equal(subagentStarted.payload.status, "running");
+      }
+
+      const subagentCompleted = runtimeEvents.find((event) => event.type === "subagent.completed");
+      assert.equal(subagentCompleted?.type, "subagent.completed");
+      if (subagentCompleted?.type === "subagent.completed") {
+        assert.equal(subagentCompleted.payload.subagentId, "tool-task-1");
+        assert.equal(subagentCompleted.payload.status, "completed");
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -2264,7 +2302,7 @@ describe("ClaudeAdapterLive", () => {
       return Effect.gen(function* () {
         const adapter = yield* ClaudeAdapter;
 
-        const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 9).pipe(
+        const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 10).pipe(
           Stream.runCollect,
           Effect.forkChild,
         );

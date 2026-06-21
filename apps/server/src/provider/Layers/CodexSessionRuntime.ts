@@ -4,7 +4,7 @@ import {
   EventId,
   ProviderDriverKind,
   ProviderItemId,
-  type ProviderInstanceId,
+  ProviderInstanceId,
   type ProviderApprovalDecision,
   type ProviderEvent,
   type ProviderInteractionMode,
@@ -44,6 +44,7 @@ import {
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
 } from "../CodexDeveloperInstructions.ts";
+import { codexChildThreadId, extractCodexThreadSpawnMetadata } from "./CodexChildThreads.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
 const PROVIDER = ProviderDriverKind.make("codex");
@@ -96,6 +97,10 @@ type CodexServiceTier = NonNullable<EffectCodexSchema.V2ThreadStartParams["servi
 type CodexThreadItem =
   | EffectCodexSchema.V2ThreadReadResponse["thread"]["turns"][number]["items"][number]
   | EffectCodexSchema.V2ThreadRollbackResponse["thread"]["turns"][number]["items"][number];
+export type CodexSessionRuntimeAttachmentInput = Extract<
+  EffectCodexSchema.V2TurnStartParams__UserInput,
+  { readonly type: "image" } | { readonly type: "mention" }
+>;
 
 export interface CodexSessionRuntimeOptions {
   readonly threadId: ThreadId;
@@ -113,10 +118,7 @@ export interface CodexSessionRuntimeOptions {
 
 export interface CodexSessionRuntimeSendTurnInput {
   readonly input?: string;
-  readonly attachments?: ReadonlyArray<{
-    readonly type: "image";
-    readonly url: string;
-  }>;
+  readonly attachments?: ReadonlyArray<CodexSessionRuntimeAttachmentInput>;
   readonly model?: string;
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort | undefined;
@@ -126,6 +128,10 @@ export interface CodexSessionRuntimeSendTurnInput {
 
 export interface CodexThreadTurnSnapshot {
   readonly id: TurnId;
+  readonly status: string;
+  readonly startedAt?: number | null;
+  readonly completedAt?: number | null;
+  readonly errorMessage?: string;
   readonly items: ReadonlyArray<CodexThreadItem>;
 }
 
@@ -137,14 +143,40 @@ export interface CodexThreadSnapshot {
 export interface CodexSessionRuntimeShape {
   readonly start: () => Effect.Effect<ProviderSession, CodexSessionRuntimeError>;
   readonly getSession: Effect.Effect<ProviderSession>;
+  readonly registerProviderThreadBinding: (input: {
+    readonly providerThreadId: string;
+    readonly threadId: ThreadId;
+    readonly parentThreadId?: ThreadId;
+  }) => Effect.Effect<void>;
   readonly sendTurn: (
     input: CodexSessionRuntimeSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, CodexSessionRuntimeError>;
+  readonly sendTurnToProviderThread: (
+    providerThreadId: string,
+    input: CodexSessionRuntimeSendTurnInput,
+  ) => Effect.Effect<ProviderTurnStartResult, CodexSessionRuntimeError>;
   readonly interruptTurn: (turnId?: TurnId) => Effect.Effect<void, CodexSessionRuntimeError>;
+  readonly interruptProviderThreadTurn: (
+    providerThreadId: string,
+    turnId?: TurnId,
+  ) => Effect.Effect<void, CodexSessionRuntimeError>;
   readonly readThread: Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
+  readonly readProviderThread: (
+    providerThreadId: string,
+  ) => Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
   readonly rollbackThread: (
     numTurns: number,
   ) => Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
+  readonly rollbackProviderThread: (
+    providerThreadId: string,
+    numTurns: number,
+  ) => Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
+  readonly listSpawnedChildThreads: (
+    parentProviderThreadId: string,
+  ) => Effect.Effect<
+    ReadonlyArray<EffectCodexSchema.V2ThreadListResponse["data"][number]>,
+    CodexSessionRuntimeError
+  >;
   readonly refreshUsage: Effect.Effect<void, CodexSessionRuntimeError>;
   readonly respondToRequest: (
     requestId: ApprovalRequestId,
@@ -354,10 +386,7 @@ export function buildTurnStartParams(input: {
   readonly threadId: string;
   readonly runtimeMode: RuntimeMode;
   readonly prompt?: string;
-  readonly attachments?: ReadonlyArray<{
-    readonly type: "image";
-    readonly url: string;
-  }>;
+  readonly attachments?: ReadonlyArray<CodexSessionRuntimeAttachmentInput>;
   readonly model?: string;
   readonly serviceTier?: CodexServiceTier;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
@@ -528,6 +557,18 @@ function readNotificationThreadId(notification: CodexServerNotification): string
     default:
       return undefined;
   }
+}
+
+function readProviderThreadIdFromPayload(payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    return undefined;
+  }
+  const raw = (payload as Record<string, unknown>).threadId;
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function readRouteFields(notification: CodexServerNotification): {
@@ -711,6 +752,10 @@ function parseThreadSnapshot(
     threadId: response.thread.id,
     turns: response.thread.turns.map((turn) => ({
       id: TurnId.make(turn.id),
+      status: turn.status,
+      ...(turn.startedAt !== undefined ? { startedAt: turn.startedAt } : {}),
+      ...(turn.completedAt !== undefined ? { completedAt: turn.completedAt } : {}),
+      ...(turn.error?.message ? { errorMessage: turn.error.message } : {}),
       items: turn.items,
     })),
   };
@@ -796,7 +841,10 @@ export const makeCodexSessionRuntime = (
     const approvalCorrelationsRef = yield* Ref.make(new Map<string, ApprovalCorrelation>());
     const pendingUserInputsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingUserInput>());
     const collabReceiverTurnsRef = yield* Ref.make(new Map<string, TurnId>());
+    const providerThreadToSalchiThreadRef = yield* Ref.make(new Map<string, ThreadId>());
+    const providerThreadParentSalchiThreadRef = yield* Ref.make(new Map<string, ThreadId>());
     const closedRef = yield* Ref.make(false);
+    const providerInstanceId = options.providerInstanceId ?? ProviderInstanceId.make("codex");
 
     const { client, child } = yield* makeCodexAppServerClient({
       binaryPath: options.binaryPath,
@@ -843,6 +891,33 @@ export const makeCodexSessionRuntime = (
           ...event,
         });
       });
+    const rememberProviderThreadBinding = (input: {
+      readonly providerThreadId: string;
+      readonly threadId: ThreadId;
+      readonly parentThreadId?: ThreadId;
+    }) => {
+      const parentThreadId = input.parentThreadId;
+      return Effect.all([
+        Ref.update(providerThreadToSalchiThreadRef, (current) => {
+          const next = new Map(current);
+          next.set(input.providerThreadId, input.threadId);
+          return next;
+        }),
+        parentThreadId
+          ? Ref.update(providerThreadParentSalchiThreadRef, (current) => {
+              const next = new Map(current);
+              next.set(input.providerThreadId, parentThreadId);
+              return next;
+            })
+          : Effect.void,
+      ]).pipe(Effect.asVoid);
+    };
+    const resolveSalchiThreadIdForProviderThread = (providerThreadId: string | undefined) =>
+      providerThreadId
+        ? Ref.get(providerThreadToSalchiThreadRef).pipe(
+            Effect.map((bindings) => bindings.get(providerThreadId) ?? options.threadId),
+          )
+        : Effect.succeed(options.threadId);
     const emitSessionEvent = (method: string, message: string) =>
       emitEvent({
         kind: "session",
@@ -924,24 +999,56 @@ export const makeCodexSessionRuntime = (
       Effect.gen(function* () {
         const payload = notification.params;
         const route = readRouteFields(notification);
+        const providerThreadId = readNotificationThreadId(notification);
         const collabReceiverTurns = yield* Ref.get(collabReceiverTurnsRef);
         const childParentTurnId = (() => {
-          const providerConversationId = readNotificationThreadId(notification);
-          return providerConversationId
-            ? collabReceiverTurns.get(providerConversationId)
-            : undefined;
+          return providerThreadId ? collabReceiverTurns.get(providerThreadId) : undefined;
         })();
 
         rememberCollabReceiverTurns(collabReceiverTurns, notification, route.turnId);
-        if (childParentTurnId && shouldSuppressChildConversationNotification(notification.method)) {
+        const mappedThreadId =
+          providerThreadId !== undefined
+            ? (yield* Ref.get(providerThreadToSalchiThreadRef)).get(providerThreadId)
+            : undefined;
+
+        if (
+          childParentTurnId &&
+          mappedThreadId === undefined &&
+          shouldSuppressChildConversationNotification(notification.method)
+        ) {
           yield* Ref.set(collabReceiverTurnsRef, collabReceiverTurns);
           return;
         }
 
         let requestId: ApprovalRequestId | undefined;
         let requestKind: ProviderRequestKind | undefined;
-        let turnId = childParentTurnId ?? route.turnId;
+        let turnId =
+          mappedThreadId === undefined ? (childParentTurnId ?? route.turnId) : route.turnId;
         let itemId = route.itemId;
+        let threadId =
+          mappedThreadId ?? (yield* resolveSalchiThreadIdForProviderThread(providerThreadId));
+        let eventPayload: unknown = payload;
+
+        if (notification.method === "thread/started") {
+          const spawnMetadata = extractCodexThreadSpawnMetadata(notification.params.thread);
+          if (spawnMetadata) {
+            const parentThreadId = (yield* Ref.get(providerThreadToSalchiThreadRef)).get(
+              spawnMetadata.providerParentThreadId,
+            );
+            if (parentThreadId) {
+              threadId = codexChildThreadId(providerInstanceId, notification.params.thread.id);
+              yield* rememberProviderThreadBinding({
+                providerThreadId: notification.params.thread.id,
+                threadId,
+                parentThreadId,
+              });
+              eventPayload = {
+                ...payload,
+                salchiParentThreadId: parentThreadId,
+              };
+            }
+          }
+        }
 
         if (notification.method === "serverRequest/resolved") {
           const rawRequestId =
@@ -967,7 +1074,7 @@ export const makeCodexSessionRuntime = (
         yield* Ref.set(collabReceiverTurnsRef, collabReceiverTurns);
         yield* emitEvent({
           kind: "notification",
-          threadId: options.threadId,
+          threadId,
           method: notification.method,
           ...(turnId ? { turnId } : {}),
           ...(itemId ? { itemId } : {}),
@@ -976,7 +1083,7 @@ export const makeCodexSessionRuntime = (
           ...(notification.method === "item/agentMessage/delta"
             ? { textDelta: notification.params.delta }
             : {}),
-          ...(payload !== undefined ? { payload } : {}),
+          ...(eventPayload !== undefined ? { payload: eventPayload } : {}),
         });
       });
 
@@ -1074,10 +1181,13 @@ export const makeCodexSessionRuntime = (
           });
           return next;
         });
+        const threadId = yield* resolveSalchiThreadIdForProviderThread(
+          readProviderThreadIdFromPayload(payload),
+        );
 
         yield* emitEvent({
           kind: "request",
-          threadId: options.threadId,
+          threadId,
           method: "item/commandExecution/requestApproval",
           requestId,
           requestKind: "command",
@@ -1130,10 +1240,13 @@ export const makeCodexSessionRuntime = (
           });
           return next;
         });
+        const threadId = yield* resolveSalchiThreadIdForProviderThread(
+          readProviderThreadIdFromPayload(payload),
+        );
 
         yield* emitEvent({
           kind: "request",
-          threadId: options.threadId,
+          threadId,
           method: "item/fileChange/requestApproval",
           requestId,
           requestKind: "file-change",
@@ -1174,10 +1287,13 @@ export const makeCodexSessionRuntime = (
           });
           return next;
         });
+        const threadId = yield* resolveSalchiThreadIdForProviderThread(
+          readProviderThreadIdFromPayload(payload),
+        );
 
         yield* emitEvent({
           kind: "request",
-          threadId: options.threadId,
+          threadId,
           method: "item/tool/requestUserInput",
           requestId,
           ...(turnId ? { turnId } : {}),
@@ -1308,6 +1424,10 @@ export const makeCodexSessionRuntime = (
       });
 
       const providerThreadId = opened.thread.id;
+      yield* rememberProviderThreadBinding({
+        providerThreadId,
+        threadId: options.threadId,
+      });
       const session = {
         ...(yield* Ref.get(sessionRef)),
         status: "ready",
@@ -1353,81 +1473,126 @@ export const makeCodexSessionRuntime = (
       yield* Queue.shutdown(events);
     });
 
-    return {
-      start,
-      getSession: Ref.get(sessionRef),
-      sendTurn: (input) =>
-        Effect.gen(function* () {
-          const providerThreadId = yield* readProviderThreadId;
-          const normalizedModel = normalizeCodexModelSlug(
-            input.model ?? (yield* Ref.get(sessionRef)).model,
-          );
-          const params = yield* buildTurnStartParams({
-            threadId: providerThreadId,
-            runtimeMode: options.runtimeMode,
-            ...(input.input ? { prompt: input.input } : {}),
-            ...(input.attachments ? { attachments: input.attachments } : {}),
-            ...(normalizedModel ? { model: normalizedModel } : {}),
-            ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
-            ...(input.effort ? { effort: input.effort } : {}),
-            ...(input.approvalsReviewer ? { approvalsReviewer: input.approvalsReviewer } : {}),
-            ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
-          });
-          const rawResponse = yield* client.raw.request("turn/start", params);
-          const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(
-            Effect.mapError((error) =>
-              toProtocolParseError("Invalid turn/start response payload", error),
-            ),
-          );
-          const turnId = TurnId.make(response.turn.id);
+    const sendTurnToProviderThread = (
+      providerThreadId: string,
+      input: CodexSessionRuntimeSendTurnInput,
+    ) =>
+      Effect.gen(function* () {
+        const normalizedModel = normalizeCodexModelSlug(
+          input.model ?? (yield* Ref.get(sessionRef)).model,
+        );
+        const params = yield* buildTurnStartParams({
+          threadId: providerThreadId,
+          runtimeMode: options.runtimeMode,
+          ...(input.input ? { prompt: input.input } : {}),
+          ...(input.attachments ? { attachments: input.attachments } : {}),
+          ...(normalizedModel ? { model: normalizedModel } : {}),
+          ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
+          ...(input.effort ? { effort: input.effort } : {}),
+          ...(input.approvalsReviewer ? { approvalsReviewer: input.approvalsReviewer } : {}),
+          ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
+        });
+        const rawResponse = yield* client.raw.request("turn/start", params);
+        const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(
+          Effect.mapError((error) =>
+            toProtocolParseError("Invalid turn/start response payload", error),
+          ),
+        );
+        const turnId = TurnId.make(response.turn.id);
+        const rootProviderThreadId = currentProviderThreadId(yield* Ref.get(sessionRef));
+        if (providerThreadId === rootProviderThreadId) {
           yield* updateSession(sessionRef, {
             status: "running",
             activeTurnId: turnId,
             ...(normalizedModel ? { model: normalizedModel } : {}),
           });
-          const resumedProviderThreadId = currentProviderThreadId(yield* Ref.get(sessionRef));
-          return {
-            threadId: options.threadId,
-            turnId,
-            ...(resumedProviderThreadId
-              ? { resumeCursor: { threadId: resumedProviderThreadId } }
-              : {}),
-          } satisfies ProviderTurnStartResult;
-        }),
-      interruptTurn: (turnId) =>
-        Effect.gen(function* () {
-          const providerThreadId = yield* readProviderThreadId;
-          const session = yield* Ref.get(sessionRef);
-          const effectiveTurnId = turnId ?? session.activeTurnId;
-          if (!effectiveTurnId) {
-            return;
-          }
-          yield* client.request("turn/interrupt", {
-            threadId: providerThreadId,
-            turnId: effectiveTurnId,
-          });
-        }),
-      readThread: Effect.gen(function* () {
-        const providerThreadId = yield* readProviderThreadId;
+        }
+        const salchiThreadId = yield* resolveSalchiThreadIdForProviderThread(providerThreadId);
+        return {
+          threadId: salchiThreadId,
+          turnId,
+          resumeCursor: { threadId: providerThreadId },
+        } satisfies ProviderTurnStartResult;
+      });
+
+    const interruptProviderThreadTurn = (providerThreadId: string, turnId?: TurnId) =>
+      Effect.gen(function* () {
+        const session = yield* Ref.get(sessionRef);
+        const rootProviderThreadId = currentProviderThreadId(session);
+        const effectiveTurnId =
+          turnId ?? (providerThreadId === rootProviderThreadId ? session.activeTurnId : undefined);
+        if (!effectiveTurnId) {
+          return;
+        }
+        yield* client.request("turn/interrupt", {
+          threadId: providerThreadId,
+          turnId: effectiveTurnId,
+        });
+      });
+
+    const readProviderThread = (providerThreadId: string) =>
+      Effect.gen(function* () {
         const response = yield* client.request("thread/read", {
           threadId: providerThreadId,
           includeTurns: true,
         });
         return parseThreadSnapshot(response);
-      }),
-      rollbackThread: (numTurns) =>
-        Effect.gen(function* () {
-          const providerThreadId = yield* readProviderThreadId;
-          const response = yield* client.request("thread/rollback", {
-            threadId: providerThreadId,
-            numTurns,
-          });
+      });
+
+    const rollbackProviderThread = (providerThreadId: string, numTurns: number) =>
+      Effect.gen(function* () {
+        const response = yield* client.request("thread/rollback", {
+          threadId: providerThreadId,
+          numTurns,
+        });
+        const rootProviderThreadId = currentProviderThreadId(yield* Ref.get(sessionRef));
+        if (providerThreadId === rootProviderThreadId) {
           yield* updateSession(sessionRef, {
             status: "ready",
             activeTurnId: undefined,
           });
-          return parseThreadSnapshot(response);
-        }),
+        }
+        return parseThreadSnapshot(response);
+      });
+
+    const listSpawnedChildThreads = (parentProviderThreadId: string) =>
+      Effect.gen(function* () {
+        const response = yield* client.request("thread/list", {
+          sourceKinds: ["subAgentThreadSpawn"],
+          useStateDbOnly: true,
+          limit: 200,
+        });
+        return response.data.filter(
+          (thread) =>
+            extractCodexThreadSpawnMetadata(thread)?.providerParentThreadId ===
+            parentProviderThreadId,
+        );
+      });
+
+    return {
+      start,
+      getSession: Ref.get(sessionRef),
+      registerProviderThreadBinding: rememberProviderThreadBinding,
+      sendTurn: (input) =>
+        readProviderThreadId.pipe(
+          Effect.flatMap((providerThreadId) => sendTurnToProviderThread(providerThreadId, input)),
+        ),
+      sendTurnToProviderThread,
+      interruptTurn: (turnId) =>
+        readProviderThreadId.pipe(
+          Effect.flatMap((providerThreadId) =>
+            interruptProviderThreadTurn(providerThreadId, turnId),
+          ),
+        ),
+      interruptProviderThreadTurn,
+      readThread: readProviderThreadId.pipe(Effect.flatMap(readProviderThread)),
+      readProviderThread,
+      rollbackThread: (numTurns) =>
+        readProviderThreadId.pipe(
+          Effect.flatMap((providerThreadId) => rollbackProviderThread(providerThreadId, numTurns)),
+        ),
+      rollbackProviderThread,
+      listSpawnedChildThreads,
       refreshUsage: refreshAccountRateLimits,
       respondToRequest: (requestId, decision) =>
         Effect.gen(function* () {

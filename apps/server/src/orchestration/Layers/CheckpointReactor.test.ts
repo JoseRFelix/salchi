@@ -128,7 +128,8 @@ function createProviderServiceHarness(
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
     listSessions,
-    getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+    getCapabilities: () =>
+      Effect.succeed({ sessionModelSwitch: "in-session", childThreadMode: "none" }),
     getInstanceInfo: (instanceId) =>
       Effect.succeed({
         instanceId,
@@ -140,6 +141,7 @@ function createProviderServiceHarness(
           continuationKey: `${providerName}:instance:${instanceId}`,
         },
       }),
+    registerMaterializedSessionBinding: () => Effect.void,
     rollbackConversation,
     refreshUsage: () => Effect.succeed({ accountRateLimits: [] }),
     get streamEvents() {

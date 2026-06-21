@@ -6,6 +6,7 @@ import {
   type AssistantDeliveryMode,
   type ChatAttachment,
   CommandId,
+  EventId,
   MessageId,
   type OrchestrationEvent,
   type OrchestrationMessage,
@@ -111,6 +112,39 @@ function sameId(left: string | null | undefined, right: string | null | undefine
     return false;
   }
   return left === right;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function subagentDisplayName(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const withoutPrefix = trimmed.replace(/^subagent:\s*/i, "").trim();
+  const rawCandidate = withoutPrefix || trimmed;
+  const basename =
+    rawCandidate
+      .split(/[\\/]/)
+      .map((segment) => segment.trim())
+      .findLast((segment) => segment.length > 0) ?? rawCandidate;
+  const candidate = basename.replace(/\.[^.]+$/, "").trim() || basename;
+  return /^(default|sub-?agent)$/i.test(candidate) ? undefined : candidate;
+}
+
+function materializedSubagentTitle(input: {
+  readonly role?: string | null | undefined;
+  readonly nickname?: string | null | undefined;
+  readonly path?: string | null | undefined;
+}): string | undefined {
+  return (
+    subagentDisplayName(input.nickname) ??
+    subagentDisplayName(input.role) ??
+    subagentDisplayName(input.path)
+  );
 }
 
 function hasAssistantMessageForTurn(
@@ -586,6 +620,117 @@ function runtimeEventToActivities(
       ];
     }
 
+    case "subagent.started": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "subagent.started",
+          summary: "Subagent started",
+          payload: {
+            subagentId: event.payload.subagentId,
+            status: event.payload.status ?? "running",
+            ...(event.payload.providerThreadId
+              ? { providerThreadId: event.payload.providerThreadId }
+              : {}),
+            ...(event.payload.parentTurnId ? { parentTurnId: event.payload.parentTurnId } : {}),
+            ...(event.payload.sourceItemId ? { sourceItemId: event.payload.sourceItemId } : {}),
+            ...(event.payload.role ? { role: event.payload.role } : {}),
+            ...(event.payload.nickname ? { nickname: event.payload.nickname } : {}),
+            ...(event.payload.model ? { model: event.payload.model } : {}),
+            ...(event.payload.prompt ? { prompt: truncateDetail(event.payload.prompt) } : {}),
+            ...(event.payload.summary
+              ? {
+                  summary: truncateDetail(event.payload.summary),
+                  detail: truncateDetail(event.payload.summary),
+                }
+              : {}),
+            ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "subagent.updated": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "subagent.updated",
+          summary: "Subagent update",
+          payload: {
+            subagentId: event.payload.subagentId,
+            ...(event.payload.status ? { status: event.payload.status } : {}),
+            ...(event.payload.providerThreadId
+              ? { providerThreadId: event.payload.providerThreadId }
+              : {}),
+            ...(event.payload.parentTurnId ? { parentTurnId: event.payload.parentTurnId } : {}),
+            ...(event.payload.sourceItemId ? { sourceItemId: event.payload.sourceItemId } : {}),
+            ...(event.payload.role ? { role: event.payload.role } : {}),
+            ...(event.payload.nickname ? { nickname: event.payload.nickname } : {}),
+            ...(event.payload.model ? { model: event.payload.model } : {}),
+            ...(event.payload.prompt ? { prompt: truncateDetail(event.payload.prompt) } : {}),
+            ...(event.payload.summary ? { summary: truncateDetail(event.payload.summary) } : {}),
+            ...(event.payload.description
+              ? { detail: truncateDetail(event.payload.description) }
+              : event.payload.summary
+                ? { detail: truncateDetail(event.payload.summary) }
+                : {}),
+            ...(event.payload.lastToolName ? { lastToolName: event.payload.lastToolName } : {}),
+            ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "subagent.completed": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: event.payload.status === "failed" ? "error" : "info",
+          kind: "subagent.completed",
+          summary:
+            event.payload.status === "failed"
+              ? "Subagent failed"
+              : event.payload.status === "stopped"
+                ? "Subagent stopped"
+                : event.payload.status === "interrupted"
+                  ? "Subagent interrupted"
+                  : "Subagent completed",
+          payload: {
+            subagentId: event.payload.subagentId,
+            status: event.payload.status,
+            ...(event.payload.providerThreadId
+              ? { providerThreadId: event.payload.providerThreadId }
+              : {}),
+            ...(event.payload.parentTurnId ? { parentTurnId: event.payload.parentTurnId } : {}),
+            ...(event.payload.sourceItemId ? { sourceItemId: event.payload.sourceItemId } : {}),
+            ...(event.payload.role ? { role: event.payload.role } : {}),
+            ...(event.payload.nickname ? { nickname: event.payload.nickname } : {}),
+            ...(event.payload.model ? { model: event.payload.model } : {}),
+            ...(event.payload.prompt ? { prompt: truncateDetail(event.payload.prompt) } : {}),
+            ...(event.payload.summary
+              ? {
+                  summary: truncateDetail(event.payload.summary),
+                  detail: truncateDetail(event.payload.summary),
+                }
+              : {}),
+            ...(event.payload.error ? { error: truncateDetail(event.payload.error) } : {}),
+            ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "thread.state.changed": {
       if (event.payload.state !== "compacted") {
         return [];
@@ -760,6 +905,267 @@ const make = Effect.gen(function* () {
     return yield* projectionSnapshotQuery
       .getThreadShellById(threadId)
       .pipe(Effect.map(Option.getOrUndefined));
+  });
+
+  const materializeChildThreadIfNeeded = Effect.fn("materializeChildThreadIfNeeded")(function* (
+    event: ProviderRuntimeEvent,
+  ) {
+    if (event.type !== "thread.started") {
+      return;
+    }
+    const payload = event.payload;
+    if (!payload.parentThreadId || !payload.providerThreadId || !event.providerInstanceId) {
+      return;
+    }
+
+    const capabilities = yield* providerService.getCapabilities(event.providerInstanceId);
+    if (capabilities.childThreadMode !== "materialized") {
+      return;
+    }
+
+    const existingChild = yield* resolveThreadShell(event.threadId);
+    if (existingChild) {
+      return;
+    }
+
+    const parentThread = yield* resolveThreadShell(payload.parentThreadId);
+    if (!parentThread) {
+      yield* Effect.logWarning("provider runtime child thread materialization dropped", {
+        eventId: event.eventId,
+        threadId: event.threadId,
+        parentThreadId: payload.parentThreadId,
+        providerThreadId: payload.providerThreadId,
+        providerParentThreadId: payload.providerParentThreadId,
+        reason: "missing-parent-thread",
+      });
+      return;
+    }
+    const parentProject = yield* projectionSnapshotQuery
+      .getProjectShellById(parentThread.projectId)
+      .pipe(Effect.map(Option.getOrUndefined));
+    if (!parentProject) {
+      yield* Effect.logWarning("provider runtime child thread materialization dropped", {
+        eventId: event.eventId,
+        threadId: event.threadId,
+        parentThreadId: payload.parentThreadId,
+        providerThreadId: payload.providerThreadId,
+        providerParentThreadId: payload.providerParentThreadId,
+        reason: "missing-parent-project",
+      });
+      return;
+    }
+
+    const title =
+      materializedSubagentTitle({
+        role: payload.subagentRole,
+        nickname: payload.subagentNickname,
+        path: payload.subagentPath,
+      }) ?? "Subagent";
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.create",
+      commandId: yield* providerCommandId(event, "child-thread-create"),
+      threadId: event.threadId,
+      projectId: parentThread.projectId,
+      title,
+      modelSelection: parentThread.modelSelection,
+      runtimeMode: parentThread.runtimeMode,
+      interactionMode: parentThread.interactionMode,
+      parentThreadId: parentThread.id,
+      subagentKind: payload.subagentKind ?? null,
+      subagentNickname: payload.subagentNickname ?? null,
+      subagentRole: payload.subagentRole ?? null,
+      hiddenFromThreadList: payload.hiddenFromThreadList ?? false,
+      branch: parentThread.branch,
+      worktreePath: parentThread.worktreePath,
+      createdAt: event.createdAt,
+    });
+
+    yield* providerService.registerMaterializedSessionBinding({
+      threadId: event.threadId,
+      provider: event.provider,
+      providerInstanceId: event.providerInstanceId,
+      runtimeMode: parentThread.runtimeMode,
+      resumeCursor: { threadId: payload.providerThreadId },
+      runtimePayload: {
+        parentThreadId: parentThread.id,
+        providerParentThreadId: payload.providerParentThreadId ?? null,
+        providerThreadId: payload.providerThreadId,
+        cwd: parentThread.worktreePath ?? parentProject.workspaceRoot,
+        modelSelection: parentThread.modelSelection,
+      },
+      status: "running",
+    });
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: yield* providerCommandId(event, "child-thread-parent-activity"),
+      threadId: parentThread.id,
+      activity: {
+        id: EventId.make(`${event.eventId}:parent-spawn`),
+        createdAt: event.createdAt,
+        tone: "info",
+        kind: "subagent.thread.spawned",
+        summary: title,
+        payload: {
+          threadId: event.threadId,
+          providerThreadId: payload.providerThreadId,
+          ...(payload.providerParentThreadId
+            ? { providerParentThreadId: payload.providerParentThreadId }
+            : {}),
+          ...(payload.subagentKind ? { subagentKind: payload.subagentKind } : {}),
+          ...(payload.subagentNickname ? { subagentNickname: payload.subagentNickname } : {}),
+          ...(payload.subagentRole ? { subagentRole: payload.subagentRole } : {}),
+          ...(payload.subagentPath ? { subagentPath: payload.subagentPath } : {}),
+        },
+        turnId: null,
+      },
+      createdAt: event.createdAt,
+    });
+  });
+
+  const materializedChildThreadIdFromActivity = (
+    activities: ReadonlyArray<OrchestrationThreadActivity>,
+    providerThreadId: string,
+  ): ThreadId | undefined => {
+    for (let index = activities.length - 1; index >= 0; index -= 1) {
+      const activity = activities[index];
+      if (activity?.kind !== "subagent.thread.spawned" || !isRecord(activity.payload)) {
+        continue;
+      }
+
+      const payloadProviderThreadId =
+        typeof activity.payload.providerThreadId === "string"
+          ? activity.payload.providerThreadId.trim()
+          : "";
+      const payloadThreadId =
+        typeof activity.payload.threadId === "string" ? activity.payload.threadId.trim() : "";
+      if (
+        payloadThreadId &&
+        (payloadProviderThreadId === providerThreadId || payloadThreadId === providerThreadId)
+      ) {
+        return ThreadId.make(payloadThreadId);
+      }
+    }
+    return undefined;
+  };
+
+  const shouldReplaceMaterializedSubagentTitle = (input: {
+    readonly existingTitle: string;
+    readonly existingRole?: string | null | undefined;
+    readonly existingNickname?: string | null | undefined;
+    readonly nextTitle: string;
+  }): boolean => {
+    const currentTitleName = subagentDisplayName(input.existingTitle);
+    if (!currentTitleName) {
+      return input.existingTitle.trim() !== input.nextTitle;
+    }
+    if (currentTitleName === input.nextTitle) {
+      return false;
+    }
+
+    const currentMetadataName = materializedSubagentTitle({
+      role: input.existingRole,
+      nickname: input.existingNickname,
+    });
+    return !currentMetadataName;
+  };
+
+  const refreshMaterializedChildThreadMetadataIfNeeded = Effect.fn(
+    "refreshMaterializedChildThreadMetadataIfNeeded",
+  )(function* (event: ProviderRuntimeEvent) {
+    if (event.type === "thread.started") {
+      const providerThreadId = event.payload.providerThreadId?.trim();
+      if (!event.payload.parentThreadId || !providerThreadId) {
+        return;
+      }
+
+      const nextTitle = materializedSubagentTitle({
+        role: event.payload.subagentRole,
+        nickname: event.payload.subagentNickname,
+        path: event.payload.subagentPath,
+      });
+      const childThread = yield* resolveThreadShell(event.threadId);
+      if (!childThread) {
+        return;
+      }
+
+      const titleChanged =
+        nextTitle !== undefined &&
+        shouldReplaceMaterializedSubagentTitle({
+          existingTitle: childThread.title,
+          existingRole: childThread.subagentRole,
+          existingNickname: childThread.subagentNickname,
+          nextTitle,
+        });
+      const shouldRefreshTimestamp = childThread.updatedAt.localeCompare(event.createdAt) < 0;
+      if (!titleChanged && !shouldRefreshTimestamp) {
+        return;
+      }
+
+      yield* orchestrationEngine.dispatch({
+        type: "thread.meta.update",
+        commandId: yield* providerCommandId(event, "materialized-child-meta-refresh"),
+        threadId: event.threadId,
+        title: titleChanged && nextTitle ? nextTitle : childThread.title,
+      });
+      return;
+    }
+
+    if (
+      event.type !== "subagent.started" &&
+      event.type !== "subagent.updated" &&
+      event.type !== "subagent.completed"
+    ) {
+      return;
+    }
+
+    const providerThreadId = event.payload.providerThreadId?.trim();
+    if (!providerThreadId) {
+      return;
+    }
+
+    const nextTitle = materializedSubagentTitle({
+      role: event.payload.role,
+      nickname: event.payload.nickname,
+    });
+    const parentThread = yield* resolveThreadDetail(event.threadId);
+    if (!parentThread) {
+      return;
+    }
+
+    const childThreadId = materializedChildThreadIdFromActivity(
+      parentThread.activities,
+      providerThreadId,
+    );
+    if (!childThreadId) {
+      return;
+    }
+
+    const childThread = yield* resolveThreadShell(childThreadId);
+    if (!childThread) {
+      return;
+    }
+
+    const titleChanged =
+      nextTitle !== undefined &&
+      shouldReplaceMaterializedSubagentTitle({
+        existingTitle: childThread.title,
+        existingRole: childThread.subagentRole,
+        existingNickname: childThread.subagentNickname,
+        nextTitle,
+      });
+    const shouldRefreshTimestamp = childThread.updatedAt.localeCompare(event.createdAt) < 0;
+    if (!titleChanged && !shouldRefreshTimestamp) {
+      return;
+    }
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.meta.update",
+      commandId: yield* providerCommandId(event, "materialized-child-meta-refresh"),
+      threadId: childThreadId,
+      title: titleChanged && nextTitle ? nextTitle : childThread.title,
+    });
   });
 
   const relativePathForPersistedFile = (workspaceRoot: string, filename: string) => {
@@ -1541,6 +1947,8 @@ const make = Effect.gen(function* () {
 
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
+      yield* materializeChildThreadIfNeeded(event);
+      yield* refreshMaterializedChildThreadMetadataIfNeeded(event);
       const thread = yield* resolveThreadShell(event.threadId);
       if (!thread) return;
 
