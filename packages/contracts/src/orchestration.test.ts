@@ -1,5 +1,7 @@
 import { assert, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import type * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 
 import {
@@ -53,6 +55,19 @@ function getOptionValue(
 ): unknown {
   return options?.find((option) => option.id === id)?.value;
 }
+
+function failureText(exit: Exit.Exit<unknown, unknown>): string {
+  if (exit._tag !== "Failure") {
+    assert.fail(`Expected failure, received ${exit._tag}.`);
+  }
+  const failReason = exit.cause.reasons.find(Cause.isFailReason);
+  const error = failReason?.error;
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return error === undefined ? Cause.pretty(exit.cause) : String(error);
+}
+
 const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPayload);
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
@@ -348,8 +363,8 @@ it.effect("rejects invalid assistant image attachment metadata", () =>
       }),
     );
 
-    assert.strictEqual(invalidMime._tag, "Failure");
-    assert.strictEqual(oversized._tag, "Failure");
+    assert.match(failureText(invalidMime), /mimeType|image\/|text\/plain/i);
+    assert.match(failureText(oversized), /sizeBytes|10485760|less than or equal/i);
   }),
 );
 
@@ -432,8 +447,8 @@ it.effect("decodes uploaded PDF attachments and rejects invalid PDF metadata", (
       }),
     );
 
-    assert.strictEqual(invalidMime._tag, "Failure");
-    assert.strictEqual(oversized._tag, "Failure");
+    assert.match(failureText(invalidMime), /mimeType|application\/pdf|text\/plain/i);
+    assert.match(failureText(oversized), /sizeBytes|10485760|less than or equal/i);
   }),
 );
 

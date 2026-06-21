@@ -29,6 +29,7 @@ import {
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import type { CursorAdapterShape } from "../Services/CursorAdapter.ts";
+import { toProviderAttachmentReference } from "../attachmentInputs.ts";
 import { makeCursorAdapter } from "./CursorAdapter.ts";
 const decodeCursorSettings = Schema.decodeSync(CursorSettings);
 
@@ -289,6 +290,13 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       const attachmentPath = path.join(serverConfig.attachmentsDir, `${attachmentId}.pdf`);
       yield* Effect.promise(() => mkdir(serverConfig.attachmentsDir, { recursive: true }));
       yield* Effect.promise(() => writeFile(attachmentPath, "%PDF", "utf8"));
+      const attachment = {
+        type: "pdf",
+        id: attachmentId,
+        name: "report.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 4,
+      } as const;
 
       yield* adapter.startSession({
         threadId,
@@ -301,15 +309,7 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       yield* adapter.sendTurn({
         threadId,
         input: "read this pdf",
-        attachments: [
-          {
-            type: "pdf",
-            id: attachmentId,
-            name: "report.pdf",
-            mimeType: "application/pdf",
-            sizeBytes: 4,
-          },
-        ],
+        attachments: [attachment],
       });
       yield* adapter.stopSession(threadId);
 
@@ -318,7 +318,7 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       const prompt = (promptRequest?.params as { prompt?: unknown } | undefined)?.prompt;
       assert.deepInclude(prompt as unknown[], {
         type: "resource_link",
-        uri: `file://${attachmentPath}`,
+        uri: toProviderAttachmentReference(attachment, attachmentPath).fileUrl,
         name: "report.pdf",
         mimeType: "application/pdf",
         size: 4,

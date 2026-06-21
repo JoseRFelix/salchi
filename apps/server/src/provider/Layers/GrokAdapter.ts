@@ -30,9 +30,8 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
-import { toProviderAttachmentReference } from "../attachmentInputs.ts";
+import { buildAcpAttachmentPromptParts } from "../attachmentInputs.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -735,49 +734,13 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             });
 
             const text = input.input?.trim();
-            const attachmentPromptParts = yield* Effect.forEach(
-              input.attachments ?? [],
-              (attachment) =>
-                Effect.gen(function* () {
-                  const attachmentPath = resolveAttachmentPath({
-                    attachmentsDir: serverConfig.attachmentsDir,
-                    attachment,
-                  });
-                  if (!attachmentPath) {
-                    return yield* new ProviderAdapterRequestError({
-                      provider: PROVIDER,
-                      method: "session/prompt",
-                      detail: `Invalid attachment id '${attachment.id}'.`,
-                    });
-                  }
-                  if (attachment.type === "pdf") {
-                    const reference = toProviderAttachmentReference(attachment, attachmentPath);
-                    return {
-                      type: "resource_link",
-                      uri: reference.fileUrl,
-                      name: attachment.name,
-                      mimeType: attachment.mimeType,
-                      size: attachment.sizeBytes,
-                    } satisfies EffectAcpSchema.ContentBlock;
-                  }
-                  const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new ProviderAdapterRequestError({
-                          provider: PROVIDER,
-                          method: "session/prompt",
-                          detail: cause.message,
-                          cause,
-                        }),
-                    ),
-                  );
-                  return {
-                    type: "image",
-                    data: Buffer.from(bytes).toString("base64"),
-                    mimeType: attachment.mimeType,
-                  } satisfies EffectAcpSchema.ContentBlock;
-                }),
-            );
+            const attachmentPromptParts = yield* buildAcpAttachmentPromptParts({
+              attachments: input.attachments,
+              attachmentsDir: serverConfig.attachmentsDir,
+              fileSystem,
+              provider: PROVIDER,
+              method: "session/prompt",
+            });
             const promptParts: Array<EffectAcpSchema.ContentBlock> = [
               ...(text ? [{ type: "text" as const, text }] : []),
               ...attachmentPromptParts,

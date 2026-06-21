@@ -11,6 +11,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   ThreadId,
   type ModelSelection,
   type OrchestrationProposedPlanId,
@@ -584,6 +585,75 @@ describe("composerDraftStore terminal contexts", () => {
       },
     ]);
     expect(draft?.images[0]?.file.type).toBe("application/pdf");
+  });
+
+  it("drops persisted attachments with invalid type or size", () => {
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const mergedState = persistApi.getOptions().merge(
+      {
+        draftsByThreadId: {
+          [threadId]: {
+            prompt: "",
+            attachments: [
+              {
+                type: "image",
+                id: "img-valid",
+                name: "image.png",
+                mimeType: "image/png",
+                sizeBytes: 4,
+                dataUrl: "data:image/png;base64,AQIDBA==",
+              },
+              {
+                type: "video",
+                id: "img-bad-type",
+                name: "video.mp4",
+                mimeType: "image/png",
+                sizeBytes: 4,
+                dataUrl: "data:image/png;base64,AQIDBA==",
+              },
+              {
+                type: "image",
+                id: "img-negative",
+                name: "image.png",
+                mimeType: "image/png",
+                sizeBytes: -1,
+                dataUrl: "data:image/png;base64,AQIDBA==",
+              },
+              {
+                type: "image",
+                id: "img-fractional",
+                name: "image.png",
+                mimeType: "image/png",
+                sizeBytes: 1.5,
+                dataUrl: "data:image/png;base64,AQIDBA==",
+              },
+              {
+                type: "image",
+                id: "img-oversized",
+                name: "image.png",
+                mimeType: "image/png",
+                sizeBytes: PROVIDER_SEND_TURN_MAX_IMAGE_BYTES + 1,
+                dataUrl: "data:image/png;base64,AQIDBA==",
+              },
+            ],
+            terminalContexts: [],
+          },
+        },
+        draftThreadsByThreadId: {},
+        projectDraftThreadIdByProjectKey: {},
+      },
+      useComposerDraftStore.getInitialState(),
+    );
+
+    const draft = mergedState.draftsByThreadKey[threadKeyFor(threadId)];
+    expect(draft?.images.map((attachment) => attachment.id)).toEqual(["img-valid"]);
   });
 
   it("sanitizes malformed persisted drafts during merge", () => {

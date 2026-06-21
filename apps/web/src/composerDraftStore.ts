@@ -10,6 +10,8 @@ import {
   ProviderInteractionMode,
   ProviderDriverKind,
   ProviderOptionSelection,
+  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  PROVIDER_SEND_TURN_MAX_PDF_BYTES,
   RuntimeMode,
   type ServerProvider,
   type ScopedProjectRef,
@@ -972,7 +974,11 @@ function normalizePersistedAttachment(value: unknown): PersistedComposerAttachme
     return null;
   }
   const candidate = value as Record<string, unknown>;
-  const type = candidate.type === "pdf" ? "pdf" : "image";
+  const rawType = candidate.type;
+  if (rawType !== undefined && rawType !== "image" && rawType !== "pdf") {
+    return null;
+  }
+  const type = rawType === "pdf" ? "pdf" : "image";
   const id = candidate.id;
   const name = candidate.name;
   const mimeType = candidate.mimeType;
@@ -984,10 +990,17 @@ function normalizePersistedAttachment(value: unknown): PersistedComposerAttachme
     typeof mimeType !== "string" ||
     typeof sizeBytes !== "number" ||
     !Number.isFinite(sizeBytes) ||
+    !Number.isInteger(sizeBytes) ||
+    sizeBytes < 0 ||
     typeof dataUrl !== "string" ||
     id.length === 0 ||
     dataUrl.length === 0
   ) {
+    return null;
+  }
+  const maxSizeBytes =
+    type === "pdf" ? PROVIDER_SEND_TURN_MAX_PDF_BYTES : PROVIDER_SEND_TURN_MAX_IMAGE_BYTES;
+  if (sizeBytes > maxSizeBytes) {
     return null;
   }
   if (type === "pdf" && mimeType.toLowerCase() !== PDF_MIME_TYPE) {

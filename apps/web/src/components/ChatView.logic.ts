@@ -11,8 +11,10 @@ import {
   type ScopedThreadRef,
   type ThreadId,
   type TurnId,
+  type UploadChatAttachment,
 } from "@t3tools/contracts";
-import { type ChatMessage, type SessionPhase, type Thread } from "../types";
+import { PDF_MIME_TYPE } from "@t3tools/shared/attachmentMime";
+import { type ChatAttachment, type ChatMessage, type SessionPhase, type Thread } from "../types";
 import { type ComposerAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
 import { selectThreadByRef, useStore } from "../store";
@@ -153,21 +155,28 @@ export function revokeUserMessagePreviewUrls(message: ChatMessage): void {
   }
 }
 
-export function collectUserMessageBlobPreviewUrls(message: ChatMessage): string[] {
+export interface UserMessageBlobPreviewUrls {
+  readonly handoffPreviewUrls: string[];
+  readonly revokePreviewUrls: string[];
+}
+
+export function collectUserMessageBlobPreviewUrls(
+  message: ChatMessage,
+): UserMessageBlobPreviewUrls {
   if (message.role !== "user" || !message.attachments) {
-    return [];
+    return { handoffPreviewUrls: [], revokePreviewUrls: [] };
   }
-  const previewUrls: string[] = [];
-  let hasNonImageBlobPreview = false;
+  const handoffPreviewUrls: string[] = [];
+  const revokePreviewUrls: string[] = [];
   for (const attachment of message.attachments) {
     if (!attachment.previewUrl || !attachment.previewUrl.startsWith("blob:")) continue;
     if (attachment.type !== "image") {
-      hasNonImageBlobPreview = true;
+      revokePreviewUrls.push(attachment.previewUrl);
       continue;
     }
-    previewUrls.push(attachment.previewUrl);
+    handoffPreviewUrls.push(attachment.previewUrl);
   }
-  return hasNonImageBlobPreview ? [] : previewUrls;
+  return { handoffPreviewUrls, revokePreviewUrls };
 }
 
 export interface PullRequestDialogState {
@@ -211,6 +220,49 @@ export function cloneComposerImageForRetry(image: ComposerAttachment): ComposerA
   } catch {
     return image;
   }
+}
+
+export async function toUploadComposerAttachment(
+  attachment: ComposerAttachment,
+  readFileDataUrl: (file: File) => Promise<string>,
+): Promise<UploadChatAttachment> {
+  if (attachment.type === "pdf") {
+    return {
+      type: "pdf",
+      name: attachment.name,
+      mimeType: PDF_MIME_TYPE,
+      sizeBytes: attachment.sizeBytes,
+      dataUrl: await readFileDataUrl(attachment.file),
+    };
+  }
+  return {
+    type: "image",
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes,
+    dataUrl: await readFileDataUrl(attachment.file),
+  };
+}
+
+export function toOptimisticChatAttachment(attachment: ComposerAttachment): ChatAttachment {
+  if (attachment.type === "pdf") {
+    return {
+      type: "pdf",
+      id: attachment.id,
+      name: attachment.name,
+      mimeType: PDF_MIME_TYPE,
+      sizeBytes: attachment.sizeBytes,
+      previewUrl: attachment.previewUrl,
+    };
+  }
+  return {
+    type: "image",
+    id: attachment.id,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes,
+    previewUrl: attachment.previewUrl,
+  };
 }
 
 export function deriveComposerSendState(options: {

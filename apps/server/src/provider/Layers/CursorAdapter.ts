@@ -40,9 +40,8 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
-import { toProviderAttachmentReference } from "../attachmentInputs.ts";
+import { buildAcpAttachmentPromptParts } from "../attachmentInputs.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -1004,48 +1003,15 @@ export function makeCursorAdapter(
           if (input.input?.trim()) {
             promptParts.push({ type: "text", text: input.input.trim() });
           }
-          if (input.attachments && input.attachments.length > 0) {
-            for (const attachment of input.attachments) {
-              const attachmentPath = resolveAttachmentPath({
-                attachmentsDir: serverConfig.attachmentsDir,
-                attachment,
-              });
-              if (!attachmentPath) {
-                return yield* new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "session/prompt",
-                  detail: `Invalid attachment id '${attachment.id}'.`,
-                });
-              }
-              if (attachment.type === "pdf") {
-                const reference = toProviderAttachmentReference(attachment, attachmentPath);
-                promptParts.push({
-                  type: "resource_link",
-                  uri: reference.fileUrl,
-                  name: attachment.name,
-                  mimeType: attachment.mimeType,
-                  size: attachment.sizeBytes,
-                });
-                continue;
-              }
-              const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ProviderAdapterRequestError({
-                      provider: PROVIDER,
-                      method: "session/prompt",
-                      detail: cause.message,
-                      cause,
-                    }),
-                ),
-              );
-              promptParts.push({
-                type: "image",
-                data: Buffer.from(bytes).toString("base64"),
-                mimeType: attachment.mimeType,
-              });
-            }
-          }
+          promptParts.push(
+            ...(yield* buildAcpAttachmentPromptParts({
+              attachments: input.attachments,
+              attachmentsDir: serverConfig.attachmentsDir,
+              fileSystem,
+              provider: PROVIDER,
+              method: "session/prompt",
+            })),
+          );
 
           if (promptParts.length === 0) {
             return yield* new ProviderAdapterValidationError({

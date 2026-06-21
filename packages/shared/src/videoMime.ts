@@ -8,15 +8,7 @@ export const MIME_TYPE_BY_VIDEO_EXTENSION: Record<string, string> = {
   ".webm": "video/webm",
 };
 
-export const SAFE_VIDEO_FILE_EXTENSIONS = new Set([
-  ".m4v",
-  ".mkv",
-  ".mov",
-  ".mp4",
-  ".ogg",
-  ".ogv",
-  ".webm",
-]);
+export const SAFE_VIDEO_FILE_EXTENSIONS = new Set(Object.keys(MIME_TYPE_BY_VIDEO_EXTENSION));
 
 export function videoExtensionFromFileName(fileName: string): string | null {
   const extensionMatch = /\.([a-z0-9]{1,8})$/i.exec(fileName.trim());

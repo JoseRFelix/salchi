@@ -83,6 +83,12 @@ describe("workspace media byte ranges", () => {
   });
 
   it("rejects unsupported or unsatisfiable byte ranges", () => {
+    expect(resolveWorkspaceMediaByteRange("bytes=0-0", 0)).toEqual({
+      kind: "unsatisfiable",
+    });
+    expect(resolveWorkspaceMediaByteRange("bytes=-0", 100)).toEqual({
+      kind: "unsatisfiable",
+    });
     expect(resolveWorkspaceMediaByteRange("items=0-10", 100)).toEqual({
       kind: "unsatisfiable",
     });
