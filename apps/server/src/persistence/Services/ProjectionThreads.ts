@@ -28,6 +28,11 @@ const DefaultedProjectionParentThreadId = Schema.NullOr(ThreadId).pipe(
   Schema.withDecodingDefaultKey(Effect.succeed(null)),
   Schema.withConstructorDefault(Effect.succeed(null)),
 );
+const DefaultedProjectionCreatedByThreadId = Schema.NullOr(ThreadId).pipe(
+  Schema.optionalKey,
+  Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  Schema.withConstructorDefault(Effect.succeed(null)),
+);
 const DefaultedProjectionSubagentText = Schema.NullOr(Schema.String).pipe(
   Schema.optionalKey,
   Schema.withDecodingDefaultKey(Effect.succeed(null)),
@@ -47,6 +52,7 @@ export const ProjectionThread = Schema.Struct({
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   parentThreadId: DefaultedProjectionParentThreadId,
+  createdByThreadId: DefaultedProjectionCreatedByThreadId,
   subagentKind: DefaultedProjectionSubagentText,
   subagentNickname: DefaultedProjectionSubagentText,
   subagentRole: DefaultedProjectionSubagentText,

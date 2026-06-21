@@ -49,6 +49,7 @@ import Migration0033 from "./Migrations/033_StripImageViewActivityResults.ts";
 import Migration0034 from "./Migrations/034_CanonicalizeQueuedMessageDispatchTimes.ts";
 import Migration0035 from "./Migrations/035_CheckpointTurnFileSnapshots.ts";
 import Migration0036 from "./Migrations/036_ProjectionThreadSubagents.ts";
+import Migration0037 from "./Migrations/037_ProjectionThreadCreatedBy.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -97,6 +98,7 @@ export const migrationEntries = [
   [34, "CanonicalizeQueuedMessageDispatchTimes", Migration0034],
   [35, "CheckpointTurnFileSnapshots", Migration0035],
   [36, "ProjectionThreadSubagents", Migration0036],
+  [37, "ProjectionThreadCreatedBy", Migration0037],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

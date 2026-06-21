@@ -254,6 +254,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
           parentThreadId: command.parentThreadId ?? null,
+          createdByThreadId: command.createdByThreadId ?? null,
           subagentKind: command.subagentKind ?? null,
           subagentNickname: command.subagentNickname ?? null,
           subagentRole: command.subagentRole ?? null,

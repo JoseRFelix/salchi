@@ -332,6 +332,7 @@ function mapThread(
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
     parentThreadId: thread.parentThreadId ?? null,
+    createdByThreadId: thread.createdByThreadId ?? null,
     subagentKind: thread.subagentKind ?? null,
     subagentNickname: thread.subagentNickname ?? null,
     subagentRole: thread.subagentRole ?? null,
@@ -373,6 +374,7 @@ function mapThreadShell(
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
     parentThreadId: thread.parentThreadId ?? null,
+    createdByThreadId: thread.createdByThreadId ?? null,
     subagentKind: thread.subagentKind ?? null,
     subagentNickname: thread.subagentNickname ?? null,
     subagentRole: thread.subagentRole ?? null,
@@ -396,6 +398,7 @@ function mapThreadShell(
     title: thread.title,
     interactionMode: thread.interactionMode,
     parentThreadId: thread.parentThreadId ?? null,
+    createdByThreadId: thread.createdByThreadId ?? null,
     subagentKind: thread.subagentKind ?? null,
     subagentNickname: thread.subagentNickname ?? null,
     subagentRole: thread.subagentRole ?? null,
@@ -431,6 +434,7 @@ function toThreadShell(thread: Thread): ThreadShell {
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
     parentThreadId: thread.parentThreadId ?? null,
+    createdByThreadId: thread.createdByThreadId ?? null,
     subagentKind: thread.subagentKind ?? null,
     subagentNickname: thread.subagentNickname ?? null,
     subagentRole: thread.subagentRole ?? null,
@@ -530,6 +534,7 @@ function sidebarThreadSummariesEqual(
     left.title === right.title &&
     left.interactionMode === right.interactionMode &&
     (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
+    (left.createdByThreadId ?? null) === (right.createdByThreadId ?? null) &&
     (left.subagentKind ?? null) === (right.subagentKind ?? null) &&
     (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
     (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
@@ -560,6 +565,7 @@ function threadShellsEqual(left: ThreadShell | undefined, right: ThreadShell): b
     left.runtimeMode === right.runtimeMode &&
     left.interactionMode === right.interactionMode &&
     (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
+    (left.createdByThreadId ?? null) === (right.createdByThreadId ?? null) &&
     (left.subagentKind ?? null) === (right.subagentKind ?? null) &&
     (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
     (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
@@ -1452,6 +1458,7 @@ function syncSidebarThreadSummaryFromThreadState(
     title: shell.title,
     interactionMode: shell.interactionMode,
     parentThreadId: shell.parentThreadId ?? null,
+    createdByThreadId: shell.createdByThreadId ?? null,
     subagentKind: shell.subagentKind ?? null,
     subagentNickname: shell.subagentNickname ?? null,
     subagentRole: shell.subagentRole ?? null,
@@ -2198,6 +2205,12 @@ function applyEnvironmentOrchestrationEvent(
           modelSelection: event.payload.modelSelection,
           runtimeMode: event.payload.runtimeMode,
           interactionMode: event.payload.interactionMode,
+          parentThreadId: event.payload.parentThreadId ?? null,
+          createdByThreadId: event.payload.createdByThreadId ?? null,
+          subagentKind: event.payload.subagentKind ?? null,
+          subagentNickname: event.payload.subagentNickname ?? null,
+          subagentRole: event.payload.subagentRole ?? null,
+          hiddenFromThreadList: event.payload.hiddenFromThreadList ?? false,
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
           latestTurn: null,

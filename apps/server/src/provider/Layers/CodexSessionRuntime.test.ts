@@ -12,6 +12,10 @@ import {
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
 } from "../CodexDeveloperInstructions.ts";
 import {
+  INDEPENDENT_THREAD_TOOL_CODEX_INSTRUCTIONS,
+  INDEPENDENT_THREAD_TOOL_SPEC,
+} from "../IndependentThreadTool.ts";
+import {
   buildTurnStartParams,
   isRecoverableThreadResumeError,
   openCodexThread,
@@ -27,19 +31,38 @@ function makeThreadOpenResponse(
     modelProvider: "openai",
     approvalPolicy: "never",
     approvalsReviewer: "user",
-    sandbox: { type: "danger-full-access" },
+    sandbox: { type: "dangerFullAccess" },
     thread: {
       id: threadId,
-      createdAt: "2026-04-18T00:00:00.000Z",
-      source: { session: "cli" },
+      cliVersion: "0.0.0-test",
+      createdAt: 1_713_398_400,
+      cwd: "/tmp/project",
+      ephemeral: false,
+      modelProvider: "openai",
+      preview: "",
+      sessionId: "session-1",
+      source: "appServer",
       turns: [],
       status: {
-        state: "idle",
-        activeFlags: [],
+        type: "idle",
       },
+      updatedAt: 1_713_398_400,
     },
   } as unknown as CodexRpc.ClientRequestResponsesByMethod["thread/start"];
 }
+
+describe("Codex developer instructions", () => {
+  it("advertises independent thread creation in both collaboration modes", () => {
+    assert.ok(
+      CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS.includes(INDEPENDENT_THREAD_TOOL_CODEX_INSTRUCTIONS),
+    );
+    assert.ok(
+      CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS.includes(
+        INDEPENDENT_THREAD_TOOL_CODEX_INSTRUCTIONS,
+      ),
+    );
+  });
+});
 
 describe("buildTurnStartParams", () => {
   it("includes plan collaboration mode when requested", () => {
@@ -254,10 +277,60 @@ describe("isRecoverableThreadResumeError", () => {
 });
 
 describe("openCodexThread", () => {
+  it("registers the independent thread dynamic tool when starting a new thread", async () => {
+    const calls: Array<{ method: string; payload: unknown }> = [];
+    const started = makeThreadOpenResponse("fresh-thread");
+    const client = {
+      raw: {
+        request: (method: string, payload?: unknown) => {
+          calls.push({ method, payload });
+          return Effect.succeed(started);
+        },
+      },
+      request: <M extends "thread/start" | "thread/resume">(
+        _method: M,
+        _payload: CodexRpc.ClientRequestParamsByMethod[M],
+      ) => Effect.succeed(started as CodexRpc.ClientRequestResponsesByMethod[M]),
+    };
+
+    const opened = await Effect.runPromise(
+      openCodexThread({
+        client,
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: "gpt-5.3-codex",
+        serviceTier: undefined,
+        approvalsReviewer: undefined,
+        resumeThreadId: undefined,
+      }),
+    );
+
+    assert.equal(opened.thread.id, "fresh-thread");
+    assert.deepStrictEqual(calls, [
+      {
+        method: "thread/start",
+        payload: {
+          cwd: "/tmp/project",
+          approvalPolicy: "never",
+          sandbox: "danger-full-access",
+          dynamicTools: [INDEPENDENT_THREAD_TOOL_SPEC],
+          model: "gpt-5.3-codex",
+        },
+      },
+    ]);
+  });
+
   it("falls back to thread/start when resume fails recoverably", async () => {
     const calls: Array<{ method: "thread/start" | "thread/resume"; payload: unknown }> = [];
     const started = makeThreadOpenResponse("fresh-thread");
     const client = {
+      raw: {
+        request: (method: string, payload?: unknown) => {
+          calls.push({ method: method as "thread/start" | "thread/resume", payload });
+          return Effect.succeed(started);
+        },
+      },
       request: <M extends "thread/start" | "thread/resume">(
         method: M,
         payload: CodexRpc.ClientRequestParamsByMethod[M],
@@ -301,10 +374,22 @@ describe("openCodexThread", () => {
       model: "gpt-5.3-codex",
       approvalsReviewer: "auto_review",
     });
+    assert.deepStrictEqual(calls[1]?.payload, {
+      cwd: "/tmp/project",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      dynamicTools: [INDEPENDENT_THREAD_TOOL_SPEC],
+      model: "gpt-5.3-codex",
+      approvalsReviewer: "auto_review",
+    });
   });
 
   it("propagates non-recoverable resume failures", async () => {
+    const started = makeThreadOpenResponse("fresh-thread");
     const client = {
+      raw: {
+        request: (_method: string, _payload?: unknown) => Effect.succeed(started),
+      },
       request: <M extends "thread/start" | "thread/resume">(
         method: M,
         _payload: CodexRpc.ClientRequestParamsByMethod[M],

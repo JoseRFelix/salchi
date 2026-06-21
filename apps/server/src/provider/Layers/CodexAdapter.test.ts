@@ -56,6 +56,7 @@ import {
   extractCodexSubagentMetadata,
   extractCodexThreadSpawnMetadata,
 } from "./CodexChildThreads.ts";
+import { INDEPENDENT_THREAD_TOOL_METHOD } from "../IndependentThreadTool.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 // Test-local service tag so the rest of the file can keep using `yield* CodexAdapter`.
@@ -1968,6 +1969,54 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           });
         }
       }),
+  );
+
+  it.effect("maps Salchi create-thread notifications to independent thread events", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const eventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-salchi-create-thread"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        threadId: asThreadId("thread-1"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: INDEPENDENT_THREAD_TOOL_METHOD,
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("tool-create-thread"),
+        payload: {
+          threadId: asThreadId("independent-thread-1"),
+          title: "Investigate retry behavior",
+          initialPrompt: "Review retry behavior and report findings.",
+          initialMessageId: "codex-tool:tool-create-thread:initial-message",
+          createdByThreadId: asThreadId("thread-1"),
+          sourceItemId: asItemId("tool-create-thread"),
+          branch: "feature/retry-behavior",
+          worktreePath: "/tmp/retry-behavior-worktree",
+        },
+      } satisfies ProviderEvent);
+
+      const event = Option.getOrThrow(yield* Fiber.join(eventFiber));
+      assert.equal(event.type, "thread.independent.created");
+      if (event.type !== "thread.independent.created") {
+        return;
+      }
+      assert.equal(event.threadId, "thread-1");
+      assert.equal(event.turnId, "turn-1");
+      assert.equal(event.itemId, "tool-create-thread");
+      assert.deepEqual(event.payload, {
+        threadId: asThreadId("independent-thread-1"),
+        title: "Investigate retry behavior",
+        createdByThreadId: asThreadId("thread-1"),
+        initialPrompt: "Review retry behavior and report findings.",
+        initialMessageId: "codex-tool:tool-create-thread:initial-message",
+        sourceItemId: asItemId("tool-create-thread"),
+        branch: "feature/retry-behavior",
+        worktreePath: "/tmp/retry-behavior-worktree",
+      });
+    }),
   );
 
   it.effect("unwraps Codex token usage payloads for context window events", () =>

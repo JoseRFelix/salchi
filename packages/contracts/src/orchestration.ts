@@ -393,6 +393,11 @@ const DefaultedParentThreadId = Schema.NullOr(ThreadId).pipe(
   Schema.withDecodingDefaultKey(Effect.succeed(null)),
   Schema.withConstructorDefault(Effect.succeed(null)),
 );
+const DefaultedCreatedByThreadId = Schema.NullOr(ThreadId).pipe(
+  Schema.optionalKey,
+  Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  Schema.withConstructorDefault(Effect.succeed(null)),
+);
 const DefaultedSubagentText = Schema.NullOr(TrimmedNonEmptyString).pipe(
   Schema.optionalKey,
   Schema.withDecodingDefaultKey(Effect.succeed(null)),
@@ -414,6 +419,7 @@ export const OrchestrationThread = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   parentThreadId: DefaultedParentThreadId,
+  createdByThreadId: DefaultedCreatedByThreadId,
   subagentKind: DefaultedSubagentText,
   subagentNickname: DefaultedSubagentText,
   subagentRole: DefaultedSubagentText,
@@ -468,6 +474,7 @@ export const OrchestrationThreadShell = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   parentThreadId: DefaultedParentThreadId,
+  createdByThreadId: DefaultedCreatedByThreadId,
   subagentKind: DefaultedSubagentText,
   subagentNickname: DefaultedSubagentText,
   subagentRole: DefaultedSubagentText,
@@ -656,6 +663,7 @@ const ThreadCreateCommand = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   parentThreadId: DefaultedParentThreadId,
+  createdByThreadId: DefaultedCreatedByThreadId,
   subagentKind: DefaultedSubagentText,
   subagentNickname: DefaultedSubagentText,
   subagentRole: DefaultedSubagentText,
@@ -1080,6 +1088,7 @@ export const ThreadCreatedPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   parentThreadId: DefaultedParentThreadId,
+  createdByThreadId: DefaultedCreatedByThreadId,
   subagentKind: DefaultedSubagentText,
   subagentNickname: DefaultedSubagentText,
   subagentRole: DefaultedSubagentText,

@@ -957,6 +957,101 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("materializes provider-created independent threads as root threads", async () => {
+    const harness = await createHarness();
+    const createdThreadId = asThreadId("independent-thread-1");
+    const eventId = asEventId("evt-provider-independent-thread-created");
+    const now = "2026-01-01T00:00:01.000Z";
+
+    const createEvent = {
+      type: "thread.independent.created",
+      eventId,
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-origin"),
+      providerRefs: {
+        providerItemId: asItemId("call-create-thread"),
+      },
+      payload: {
+        threadId: createdThreadId,
+        title: "Investigate flaky reconnects",
+        initialPrompt: "Review the reconnect flow and report likely failure modes.",
+        providerThreadId: "provider-independent-1",
+        sourceItemId: asItemId("tool-create-thread"),
+        branch: "feature/reconnect-review",
+        worktreePath: "/tmp/reconnect-review-worktree",
+      },
+    } satisfies LegacyProviderRuntimeEvent;
+
+    harness.emit(createEvent);
+    await harness.drain();
+
+    const created = await waitForThread(
+      harness.readModel,
+      (thread) => thread.messages.some((message) => message.id.includes("independent-thread")),
+      2000,
+      createdThreadId,
+    );
+
+    expect(created.parentThreadId).toBeNull();
+    expect(created.createdByThreadId).toBe(asThreadId("thread-1"));
+    expect(created.subagentKind).toBeNull();
+    expect(created.subagentNickname).toBeNull();
+    expect(created.subagentRole).toBeNull();
+    expect(created.hiddenFromThreadList).toBe(false);
+    expect(created.projectId).toBe(asProjectId("project-1"));
+    expect(created.title).toBe("Investigate flaky reconnects");
+    expect(created.branch).toBe("feature/reconnect-review");
+    expect(created.worktreePath).toBe("/tmp/reconnect-review-worktree");
+    expect(created.modelSelection).toEqual({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5-codex",
+    });
+    expect(created.runtimeMode).toBe("approval-required");
+    expect(created.interactionMode).toBe(DEFAULT_PROVIDER_INTERACTION_MODE);
+    expect(created.messages).toHaveLength(1);
+    expect(created.messages[0]).toMatchObject({
+      id: asMessageId(`provider:${eventId}:independent-thread-message`),
+      role: "user",
+      text: "Review the reconnect flow and report likely failure modes.",
+    });
+
+    const snapshot = await harness.readModel();
+    const source = snapshot.threads.find((thread) => thread.id === asThreadId("thread-1"));
+    const sourceActivity = source?.activities.find(
+      (activity) => activity.kind === "thread.created",
+    );
+    expect(sourceActivity).toMatchObject({
+      summary: "Investigate flaky reconnects",
+      payload: {
+        threadId: createdThreadId,
+        title: "Investigate flaky reconnects",
+        createdByThreadId: asThreadId("thread-1"),
+        providerThreadId: "provider-independent-1",
+        sourceItemId: asItemId("tool-create-thread"),
+        providerItemId: asItemId("call-create-thread"),
+      },
+      turnId: asTurnId("turn-origin"),
+    });
+    expect(harness.materializedBindings).toHaveLength(0);
+
+    harness.emit(createEvent);
+    await harness.drain();
+
+    const afterReplay = await harness.readModel();
+    const replayedCreated = afterReplay.threads.find((thread) => thread.id === createdThreadId);
+    const replayedSource = afterReplay.threads.find(
+      (thread) => thread.id === asThreadId("thread-1"),
+    );
+    expect(afterReplay.threads.filter((thread) => thread.id === createdThreadId)).toHaveLength(1);
+    expect(replayedCreated?.messages).toHaveLength(1);
+    expect(
+      replayedSource?.activities.filter((activity) => activity.kind === "thread.created"),
+    ).toHaveLength(1);
+  });
+
   it("uses real materialized child nicknames before generic roles", async () => {
     const harness = await createHarness();
     harness.setChildThreadMode("materialized");

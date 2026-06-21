@@ -37,6 +37,11 @@ import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
+import {
+  INDEPENDENT_THREAD_MCP_SERVER_NAME,
+  INDEPENDENT_THREAD_TOOL_NAME,
+  INDEPENDENT_THREAD_TOOL_RESULT_MARKER,
+} from "../IndependentThreadTool.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { makeClaudeAdapter, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
@@ -253,6 +258,56 @@ function makeDeterministicRandomService(seed = 0x1234_5678): {
   };
 }
 
+type ClaudeSdkMcpServerDebugShape = {
+  readonly type?: unknown;
+  readonly name?: unknown;
+  readonly instance?: {
+    readonly _registeredTools?: Record<
+      string,
+      {
+        readonly handler?: unknown;
+        readonly _meta?: Record<string, unknown>;
+      }
+    >;
+  };
+};
+
+function getClaudeIndependentThreadTool(
+  input:
+    | {
+        readonly options: ClaudeQueryOptions;
+      }
+    | undefined,
+): {
+  readonly server: ClaudeSdkMcpServerDebugShape | undefined;
+  readonly tool:
+    | {
+        readonly handler?: unknown;
+        readonly _meta?: Record<string, unknown>;
+      }
+    | undefined;
+  readonly handler:
+    | ((args: Record<string, unknown>, extra: unknown) => Promise<Record<string, unknown>>)
+    | undefined;
+} {
+  const server = input?.options.mcpServers?.[INDEPENDENT_THREAD_MCP_SERVER_NAME] as
+    | ClaudeSdkMcpServerDebugShape
+    | undefined;
+  const registeredTool = server?.instance?._registeredTools?.[INDEPENDENT_THREAD_TOOL_NAME];
+  const handler =
+    typeof registeredTool?.handler === "function"
+      ? (registeredTool.handler as (
+          args: Record<string, unknown>,
+          extra: unknown,
+        ) => Promise<Record<string, unknown>>)
+      : undefined;
+  return {
+    server,
+    tool: registeredTool,
+    handler,
+  };
+}
+
 async function readFirstPromptText(
   input:
     | {
@@ -378,6 +433,88 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
       assert.equal(createInput?.options.permissionMode, undefined);
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("registers the Salchi create_thread MCP tool for Claude sessions", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const {
+        server,
+        tool: registeredTool,
+        handler,
+      } = getClaudeIndependentThreadTool(harness.getLastCreateQueryInput());
+
+      assert.equal(server?.type, "sdk");
+      assert.equal(server?.name, INDEPENDENT_THREAD_MCP_SERVER_NAME);
+      assert.equal(typeof handler, "function");
+      assert.equal(registeredTool?._meta?.["anthropic/alwaysLoad"], true);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("emits an independent-thread runtime event from Claude create_thread", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 4).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const { handler } = getClaudeIndependentThreadTool(harness.getLastCreateQueryInput());
+      assert.equal(typeof handler, "function");
+      if (!handler) {
+        return;
+      }
+
+      const toolResult = yield* Effect.promise(() =>
+        handler(
+          {
+            title: "Claude split",
+            initialPrompt: "Investigate this independently.",
+            checkoutMode: "local",
+          },
+          {},
+        ),
+      );
+
+      const structuredContent = toolResult.structuredContent as
+        | { readonly type?: unknown }
+        | undefined;
+      assert.equal(structuredContent?.type, INDEPENDENT_THREAD_TOOL_RESULT_MARKER);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const createdEvent = runtimeEvents.find(
+        (event) => event.type === "thread.independent.created",
+      );
+      assert.equal(createdEvent?.type, "thread.independent.created");
+      if (createdEvent?.type !== "thread.independent.created") {
+        return;
+      }
+      assert.equal(createdEvent.payload.title, "Claude split");
+      assert.equal(createdEvent.payload.initialPrompt, "Investigate this independently.");
+      assert.equal(createdEvent.payload.branch, null);
+      assert.equal(createdEvent.payload.worktreePath, null);
+      assert.equal(String(createdEvent.payload.createdByThreadId), String(THREAD_ID));
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

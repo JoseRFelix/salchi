@@ -285,6 +285,7 @@ export function projectEvent(
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
             parentThreadId: payload.parentThreadId,
+            createdByThreadId: payload.createdByThreadId,
             subagentKind: payload.subagentKind,
             subagentNickname: payload.subagentNickname,
             subagentRole: payload.subagentRole,

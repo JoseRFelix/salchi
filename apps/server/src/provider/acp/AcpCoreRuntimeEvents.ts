@@ -13,6 +13,10 @@ import {
 } from "@t3tools/contracts";
 
 import type { AcpPermissionRequest, AcpPlanUpdate, AcpToolCallState } from "./AcpRuntimeModel.ts";
+import {
+  INDEPENDENT_THREAD_TOOL_RESULT_MARKER,
+  makeIndependentThreadCreatedRuntimeEvent,
+} from "../IndependentThreadTool.ts";
 
 type AcpAdapterRawSource = Extract<
   RuntimeEventRawSource,
@@ -74,6 +78,104 @@ function runtimeItemStatusFromAcpToolStatus(
     default:
       return undefined;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseMarkedJsonText(value: string): unknown | undefined {
+  const markerIndex = value.indexOf(INDEPENDENT_THREAD_TOOL_RESULT_MARKER);
+  if (markerIndex < 0) {
+    return undefined;
+  }
+  const jsonStart = value.indexOf("{", markerIndex + INDEPENDENT_THREAD_TOOL_RESULT_MARKER.length);
+  if (jsonStart < 0) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(value.slice(jsonStart));
+  } catch {
+    return undefined;
+  }
+}
+
+function extractIndependentThreadArguments(value: unknown, depth = 0): unknown | undefined {
+  if (depth > 8) {
+    return undefined;
+  }
+
+  if (typeof value === "string") {
+    const markedJson = parseMarkedJsonText(value);
+    if (markedJson !== undefined) {
+      return extractIndependentThreadArguments(markedJson, depth + 1);
+    }
+    const trimmed = value.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        return extractIndependentThreadArguments(JSON.parse(trimmed), depth + 1);
+      } catch {
+        return undefined;
+      }
+    }
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = extractIndependentThreadArguments(item, depth + 1);
+      if (found !== undefined) {
+        return found;
+      }
+    }
+    return undefined;
+  }
+
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  if (value.type === INDEPENDENT_THREAD_TOOL_RESULT_MARKER) {
+    if (Object.hasOwn(value, "arguments")) {
+      return value.arguments;
+    }
+    if (Object.hasOwn(value, "args")) {
+      return value.args;
+    }
+    if (Object.hasOwn(value, "input")) {
+      return value.input;
+    }
+    if (Object.hasOwn(value, "payload")) {
+      return value.payload;
+    }
+  }
+
+  const priorityFields = [
+    "structuredContent",
+    "rawOutput",
+    "output",
+    "content",
+    "result",
+    "data",
+  ] as const;
+  for (const field of priorityFields) {
+    if (!Object.hasOwn(value, field)) {
+      continue;
+    }
+    const found = extractIndependentThreadArguments(value[field], depth + 1);
+    if (found !== undefined) {
+      return found;
+    }
+  }
+
+  for (const nested of Object.values(value)) {
+    const found = extractIndependentThreadArguments(nested, depth + 1);
+    if (found !== undefined) {
+      return found;
+    }
+  }
+
+  return undefined;
 }
 
 export function makeAcpRequestOpenedEvent(input: {
@@ -189,6 +291,38 @@ export function makeAcpToolCallEvent(input: {
       payload: input.rawPayload,
     },
   };
+}
+
+export function makeAcpIndependentThreadCreatedEvent(input: {
+  readonly stamp: AcpEventStamp;
+  readonly provider: ProviderDriverKind;
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId | undefined;
+  readonly toolCall: AcpToolCallState;
+  readonly rawPayload: unknown;
+}): ProviderRuntimeEvent | undefined {
+  if (input.toolCall.status !== "completed") {
+    return undefined;
+  }
+  const argumentsValue = extractIndependentThreadArguments(input.toolCall.data);
+  if (argumentsValue === undefined) {
+    return undefined;
+  }
+  return makeIndependentThreadCreatedRuntimeEvent({
+    provider: input.provider,
+    eventId: input.stamp.eventId,
+    createdAt: input.stamp.createdAt,
+    sourceThreadId: input.threadId,
+    ...(input.turnId ? { turnId: input.turnId } : {}),
+    idPrefix: `acp-tool:${input.toolCall.toolCallId}`,
+    argumentsValue,
+    sourceItemId: RuntimeItemId.make(input.toolCall.toolCallId),
+    raw: {
+      source: "acp.jsonrpc",
+      method: "session/update",
+      payload: input.rawPayload,
+    },
+  });
 }
 
 export function makeAcpAssistantItemEvent(input: {
