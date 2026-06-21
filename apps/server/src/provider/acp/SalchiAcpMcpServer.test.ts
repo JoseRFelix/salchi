@@ -32,8 +32,22 @@ async function runMcpRequest(request: unknown): Promise<Record<string, unknown>>
   child.stdin.end(`${JSON.stringify(request)}\n`);
 
   const exitCode = await new Promise<number | null>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("exit", resolve);
+    // @effect-diagnostics-next-line globalTimers:off
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`Timed out waiting for MCP server response. stderr: ${stderr}`));
+    }, 5_000);
+    const cleanup = () => {
+      clearTimeout(timer);
+    };
+    child.once("error", (error) => {
+      cleanup();
+      reject(error);
+    });
+    child.once("exit", (code) => {
+      cleanup();
+      resolve(code);
+    });
   });
   if (exitCode !== 0) {
     throw new Error(`MCP server exited with ${exitCode}: ${stderr}`);

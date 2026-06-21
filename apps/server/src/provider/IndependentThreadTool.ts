@@ -235,17 +235,6 @@ function readCheckoutMode(
   }
 }
 
-function titleFromPrompt(prompt: string | undefined): string | undefined {
-  if (!prompt) {
-    return undefined;
-  }
-  const singleLine = prompt.replace(/\s+/g, " ").trim();
-  if (!singleLine) {
-    return undefined;
-  }
-  return singleLine.length <= 80 ? singleLine : `${singleLine.slice(0, 77)}...`;
-}
-
 export function isIndependentThreadToolCall(input: {
   readonly namespace?: string | null;
   readonly tool: string;
@@ -261,12 +250,18 @@ export function isIndependentThreadToolCall(input: {
 export function parseIndependentThreadToolArguments(
   argumentsValue: unknown,
 ): IndependentThreadToolArguments {
-  const record = asPlainRecord(argumentsValue) ?? {};
+  const record = asPlainRecord(argumentsValue);
+  if (!record) {
+    throw new Error("create_thread arguments must be an object");
+  }
   const initialPrompt = readStringField(record, ["initialPrompt", "prompt", "input", "message"]);
-  const title =
-    readStringField(record, ["title", "name"]) ??
-    titleFromPrompt(initialPrompt) ??
-    "Created thread";
+  if (!initialPrompt) {
+    throw new Error("create_thread requires a non-empty initialPrompt");
+  }
+  const title = readStringField(record, ["title", "name"]);
+  if (!title) {
+    throw new Error("create_thread requires a non-empty title");
+  }
   const titleSeed = readStringField(record, ["titleSeed"]);
   const requestedThreadId = readStringField(record, ["threadId"]);
   const checkoutMode = readCheckoutMode(record);
@@ -293,7 +288,7 @@ export function parseIndependentThreadToolArguments(
   return {
     ...(requestedThreadId ? { requestedThreadId: ThreadId.make(requestedThreadId) } : {}),
     title,
-    ...(initialPrompt ? { initialPrompt } : {}),
+    initialPrompt,
     ...(titleSeed ? { titleSeed } : {}),
     ...(checkoutMode ? { checkoutMode } : {}),
     ...(resolvedBranch !== undefined ? { branch: resolvedBranch } : {}),
