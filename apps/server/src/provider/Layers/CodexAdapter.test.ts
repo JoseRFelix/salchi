@@ -834,7 +834,13 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         ]),
       );
 
-      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 3)).pipe(
+      const threadStartedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "thread.started" &&
+            event.payload.providerThreadId === providerChildThreadId,
+        ),
+        Stream.runHead,
         Effect.forkChild,
       );
 
@@ -852,8 +858,9 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         }),
       );
 
-      const events = Array.from(yield* Fiber.join(eventsFiber));
-      const threadStarted = events.find((event) => event.type === "thread.started");
+      const threadStartedOption = yield* Fiber.join(threadStartedFiber);
+      assert.equal(threadStartedOption._tag, "Some");
+      const threadStarted = threadStartedOption._tag === "Some" ? threadStartedOption.value : null;
       assert.ok(threadStarted);
       assert.equal(threadStarted.threadId, childThreadId);
       if (threadStarted.type === "thread.started") {
@@ -865,11 +872,13 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }
 
       assert.deepStrictEqual(
-        runtime.registerProviderThreadBindingImpl.mock.calls.map(([input]) => ({
-          providerThreadId: input.providerThreadId,
-          threadId: input.threadId,
-          parentThreadId: input.parentThreadId,
-        })),
+        runtime.registerProviderThreadBindingImpl.mock.calls
+          .map(([input]) => ({
+            providerThreadId: input.providerThreadId,
+            threadId: input.threadId,
+            parentThreadId: input.parentThreadId,
+          }))
+          .filter((binding) => binding.providerThreadId === providerChildThreadId),
         [
           {
             providerThreadId: providerChildThreadId,
@@ -2052,6 +2061,83 @@ it.effect("backfills resumed materialized Codex child thread snapshots on direct
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("backfills in-progress Codex child snapshot items as updates", () => {
+  const resumedRuntimes: FakeCodexRuntime[] = [];
+  const resumedRuntimeFactory = vi.fn((options: CodexSessionRuntimeOptions) => {
+    const runtime = new FakeCodexRuntime(options);
+    runtime.readProviderThreadImpl.mockImplementation((providerThreadId) =>
+      Promise.resolve({
+        threadId: providerThreadId,
+        turns:
+          providerThreadId === "provider-child-in-progress"
+            ? [
+                {
+                  id: asTurnId("turn-child-in-progress"),
+                  status: "running",
+                  startedAt: 1_778_000_021,
+                  completedAt: null,
+                  items: [
+                    {
+                      id: "msg-child-in-progress",
+                      text: "Still working.",
+                      type: "agentMessage",
+                      status: "inProgress",
+                    },
+                  ],
+                },
+              ]
+            : [],
+      }),
+    );
+    resumedRuntimes.push(runtime);
+    return Effect.succeed(runtime);
+  });
+  const layer = Layer.effect(
+    CodexAdapter,
+    Effect.gen(function* () {
+      const codexConfig = decodeCodexSettings({});
+      return yield* makeCodexAdapter(codexConfig, {
+        makeRuntime: resumedRuntimeFactory,
+      });
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  );
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    const childThreadId = codexChildThreadId(
+      ProviderInstanceId.make("codex"),
+      "provider-child-in-progress",
+    );
+    const eventFiber = yield* adapter.streamEvents.pipe(
+      Stream.filter(
+        (event) => event.type === "item.updated" && event.itemId === "msg-child-in-progress",
+      ),
+      Stream.runHead,
+      Effect.forkChild,
+    );
+
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId: childThreadId,
+      resumeCursor: { threadId: "provider-child-in-progress" },
+      runtimeMode: "full-access",
+    });
+
+    const event = yield* Fiber.join(eventFiber);
+    assert.equal(event._tag, "Some");
+    if (event._tag === "Some") {
+      assert.equal(event.value.threadId, childThreadId);
+      assert.equal(event.value.type, "item.updated");
+      assert.equal(event.value.payload.status, "inProgress");
+    }
+  }).pipe(Effect.provide(layer));
+});
+
 const scopedLifecycleRuntimeFactory = makeScopedRuntimeFactory();
 const scopedLifecycleLayer = it.layer(
   Layer.effect(
@@ -2140,6 +2226,82 @@ scopedLifecycleLayer("CodexAdapterLive scoped lifecycle", (it) => {
       assert.equal(runtime.closeImpl.mock.calls.length, 1);
       assert.deepStrictEqual(scopedLifecycleRuntimeFactory.releasedThreadIds, [parentThreadId]);
       assert.equal(yield* adapter.hasSession(parentThreadId), false);
+    }),
+  );
+
+  it.effect("does not block runtime events behind child snapshot backfill", () =>
+    Effect.gen(function* () {
+      scopedLifecycleRuntimeFactory.releasedThreadIds.length = 0;
+      const adapter = yield* CodexAdapter;
+      const parentThreadId = asThreadId("thread-parent-nonblocking-child-backfill");
+      const childThreadId = codexChildThreadId(
+        ProviderInstanceId.make("codex"),
+        "provider-child-nonblocking",
+      );
+      let finishBackfill: ((snapshot: CodexThreadSnapshot) => void) | undefined;
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: parentThreadId,
+        runtimeMode: "full-access",
+      });
+
+      const runtime = scopedLifecycleRuntimeFactory.lastRuntime;
+      assert.ok(runtime);
+      runtime.readProviderThreadImpl.mockImplementation(
+        (providerThreadId) =>
+          new Promise<CodexThreadSnapshot>((resolve) => {
+            finishBackfill = resolve;
+            assert.equal(providerThreadId, "provider-child-nonblocking");
+          }),
+      );
+
+      const turnStartedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "turn.started" && event.turnId === asTurnId("turn-root-after-child"),
+        ),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit(
+        makeCodexChildThreadStartedEvent({
+          eventId: "evt-child-thread-nonblocking",
+          threadId: childThreadId,
+          providerThreadId: "provider-child-nonblocking",
+          parentThreadId,
+        }),
+      );
+      yield* runtime.emit({
+        id: asEventId("evt-root-turn-after-child"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        createdAt: "2026-01-01T00:00:01.000Z",
+        method: "turn/started",
+        threadId: parentThreadId,
+        turnId: asTurnId("turn-root-after-child"),
+        payload: {
+          threadId: "provider-thread-1",
+          turn: {
+            id: "turn-root-after-child",
+            status: "running",
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const turnStarted = yield* Fiber.join(turnStartedFiber);
+      assert.equal(turnStarted._tag, "Some");
+      if (turnStarted._tag === "Some") {
+        assert.equal(turnStarted.value.threadId, parentThreadId);
+      }
+
+      assert.ok(finishBackfill);
+      finishBackfill({
+        threadId: "provider-child-nonblocking",
+        turns: [],
+      });
     }),
   );
 });

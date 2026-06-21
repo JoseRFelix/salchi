@@ -245,6 +245,7 @@ interface PendingApproval {
   readonly requestId: ApprovalRequestId;
   readonly jsonRpcId: string;
   readonly requestKind: ProviderRequestKind;
+  readonly threadId: ThreadId;
   readonly turnId: TurnId | undefined;
   readonly itemId: ProviderItemId | undefined;
   readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
@@ -253,12 +254,14 @@ interface PendingApproval {
 interface ApprovalCorrelation {
   readonly requestId: ApprovalRequestId;
   readonly requestKind: ProviderRequestKind;
+  readonly threadId: ThreadId;
   readonly turnId: TurnId | undefined;
   readonly itemId: ProviderItemId | undefined;
 }
 
 interface PendingUserInput {
   readonly requestId: ApprovalRequestId;
+  readonly threadId: ThreadId;
   readonly turnId: TurnId | undefined;
   readonly itemId: ProviderItemId | undefined;
   readonly answers: Deferred.Deferred<ProviderUserInputAnswers>;
@@ -843,6 +846,7 @@ export const makeCodexSessionRuntime = (
     const collabReceiverTurnsRef = yield* Ref.make(new Map<string, TurnId>());
     const providerThreadToSalchiThreadRef = yield* Ref.make(new Map<string, ThreadId>());
     const providerThreadParentSalchiThreadRef = yield* Ref.make(new Map<string, ThreadId>());
+    const activeProviderThreadTurnsRef = yield* Ref.make(new Map<string, TurnId>());
     const closedRef = yield* Ref.make(false);
     const providerInstanceId = options.providerInstanceId ?? ProviderInstanceId.make("codex");
 
@@ -1061,6 +1065,7 @@ export const makeCodexSessionRuntime = (
           if (correlation) {
             requestId = correlation.requestId;
             requestKind = correlation.requestKind;
+            threadId = correlation.threadId;
             turnId = correlation.turnId ?? turnId;
             itemId = correlation.itemId ?? itemId;
             yield* Ref.update(approvalCorrelationsRef, (current) => {
@@ -1072,6 +1077,19 @@ export const makeCodexSessionRuntime = (
         }
 
         yield* Ref.set(collabReceiverTurnsRef, collabReceiverTurns);
+        if (notification.method === "turn/started") {
+          yield* Ref.update(activeProviderThreadTurnsRef, (current) => {
+            const next = new Map(current);
+            next.set(notification.params.threadId, TurnId.make(notification.params.turn.id));
+            return next;
+          });
+        } else if (notification.method === "turn/completed") {
+          yield* Ref.update(activeProviderThreadTurnsRef, (current) => {
+            const next = new Map(current);
+            next.delete(notification.params.threadId);
+            return next;
+          });
+        }
         yield* emitEvent({
           kind: "notification",
           threadId,
@@ -1158,6 +1176,9 @@ export const makeCodexSessionRuntime = (
         const turnId = TurnId.make(payload.turnId);
         const itemId = ProviderItemId.make(payload.itemId);
         const decision = yield* Deferred.make<ProviderApprovalDecision>();
+        const threadId = yield* resolveSalchiThreadIdForProviderThread(
+          readProviderThreadIdFromPayload(payload),
+        );
 
         yield* Ref.update(pendingApprovalsRef, (current) => {
           const next = new Map(current);
@@ -1165,6 +1186,7 @@ export const makeCodexSessionRuntime = (
             requestId,
             jsonRpcId: payload.approvalId ?? payload.itemId,
             requestKind: "command",
+            threadId,
             turnId,
             itemId,
             decision,
@@ -1176,14 +1198,12 @@ export const makeCodexSessionRuntime = (
           next.set(payload.approvalId ?? payload.itemId, {
             requestId,
             requestKind: "command",
+            threadId,
             turnId,
             itemId,
           });
           return next;
         });
-        const threadId = yield* resolveSalchiThreadIdForProviderThread(
-          readProviderThreadIdFromPayload(payload),
-        );
 
         yield* emitEvent({
           kind: "request",
@@ -1217,6 +1237,9 @@ export const makeCodexSessionRuntime = (
         const turnId = TurnId.make(payload.turnId);
         const itemId = ProviderItemId.make(payload.itemId);
         const decision = yield* Deferred.make<ProviderApprovalDecision>();
+        const threadId = yield* resolveSalchiThreadIdForProviderThread(
+          readProviderThreadIdFromPayload(payload),
+        );
 
         yield* Ref.update(pendingApprovalsRef, (current) => {
           const next = new Map(current);
@@ -1224,6 +1247,7 @@ export const makeCodexSessionRuntime = (
             requestId,
             jsonRpcId: payload.itemId,
             requestKind: "file-change",
+            threadId,
             turnId,
             itemId,
             decision,
@@ -1235,14 +1259,12 @@ export const makeCodexSessionRuntime = (
           next.set(payload.itemId, {
             requestId,
             requestKind: "file-change",
+            threadId,
             turnId,
             itemId,
           });
           return next;
         });
-        const threadId = yield* resolveSalchiThreadIdForProviderThread(
-          readProviderThreadIdFromPayload(payload),
-        );
 
         yield* emitEvent({
           kind: "request",
@@ -1276,20 +1298,21 @@ export const makeCodexSessionRuntime = (
         const turnId = TurnId.make(payload.turnId);
         const itemId = ProviderItemId.make(payload.itemId);
         const answers = yield* Deferred.make<ProviderUserInputAnswers>();
+        const threadId = yield* resolveSalchiThreadIdForProviderThread(
+          readProviderThreadIdFromPayload(payload),
+        );
 
         yield* Ref.update(pendingUserInputsRef, (current) => {
           const next = new Map(current);
           next.set(requestId, {
             requestId,
+            threadId,
             turnId,
             itemId,
             answers,
           });
           return next;
         });
-        const threadId = yield* resolveSalchiThreadIdForProviderThread(
-          readProviderThreadIdFromPayload(payload),
-        );
 
         yield* emitEvent({
           kind: "request",
@@ -1500,6 +1523,11 @@ export const makeCodexSessionRuntime = (
         );
         const turnId = TurnId.make(response.turn.id);
         const rootProviderThreadId = currentProviderThreadId(yield* Ref.get(sessionRef));
+        yield* Ref.update(activeProviderThreadTurnsRef, (current) => {
+          const next = new Map(current);
+          next.set(providerThreadId, turnId);
+          return next;
+        });
         if (providerThreadId === rootProviderThreadId) {
           yield* updateSession(sessionRef, {
             status: "running",
@@ -1518,9 +1546,13 @@ export const makeCodexSessionRuntime = (
     const interruptProviderThreadTurn = (providerThreadId: string, turnId?: TurnId) =>
       Effect.gen(function* () {
         const session = yield* Ref.get(sessionRef);
-        const rootProviderThreadId = currentProviderThreadId(session);
+        const activeProviderThreadTurns = yield* Ref.get(activeProviderThreadTurnsRef);
         const effectiveTurnId =
-          turnId ?? (providerThreadId === rootProviderThreadId ? session.activeTurnId : undefined);
+          turnId ??
+          activeProviderThreadTurns.get(providerThreadId) ??
+          (providerThreadId === currentProviderThreadId(session)
+            ? session.activeTurnId
+            : undefined);
         if (!effectiveTurnId) {
           return;
         }
@@ -1546,6 +1578,11 @@ export const makeCodexSessionRuntime = (
           numTurns,
         });
         const rootProviderThreadId = currentProviderThreadId(yield* Ref.get(sessionRef));
+        yield* Ref.update(activeProviderThreadTurnsRef, (current) => {
+          const next = new Map(current);
+          next.delete(providerThreadId);
+          return next;
+        });
         if (providerThreadId === rootProviderThreadId) {
           yield* updateSession(sessionRef, {
             status: "ready",
@@ -1610,7 +1647,7 @@ export const makeCodexSessionRuntime = (
           yield* Deferred.succeed(pending.decision, decision);
           yield* emitEvent({
             kind: "notification",
-            threadId: options.threadId,
+            threadId: pending.threadId,
             method: "item/requestApproval/decision",
             requestId: pending.requestId,
             requestKind: pending.requestKind,
@@ -1640,7 +1677,7 @@ export const makeCodexSessionRuntime = (
           yield* Deferred.succeed(pending.answers, answers);
           yield* emitEvent({
             kind: "notification",
-            threadId: options.threadId,
+            threadId: pending.threadId,
             method: "item/tool/requestUserInput/answered",
             requestId: pending.requestId,
             ...(pending.turnId ? { turnId: pending.turnId } : {}),

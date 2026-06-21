@@ -896,15 +896,13 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
 
-    const child = await waitForThread(
-      harness.readModel,
-      (thread) =>
-        thread.id === childThreadId &&
-        thread.parentThreadId === asThreadId("thread-1") &&
-        thread.title === "planner",
-      2000,
-      childThreadId,
-    );
+    await harness.drain();
+    const child = (await harness.readModel()).threads.find((thread) => thread.id === childThreadId);
+    if (!child) {
+      throw new Error("Expected materialized child thread to be projected");
+    }
+    expect(child.parentThreadId).toBe(asThreadId("thread-1"));
+    expect(child.title).toBe("planner");
     expect(child.projectId).toBe(asProjectId("project-1"));
     expect(child.modelSelection).toEqual({
       instanceId: ProviderInstanceId.make("codex"),
@@ -979,13 +977,10 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
 
-    const child = await waitForThread(
-      harness.readModel,
-      (thread) => thread.id === childThreadId && thread.title === "Bohr",
-      2000,
-      childThreadId,
-    );
-    expect(child.title).toBe("Bohr");
+    await harness.drain();
+    const child = (await harness.readModel()).threads.find((thread) => thread.id === childThreadId);
+    expect(child).toBeDefined();
+    expect(child?.title).toBe("Bohr");
 
     const snapshot = await harness.readModel();
     const parent = snapshot.threads.find((thread) => thread.id === asThreadId("thread-1"));
@@ -1025,12 +1020,11 @@ describe("ProviderRuntimeIngestion", () => {
       threadId: childThreadId,
       payload: basePayload,
     });
-    await waitForThread(
-      harness.readModel,
-      (thread) => thread.parentThreadId === asThreadId("thread-1"),
-      2000,
-      childThreadId,
+    await harness.drain();
+    const childAfterFirstStart = (await harness.readModel()).threads.find(
+      (thread) => thread.id === childThreadId,
     );
+    expect(childAfterFirstStart?.parentThreadId).toBe(asThreadId("thread-1"));
 
     harness.emit({
       type: "thread.started",
@@ -1076,12 +1070,14 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
 
-    const childBeforeUpdate = await waitForThread(
-      harness.readModel,
-      (thread) => thread.id === childThreadId && thread.title === "Subagent",
-      2000,
-      childThreadId,
+    await harness.drain();
+    const childBeforeUpdate = (await harness.readModel()).threads.find(
+      (thread) => thread.id === childThreadId,
     );
+    if (!childBeforeUpdate) {
+      throw new Error("Expected materialized child thread before metadata update");
+    }
+    expect(childBeforeUpdate.title).toBe("Subagent");
 
     harness.emit({
       type: "subagent.updated",
@@ -1099,15 +1095,13 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
 
-    const childAfterUpdate = await waitForThread(
-      harness.readModel,
-      (thread) =>
-        thread.id === childThreadId &&
-        thread.title === "Mill" &&
-        thread.updatedAt !== childBeforeUpdate.updatedAt,
-      2000,
-      childThreadId,
+    await harness.drain();
+    const childAfterUpdate = (await harness.readModel()).threads.find(
+      (thread) => thread.id === childThreadId,
     );
+    if (!childAfterUpdate) {
+      throw new Error("Expected materialized child thread after metadata update");
+    }
     expect(childAfterUpdate.title).toBe("Mill");
     expect(childAfterUpdate.updatedAt > childBeforeUpdate.updatedAt).toBe(true);
   });
@@ -1135,12 +1129,14 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
 
-    const childBeforeRefresh = await waitForThread(
-      harness.readModel,
-      (thread) => thread.id === childThreadId && thread.title === "Subagent",
-      2000,
-      childThreadId,
+    await harness.drain();
+    const childBeforeRefresh = (await harness.readModel()).threads.find(
+      (thread) => thread.id === childThreadId,
     );
+    if (!childBeforeRefresh) {
+      throw new Error("Expected materialized child thread before repeated start");
+    }
+    expect(childBeforeRefresh.title).toBe("Subagent");
 
     harness.emit({
       type: "thread.started",
@@ -1160,16 +1156,15 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
 
-    const childAfterRefresh = await waitForThread(
-      harness.readModel,
-      (thread) =>
-        thread.id === childThreadId &&
-        thread.title === "Mill" &&
-        thread.updatedAt !== childBeforeRefresh.updatedAt,
-      2000,
-      childThreadId,
+    await harness.drain();
+    const childAfterRefresh = (await harness.readModel()).threads.find(
+      (thread) => thread.id === childThreadId,
     );
+    if (!childAfterRefresh) {
+      throw new Error("Expected materialized child thread after repeated start");
+    }
     expect(childAfterRefresh.title).toBe("Mill");
+    expect(childAfterRefresh.updatedAt > childBeforeRefresh.updatedAt).toBe(true);
     expect(harness.materializedBindings).toHaveLength(1);
   });
 

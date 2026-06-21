@@ -595,13 +595,7 @@ function claudeSubagentRoleFromInput(input: Record<string, unknown>): string | u
 }
 
 function claudeSubagentIdFromTool(tool: ToolInFlight): RuntimeSubagentId {
-  return asRuntimeSubagentId(
-    readString(tool.input.task_id) ??
-      readString(tool.input.taskId) ??
-      readString(tool.input.agent_id) ??
-      readString(tool.input.agentId) ??
-      tool.itemId,
-  );
+  return asRuntimeSubagentId(tool.itemId);
 }
 
 function claudeSubagentCommonPayload(tool: ToolInFlight) {

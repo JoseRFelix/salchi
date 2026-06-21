@@ -41,6 +41,10 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
+import {
+  makeKeyedCoalescingWorker,
+  type KeyedCoalescingWorker,
+} from "@t3tools/shared/KeyedCoalescingWorker";
 
 import {
   getModelSelectionBooleanOptionValue,
@@ -115,6 +119,9 @@ interface CodexAdapterRootSessionContext {
   readonly runtime: CodexSessionRuntimeShape;
   readonly eventFiber: Fiber.Fiber<void, never>;
   readonly childThreadIds: Set<ThreadId>;
+  readonly stoppedChildThreadIds: Set<ThreadId>;
+  readonly stoppedChildProviderThreadIds: Set<string>;
+  readonly recoveryWorker: KeyedCoalescingWorker<ThreadId, CodexChildRecoveryWork>;
   providerThreadId?: string;
   stopped: boolean;
 }
@@ -130,6 +137,22 @@ interface CodexAdapterChildSessionContext {
 }
 
 type CodexAdapterSessionContext = CodexAdapterRootSessionContext | CodexAdapterChildSessionContext;
+
+interface CodexChildBackfillWork {
+  readonly threadId: ThreadId;
+  readonly providerThreadId: string;
+}
+
+interface CodexChildHydrationWork {
+  readonly candidateProviderThreadIds?: ReadonlySet<string>;
+  readonly reason?: string;
+}
+
+interface CodexChildRecoveryWork {
+  readonly root: CodexAdapterRootSessionContext;
+  readonly backfills: ReadonlyMap<string, CodexChildBackfillWork>;
+  readonly hydrations: ReadonlyArray<CodexChildHydrationWork>;
+}
 
 function mapCodexRuntimeError(
   threadId: ThreadId,
@@ -437,15 +460,16 @@ function codexThreadSnapshotBackfillEvents(input: {
       const itemType = toCanonicalItemType(item.type);
       const detail = itemDetail(item);
       const status = runtimeItemStatusFromSnapshotItem(item);
+      const eventType = status === "inProgress" ? "item.updated" : "item.completed";
       events.push({
-        eventId: backfillEventId(input.snapshot.threadId, turn.id, item.id, "item-completed"),
+        eventId: backfillEventId(input.snapshot.threadId, turn.id, item.id, eventType),
         provider: PROVIDER,
         providerInstanceId: input.providerInstanceId,
         threadId: input.threadId,
         turnId: turn.id,
         itemId,
         createdAt: turnCompletedAt,
-        type: "item.completed",
+        type: eventType,
         payload: {
           itemType,
           ...(status ? { status } : {}),
@@ -1983,8 +2007,14 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     if (event.method !== "thread/started" || event.threadId === root.threadId) {
       return;
     }
+    if (root.stoppedChildThreadIds.has(event.threadId)) {
+      return;
+    }
     const payload = readPayload(EffectCodexSchema.V2ThreadStartedNotification, event.payload);
     if (!payload) {
+      return;
+    }
+    if (root.stoppedChildProviderThreadIds.has(payload.thread.id)) {
       return;
     }
     const metadata = extractCodexThreadSpawnMetadata(payload.thread);
@@ -2024,7 +2054,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ) {
             return;
           }
+          if (root.stoppedChildProviderThreadIds.has(thread.id)) {
+            return;
+          }
           const threadId = codexChildThreadId(boundInstanceId, thread.id);
+          if (root.stoppedChildThreadIds.has(threadId)) {
+            return;
+          }
           const existing = sessions.get(threadId);
           if (
             existing &&
@@ -2059,24 +2095,95 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           if (runtimeEvents.length > 0) {
             yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
           }
-          yield* enqueueChildThreadSnapshotBackfill({
-            root,
+          yield* enqueueChildBackfillRecovery(root, {
             threadId,
             providerThreadId: thread.id,
-          }).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("failed to backfill hydrated Codex spawned child thread", {
-                threadId,
-                providerThreadId: thread.id,
-                reason: options?.reason,
-                cause,
-              }),
-            ),
-          );
+          });
         }),
       { concurrency: 1, discard: true },
     );
   });
+
+  const emptyRecoveryWork = (root: CodexAdapterRootSessionContext): CodexChildRecoveryWork => ({
+    root,
+    backfills: new Map(),
+    hydrations: [],
+  });
+
+  const mergeRecoveryWork = (
+    current: CodexChildRecoveryWork,
+    next: CodexChildRecoveryWork,
+  ): CodexChildRecoveryWork => {
+    const backfills = new Map(current.backfills);
+    for (const [providerThreadId, backfill] of next.backfills) {
+      backfills.set(providerThreadId, backfill);
+    }
+    return {
+      root: next.root,
+      backfills,
+      hydrations: [...current.hydrations, ...next.hydrations],
+    };
+  };
+
+  const processChildRecoveryWork = (work: CodexChildRecoveryWork) =>
+    Effect.gen(function* () {
+      if (work.root.stopped) {
+        return;
+      }
+      yield* Effect.forEach(
+        Array.from(work.backfills.values()),
+        (backfill) =>
+          enqueueChildThreadSnapshotBackfill({
+            root: work.root,
+            threadId: backfill.threadId,
+            providerThreadId: backfill.providerThreadId,
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to backfill Codex spawned child thread", {
+                threadId: backfill.threadId,
+                providerThreadId: backfill.providerThreadId,
+                cause,
+              }),
+            ),
+          ),
+        { concurrency: 1, discard: true },
+      );
+      yield* Effect.forEach(
+        work.hydrations,
+        (hydration) =>
+          hydrateSpawnedChildSessions(work.root, hydration).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to hydrate Codex spawned child threads", {
+                threadId: work.root.threadId,
+                reason: hydration.reason,
+                receiverThreadIds: hydration.candidateProviderThreadIds
+                  ? [...hydration.candidateProviderThreadIds]
+                  : undefined,
+                cause,
+              }),
+            ),
+          ),
+        { concurrency: 1, discard: true },
+      );
+    });
+
+  const enqueueChildBackfillRecovery = (
+    root: CodexAdapterRootSessionContext,
+    backfill: CodexChildBackfillWork,
+  ) =>
+    root.recoveryWorker.enqueue(root.threadId, {
+      ...emptyRecoveryWork(root),
+      backfills: new Map([[backfill.providerThreadId, backfill]]),
+    });
+
+  const enqueueChildHydrationRecovery = (
+    root: CodexAdapterRootSessionContext,
+    hydration: CodexChildHydrationWork = {},
+  ) =>
+    root.recoveryWorker.enqueue(root.threadId, {
+      ...emptyRecoveryWork(root),
+      hydrations: [hydration],
+    });
 
   const startSession: CodexAdapterShape["startSession"] = (input) =>
     Effect.scoped(
@@ -2144,18 +2251,25 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               }),
           ),
         );
+        const recoveryWorker = yield* makeKeyedCoalescingWorker({
+          merge: mergeRecoveryWork,
+          process: (_rootThreadId: ThreadId, work: CodexChildRecoveryWork) =>
+            processChildRecoveryWork(work),
+        }).pipe(Effect.provideService(Scope.Scope, sessionScope));
 
         let rootSession: CodexAdapterRootSessionContext | undefined;
         const eventFiber = yield* Stream.runForEach(runtime.events, (event) =>
           Effect.gen(function* () {
             yield* writeNativeEvent(event);
-            if (rootSession) {
-              yield* registerVirtualChildFromThreadStartedEvent(rootSession, event);
+            const root = rootSession;
+            if (root?.stoppedChildThreadIds.has(event.threadId)) {
+              return;
+            }
+            if (root) {
+              yield* registerVirtualChildFromThreadStartedEvent(root, event);
             }
             const runtimeEvents = mapToRuntimeEvents(event, event.threadId);
-            const hydrationInput = rootSession
-              ? collabAgentChildHydrationInputFromEvent(event)
-              : null;
+            const hydrationInput = root ? collabAgentChildHydrationInputFromEvent(event) : null;
             if (runtimeEvents.length === 0) {
               yield* Effect.logDebug("ignoring unhandled Codex provider event", {
                 method: event.method,
@@ -2166,39 +2280,17 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             } else {
               yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
             }
-            if (runtimeEvents.length > 0 && event.method === "thread/started" && rootSession) {
+            if (runtimeEvents.length > 0 && event.method === "thread/started" && root) {
               const childSession = sessions.get(event.threadId);
               if (childSession?.kind === "child") {
-                yield* enqueueChildThreadSnapshotBackfill({
-                  root: rootSession,
+                yield* enqueueChildBackfillRecovery(root, {
                   threadId: childSession.threadId,
                   providerThreadId: childSession.providerThreadId,
-                }).pipe(
-                  Effect.catchCause((cause) =>
-                    Effect.logWarning("failed to backfill Codex spawned child thread", {
-                      threadId: childSession.threadId,
-                      providerThreadId: childSession.providerThreadId,
-                      cause,
-                    }),
-                  ),
-                );
+                });
               }
             }
-            if (rootSession && hydrationInput) {
-              yield* hydrateSpawnedChildSessions(rootSession, hydrationInput).pipe(
-                Effect.catchCause((cause) =>
-                  Effect.logWarning(
-                    "failed to hydrate Codex spawned child threads after collab agent event",
-                    {
-                      threadId: event.threadId,
-                      method: event.method,
-                      reason: hydrationInput.reason,
-                      receiverThreadIds: [...hydrationInput.candidateProviderThreadIds],
-                      cause,
-                    },
-                  ),
-                ),
-              );
+            if (root && hydrationInput) {
+              yield* enqueueChildHydrationRecovery(root, hydrationInput);
             }
           }),
         ).pipe(Effect.forkChild);
@@ -2209,6 +2301,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           runtime,
           eventFiber,
           childThreadIds: new Set(),
+          stoppedChildThreadIds: new Set(),
+          stoppedChildProviderThreadIds: new Set(),
+          recoveryWorker,
           stopped: false,
         };
 
@@ -2239,28 +2334,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         }
         sessions.set(input.threadId, rootSession);
         if (startedProviderThreadId && String(input.threadId).startsWith("codex-child-")) {
-          yield* enqueueChildThreadSnapshotBackfill({
-            root: rootSession,
+          yield* enqueueChildBackfillRecovery(rootSession, {
             threadId: input.threadId,
             providerThreadId: startedProviderThreadId,
-          }).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("failed to backfill resumed Codex child thread", {
-                threadId: input.threadId,
-                providerThreadId: startedProviderThreadId,
-                cause,
-              }),
-            ),
-          );
+          });
         }
-        yield* hydrateSpawnedChildSessions(rootSession).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("failed to hydrate Codex spawned child threads", {
-              threadId: input.threadId,
-              cause,
-            }),
-          ),
-        );
+        yield* enqueueChildHydrationRecovery(rootSession);
         sessionScopeTransferred = true;
 
         return started;
@@ -2456,6 +2535,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       const root = sessions.get(session.rootThreadId);
       if (root?.kind === "root") {
         root.childThreadIds.delete(session.threadId);
+        root.stoppedChildThreadIds.add(session.threadId);
+        root.stoppedChildProviderThreadIds.add(session.providerThreadId);
       }
       return;
     }
@@ -2466,6 +2547,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       const child = sessions.get(childThreadId);
       if (child?.kind === "child") {
         child.stopped = true;
+        session.stoppedChildThreadIds.add(child.threadId);
+        session.stoppedChildProviderThreadIds.add(child.providerThreadId);
         sessions.delete(childThreadId);
       }
     }
