@@ -12,12 +12,15 @@ export function resolveDiffThemeName(theme: "light" | "dark"): DiffThemeName {
   return theme === "dark" ? DIFF_THEME_NAMES.dark : DIFF_THEME_NAMES.light;
 }
 
+// 16px is the smallest font size that iOS Safari will not auto-zoom into when an
+// editable element is focused. Keeping the mobile floor at exactly 16px stops the
+// file preview from zooming when a line is tapped to edit (e.g. in the iOS PWA).
 export const DIFF_MOBILE_TEXT_FLOOR_UNSAFE_CSS = `
 @media (max-width: 767px) {
   [data-diff],
   [data-file],
   [data-line] {
-    --diffs-font-size: 15px !important;
+    --diffs-font-size: 16px !important;
   }
 }
 `;

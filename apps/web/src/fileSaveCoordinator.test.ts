@@ -40,6 +40,68 @@ describe("FileSaveCoordinator", () => {
     expect(onPendingChange.mock.calls).toEqual([[true], [true], [false]]);
   });
 
+  it("ignores editor changes that match the initially loaded contents", async () => {
+    vi.useFakeTimers();
+    const persist = vi.fn<(contents: string) => Promise<void>>().mockResolvedValue(undefined);
+    const onPendingChange = vi.fn();
+    const coordinator = new FileSaveCoordinator({
+      debounceMs: 500,
+      initialContents: "original",
+      persist,
+      onPendingChange,
+      onConfirmed: vi.fn(),
+    });
+
+    coordinator.change("original");
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(persist).not.toHaveBeenCalled();
+    expect(onPendingChange).toHaveBeenCalledWith(false);
+  });
+
+  it("does not reschedule the debounce for duplicate pending contents", async () => {
+    vi.useFakeTimers();
+    const persist = vi.fn<(contents: string) => Promise<void>>().mockResolvedValue(undefined);
+    const coordinator = new FileSaveCoordinator({
+      debounceMs: 500,
+      initialContents: "original",
+      persist,
+      onPendingChange: vi.fn(),
+      onConfirmed: vi.fn(),
+    });
+
+    coordinator.change("updated");
+    await vi.advanceTimersByTimeAsync(300);
+    coordinator.change("updated");
+    await vi.advanceTimersByTimeAsync(199);
+    expect(persist).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(persist).toHaveBeenCalledOnce();
+    expect(persist).toHaveBeenCalledWith("updated");
+  });
+
+  it("cancels a pending save when contents return to the confirmed value before debounce", async () => {
+    vi.useFakeTimers();
+    const persist = vi.fn<(contents: string) => Promise<void>>().mockResolvedValue(undefined);
+    const onPendingChange = vi.fn();
+    const coordinator = new FileSaveCoordinator({
+      debounceMs: 500,
+      initialContents: "original",
+      persist,
+      onPendingChange,
+      onConfirmed: vi.fn(),
+    });
+
+    coordinator.change("updated");
+    await vi.advanceTimersByTimeAsync(300);
+    coordinator.change("original");
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(persist).not.toHaveBeenCalled();
+    expect(onPendingChange.mock.calls).toEqual([[true], [false]]);
+  });
+
   it("keeps pending state until an edit made during a write is also saved", async () => {
     vi.useFakeTimers();
     const firstWrite = deferred();
@@ -65,6 +127,35 @@ describe("FileSaveCoordinator", () => {
     await vi.runAllTimersAsync();
     expect(persist).toHaveBeenCalledTimes(2);
     expect(persist).toHaveBeenLastCalledWith("latest");
+    expect(onPendingChange.mock.calls.at(-1)).toEqual([false]);
+  });
+
+  it("persists a revert to confirmed contents when an earlier write is already in flight", async () => {
+    vi.useFakeTimers();
+    const firstWrite = deferred();
+    const persist = vi
+      .fn<(contents: string) => Promise<void>>()
+      .mockReturnValueOnce(firstWrite.promise)
+      .mockResolvedValueOnce(undefined);
+    const onPendingChange = vi.fn();
+    const coordinator = new FileSaveCoordinator({
+      debounceMs: 500,
+      initialContents: "original",
+      persist,
+      onPendingChange,
+      onConfirmed: vi.fn(),
+    });
+
+    coordinator.change("updated");
+    await vi.advanceTimersByTimeAsync(500);
+    coordinator.change("original");
+
+    firstWrite.resolve();
+    await vi.runAllTimersAsync();
+
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(persist).toHaveBeenNthCalledWith(1, "updated");
+    expect(persist).toHaveBeenNthCalledWith(2, "original");
     expect(onPendingChange.mock.calls.at(-1)).toEqual([false]);
   });
 

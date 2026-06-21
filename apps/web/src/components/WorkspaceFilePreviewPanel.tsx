@@ -48,7 +48,11 @@ import { formatWorkspaceRelativePath } from "../filePathDisplay";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { MOBILE_EDGE_SWIPE_ALLOW_EDITABLE_ATTRIBUTE } from "../hooks/useMobileEdgeSwipe";
 import { useTheme } from "../hooks/useTheme";
-import { DIFF_MOBILE_TEXT_FLOOR_UNSAFE_CSS, resolveDiffThemeName } from "../lib/diffRendering";
+import {
+  DIFF_MOBILE_TEXT_FLOOR_UNSAFE_CSS,
+  resolveDiffThemeName,
+  type DiffThemeName,
+} from "../lib/diffRendering";
 import { gitWorkingTreeDiffQueryOptions } from "../lib/gitReactQuery";
 import { refreshGitStatus, useGitStatus } from "../lib/gitStatusState";
 import type {
@@ -335,6 +339,58 @@ function withContents(file: ProjectReadFileResult, contents: string): ProjectRea
   };
 }
 
+function refreshPreviewFileCacheKey(file: FileContents, diffThemeName: DiffThemeName): void {
+  if (file.cacheKey === undefined) {
+    return;
+  }
+  file.cacheKey = createCodeHighlightCacheKey(
+    file.contents,
+    file.lang ?? "text",
+    diffThemeName,
+    "file-preview",
+  );
+}
+
+function copyPreviewFile(file: FileContents): FileContents {
+  return { ...file };
+}
+
+function updateLivePreviewFileMetadata(
+  liveFile: FileContents,
+  sourceFile: FileContents,
+  diffThemeName: DiffThemeName,
+): void {
+  liveFile.name = sourceFile.name;
+  if (sourceFile.lang === undefined) {
+    delete liveFile.lang;
+  } else {
+    liveFile.lang = sourceFile.lang;
+  }
+  if (sourceFile.header === undefined) {
+    delete liveFile.header;
+  } else {
+    liveFile.header = sourceFile.header;
+  }
+  if (sourceFile.cacheKey === undefined) {
+    delete liveFile.cacheKey;
+  } else {
+    liveFile.cacheKey = sourceFile.cacheKey;
+  }
+  refreshPreviewFileCacheKey(liveFile, diffThemeName);
+}
+
+function updateLivePreviewFileContents(
+  liveFile: FileContents,
+  contents: string,
+  diffThemeName: DiffThemeName,
+): void {
+  if (liveFile.contents === contents) {
+    return;
+  }
+  liveFile.contents = contents;
+  refreshPreviewFileCacheKey(liveFile, diffThemeName);
+}
+
 function getFilePreviewScrollElement(root: HTMLElement | null): HTMLElement | null {
   return root?.querySelector<HTMLElement>(`.${FILE_PREVIEW_VIRTUALIZER_CLASS_NAME}`) ?? null;
 }
@@ -437,7 +493,7 @@ function WorkspaceInlineDiffAnnotation(props: {
   onClose: () => void;
   onNavigate: (direction: "prev" | "next") => void;
   options: {
-    diffThemeName: string;
+    diffThemeName: DiffThemeName;
     resolvedTheme: "dark" | "light" | "system";
     wordWrap: boolean;
   };
@@ -607,7 +663,7 @@ function EditableWorkspaceFileSurface(props: {
   previewFile: FileContents;
   queryKey: WorkspaceFilePreviewQueryKey;
   virtualizerKey?: string | undefined;
-  diffThemeName: string;
+  diffThemeName: DiffThemeName;
   lineAnnotations: LineAnnotation<WorkspaceFileInlineDiffAnnotation>[];
   previewUnsafeCss: string;
   renderInlineDiffAnnotation: (
@@ -639,10 +695,29 @@ function EditableWorkspaceFileSurface(props: {
   } = props;
   const queryClient = useQueryClient();
   const fallbackFileRef = useRef(file);
+  const targetKey = `${target.environmentId}\u0000${target.cwd}\u0000${target.relativePath}`;
+  const initialContentsRef = useRef({ targetKey, contents: previewFile.contents });
+  const confirmedContentsRef = useRef({ targetKey, contents: previewFile.contents });
+  const livePreviewFileRef = useRef({ targetKey, file: copyPreviewFile(previewFile) });
+  const livePreviewFileDirtyRef = useRef(false);
 
   useEffect(() => {
     fallbackFileRef.current = file;
   }, [file]);
+
+  if (initialContentsRef.current.targetKey !== targetKey) {
+    initialContentsRef.current = { targetKey, contents: previewFile.contents };
+    confirmedContentsRef.current = { targetKey, contents: previewFile.contents };
+    livePreviewFileRef.current = { targetKey, file: copyPreviewFile(previewFile) };
+    livePreviewFileDirtyRef.current = false;
+  } else if (!livePreviewFileDirtyRef.current) {
+    updateLivePreviewFileContents(
+      livePreviewFileRef.current.file,
+      previewFile.contents,
+      diffThemeName,
+    );
+  }
+  updateLivePreviewFileMetadata(livePreviewFileRef.current.file, previewFile, diffThemeName);
 
   const writeQueryContents = useCallback(
     (nextContents: string) => {
@@ -657,8 +732,21 @@ function EditableWorkspaceFileSurface(props: {
     () =>
       new FileSaveCoordinator({
         debounceMs: FILE_SAVE_DEBOUNCE_MS,
-        onPendingChange,
+        initialContents: initialContentsRef.current.contents,
+        onPendingChange: (pending) => {
+          if (
+            !pending &&
+            livePreviewFileRef.current.file.contents === confirmedContentsRef.current.contents
+          ) {
+            livePreviewFileDirtyRef.current = false;
+          }
+          onPendingChange(pending);
+        },
         onConfirmed: (confirmedContents) => {
+          confirmedContentsRef.current = { targetKey, contents: confirmedContents };
+          if (livePreviewFileRef.current.file.contents === confirmedContents) {
+            livePreviewFileDirtyRef.current = false;
+          }
           onSaveErrorChange(null);
           writeQueryContents(confirmedContents);
           void refreshGitStatus(
@@ -701,11 +789,16 @@ function EditableWorkspaceFileSurface(props: {
       new Editor<unknown>({
         onChange: (changedFile) => {
           onSaveErrorChange(null);
-          writeQueryContents(changedFile.contents);
+          updateLivePreviewFileContents(
+            livePreviewFileRef.current.file,
+            changedFile.contents,
+            diffThemeName,
+          );
+          livePreviewFileDirtyRef.current = true;
           saveCoordinator.change(changedFile.contents);
         },
       }),
-    [onSaveErrorChange, saveCoordinator, writeQueryContents],
+    [diffThemeName, onSaveErrorChange, saveCoordinator],
   );
 
   useEffect(
@@ -730,7 +823,7 @@ function EditableWorkspaceFileSurface(props: {
         <File
           className="workspace-file-preview-render min-w-full"
           contentEditable
-          file={previewFile}
+          file={livePreviewFileRef.current.file}
           lineAnnotations={lineAnnotations}
           renderAnnotation={renderInlineDiffAnnotation}
           selectedLines={selectedLines}
@@ -753,7 +846,7 @@ function EditableWorkspaceFileSurface(props: {
 function ReadonlyWorkspaceFileSurface(props: {
   previewFile: FileContents;
   virtualizerKey?: string | undefined;
-  diffThemeName: string;
+  diffThemeName: DiffThemeName;
   lineAnnotations: LineAnnotation<WorkspaceFileInlineDiffAnnotation>[];
   previewUnsafeCss: string;
   renderInlineDiffAnnotation: (
