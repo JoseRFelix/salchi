@@ -13,14 +13,15 @@ CLIs instead of reselling tokens.
 ## Demo
 
 <p align="center">
-  <video src="https://raw.githubusercontent.com/JoseRFelix/salchi/main/assets/salchi/salchi-demo.mov" controls muted playsinline width="900">
-    Watch the <a href="https://raw.githubusercontent.com/JoseRFelix/salchi/main/assets/salchi/salchi-demo.mov">Salchi demo video</a>.
-  </video>
+  <a href="./assets/salchi/salchi-demo.mp4">Watch the Salchi demo video</a>
 </p>
 
-<p align="center">
-  <a href="https://raw.githubusercontent.com/JoseRFelix/salchi/main/assets/salchi/salchi-demo.mov">Watch the Salchi demo video</a>
-</p>
+<!--
+GitHub README video players render from GitHub attachment URLs, not repo-hosted
+video files. Upload assets/salchi/salchi-demo.mp4 through GitHub's README editor
+and replace the fallback link above with the generated
+https://github.com/user-attachments/assets/... URL.
+-->
 
 ## Why Salchi?
 
