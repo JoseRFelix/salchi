@@ -1099,8 +1099,7 @@ describe("WorkspaceFilePreviewPanel", () => {
     }
   });
 
-  it("edits full file previews with a debounced workspace write", async () => {
-    vi.useFakeTimers();
+  it("renders full file previews read-only", async () => {
     const writeFile = vi.fn(
       async (input: Parameters<EnvironmentApi["projects"]["writeFile"]>[0]) => ({
         relativePath: input.relativePath,
@@ -1108,40 +1107,12 @@ describe("WorkspaceFilePreviewPanel", () => {
     );
     const mounted = await renderPreview({ contents: DEFAULT_CONTENTS, writeFile });
     try {
-      expect(fileRenderCalls.at(-1)?.contentEditable).toBe(true);
-      await page
-        .getByRole("textbox", { name: "Edit src/App.tsx" })
-        .fill("export const value = 2;\nconsole.log(value);\n");
-
+      expect(fileRenderCalls.at(-1)?.contentEditable).toBeUndefined();
+      await expect
+        .element(page.getByRole("textbox", { name: "Edit src/App.tsx" }))
+        .not.toBeInTheDocument();
       expect(writeFile).not.toHaveBeenCalled();
-      await expect.element(page.getByRole("status", { name: "Saving file" })).toBeVisible();
-
-      await vi.advanceTimersByTimeAsync(499);
-      expect(writeFile).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1);
-      await vi.waitFor(() => {
-        expect(writeFile).toHaveBeenCalledWith({
-          cwd: "/repo/project",
-          relativePath: "src/App.tsx",
-          contents: "export const value = 2;\nconsole.log(value);\n",
-        });
-      });
-      expect(refreshGitStatusMock).toHaveBeenCalledWith(
-        {
-          environmentId: ENVIRONMENT_ID,
-          cwd: "/repo/project",
-        },
-        { force: true },
-      );
-
-      await vi.waitFor(() => {
-        expect(fileRenderCalls.at(-1)?.file.contents).toBe(
-          "export const value = 2;\nconsole.log(value);\n",
-        );
-      });
     } finally {
-      vi.useRealTimers();
       await mounted.cleanup();
     }
   });

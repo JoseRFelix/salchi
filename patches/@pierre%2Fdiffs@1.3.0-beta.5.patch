@@ -1,8 +1,8 @@
 diff --git a/package.json b/package.json
-index b18c94f3f7b40bdb15084ab7cabcb19dd29c61f7..ab96ac589d368e806ef45480283d6e0fa199117f 100644
+index d1558633de87044b7aa96cff09443db11f163cec..c0b16f0a0bec6fba2026f24f38b2c0a8fa06af7c 100644
 --- a/package.json
 +++ b/package.json
-@@ -51,6 +51,18 @@
+@@ -55,6 +55,18 @@
      "./worker/worker-portable.js": {
        "types": "./dist/worker/worker-portable.d.ts",
        "import": "./dist/worker/worker-portable.js"

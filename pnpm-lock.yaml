@@ -13,8 +13,8 @@ catalogs:
       specifier: 0.11.4
       version: 0.11.4
     '@pierre/diffs':
-      specifier: 1.3.0-beta.4
-      version: 1.3.0-beta.4
+      specifier: 1.3.0-beta.5
+      version: 1.3.0-beta.5
     '@types/bun':
       specifier: ^1.3.11
       version: 1.3.14
@@ -47,9 +47,9 @@ overrides:
 packageExtensionsChecksum: sha256-MDpMSm2Rk8Y7FDIbaAgFkT45PZBPV7JBzjTAft+noEM=
 
 patchedDependencies:
-  '@pierre/diffs@1.3.0-beta.4':
-    hash: f5d41705ce94bbafc731d92e9cb1671db710df046dd135cb894e3e3e9164a75b
-    path: patches/@pierre%2Fdiffs@1.3.0-beta.4.patch
+  '@pierre/diffs@1.3.0-beta.5':
+    hash: ff332e2326703cadcae45de3fea7a013ada1719cfe27cfd5f8866523dc39f5e1
+    path: patches/@pierre%2Fdiffs@1.3.0-beta.5.patch
   effect@4.0.0-beta.73:
     hash: a28d840fa97ffebabe628e5562837c537d83c40cfdad8049de73c38086f2fb01
     path: patches/effect@4.0.0-beta.73.patch
@@ -167,7 +167,7 @@ importers:
         version: 1.16.2
       '@pierre/diffs':
         specifier: 'catalog:'
-        version: 1.3.0-beta.4(patch_hash=f5d41705ce94bbafc731d92e9cb1671db710df046dd135cb894e3e3e9164a75b)(@shikijs/themes@4.2.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+        version: 1.3.0-beta.5(patch_hash=ff332e2326703cadcae45de3fea7a013ada1719cfe27cfd5f8866523dc39f5e1)(@shikijs/themes@4.2.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
       effect:
         specifier: 4.0.0-beta.73
         version: 4.0.0-beta.73(patch_hash=a28d840fa97ffebabe628e5562837c537d83c40cfdad8049de73c38086f2fb01)
@@ -255,7 +255,7 @@ importers:
         version: 0.44.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(yjs@13.6.31)
       '@pierre/diffs':
         specifier: 'catalog:'
-        version: 1.3.0-beta.4(patch_hash=f5d41705ce94bbafc731d92e9cb1671db710df046dd135cb894e3e3e9164a75b)(@shikijs/themes@4.2.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+        version: 1.3.0-beta.5(patch_hash=ff332e2326703cadcae45de3fea7a013ada1719cfe27cfd5f8866523dc39f5e1)(@shikijs/themes@4.2.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
       '@pierre/trees':
         specifier: 1.0.0-beta.4
         version: 1.0.0-beta.4(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
@@ -2324,8 +2324,8 @@ packages:
     resolution: {integrity: sha512-titLmukUt/h8ho7Svlf0xSBjoy2ccZKrXjpXpZCj+v6V4CJccC2KyP45BLSCMx8YIpifMyiDyUptM4+5sruKbQ==}
     engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
 
-  '@pierre/diffs@1.3.0-beta.4':
-    resolution: {integrity: sha512-poFcsvhcQt9lH/InzAPaGs47WYHMidnFCjuYGNU41HiVLJP4mkIQDSdvcnPIkBuh/cYbPOQg/YE3T1kSpr01GA==}
+  '@pierre/diffs@1.3.0-beta.5':
+    resolution: {integrity: sha512-d7449IY6Phcg9LCRLbPxhsxn6Bv4KoaP/vPyZtGu2uR1SFsSJPQcRoPf8lzyobNGKD0GZGuhgHW5LrOlilFo7w==}
     peerDependencies:
       react: ^18.3.1 || ^19.0.0
       react-dom: ^18.3.1 || ^19.0.0
@@ -8348,29 +8348,29 @@ snapshots:
 
   '@oxlint/plugins@1.68.0': {}
 
-  '@pierre/diffs@1.3.0-beta.4(patch_hash=f5d41705ce94bbafc731d92e9cb1671db710df046dd135cb894e3e3e9164a75b)(@shikijs/themes@4.2.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
+  '@pierre/diffs@1.3.0-beta.5(patch_hash=ff332e2326703cadcae45de3fea7a013ada1719cfe27cfd5f8866523dc39f5e1)(@shikijs/themes@4.2.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
     dependencies:
       '@pierre/theme': 1.0.3
-      '@pierre/theming': 0.0.1(@pierre/theme@1.0.3)(@shikijs/themes@4.2.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(shiki@3.23.0)
+      '@pierre/theming': 0.0.1(@pierre/theme@1.0.3)(@shikijs/themes@4.2.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(shiki@4.2.0)
       '@shikijs/transformers': 3.23.0
       diff: 8.0.3
       hast-util-to-html: 9.0.5
       lru_map: 0.4.1
       react: 19.2.6
       react-dom: 19.2.6(react@19.2.6)
-      shiki: 3.23.0
+      shiki: 4.2.0
     transitivePeerDependencies:
       - '@shikijs/themes'
 
   '@pierre/theme@1.0.3': {}
 
-  '@pierre/theming@0.0.1(@pierre/theme@1.0.3)(@shikijs/themes@4.2.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(shiki@3.23.0)':
+  '@pierre/theming@0.0.1(@pierre/theme@1.0.3)(@shikijs/themes@4.2.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(shiki@4.2.0)':
     optionalDependencies:
       '@pierre/theme': 1.0.3
       '@shikijs/themes': 4.2.0
       react: 19.2.6
       react-dom: 19.2.6(react@19.2.6)
-      shiki: 3.23.0
+      shiki: 4.2.0
 
   '@pierre/trees@1.0.0-beta.4(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
     dependencies:

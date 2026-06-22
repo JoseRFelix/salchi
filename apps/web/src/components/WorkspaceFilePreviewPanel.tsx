@@ -89,6 +89,10 @@ const FILE_SAVE_DEBOUNCE_MS = 500;
 // A tap counts as a click as long as the finger barely moves; anything larger is a scroll.
 const FILE_PREVIEW_GUTTER_TAP_SLOP_PX = 10;
 
+function isWorkspaceFilePreviewEditingEnabled(): boolean {
+  return false;
+}
+
 const FILE_PREVIEW_RENDER_STYLE = {
   "--diffs-bg": "var(--background)",
   "--diffs-light-bg": "var(--background)",
@@ -1070,7 +1074,11 @@ export function WorkspaceFilePreviewPanel(props: {
   const returnButtonLabel = props.backTarget
     ? workspaceFilePanelBackButtonLabel(props.backTarget)
     : "Back";
-  const canEditFile = query.data !== undefined && !query.data.truncated && !isMediaPreviewTarget;
+  const canEditFile =
+    isWorkspaceFilePreviewEditingEnabled() &&
+    query.data !== undefined &&
+    !query.data.truncated &&
+    !isMediaPreviewTarget;
 
   useEffect(() => {
     setSavePending(false);
