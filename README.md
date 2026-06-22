@@ -10,6 +10,18 @@ Cursor, and OpenCode, with more providers coming soon. Bring the AI
 subscriptions you already use; Salchi connects to your authenticated provider
 CLIs instead of reselling tokens.
 
+## Demo
+
+<p align="center">
+  <video src="https://raw.githubusercontent.com/JoseRFelix/salchi/main/assets/salchi/salchi-demo.mov" controls muted playsinline width="900">
+    Watch the <a href="https://raw.githubusercontent.com/JoseRFelix/salchi/main/assets/salchi/salchi-demo.mov">Salchi demo video</a>.
+  </video>
+</p>
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/JoseRFelix/salchi/main/assets/salchi/salchi-demo.mov">Watch the Salchi demo video</a>
+</p>
+
 ## Why Salchi?
 
 Salchi focuses on mobile-first agent consumption:
@@ -28,6 +40,15 @@ That makes Salchi useful when you want:
   without exposing your editor to the public internet.
 - One web surface for many providers, including Claude, OpenAI/Codex, Cursor,
   and OpenCode.
+- Built-in file explorer for browsing project files alongside agent sessions.
+- Source control views for reviewing local changes without switching tools.
+- Codex subagents for splitting focused work out from the main conversation.
+- Independent threads for running separate AI loops while keeping your current
+  session intact.
+- PDF attachments for asking agents to inspect specs, reports, and other
+  documents.
+- Codex chat image generation for creating visual assets from the same
+  conversation surface.
 - PWA push notifications for agent activity. On mobile, install Salchi to the
   Home Screen first so notifications can work.
 - Mobile-first PWA polish for coding-agent workflows that need to stay useful on
