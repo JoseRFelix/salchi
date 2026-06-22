@@ -807,7 +807,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       {sourceControlOpen ? (
         <Button
           size="icon-xs"
-          variant="ghost"
+          variant="outline"
           aria-label="Back to source control"
           title="Back to source control"
           className="shrink-0 [-webkit-app-region:no-drag]"
@@ -1061,7 +1061,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
         {mode === "sheet" ? (
           <Button
             size="icon-xs"
-            variant="ghost"
+            variant="outline"
             aria-label="Close diff"
             title="Close diff"
             onClick={closeDiffPanel}
