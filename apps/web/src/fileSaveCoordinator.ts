@@ -1,5 +1,6 @@
 export interface FileSaveCoordinatorOptions {
   readonly debounceMs: number;
+  readonly initialContents?: string;
   readonly persist: (contents: string) => Promise<void>;
   readonly onPendingChange: (pending: boolean) => void;
   readonly onConfirmed: (contents: string) => void;
@@ -8,7 +9,8 @@ export interface FileSaveCoordinatorOptions {
 
 export class FileSaveCoordinator {
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private latestContents = "";
+  private latestContents: string;
+  private confirmedContents: string | null;
   private latestRevision = 0;
   private persistedRevision = 0;
   private lastChangeAt = 0;
@@ -17,9 +19,24 @@ export class FileSaveCoordinator {
   private savePromise: Promise<void> | null = null;
   private disposePromise: Promise<void> | null = null;
 
-  constructor(private readonly options: FileSaveCoordinatorOptions) {}
+  constructor(private readonly options: FileSaveCoordinatorOptions) {
+    this.latestContents = options.initialContents ?? "";
+    this.confirmedContents = options.initialContents ?? null;
+  }
 
   change(contents: string): void {
+    if (this.latestRevision !== this.persistedRevision && contents === this.latestContents) {
+      return;
+    }
+
+    if (!this.saving && contents === this.confirmedContents) {
+      this.latestContents = contents;
+      this.latestRevision = this.persistedRevision;
+      this.clearTimer();
+      this.options.onPendingChange(false);
+      return;
+    }
+
     this.latestContents = contents;
     this.latestRevision += 1;
     this.lastChangeAt = Date.now();
@@ -64,6 +81,7 @@ export class FileSaveCoordinator {
       .then(() => {
         succeeded = true;
         this.persistedRevision = revision;
+        this.confirmedContents = contents;
         this.options.onConfirmed(contents);
       })
       .catch((error: unknown) => {

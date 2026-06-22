@@ -112,7 +112,7 @@ import { cn } from "~/lib/utils";
 export type SourceControlPanelMode = "sidebar" | "sheet";
 type SourceControlSection = SourceControlTreeSection;
 
-const SOURCE_CONTROL_ROW_HEIGHT = 28;
+export const SOURCE_CONTROL_ROW_HEIGHT = 32;
 const SOURCE_CONTROL_ROW_OVERSCAN_COUNT = 12;
 const SOURCE_CONTROL_ROW_OVERSCAN_PX = 336;
 const sourceControlRowActionButtonClass =
@@ -1415,7 +1415,7 @@ function SourceControlSectionHeader({
 
   return (
     <div
-      className="group/section mx-1.5 flex h-7 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/40"
+      className="group/section mx-1.5 flex h-8 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/40"
       data-source-control-row-key={rowKey}
     >
       <button
@@ -1531,7 +1531,7 @@ function SourceControlTreeRow({
     return (
       <div
         style={indentStyle}
-        className="mx-1.5 flex h-7 items-center gap-1 rounded-md pr-2 text-left text-[15px] text-foreground/90 transition-colors hover:bg-accent/50 md:text-[13px]"
+        className="mx-1.5 flex h-8 items-center gap-1 rounded-md pr-2 text-left text-base text-foreground/90 transition-colors hover:bg-accent/50"
         data-source-control-row-key={rowKey}
       >
         <button
@@ -1565,7 +1565,7 @@ function SourceControlTreeRow({
     <div
       style={indentStyle}
       title={node.path}
-      className="group mx-1.5 flex h-7 items-center gap-1.5 rounded-md pr-2 text-left transition-colors hover:bg-accent/50"
+      className="group mx-1.5 flex h-8 items-center gap-1.5 rounded-md pr-2 text-left transition-colors hover:bg-accent/50"
       data-source-control-path={node.path}
       data-source-control-row-key={rowKey}
     >
@@ -1582,9 +1582,7 @@ function SourceControlTreeRow({
           theme={resolvedTheme}
           className="size-4 shrink-0"
         />
-        <span className="min-w-0 flex-1 truncate text-[15px] text-foreground/90 md:text-[13px]">
-          {node.name}
-        </span>
+        <span className="min-w-0 flex-1 truncate text-base text-foreground/90">{node.name}</span>
       </button>
       <div className="grid shrink-0 grid-cols-[1.25rem_1.5rem_1.5rem] items-center justify-items-center gap-0.5">
         <span

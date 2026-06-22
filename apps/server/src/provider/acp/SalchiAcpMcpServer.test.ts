@@ -52,7 +52,7 @@ async function runMcpRequest(request: unknown): Promise<Record<string, unknown>>
     ),
   );
   if (Option.isNone(exitCodeOption)) {
-    throw new Error("MCP server request timed out");
+    throw new Error(`MCP server request timed out. stderr: ${stderr}`);
   }
   const exitCode = exitCodeOption.value;
   if (exitCode !== 0) {

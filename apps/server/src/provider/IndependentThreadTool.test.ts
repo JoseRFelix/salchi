@@ -55,6 +55,21 @@ describe("IndependentThreadTool", () => {
     assert.equal(parsed.worktreePath, "/tmp/retry-audit");
   });
 
+  it("rejects malformed tool arguments before creating a payload", () => {
+    assert.throws(
+      () => parseIndependentThreadToolArguments(null),
+      /create_thread arguments must be an object/,
+    );
+    assert.throws(
+      () => parseIndependentThreadToolArguments({ title: "Missing prompt" }),
+      /create_thread requires a non-empty initialPrompt/,
+    );
+    assert.throws(
+      () => parseIndependentThreadToolArguments({ initialPrompt: "Missing title" }),
+      /create_thread requires a non-empty title/,
+    );
+  });
+
   it("parses local checkout mode as an explicit worktree clear", () => {
     const parsed = parseIndependentThreadToolArguments({
       title: "Local checkout task",
