@@ -1,6 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { spawn } from "node:child_process";
 
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -31,24 +33,28 @@ async function runMcpRequest(request: unknown): Promise<Record<string, unknown>>
   });
   child.stdin.end(`${JSON.stringify(request)}\n`);
 
-  const exitCode = await new Promise<number | null>((resolve, reject) => {
-    // @effect-diagnostics-next-line globalTimers:off
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`Timed out waiting for MCP server response. stderr: ${stderr}`));
-    }, 5_000);
-    const cleanup = () => {
-      clearTimeout(timer);
-    };
-    child.once("error", (error) => {
-      cleanup();
-      reject(error);
-    });
-    child.once("exit", (code) => {
-      cleanup();
-      resolve(code);
-    });
-  });
+  const exitCodeOption = await Effect.runPromise(
+    Effect.promise(
+      () =>
+        new Promise<number | null>((resolve, reject) => {
+          child.once("error", reject);
+          child.once("close", resolve);
+        }),
+    ).pipe(
+      Effect.timeoutOption("5 seconds"),
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (!child.killed && child.exitCode === null) {
+            child.kill("SIGKILL");
+          }
+        }),
+      ),
+    ),
+  );
+  if (Option.isNone(exitCodeOption)) {
+    throw new Error(`MCP server request timed out. stderr: ${stderr}`);
+  }
+  const exitCode = exitCodeOption.value;
   if (exitCode !== 0) {
     throw new Error(`MCP server exited with ${exitCode}: ${stderr}`);
   }

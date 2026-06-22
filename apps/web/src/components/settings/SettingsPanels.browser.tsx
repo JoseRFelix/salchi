@@ -1369,16 +1369,13 @@ describe("SourceControlSettingsPanel discovery states", () => {
           label: "Bitbucket",
           status: "available",
           version: Option.none(),
-          installHint:
-            "Set T3CODE_BITBUCKET_EMAIL and T3CODE_BITBUCKET_API_TOKEN, or T3CODE_BITBUCKET_ACCESS_TOKEN.",
+          installHint: "Set Bitbucket credentials on the server.",
           detail: Option.none(),
           auth: {
             status: "unauthenticated",
             account: Option.none(),
             host: Option.some("bitbucket.org"),
-            detail: Option.some(
-              "Set T3CODE_BITBUCKET_EMAIL and T3CODE_BITBUCKET_API_TOKEN, or T3CODE_BITBUCKET_ACCESS_TOKEN.",
-            ),
+            detail: Option.some("Set Bitbucket credentials on the server."),
           },
         },
       ],
@@ -1394,11 +1391,7 @@ describe("SourceControlSettingsPanel discovery states", () => {
 
     await expect.element(page.getByText("Not authenticated")).toBeInTheDocument();
     await expect
-      .element(
-        page.getByText(
-          "Available. Set T3CODE_BITBUCKET_EMAIL and T3CODE_BITBUCKET_API_TOKEN, or T3CODE_BITBUCKET_ACCESS_TOKEN.",
-        ),
-      )
+      .element(page.getByText("Available. Set Bitbucket credentials on the server."))
       .toBeInTheDocument();
     await expect.element(bitbucketSwitch).toBeDisabled();
     await expect.element(bitbucketSwitch).not.toBeChecked();

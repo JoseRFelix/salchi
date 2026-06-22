@@ -4112,7 +4112,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             isRepo: true,
             hasPrimaryRemote: true,
             isDefaultRef: false,
-            refName: "t3code/bootstrap-refName",
+            refName: "salchi/bootstrap-refName",
             hasWorkingTreeChanges: false,
             workingTree: emptyWorkingTree(),
             hasUpstream: true,
@@ -4125,7 +4125,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           (_: Parameters<GitVcsDriver.GitVcsDriverShape["createWorktree"]>[0]) =>
             Effect.succeed({
               worktree: {
-                refName: "t3code/bootstrap-refName",
+                refName: "salchi/bootstrap-refName",
                 path: "/tmp/bootstrap-worktree",
               },
             }),
@@ -4194,7 +4194,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 prepareWorktree: {
                   projectCwd: "/tmp/project",
                   baseBranch: "main",
-                  branch: "t3code/bootstrap-refName",
+                  branch: "salchi/bootstrap-refName",
                 },
                 runSetupScript: true,
               },
@@ -4217,7 +4217,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
           cwd: "/tmp/project",
           refName: "main",
-          newRefName: "t3code/bootstrap-refName",
+          newRefName: "salchi/bootstrap-refName",
           path: null,
         });
         assert.deepEqual(runForThread.mock.calls[0]?.[0], {
@@ -4251,7 +4251,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         (_: Parameters<GitVcsDriver.GitVcsDriverShape["createWorktree"]>[0]) =>
           Effect.succeed({
             worktree: {
-              refName: "t3code/bootstrap-refName",
+              refName: "salchi/bootstrap-refName",
               path: "/tmp/bootstrap-worktree",
             },
           }),
@@ -4311,7 +4311,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               prepareWorktree: {
                 projectCwd: "/tmp/project",
                 baseBranch: "main",
-                branch: "t3code/bootstrap-refName",
+                branch: "salchi/bootstrap-refName",
               },
               runSetupScript: true,
             },
@@ -4345,7 +4345,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         (_: Parameters<GitVcsDriver.GitVcsDriverShape["createWorktree"]>[0]) =>
           Effect.succeed({
             worktree: {
-              refName: "t3code/bootstrap-refName",
+              refName: "salchi/bootstrap-refName",
               path: "/tmp/bootstrap-worktree",
             },
           }),
@@ -4428,7 +4428,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               prepareWorktree: {
                 projectCwd: "/tmp/project",
                 baseBranch: "main",
-                branch: "t3code/bootstrap-refName",
+                branch: "salchi/bootstrap-refName",
               },
               runSetupScript: true,
             },
@@ -4512,7 +4512,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               prepareWorktree: {
                 projectCwd: "/tmp/project",
                 baseBranch: "main",
-                branch: "t3code/bootstrap-refName",
+                branch: "salchi/bootstrap-refName",
               },
               runSetupScript: false,
             },

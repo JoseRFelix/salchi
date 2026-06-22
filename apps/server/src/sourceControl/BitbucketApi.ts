@@ -12,7 +12,7 @@ import {
   type SourceControlRepositoryVisibility,
 } from "@t3tools/contracts";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
-import { sanitizeBranchFragment } from "@t3tools/shared/git";
+import { WORKTREE_BRANCH_PREFIX, sanitizeBranchFragment } from "@t3tools/shared/git";
 import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
 
 import * as BitbucketPullRequests from "./bitbucketPullRequests.ts";
@@ -295,7 +295,7 @@ function checkoutBranchName(input: {
     return input.headBranch;
   }
 
-  return `t3code/pr-${input.pullRequestId}/${sanitizeBranchFragment(input.headBranch)}`;
+  return `${WORKTREE_BRANCH_PREFIX}/pr-${input.pullRequestId}/${sanitizeBranchFragment(input.headBranch)}`;
 }
 
 function repositoryNameWithOwner(
@@ -336,9 +336,7 @@ function authFromConfig(
     status: "unauthenticated",
     account: Option.none(),
     host: Option.some("bitbucket.org"),
-    detail: Option.some(
-      "Set T3CODE_BITBUCKET_EMAIL and T3CODE_BITBUCKET_API_TOKEN, or T3CODE_BITBUCKET_ACCESS_TOKEN.",
-    ),
+    detail: Option.some("Set Bitbucket credentials on the server."),
   };
 }
 
