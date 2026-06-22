@@ -12,16 +12,7 @@ CLIs instead of reselling tokens.
 
 ## Demo
 
-<p align="center">
-  <a href="./assets/salchi/salchi-demo.mp4">Watch the Salchi demo video</a>
-</p>
-
-<!--
-GitHub README video players render from GitHub attachment URLs, not repo-hosted
-video files. Upload assets/salchi/salchi-demo.mp4 through GitHub's README editor
-and replace the fallback link above with the generated
-https://github.com/user-attachments/assets/... URL.
--->
+https://github.com/user-attachments/assets/f1198b94-858d-4600-b3ad-d9ea40f568bd
 
 ## Why Salchi?
 
