@@ -271,7 +271,7 @@ export default function ProjectScriptsControl({
           </MenuItem>
         );
       })}
-      <MenuItem className={dropdownItemClassName} onClick={openAddDialog}>
+      <MenuItem className={dropdownItemClassName} closeOnClick={false} onClick={openAddDialog}>
         <PlusIcon className="size-4" />
         Add action
       </MenuItem>
@@ -282,7 +282,7 @@ export default function ProjectScriptsControl({
     if (inMenu) {
       if (!primaryScript) {
         return (
-          <MenuItem onClick={openAddDialog}>
+          <MenuItem closeOnClick={false} onClick={openAddDialog}>
             <PlusIcon className="size-4" />
             Add action
           </MenuItem>
