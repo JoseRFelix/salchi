@@ -570,6 +570,62 @@ describe("provider update launch notification logic", () => {
     });
   });
 
+  it("shortens success sidebar pill lifetime when it remounts before expiry", () => {
+    const view = getProviderUpdateSidebarPillView(
+      [
+        provider({
+          driver: driver("codex"),
+          version: "1.1.0",
+          latestVersion: "1.1.0",
+          advisoryStatus: "current",
+          updateState: {
+            status: "succeeded",
+            startedAt: checkedAt,
+            finishedAt: checkedAt,
+            message: "Provider updated.",
+            output: null,
+          },
+        }),
+      ],
+      {
+        visibleAfterIso: sessionStartedAt,
+        nowMs: Date.parse(checkedAt) + 2_500,
+      },
+    );
+
+    expect(view).toMatchObject({
+      key: "succeeded:codex:2026-04-23T10:00:00.000Z:Provider updated.",
+      tone: "success",
+      dismissAfterVisibleMs: 500,
+    });
+  });
+
+  it("does not show expired success sidebar pills after remount", () => {
+    const view = getProviderUpdateSidebarPillView(
+      [
+        provider({
+          driver: driver("codex"),
+          version: "1.1.0",
+          latestVersion: "1.1.0",
+          advisoryStatus: "current",
+          updateState: {
+            status: "succeeded",
+            startedAt: checkedAt,
+            finishedAt: checkedAt,
+            message: "Provider updated.",
+            output: null,
+          },
+        }),
+      ],
+      {
+        visibleAfterIso: sessionStartedAt,
+        nowMs: Date.parse(checkedAt) + 3_000,
+      },
+    );
+
+    expect(view).toBeNull();
+  });
+
   it("keeps unchanged sidebar pill states dismissible", () => {
     const view = getProviderUpdateSidebarPillView(
       [

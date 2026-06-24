@@ -38,6 +38,7 @@ export interface ProviderUpdateSidebarPillView {
 interface ProviderUpdateSidebarPillOptions {
   readonly visibleAfterIso?: string;
   readonly dismissedKeys?: ReadonlySet<string>;
+  readonly nowMs?: number;
 }
 
 const PROVIDER_UPDATE_SUCCESS_VISIBLE_MS = 3_000;
@@ -377,6 +378,26 @@ function isRecentTerminalProvider(
   return finishedAt !== null && finishedAt >= visibleAfterIso;
 }
 
+function getProviderUpdateFinishedAtMs(provider: ServerProvider): number | null {
+  const finishedAt = getUpdateFinishedAt(provider);
+  if (finishedAt === null) {
+    return null;
+  }
+  const finishedAtMs = Date.parse(finishedAt);
+  return Number.isFinite(finishedAtMs) ? finishedAtMs : null;
+}
+
+function isExpiredSuccessProvider(provider: ServerProvider, nowMs: number | undefined): boolean {
+  if (nowMs === undefined || provider.updateState?.status !== "succeeded") {
+    return false;
+  }
+  const finishedAtMs = getProviderUpdateFinishedAtMs(provider);
+  if (finishedAtMs === null) {
+    return false;
+  }
+  return nowMs - finishedAtMs >= PROVIDER_UPDATE_SUCCESS_VISIBLE_MS;
+}
+
 function latestFinishedAtForProviders(providers: ReadonlyArray<ServerProvider>): string | null {
   return providers.reduce<string | null>((latest, provider) => {
     const finishedAt = getUpdateFinishedAt(provider);
@@ -385,6 +406,27 @@ function latestFinishedAtForProviders(providers: ReadonlyArray<ServerProvider>):
     }
     return latest === null || finishedAt > latest ? finishedAt : latest;
   }, null);
+}
+
+function getSuccessDismissAfterVisibleMs(
+  providers: ReadonlyArray<ServerProvider>,
+  nowMs: number | undefined,
+): number {
+  if (nowMs === undefined) {
+    return PROVIDER_UPDATE_SUCCESS_VISIBLE_MS;
+  }
+  const latestFinishedAtMs = providers.reduce<number | null>((latest, provider) => {
+    const finishedAtMs = getProviderUpdateFinishedAtMs(provider);
+    if (finishedAtMs === null) {
+      return latest;
+    }
+    return latest === null || finishedAtMs > latest ? finishedAtMs : latest;
+  }, null);
+  if (latestFinishedAtMs === null) {
+    return PROVIDER_UPDATE_SUCCESS_VISIBLE_MS;
+  }
+  const remainingMs = latestFinishedAtMs + PROVIDER_UPDATE_SUCCESS_VISIBLE_MS - nowMs;
+  return Math.min(PROVIDER_UPDATE_SUCCESS_VISIBLE_MS, Math.max(0, remainingMs));
 }
 
 export function getProviderUpdateSidebarPillView(
@@ -414,8 +456,10 @@ export function getProviderUpdateSidebarPillView(
     };
   }
 
-  const recentTerminalProviders = dedupedProviders.filter((provider) =>
-    isRecentTerminalProvider(provider, options?.visibleAfterIso),
+  const recentTerminalProviders = dedupedProviders.filter(
+    (provider) =>
+      isRecentTerminalProvider(provider, options?.visibleAfterIso) &&
+      !isExpiredSuccessProvider(provider, options?.nowMs),
   );
   const terminalCandidates: ProviderUpdateSidebarPillView[] = [];
 
@@ -488,7 +532,7 @@ export function getProviderUpdateSidebarPillView(
           ? getProviderUpdatedTitle(succeededProvider)
           : `${succeededProviders.length} providers updated`,
       description: getProviderUpdatedDescription(succeededProviders.length),
-      dismissAfterVisibleMs: PROVIDER_UPDATE_SUCCESS_VISIBLE_MS,
+      dismissAfterVisibleMs: getSuccessDismissAfterVisibleMs(succeededProviders, options?.nowMs),
     });
   }
 
