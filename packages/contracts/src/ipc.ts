@@ -512,6 +512,10 @@ export interface LocalApi {
         readonly rateLimits: unknown;
       }>;
     }>;
+    /**
+     * Starts or attaches to a server-owned provider update job. Terminal
+     * success/failure is observed later through provider status updates.
+     */
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdatedPayload>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
     removeKeybinding: (input: ServerRemoveKeybindingInput) => Promise<ServerRemoveKeybindingResult>;

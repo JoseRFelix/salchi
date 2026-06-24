@@ -1,5 +1,5 @@
 import { ArchiveIcon, ArchiveX, LoaderIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   defaultInstanceIdForDriver,
   type DesktopUpdateChannel,
@@ -75,6 +75,10 @@ import {
 import { ProjectFavicon } from "../ProjectFavicon";
 import { useServerObservability, useServerProviders } from "../../rpc/serverState";
 import { PushNotificationSettingsRow } from "./PushNotificationSettings";
+import {
+  hasProviderUpdateStateForInstance,
+  PROVIDER_UPDATE_LAUNCH_TIMEOUT_MS,
+} from "../../providerUpdateLaunchState";
 
 const THEME_OPTIONS = [
   {
@@ -906,11 +910,68 @@ export function ProviderSettingsPanel() {
   const serverProviders = useServerProviders();
   const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
   const [isAddInstanceDialogOpen, setIsAddInstanceDialogOpen] = useState(false);
-  const [updatingProviderDrivers, setUpdatingProviderDrivers] = useState<
-    ReadonlySet<ProviderDriverKind>
+  const [pendingUpdateLaunches, setPendingUpdateLaunches] = useState<
+    ReadonlySet<ProviderInstanceId>
   >(() => new Set());
   const [openInstanceDetails, setOpenInstanceDetails] = useState<Record<string, boolean>>({});
   const refreshingRef = useRef(false);
+  const pendingUpdateLaunchesRef = useRef<ReadonlySet<ProviderInstanceId>>(new Set());
+  const providerUpdateLaunchTimeoutsRef = useRef(
+    new Map<ProviderInstanceId, ReturnType<typeof setTimeout>>(),
+  );
+  const serverProvidersRef = useRef(serverProviders);
+
+  useEffect(() => {
+    serverProvidersRef.current = serverProviders;
+  }, [serverProviders]);
+
+  const updatePendingUpdateLaunches = useCallback(
+    (update: (previous: ReadonlySet<ProviderInstanceId>) => ReadonlySet<ProviderInstanceId>) => {
+      setPendingUpdateLaunches((previous) => {
+        const next = update(previous);
+        pendingUpdateLaunchesRef.current = next;
+        return next;
+      });
+    },
+    [],
+  );
+
+  const clearPendingProviderUpdateLaunch = useCallback(
+    (instanceId: ProviderInstanceId) => {
+      const timeoutId = providerUpdateLaunchTimeoutsRef.current.get(instanceId);
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+        providerUpdateLaunchTimeoutsRef.current.delete(instanceId);
+      }
+      updatePendingUpdateLaunches((previous) => {
+        if (!previous.has(instanceId)) {
+          return previous;
+        }
+        const next = new Set(previous);
+        next.delete(instanceId);
+        return next;
+      });
+    },
+    [updatePendingUpdateLaunches],
+  );
+
+  useEffect(
+    () => () => {
+      for (const timeoutId of providerUpdateLaunchTimeoutsRef.current.values()) {
+        clearTimeout(timeoutId);
+      }
+      providerUpdateLaunchTimeoutsRef.current.clear();
+    },
+    [],
+  );
+
+  useEffect(() => {
+    for (const instanceId of pendingUpdateLaunchesRef.current) {
+      if (hasProviderUpdateStateForInstance(serverProviders, instanceId)) {
+        clearPendingProviderUpdateLaunch(instanceId);
+      }
+    }
+  }, [clearPendingProviderUpdateLaunch, serverProviders]);
 
   const providerUpdateCandidates = useMemo(
     () => collectProviderUpdateCandidates(serverProviders),
@@ -953,48 +1014,68 @@ export function ProviderSettingsPanel() {
       });
   }, []);
 
-  const runProviderUpdate = useCallback(async (candidate: ProviderUpdateCandidate) => {
-    let started = false;
-    setUpdatingProviderDrivers((previous) => {
-      if (previous.has(candidate.driver)) {
-        return previous;
-      }
-      started = true;
-      const next = new Set(previous);
-      next.add(candidate.driver);
-      return next;
-    });
-    if (!started) {
-      return;
-    }
-
-    try {
-      await ensureLocalApi().server.updateProvider({
-        provider: candidate.driver,
-        instanceId: candidate.instanceId,
-      });
-    } catch (error) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: `Could not update ${PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver}`,
-          description:
-            error instanceof Error
-              ? error.message
-              : "The provider update command could not be started.",
-        }),
-      );
-    } finally {
-      setUpdatingProviderDrivers((previous) => {
-        if (!previous.has(candidate.driver)) {
+  const runProviderUpdate = useCallback(
+    async (candidate: ProviderUpdateCandidate) => {
+      let started = false;
+      updatePendingUpdateLaunches((previous) => {
+        if (previous.has(candidate.instanceId)) {
           return previous;
         }
+        started = true;
         const next = new Set(previous);
-        next.delete(candidate.driver);
+        next.add(candidate.instanceId);
         return next;
       });
-    }
-  }, []);
+      if (!started) {
+        return;
+      }
+
+      const timeoutId = setTimeout(() => {
+        providerUpdateLaunchTimeoutsRef.current.delete(candidate.instanceId);
+        clearPendingProviderUpdateLaunch(candidate.instanceId);
+        if (hasProviderUpdateStateForInstance(serverProvidersRef.current, candidate.instanceId)) {
+          return;
+        }
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not confirm provider update",
+            description:
+              "The connection changed before Salchi could confirm the update started. Reconnect and try again.",
+          }),
+        );
+      }, PROVIDER_UPDATE_LAUNCH_TIMEOUT_MS);
+      providerUpdateLaunchTimeoutsRef.current.set(candidate.instanceId, timeoutId);
+
+      try {
+        await ensureLocalApi().server.updateProvider({
+          provider: candidate.driver,
+          instanceId: candidate.instanceId,
+        });
+      } catch (error) {
+        const stillPending = pendingUpdateLaunchesRef.current.has(candidate.instanceId);
+        const hasProviderState = hasProviderUpdateStateForInstance(
+          serverProvidersRef.current,
+          candidate.instanceId,
+        );
+        if (stillPending && !hasProviderState) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: `Could not update ${PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver}`,
+              description:
+                error instanceof Error
+                  ? error.message
+                  : "The provider update command could not be started.",
+            }),
+          );
+        }
+      } finally {
+        clearPendingProviderUpdateLaunch(candidate.instanceId);
+      }
+    },
+    [clearPendingProviderUpdateLaunch, updatePendingUpdateLaunches],
+  );
 
   interface InstanceRow {
     readonly instanceId: ProviderInstanceId;
@@ -1222,20 +1303,25 @@ export function ProviderSettingsPanel() {
           const updateCandidate = liveProvider
             ? providerUpdateCandidateByInstanceId.get(liveProvider.instanceId)
             : undefined;
-          const isDriverUpdateRunning =
+          const hasActiveDriverUpdate =
             updateCandidate !== undefined &&
-            (updatingProviderDrivers.has(updateCandidate.driver) ||
-              serverProviders.some(
-                (provider) =>
-                  provider.driver === updateCandidate.driver && isProviderUpdateActive(provider),
-              ));
+            serverProviders.some(
+              (provider) =>
+                provider.driver === updateCandidate.driver && isProviderUpdateActive(provider),
+            );
+          const isProviderUpdateLaunchPending =
+            updateCandidate !== undefined && pendingUpdateLaunches.has(updateCandidate.instanceId);
+          const isProviderUpdateRunning =
+            updateCandidate !== undefined &&
+            (isProviderUpdateLaunchPending || hasActiveDriverUpdate);
           const showInlineUpdateButton =
             updateCandidate !== undefined &&
             hasOneClickUpdateProviderCandidate(updateCandidate, serverProviders);
           const canRunInlineUpdate =
             updateCandidate !== undefined &&
             canOneClickUpdateProviderCandidate(updateCandidate, serverProviders) &&
-            !updatingProviderDrivers.has(updateCandidate.driver);
+            !isProviderUpdateLaunchPending &&
+            !hasActiveDriverUpdate;
           const modelPreferences = settings.providerModelPreferences?.[row.instanceId] ?? {
             hiddenModels: [],
             modelOrder: [],
@@ -1308,7 +1394,7 @@ export function ProviderSettingsPanel() {
                     }
                   : undefined
               }
-              isUpdating={showInlineUpdateButton ? isDriverUpdateRunning : undefined}
+              isUpdating={showInlineUpdateButton ? isProviderUpdateRunning : undefined}
             />
           );
         })}

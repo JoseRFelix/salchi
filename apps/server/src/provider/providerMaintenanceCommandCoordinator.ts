@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 
@@ -67,10 +68,17 @@ export const makeProviderMaintenanceCommandCoordinator = Effect.fn(
 
       return yield* Effect.gen(function* () {
         const lock = yield* getLock(lockKey);
-        if (onQueued) {
-          yield* onQueued;
-        }
-        return yield* lock.withPermits(1)(run);
+        const immediate = yield* lock.withPermitsIfAvailable(1)(run);
+        return yield* Option.match(immediate, {
+          onSome: (value) => Effect.succeed(value),
+          onNone: () =>
+            Effect.gen(function* () {
+              if (onQueued) {
+                yield* onQueued;
+              }
+              return yield* lock.withPermits(1)(run);
+            }),
+        });
       }).pipe(Effect.ensuring(releaseTarget(targetKey)));
     });
 

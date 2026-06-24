@@ -11,12 +11,16 @@ import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -25,7 +29,6 @@ import { makeProviderMaintenanceCommandCoordinator } from "./providerMaintenance
 import { enrichProviderSnapshotWithVersionAdvisory } from "./providerMaintenance.ts";
 import type { ProviderMaintenanceCapabilities } from "./providerMaintenance.ts";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
-const isServerProviderUpdateError = Schema.is(ServerProviderUpdateError);
 
 const UPDATE_TIMEOUT_MS = 5 * 60_000;
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
@@ -40,6 +43,12 @@ export interface ProviderMaintenanceCommandResult {
 }
 
 export interface ProviderMaintenanceRunnerShape {
+  /**
+   * Starts or attaches to a server-owned provider update job. The returned
+   * payload reflects the current provider snapshots after the launch is
+   * accepted; terminal success/failure is published later through provider
+   * updateState changes.
+   */
   readonly updateProvider: (
     target:
       | ProviderDriverKind
@@ -63,6 +72,18 @@ class ProviderMaintenanceCommandError extends Data.TaggedError("ProviderMaintena
 interface VerifiedProviderRefresh {
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly verifiedProviders: ReadonlyArray<ServerProvider>;
+}
+
+type ProviderMaintenanceUpdateAction = NonNullable<ProviderMaintenanceCapabilities["update"]>;
+
+interface ActiveProviderUpdateJob {
+  readonly jobId: number;
+  readonly fiber: Fiber.Fiber<void, never>;
+}
+
+interface ProviderUpdateLaunch {
+  readonly payload: ServerProviderUpdatedPayload;
+  readonly startGate: Deferred.Deferred<void> | null;
 }
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -194,6 +215,12 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
+  const workerScope = yield* Scope.make("sequential");
+  yield* Effect.addFinalizer(() => Scope.close(workerScope, Exit.void));
+  const activeJobsRef = yield* SynchronizedRef.make<
+    ReadonlyMap<ProviderInstanceId, ActiveProviderUpdateJob>
+  >(new Map());
+  const nextJobIdRef = yield* Ref.make(0);
   const runMaintenanceCommand = (command: string, args: ReadonlyArray<string>) =>
     runProviderMaintenanceCommandWithSpawner({
       spawner,
@@ -277,27 +304,27 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
       }),
     );
 
-  const updateProvider: ProviderMaintenanceRunnerShape["updateProvider"] = Effect.fn(
-    "ProviderMaintenanceRunner.updateProvider",
-  )(function* (target) {
-    const provider = typeof target === "string" ? target : target.provider;
-    const instanceId =
-      typeof target === "string"
-        ? defaultInstanceIdForDriver(provider)
-        : (target.instanceId ?? defaultInstanceIdForDriver(provider));
-    const targetKey = `instance:${instanceId}`;
-    const capabilities = yield* providerRegistry.getProviderMaintenanceCapabilitiesForInstance(
-      instanceId,
-      provider,
-    );
-    const update = capabilities.update;
-    if (!update) {
-      return yield* new ServerProviderUpdateError({
-        provider,
-        reason: "This provider does not support one-click updates.",
-      });
-    }
+  const removeActiveJob = (instanceId: ProviderInstanceId, jobId: number) =>
+    SynchronizedRef.update(activeJobsRef, (activeJobs) => {
+      const existing = activeJobs.get(instanceId);
+      if (!existing || existing.jobId !== jobId) {
+        return activeJobs;
+      }
+      const next = new Map(activeJobs);
+      next.delete(instanceId);
+      return next;
+    });
 
+  const runProviderUpdateToCompletion = Effect.fn(
+    "ProviderMaintenanceRunner.runProviderUpdateToCompletion",
+  )(function* (input: {
+    readonly provider: ProviderDriverKind;
+    readonly instanceId: ProviderInstanceId;
+    readonly capabilities: ProviderMaintenanceCapabilities;
+    readonly update: ProviderMaintenanceUpdateAction;
+  }) {
+    const { provider, instanceId, capabilities, update } = input;
+    const targetKey = `instance:${instanceId}`;
     const setUpdateState = (state: ServerProviderUpdateState | null) =>
       providerRegistry.setProviderMaintenanceActionState({
         instanceId,
@@ -355,7 +382,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
             const stillOutdated =
               couldNotVerify ||
               verifiedProviders.some((verifiedProvider) => isOutdatedProvider(verifiedProvider));
-            return yield* finish(
+            const finishedPayload = yield* finish(
               makeUpdateState({
                 status: stillOutdated ? "unchanged" : "succeeded",
                 startedAt,
@@ -368,6 +395,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
                 output: commandOutput(result),
               }),
             );
+            return finishedPayload;
           },
         );
 
@@ -387,7 +415,11 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
           },
         );
 
-        return yield* runCommandAndVerify().pipe(Effect.catchCause(recordFailedUpdate));
+        return yield* runCommandAndVerify().pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause) ? Effect.interrupt : recordFailedUpdate(cause),
+          ),
+        );
       },
     );
 
@@ -399,15 +431,165 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
         run: runProviderUpdate(),
       })
       .pipe(
-        Effect.mapError((error) =>
-          isServerProviderUpdateError(error)
-            ? new ServerProviderUpdateError({
-                provider,
-                reason: error.reason,
-              })
-            : error,
-        ),
+        Effect.mapError((error) => {
+          return new ServerProviderUpdateError({
+            provider,
+            reason: error.reason,
+          });
+        }),
       );
+  });
+
+  const logCompletedJob = (input: {
+    readonly provider: ProviderDriverKind;
+    readonly instanceId: ProviderInstanceId;
+    readonly payload: ServerProviderUpdatedPayload;
+  }) => {
+    const provider = input.payload.providers.find(
+      (candidate) => candidate.instanceId === input.instanceId,
+    );
+    const status = provider?.updateState?.status ?? null;
+    const message = provider?.updateState?.message ?? null;
+    if (status === "failed") {
+      return Effect.logWarning("provider update job failed", {
+        provider: input.provider,
+        providerInstanceId: input.instanceId,
+        message,
+      });
+    }
+    return Effect.logInfo("provider update job completed", {
+      provider: input.provider,
+      providerInstanceId: input.instanceId,
+      status,
+    });
+  };
+
+  const updateProvider: ProviderMaintenanceRunnerShape["updateProvider"] = Effect.fn(
+    "ProviderMaintenanceRunner.updateProvider",
+  )(function* (target) {
+    const provider = typeof target === "string" ? target : target.provider;
+    const instanceId =
+      typeof target === "string"
+        ? defaultInstanceIdForDriver(provider)
+        : (target.instanceId ?? defaultInstanceIdForDriver(provider));
+    const capabilities = yield* providerRegistry.getProviderMaintenanceCapabilitiesForInstance(
+      instanceId,
+      provider,
+    );
+    const update = capabilities.update;
+    if (!update) {
+      return yield* new ServerProviderUpdateError({
+        provider,
+        reason: "This provider does not support one-click updates.",
+      });
+    }
+
+    const setLaunchQueuedState = providerRegistry.setProviderMaintenanceActionState({
+      instanceId,
+      action: "update",
+      state: makeUpdateState({
+        status: "queued",
+        startedAt: null,
+        finishedAt: null,
+        message: "Waiting for provider update to start.",
+      }),
+    });
+
+    const launch = yield* Effect.uninterruptible(
+      SynchronizedRef.modifyEffect(
+        activeJobsRef,
+        (
+          activeJobs,
+        ): Effect.Effect<
+          readonly [ProviderUpdateLaunch, ReadonlyMap<ProviderInstanceId, ActiveProviderUpdateJob>]
+        > => {
+          if (activeJobs.has(instanceId)) {
+            return providerRegistry.getProviders.pipe(
+              Effect.tap(() =>
+                Effect.logInfo("provider update job attached to existing job", {
+                  provider,
+                  providerInstanceId: instanceId,
+                }),
+              ),
+              Effect.map(
+                (providers) =>
+                  [
+                    {
+                      payload: { providers },
+                      startGate: null,
+                    },
+                    activeJobs,
+                  ] as const,
+              ),
+            );
+          }
+
+          return Effect.gen(function* () {
+            const providers = yield* setLaunchQueuedState;
+            const jobId = yield* Ref.updateAndGet(nextJobIdRef, (current) => current + 1);
+            const startGate = yield* Deferred.make<void>();
+            const job = Deferred.await(startGate).pipe(
+              Effect.andThen(
+                runProviderUpdateToCompletion({
+                  provider,
+                  instanceId,
+                  capabilities,
+                  update,
+                }).pipe(
+                  Effect.tap((payload) =>
+                    logCompletedJob({
+                      provider,
+                      instanceId,
+                      payload,
+                    }),
+                  ),
+                  Effect.catchCause((cause) => {
+                    if (Cause.hasInterruptsOnly(cause)) {
+                      return Effect.logWarning(
+                        "provider update job interrupted during server shutdown",
+                        {
+                          provider,
+                          providerInstanceId: instanceId,
+                        },
+                      );
+                    }
+                    return Effect.logError("provider update job failed", {
+                      provider,
+                      providerInstanceId: instanceId,
+                      cause: Cause.pretty(cause),
+                    });
+                  }),
+                  Effect.asVoid,
+                ),
+              ),
+              Effect.ensuring(removeActiveJob(instanceId, jobId)),
+            );
+            const fiber = yield* job.pipe(Effect.forkIn(workerScope));
+            const next = new Map(activeJobs);
+            next.set(instanceId, { jobId, fiber });
+            return [
+              {
+                payload: { providers },
+                startGate,
+              },
+              next,
+            ] as const;
+          });
+        },
+      ).pipe(
+        Effect.tap((launch) => {
+          if (launch.startGate === null) {
+            return Effect.void;
+          }
+          return Effect.logInfo("provider update job launched", {
+            provider,
+            providerInstanceId: instanceId,
+          }).pipe(Effect.andThen(Deferred.succeed(launch.startGate, undefined)));
+        }),
+      ),
+    );
+
+    return launch.payload;
   });
 
   return ProviderMaintenanceRunner.of({

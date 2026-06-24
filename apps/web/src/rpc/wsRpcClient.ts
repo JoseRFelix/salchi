@@ -246,6 +246,11 @@ export interface WsRpcClient {
       input?: RpcInput<typeof WS_METHODS.serverRefreshProviders>,
     ) => ReturnType<RpcUnaryMethod<typeof WS_METHODS.serverRefreshProviders>>;
     readonly refreshUsageLimits: RpcUnaryNoArgMethod<typeof WS_METHODS.serverRefreshUsageLimits>;
+    /**
+     * Starts or attaches to a server-owned provider update job. The promise is
+     * a launch acknowledgement; progress and terminal state arrive through
+     * server provider updates.
+     */
     readonly updateProvider: RpcUnaryMethod<typeof WS_METHODS.serverUpdateProvider>;
     readonly upsertKeybinding: RpcUnaryMethod<typeof WS_METHODS.serverUpsertKeybinding>;
     readonly removeKeybinding: RpcUnaryMethod<typeof WS_METHODS.serverRemoveKeybinding>;
