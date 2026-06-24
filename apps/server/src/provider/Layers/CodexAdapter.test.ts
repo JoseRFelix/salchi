@@ -1995,6 +1995,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           sourceItemId: asItemId("tool-create-thread"),
           branch: "feature/retry-behavior",
           worktreePath: "/tmp/retry-behavior-worktree",
+          workspaceRoot: "/tmp/retry-behavior-project",
         },
       } satisfies ProviderEvent);
 
@@ -2015,6 +2016,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         sourceItemId: asItemId("tool-create-thread"),
         branch: "feature/retry-behavior",
         worktreePath: "/tmp/retry-behavior-worktree",
+        workspaceRoot: "/tmp/retry-behavior-project",
       });
     }),
   );

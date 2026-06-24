@@ -1481,6 +1481,9 @@ export const makeCodexSessionRuntime = (
             ...(parsedArguments.worktreePath !== undefined
               ? { worktreePath: parsedArguments.worktreePath }
               : {}),
+            ...(parsedArguments.workspaceRoot !== undefined
+              ? { workspaceRoot: parsedArguments.workspaceRoot }
+              : {}),
           },
         });
 

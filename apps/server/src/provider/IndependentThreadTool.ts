@@ -34,6 +34,7 @@ export type IndependentThreadToolArguments = {
   readonly checkoutMode?: "inherit" | "local" | "worktree";
   readonly branch?: string | null;
   readonly worktreePath?: string | null;
+  readonly workspaceRoot?: string | null;
 };
 
 export type ProviderDynamicToolSpec = {
@@ -98,6 +99,17 @@ export const INDEPENDENT_THREAD_TOOL_INPUT_SCHEMA = {
       description:
         "Optional absolute path for a dedicated worktree or checkout. Use null with checkoutMode 'local' to force the project workspace root.",
     },
+    projectRoot: {
+      type: ["string", "null"],
+      minLength: 1,
+      description:
+        "Optional absolute path to another project folder. When provided, Salchi creates or reuses that project and creates the independent thread there.",
+    },
+    workspaceRoot: {
+      type: ["string", "null"],
+      minLength: 1,
+      description: "Alias for projectRoot. Prefer projectRoot for new calls.",
+    },
     threadId: {
       type: "string",
       minLength: 1,
@@ -136,6 +148,13 @@ export const INDEPENDENT_THREAD_TOOL_ZOD_INPUT_SHAPE = {
     .nullable()
     .optional()
     .describe("Optional absolute path for a dedicated worktree or checkout."),
+  projectRoot: z
+    .string()
+    .min(1)
+    .nullable()
+    .optional()
+    .describe("Optional absolute path to another project folder."),
+  workspaceRoot: z.string().min(1).nullable().optional().describe("Alias for projectRoot."),
   threadId: z.string().min(1).optional().describe("Optional stable Salchi thread id."),
 } as const;
 
@@ -165,6 +184,7 @@ Arguments:
 * \`checkoutMode\` ("inherit" | "local" | "worktree", optional): use "inherit" or omit it to reuse this thread's checkout, use "local" to start in the project workspace root, or use "worktree" with \`worktreePath\` to start in a specific worktree.
 * \`branch\` (string | null, optional): branch label for the new thread. Include it when known; use null if switching checkouts and the branch is unknown.
 * \`worktreePath\` (string | null, optional): absolute path for a dedicated worktree or checkout. Set null with \`checkoutMode: "local"\` to force the project workspace root.
+* \`projectRoot\` (string | null, optional): absolute path to another project folder. When provided, Salchi creates or reuses that project and creates the independent thread there.
 * \`threadId\` (string, optional): stable id only when the client already provided one.
 
 After the tool returns success, continue the current thread normally unless the user asked you to stop.`;
@@ -272,6 +292,14 @@ export function parseIndependentThreadToolArguments(
     "checkoutPath",
     "cwd",
   ]);
+  const workspaceRoot = readNullableStringField(record, [
+    "projectRoot",
+    "workspaceRoot",
+    "projectPath",
+    "folderPath",
+    "folder",
+    "directory",
+  ]);
   const resolvedWorktreePath =
     checkoutMode === "local"
       ? null
@@ -293,6 +321,7 @@ export function parseIndependentThreadToolArguments(
     ...(checkoutMode ? { checkoutMode } : {}),
     ...(resolvedBranch !== undefined ? { branch: resolvedBranch } : {}),
     ...(resolvedWorktreePath !== undefined ? { worktreePath: resolvedWorktreePath } : {}),
+    ...(workspaceRoot.specified ? { workspaceRoot: workspaceRoot.value ?? null } : {}),
   };
 }
 
@@ -323,6 +352,9 @@ export function createIndependentThreadToolRuntimeResult(input: {
     ...(parsedArguments.branch !== undefined ? { branch: parsedArguments.branch } : {}),
     ...(parsedArguments.worktreePath !== undefined
       ? { worktreePath: parsedArguments.worktreePath }
+      : {}),
+    ...(parsedArguments.workspaceRoot !== undefined
+      ? { workspaceRoot: parsedArguments.workspaceRoot }
       : {}),
   };
 
