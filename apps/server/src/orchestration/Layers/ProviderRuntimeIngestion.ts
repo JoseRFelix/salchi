@@ -934,6 +934,7 @@ const make = Effect.gen(function* () {
         { readonly type: "thread.independent.created" }
       >;
       readonly sourceThread: OrchestrationThreadShell;
+      readonly createIfMissing: boolean;
     }) {
       const requestedWorkspaceRoot = input.event.payload.workspaceRoot;
       if (
@@ -970,6 +971,9 @@ const make = Effect.gen(function* () {
         .pipe(Effect.map(Option.getOrUndefined));
       if (existingProject) {
         return { projectId: existingProject.id };
+      }
+      if (!input.createIfMissing) {
+        return null;
       }
 
       const projectId = ProjectId.make(`provider:${input.event.eventId}:project`);
@@ -1059,15 +1063,16 @@ const make = Effect.gen(function* () {
         return;
       }
 
+      const existingThread = yield* resolveThreadShell(payload.threadId);
       const targetProject = yield* resolveIndependentThreadTargetProject({
         event,
         sourceThread,
+        createIfMissing: !existingThread,
       });
       if (!targetProject) {
         return;
       }
 
-      const existingThread = yield* resolveThreadShell(payload.threadId);
       if (existingThread) {
         const conflictsWithExistingThread =
           existingThread.projectId !== targetProject.projectId ||

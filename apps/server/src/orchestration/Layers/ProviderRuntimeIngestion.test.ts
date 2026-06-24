@@ -1104,6 +1104,8 @@ describe("ProviderRuntimeIngestion", () => {
   it("drops provider-created independent threads that collide with unrelated root threads", async () => {
     const harness = await createHarness();
     const existingThreadId = asThreadId("existing-root-thread");
+    const targetWorkspaceRoot = makeTempDir("t3-provider-collision-target-project-");
+    fs.mkdirSync(path.join(targetWorkspaceRoot, ".git"));
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.create",
@@ -1140,6 +1142,7 @@ describe("ProviderRuntimeIngestion", () => {
         threadId: existingThreadId,
         title: "Hijack existing root",
         initialPrompt: "This prompt should not be enqueued.",
+        workspaceRoot: targetWorkspaceRoot,
       },
     } satisfies LegacyProviderRuntimeEvent);
     await harness.drain();
@@ -1147,9 +1150,13 @@ describe("ProviderRuntimeIngestion", () => {
     const after = await harness.readModel();
     const sourceAfter = after.threads.find((thread) => thread.id === asThreadId("thread-1"));
     const existingAfter = after.threads.find((thread) => thread.id === existingThreadId);
+    const targetProject = after.projects.find(
+      (project) => project.workspaceRoot === targetWorkspaceRoot,
+    );
     expect(
       sourceAfter?.activities.filter((activity) => activity.kind === "thread.created"),
     ).toHaveLength(0);
+    expect(targetProject).toBeUndefined();
     expect(existingAfter?.createdByThreadId).toBeNull();
     expect(existingAfter?.messages).toHaveLength(0);
     expect(existingAfter?.queuedTurns).toHaveLength(0);
