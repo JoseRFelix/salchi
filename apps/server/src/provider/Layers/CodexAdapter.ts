@@ -220,6 +220,7 @@ const SalchiThreadCreateNotificationPayload = Schema.Struct({
   sourceItemId: Schema.optional(RuntimeItemId),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  workspaceRoot: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
 });
 
 function readPayload<A>(
@@ -1113,6 +1114,7 @@ function mapToRuntimeEvents(
           ...(payload.sourceItemId ? { sourceItemId: payload.sourceItemId } : {}),
           ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
           ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+          ...(payload.workspaceRoot !== undefined ? { workspaceRoot: payload.workspaceRoot } : {}),
         },
       },
     ];

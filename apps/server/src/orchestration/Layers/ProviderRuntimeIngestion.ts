@@ -24,6 +24,7 @@ import {
   type OrchestrationThreadActivity,
   type OrchestrationThreadShell,
   type ProviderRuntimeEvent,
+  ProjectId,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -926,6 +927,72 @@ const make = Effect.gen(function* () {
       Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)),
     );
 
+  const resolveIndependentThreadTargetProject = Effect.fn("resolveIndependentThreadTargetProject")(
+    function* (input: {
+      readonly event: Extract<
+        ProviderRuntimeEvent,
+        { readonly type: "thread.independent.created" }
+      >;
+      readonly sourceThread: OrchestrationThreadShell;
+      readonly createIfMissing: boolean;
+    }) {
+      const requestedWorkspaceRoot = input.event.payload.workspaceRoot;
+      if (
+        typeof requestedWorkspaceRoot !== "string" ||
+        requestedWorkspaceRoot.trim().length === 0
+      ) {
+        return { projectId: input.sourceThread.projectId };
+      }
+
+      const workspaceRoot = yield* workspacePaths
+        .normalizeWorkspaceRoot(requestedWorkspaceRoot)
+        .pipe(
+          Effect.catch((error) =>
+            Effect.gen(function* () {
+              yield* Effect.logWarning("provider runtime independent thread creation dropped", {
+                eventId: input.event.eventId,
+                threadId: input.event.threadId,
+                createdThreadId: input.event.payload.threadId,
+                sourceThreadId: input.sourceThread.id,
+                workspaceRoot: requestedWorkspaceRoot,
+                reason: "invalid-target-workspace-root",
+                detail: error.message,
+              });
+              return null;
+            }),
+          ),
+        );
+      if (!workspaceRoot) {
+        return null;
+      }
+
+      const existingProject = yield* projectionSnapshotQuery
+        .getActiveProjectByWorkspaceRoot(workspaceRoot)
+        .pipe(Effect.map(Option.getOrUndefined));
+      if (existingProject) {
+        return { projectId: existingProject.id };
+      }
+      if (!input.createIfMissing) {
+        return null;
+      }
+
+      const projectId = ProjectId.make(`provider:${input.event.eventId}:project`);
+      const title = path.basename(workspaceRoot) || workspaceRoot;
+      yield* orchestrationEngine.dispatch({
+        type: "project.create",
+        commandId: yield* providerCommandId(input.event, "independent-thread-project-create"),
+        projectId,
+        title,
+        workspaceRoot,
+        defaultModelSelection:
+          input.event.payload.modelSelection ?? input.sourceThread.modelSelection,
+        createdAt: input.event.createdAt,
+      });
+
+      return { projectId };
+    },
+  );
+
   const turnMessageIdsByTurnKey = yield* Cache.make<string, Set<MessageId>>({
     capacity: TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY,
     timeToLive: TURN_MESSAGE_IDS_BY_TURN_TTL,
@@ -997,9 +1064,18 @@ const make = Effect.gen(function* () {
       }
 
       const existingThread = yield* resolveThreadShell(payload.threadId);
+      const targetProject = yield* resolveIndependentThreadTargetProject({
+        event,
+        sourceThread,
+        createIfMissing: !existingThread,
+      });
+      if (!targetProject) {
+        return;
+      }
+
       if (existingThread) {
         const conflictsWithExistingThread =
-          existingThread.projectId !== sourceThread.projectId ||
+          existingThread.projectId !== targetProject.projectId ||
           existingThread.parentThreadId !== null ||
           !sameId(existingThread.createdByThreadId, sourceThread.id);
         if (conflictsWithExistingThread) {
@@ -1009,7 +1085,7 @@ const make = Effect.gen(function* () {
             createdThreadId: payload.threadId,
             sourceThreadId: sourceThread.id,
             existingProjectId: existingThread.projectId,
-            sourceProjectId: sourceThread.projectId,
+            targetProjectId: targetProject.projectId,
             existingParentThreadId: existingThread.parentThreadId,
             existingCreatedByThreadId: existingThread.createdByThreadId,
             reason: "conflicting-existing-thread",
@@ -1021,7 +1097,7 @@ const make = Effect.gen(function* () {
           type: "thread.create",
           commandId: yield* providerCommandId(event, "independent-thread-create"),
           threadId: payload.threadId,
-          projectId: sourceThread.projectId,
+          projectId: targetProject.projectId,
           title: payload.title,
           modelSelection: payload.modelSelection ?? sourceThread.modelSelection,
           runtimeMode: payload.runtimeMode ?? sourceThread.runtimeMode,

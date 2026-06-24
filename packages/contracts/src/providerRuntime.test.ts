@@ -116,6 +116,7 @@ describe("ProviderRuntimeEvent", () => {
         sourceItemId: "tool-call-1",
         branch: "feature/retry-behavior",
         worktreePath: "/tmp/retry-behavior-worktree",
+        workspaceRoot: "/tmp/retry-behavior-project",
       },
     });
 
@@ -128,6 +129,7 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.initialPrompt).toBe("Review retry behavior and report findings.");
     expect(parsed.payload.branch).toBe("feature/retry-behavior");
     expect(parsed.payload.worktreePath).toBe("/tmp/retry-behavior-worktree");
+    expect(parsed.payload.workspaceRoot).toBe("/tmp/retry-behavior-project");
   });
 
   it("decodes user-input.requested with structured questions", () => {

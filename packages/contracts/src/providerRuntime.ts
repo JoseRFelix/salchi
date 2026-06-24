@@ -326,6 +326,7 @@ const ThreadIndependentCreatedPayload = Schema.Struct({
   interactionMode: Schema.optional(ProviderInteractionMode),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
+  workspaceRoot: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   createdByThreadId: Schema.optional(ThreadId),
   originThreadId: Schema.optional(ThreadId),
   providerThreadId: Schema.optional(TrimmedNonEmptyStringSchema),

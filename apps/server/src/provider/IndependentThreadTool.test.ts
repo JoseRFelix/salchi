@@ -23,9 +23,11 @@ describe("IndependentThreadTool", () => {
     assert.deepEqual(INDEPENDENT_THREAD_TOOL_SPEC.inputSchema.required, ["title", "initialPrompt"]);
     assert.ok("checkoutMode" in INDEPENDENT_THREAD_TOOL_SPEC.inputSchema.properties);
     assert.ok("worktreePath" in INDEPENDENT_THREAD_TOOL_SPEC.inputSchema.properties);
+    assert.ok("projectRoot" in INDEPENDENT_THREAD_TOOL_SPEC.inputSchema.properties);
     assert.match(INDEPENDENT_THREAD_TOOL_CODEX_INSTRUCTIONS, /create_thread/);
     assert.match(INDEPENDENT_THREAD_TOOL_CODEX_INSTRUCTIONS, /not a subagent/);
     assert.match(INDEPENDENT_THREAD_TOOL_CODEX_INSTRUCTIONS, /checkoutMode/);
+    assert.match(INDEPENDENT_THREAD_TOOL_CODEX_INSTRUCTIONS, /projectRoot/);
   });
 
   it("matches the canonical tool name and legacy aliases", () => {
@@ -44,6 +46,7 @@ describe("IndependentThreadTool", () => {
       checkoutMode: "worktree",
       branch: "feature/retry-audit",
       worktreePath: "/tmp/retry-audit",
+      projectRoot: "/tmp/other-project",
     });
 
     assert.equal(parsed.title, "Retry audit");
@@ -53,6 +56,7 @@ describe("IndependentThreadTool", () => {
     assert.equal(parsed.checkoutMode, "worktree");
     assert.equal(parsed.branch, "feature/retry-audit");
     assert.equal(parsed.worktreePath, "/tmp/retry-audit");
+    assert.equal(parsed.workspaceRoot, "/tmp/other-project");
   });
 
   it("rejects malformed tool arguments before creating a payload", () => {
@@ -92,6 +96,7 @@ describe("IndependentThreadTool", () => {
         checkoutMode: "worktree",
         branch: "feature/worktree-audit",
         worktreePath: "/tmp/worktree-audit",
+        projectRoot: "/tmp/other-project",
       },
       sourceThreadId: ThreadId.make("thread-source"),
       idPrefix: "tool-call-1",
@@ -105,6 +110,7 @@ describe("IndependentThreadTool", () => {
     assert.equal(result.payload.initialPrompt, "Audit the worktree implementation.");
     assert.equal(result.payload.branch, "feature/worktree-audit");
     assert.equal(result.payload.worktreePath, "/tmp/worktree-audit");
+    assert.equal(result.payload.workspaceRoot, "/tmp/other-project");
     assert.equal(String(result.payload.createdByThreadId), "thread-source");
     assert.equal(String(result.payload.sourceItemId), "tool-call-1");
     assert.equal(result.payload.providerThreadId, "provider-thread-1");

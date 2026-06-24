@@ -1052,9 +1052,60 @@ describe("ProviderRuntimeIngestion", () => {
     ).toHaveLength(1);
   });
 
+  it("materializes provider-created independent threads in another project folder", async () => {
+    const harness = await createHarness();
+    const targetWorkspaceRoot = makeTempDir("t3-provider-target-project-");
+    fs.mkdirSync(path.join(targetWorkspaceRoot, ".git"));
+    const createdThreadId = asThreadId("independent-thread-other-project");
+    const eventId = asEventId("evt-provider-independent-thread-other-project");
+    const now = "2026-01-01T00:00:01.000Z";
+
+    harness.emit({
+      type: "thread.independent.created",
+      eventId,
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-origin"),
+      payload: {
+        threadId: createdThreadId,
+        title: "Audit another project",
+        initialPrompt: "Review the target project independently.",
+        workspaceRoot: targetWorkspaceRoot,
+        providerThreadId: "provider-independent-other-project",
+      },
+    } satisfies LegacyProviderRuntimeEvent);
+    await harness.drain();
+
+    const created = await waitForThread(
+      harness.readModel,
+      (thread) => thread.messages.some((message) => message.id.includes("independent-thread")),
+      2000,
+      createdThreadId,
+    );
+    const snapshot = await harness.readModel();
+    const targetProject = snapshot.projects.find(
+      (project) => project.workspaceRoot === targetWorkspaceRoot,
+    );
+
+    expect(targetProject).toBeDefined();
+    expect(targetProject?.id).not.toBe(asProjectId("project-1"));
+    expect(targetProject?.title).toBe(path.basename(targetWorkspaceRoot));
+    expect(created.projectId).toBe(targetProject?.id);
+    expect(created.worktreePath).toBeNull();
+    expect(created.messages).toHaveLength(1);
+    expect(created.messages[0]).toMatchObject({
+      role: "user",
+      text: "Review the target project independently.",
+    });
+  });
+
   it("drops provider-created independent threads that collide with unrelated root threads", async () => {
     const harness = await createHarness();
     const existingThreadId = asThreadId("existing-root-thread");
+    const targetWorkspaceRoot = makeTempDir("t3-provider-collision-target-project-");
+    fs.mkdirSync(path.join(targetWorkspaceRoot, ".git"));
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.create",
@@ -1091,6 +1142,7 @@ describe("ProviderRuntimeIngestion", () => {
         threadId: existingThreadId,
         title: "Hijack existing root",
         initialPrompt: "This prompt should not be enqueued.",
+        workspaceRoot: targetWorkspaceRoot,
       },
     } satisfies LegacyProviderRuntimeEvent);
     await harness.drain();
@@ -1098,9 +1150,13 @@ describe("ProviderRuntimeIngestion", () => {
     const after = await harness.readModel();
     const sourceAfter = after.threads.find((thread) => thread.id === asThreadId("thread-1"));
     const existingAfter = after.threads.find((thread) => thread.id === existingThreadId);
+    const targetProject = after.projects.find(
+      (project) => project.workspaceRoot === targetWorkspaceRoot,
+    );
     expect(
       sourceAfter?.activities.filter((activity) => activity.kind === "thread.created"),
     ).toHaveLength(0);
+    expect(targetProject).toBeUndefined();
     expect(existingAfter?.createdByThreadId).toBeNull();
     expect(existingAfter?.messages).toHaveLength(0);
     expect(existingAfter?.queuedTurns).toHaveLength(0);
