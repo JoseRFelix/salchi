@@ -30,6 +30,7 @@ const {
   generateCommitMessageMutateAsyncSpy,
   hasServerThreadRef,
   navigateSpy,
+  pullMutateAsyncSpy,
   refreshGitStatusSpy,
   recordSourceControlDiagnosticEventSpy,
   recordSourceControlDisabledSnapshotSpy,
@@ -75,6 +76,13 @@ const {
   ),
   hasServerThreadRef: { current: true },
   navigateSpy: vi.fn(),
+  pullMutateAsyncSpy: vi.fn(() =>
+    Promise.resolve({
+      status: "pulled",
+      refName: "feature/toast-scope",
+      upstreamRef: "origin/feature/toast-scope",
+    }),
+  ),
   refreshGitStatusSpy: vi.fn(() => Promise.resolve(null)),
   recordSourceControlDiagnosticEventSpy: vi.fn(),
   recordSourceControlDisabledSnapshotSpy: vi.fn(),
@@ -154,7 +162,7 @@ vi.mock("@tanstack/react-query", async () => {
 
       if (options.__kind === "pull") {
         return {
-          mutateAsync: vi.fn(),
+          mutateAsync: pullMutateAsyncSpy,
           isPending: false,
         };
       }
@@ -947,6 +955,52 @@ describe("SourceControlPanel git action runner", () => {
       expect(pushButton?.textContent).toContain("2");
       // Commit is no longer the primary button while there are commits to push.
       expect(findButtonByExactText("Commit")).toBeNull();
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
+  it("promotes Pull to the primary button with incoming count when a clean branch is behind", async () => {
+    currentGitStatusRef.current = {
+      ...createPanelStatus(),
+      aheadCount: 0,
+      behindCount: 4,
+    };
+    const { host, screen } = await renderPanel();
+
+    try {
+      const pullButton = findButtonByText("Pull");
+      expect(pullButton).not.toBeNull();
+      expect(pullButton?.textContent).toContain("4");
+      expect(document.body.textContent).not.toContain("Behind upstream");
+
+      pullButton?.click();
+
+      await vi.waitFor(() => {
+        expect(pullMutateAsyncSpy).toHaveBeenCalled();
+      });
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
+  it("shows incoming count on Commit instead of a warning when a dirty branch is behind", async () => {
+    currentGitStatusRef.current = {
+      ...createPanelStatus({
+        unstagedFiles: [{ path: "src/app.ts", status: "modified", insertions: 2, deletions: 1 }],
+      }),
+      aheadCount: 0,
+      behindCount: 5,
+    };
+    const { host, screen } = await renderPanel();
+
+    try {
+      const commitButton = findButtonByText("Commit");
+      expect(commitButton).not.toBeNull();
+      expect(commitButton?.textContent).toContain("5");
+      expect(document.body.textContent).not.toContain("Behind upstream");
     } finally {
       await screen.unmount();
       host.remove();
