@@ -168,6 +168,43 @@ function pullDisabledReason(input: {
   return null;
 }
 
+function RemoteCommitCounts({
+  aheadCount,
+  behindCount,
+}: {
+  aheadCount: number;
+  behindCount: number;
+}) {
+  if (aheadCount <= 0 && behindCount <= 0) {
+    return null;
+  }
+
+  const labelParts = [
+    aheadCount > 0 ? `${aheadCount} outgoing commit${aheadCount === 1 ? "" : "s"}` : null,
+    behindCount > 0 ? `${behindCount} incoming commit${behindCount === 1 ? "" : "s"}` : null,
+  ].filter(Boolean);
+
+  return (
+    <span
+      className="flex items-center gap-2 text-[11px] tabular-nums"
+      aria-label={labelParts.join(", ")}
+    >
+      {aheadCount > 0 ? (
+        <span className="flex items-center gap-0.5">
+          <ArrowUpIcon className="size-3" />
+          {aheadCount}
+        </span>
+      ) : null}
+      {behindCount > 0 ? (
+        <span className="flex items-center gap-0.5">
+          <ArrowDownIcon className="size-3" />
+          {behindCount}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 function sourceControlRowKey(row: SourceControlListRow): string {
   if (row.kind === "section") {
     return `section:${row.section}`;
@@ -868,8 +905,15 @@ export default function SourceControlPanel({ mode = "sidebar", onClose }: Source
   // Once there are local commits to push, promote Push to the primary button
   // (showing ahead/behind counts like VS Code) and demote Commit into the menu.
   const pushMenuItem = gitActionMenuItems.find((item) => item.id === "push") ?? null;
-  // Only promote Push once the working tree is clean, otherwise committing the
-  // pending changes stays the primary action.
+  // Only promote sync actions once the working tree is clean, otherwise
+  // committing the pending changes stays the primary action while still showing
+  // the remote counts.
+  const showPullPrimary =
+    behindCount > 0 &&
+    aheadCount === 0 &&
+    !hasChanges &&
+    gitStatus?.refName !== null &&
+    gitStatus?.hasUpstream === true;
   const showPushPrimary = aheadCount > 0 && !hasChanges && pushMenuItem !== null;
   const pushReason = pushMenuItem
     ? getMenuActionDisabledReason({
@@ -1080,7 +1124,25 @@ export default function SourceControlPanel({ mode = "sidebar", onClose }: Source
               </Tooltip>
             </div>
             <div className="flex items-stretch">
-              {showPushPrimary ? (
+              {showPullPrimary ? (
+                <Button
+                  size="sm"
+                  className="flex-1 rounded-e-none"
+                  disabled={pullReason !== null}
+                  title={pullReason ?? undefined}
+                  onClick={handlePull}
+                >
+                  {isGitActionRunning ? (
+                    <Spinner className="size-3.5" />
+                  ) : (
+                    <RefreshCwIcon className="size-3.5" />
+                  )}
+                  Pull
+                  {!isGitActionRunning ? (
+                    <RemoteCommitCounts aheadCount={0} behindCount={behindCount} />
+                  ) : null}
+                </Button>
+              ) : showPushPrimary ? (
                 <Button
                   size="sm"
                   className="flex-1 rounded-e-none"
@@ -1095,18 +1157,7 @@ export default function SourceControlPanel({ mode = "sidebar", onClose }: Source
                   )}
                   Push
                   {!isPushing ? (
-                    <span className="flex items-center gap-2 text-[11px] tabular-nums">
-                      <span className="flex items-center gap-0.5">
-                        <ArrowUpIcon className="size-3" />
-                        {aheadCount}
-                      </span>
-                      {behindCount > 0 ? (
-                        <span className="flex items-center gap-0.5">
-                          <ArrowDownIcon className="size-3" />
-                          {behindCount}
-                        </span>
-                      ) : null}
-                    </span>
+                    <RemoteCommitCounts aheadCount={aheadCount} behindCount={behindCount} />
                   ) : null}
                 </Button>
               ) : (
@@ -1122,6 +1173,9 @@ export default function SourceControlPanel({ mode = "sidebar", onClose }: Source
                     <CheckIcon className="size-3.5" />
                   )}
                   Commit
+                  {!isCommitting ? (
+                    <RemoteCommitCounts aheadCount={aheadCount} behindCount={behindCount} />
+                  ) : null}
                 </Button>
               )}
               <Menu>
@@ -1219,13 +1273,6 @@ export default function SourceControlPanel({ mode = "sidebar", onClose }: Source
                   <CloudUploadIcon className="size-3.5" />
                   Publish repository
                 </Button>
-              ) : null}
-              {gitStatus &&
-              gitStatus.refName !== null &&
-              !gitStatus.hasWorkingTreeChanges &&
-              gitStatus.behindCount > 0 &&
-              gitStatus.aheadCount === 0 ? (
-                <p className="text-[11px] text-warning">Behind upstream. Pull/rebase first.</p>
               ) : null}
               {gitStatusError ? (
                 <p className="text-[11px] text-destructive">{gitStatusError.message}</p>
