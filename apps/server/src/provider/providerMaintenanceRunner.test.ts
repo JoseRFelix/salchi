@@ -784,7 +784,7 @@ describe("providerMaintenanceRunner", () => {
     );
   });
 
-  it.effect("continues the update job when the caller scope closes during launch", () => {
+  it.effect("continues the update job when the caller fiber is interrupted during launch", () => {
     const startedLatch: { resolve: () => void } = { resolve: () => {} };
     const releaseLatch: { resolve: () => void } = { resolve: () => {} };
     const started = new Promise<void>((resolve) => {
@@ -794,13 +794,40 @@ describe("providerMaintenanceRunner", () => {
       releaseLatch.resolve = resolve;
     });
     return Effect.gen(function* () {
-      const { registry } = yield* makeRegistry(baseProvider);
+      const launchWriteStarted = yield* Deferred.make<void>();
+      const releaseLaunchWrite = yield* Deferred.make<void>();
+      const { registry: delegateRegistry } = yield* makeRegistry(baseProvider);
+      const registry: ProviderRegistryShape = {
+        ...delegateRegistry,
+        setProviderMaintenanceActionState: (input) => {
+          if (input.instanceId === CODEX_INSTANCE_ID && input.state?.status === "queued") {
+            return Deferred.succeed(launchWriteStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseLaunchWrite)),
+              Effect.andThen(delegateRegistry.setProviderMaintenanceActionState(input)),
+            );
+          }
+          return delegateRegistry.setProviderMaintenanceActionState(input);
+        },
+      };
+      const waitForStatus = providerStatusWaiters.get(delegateRegistry);
+      if (waitForStatus) {
+        providerStatusWaiters.set(registry, waitForStatus);
+      }
       const updater = yield* makeTestRunner(registry);
       const callerScope = yield* Scope.make("sequential");
+      const interruptScope = yield* Scope.make("sequential");
 
-      yield* updater
+      const launchFiber = yield* updater
         .updateProvider(CODEX_DRIVER)
         .pipe(Effect.forkIn(callerScope, { startImmediately: true }));
+      yield* Deferred.await(launchWriteStarted);
+      const interruptFiber = yield* Fiber.interrupt(launchFiber).pipe(
+        Effect.forkIn(interruptScope, { startImmediately: true }),
+      );
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(releaseLaunchWrite, undefined);
+      yield* Fiber.join(interruptFiber);
+      yield* Scope.close(interruptScope, Exit.void);
       yield* Scope.close(callerScope, Exit.void);
 
       yield* Effect.promise(() => started);
