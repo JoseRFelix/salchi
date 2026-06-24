@@ -1,7 +1,11 @@
 import { useNavigate } from "@tanstack/react-router";
 import { DownloadIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { type ProviderDriverKind, type ProviderInstanceId } from "@t3tools/contracts";
+import {
+  type ProviderDriverKind,
+  type ProviderInstanceId,
+  type ServerProvider,
+} from "@t3tools/contracts";
 
 import { ensureLocalApi } from "../localApi";
 import { useDismissedProviderUpdateNotificationKeys } from "../providerUpdateDismissal";
@@ -10,7 +14,6 @@ import { PROVIDER_ICON_BY_PROVIDER } from "./chat/providerIconUtils";
 import {
   canOneClickUpdateProviderCandidate,
   collectProviderUpdateCandidates,
-  collectUpdatedProviderSnapshots,
   firstRejectedProviderUpdateMessage,
   getProviderUpdateInitialToastView,
   getProviderUpdateProgressToastView,
@@ -22,6 +25,7 @@ import {
 import { stackedThreadToast, toastManager } from "./ui/toast";
 
 const seenProviderUpdateNotificationKeys = new Set<string>();
+const PROVIDER_UPDATE_LAUNCH_TIMEOUT_MS = 10_000;
 type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
 
 type ActiveProviderUpdateToast =
@@ -32,7 +36,18 @@ type ActiveProviderUpdateToast =
       readonly toastId: ProviderUpdateToastId;
       readonly providerInstanceIds: ReadonlySet<ProviderInstanceId>;
       readonly providerCount: number;
+      readonly launchTimeoutId: ReturnType<typeof setTimeout> | null;
     };
+
+function hasProviderUpdateStateForTargets(
+  providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "updateState">>,
+  providerInstanceIds: ReadonlySet<ProviderInstanceId>,
+): boolean {
+  return providers.some(
+    (provider) =>
+      providerInstanceIds.has(provider.instanceId) && provider.updateState !== undefined,
+  );
+}
 
 function ProviderUpdateToastIcon({ provider }: { provider: ProviderDriverKind }) {
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[provider];
@@ -104,6 +119,7 @@ export function ProviderUpdateLaunchNotification() {
   const navigate = useNavigate();
   const providers = useServerProviders();
   const activeToastRef = useRef<ActiveProviderUpdateToast | null>(null);
+  const providersRef = useRef(providers);
   const { dismissedNotificationKeys, dismissNotificationKey } =
     useDismissedProviderUpdateNotificationKeys();
 
@@ -118,6 +134,33 @@ export function ProviderUpdateLaunchNotification() {
     [providers, updateProviders],
   );
 
+  useEffect(() => {
+    providersRef.current = providers;
+  }, [providers]);
+
+  const clearLaunchTimeout = useCallback((activeToast: ActiveProviderUpdateToast) => {
+    if (activeToast.kind !== "update" || activeToast.launchTimeoutId === null) {
+      return;
+    }
+    clearTimeout(activeToast.launchTimeoutId);
+    if (activeToastRef.current === activeToast) {
+      activeToastRef.current = {
+        ...activeToast,
+        launchTimeoutId: null,
+      };
+    }
+  }, []);
+
+  useEffect(
+    () => () => {
+      const activeToast = activeToastRef.current;
+      if (activeToast) {
+        clearLaunchTimeout(activeToast);
+      }
+    },
+    [clearLaunchTimeout],
+  );
+
   const openProviderSettings = useCallback(
     (toastId?: ProviderUpdateToastId) => {
       const activeToast = activeToastRef.current;
@@ -127,11 +170,12 @@ export function ProviderUpdateLaunchNotification() {
         toastManager.close(activeToast.toastId);
       }
       if (activeToast && (toastId === undefined || activeToast.toastId === toastId)) {
+        clearLaunchTimeout(activeToast);
         activeToastRef.current = null;
       }
       void navigate({ to: "/settings/providers" });
     },
-    [navigate],
+    [clearLaunchTimeout, navigate],
   );
 
   useEffect(() => {
@@ -143,6 +187,9 @@ export function ProviderUpdateLaunchNotification() {
     const activeProviders = providers.filter((provider) =>
       activeToast.providerInstanceIds.has(provider.instanceId),
     );
+    if (activeProviders.some((provider) => provider.updateState !== undefined)) {
+      clearLaunchTimeout(activeToast);
+    }
     const view = getProviderUpdateProgressToastView({
       providers: activeProviders,
       providerCount: activeToast.providerCount,
@@ -154,9 +201,10 @@ export function ProviderUpdateLaunchNotification() {
     });
 
     if (isTerminalProviderUpdateToastView(view)) {
+      clearLaunchTimeout(activeToastRef.current ?? activeToast);
       activeToastRef.current = null;
     }
-  }, [providers, openProviderSettings]);
+  }, [clearLaunchTimeout, providers, openProviderSettings]);
 
   useEffect(() => {
     const activeToast = activeToastRef.current;
@@ -193,12 +241,32 @@ export function ProviderUpdateLaunchNotification() {
 
       const providerCount = oneClickProviders.length;
       const providerInstanceIds = new Set(oneClickProviders.map((provider) => provider.instanceId));
+      const launchTimeoutId = setTimeout(() => {
+        const activeUpdateToast = activeToastRef.current;
+        if (activeUpdateToast?.kind !== "update" || activeUpdateToast.toastId !== toastId) {
+          return;
+        }
+        if (hasProviderUpdateStateForTargets(providersRef.current, providerInstanceIds)) {
+          clearLaunchTimeout(activeUpdateToast);
+          return;
+        }
+        updateProviderUpdateToast({
+          toastId,
+          view: getProviderUpdateRejectedToastView(
+            providerCount,
+            "The connection changed before Salchi could confirm the update started. Reconnect and try again.",
+          ),
+          openSettings,
+        });
+        activeToastRef.current = null;
+      }, PROVIDER_UPDATE_LAUNCH_TIMEOUT_MS);
       activeToastRef.current = {
         kind: "update",
         key: notificationKey,
         toastId,
         providerInstanceIds,
         providerCount,
+        launchTimeoutId,
       };
 
       updateProviderUpdateToast({
@@ -221,7 +289,11 @@ export function ProviderUpdateLaunchNotification() {
         }
 
         const rejectedMessage = firstRejectedProviderUpdateMessage(results);
-        if (rejectedMessage) {
+        if (
+          rejectedMessage &&
+          !hasProviderUpdateStateForTargets(providersRef.current, providerInstanceIds)
+        ) {
+          clearLaunchTimeout(activeUpdateToast);
           updateProviderUpdateToast({
             toastId,
             view: getProviderUpdateRejectedToastView(providerCount, rejectedMessage),
@@ -231,22 +303,8 @@ export function ProviderUpdateLaunchNotification() {
           return;
         }
 
-        const updatedProviderSnapshots = collectUpdatedProviderSnapshots({
-          results,
-          providerInstanceIds,
-        });
-        const view = getProviderUpdateProgressToastView({
-          providers: updatedProviderSnapshots,
-          providerCount,
-        });
-        updateProviderUpdateToast({
-          toastId,
-          view,
-          openSettings,
-        });
-
-        if (isTerminalProviderUpdateToastView(view)) {
-          activeToastRef.current = null;
+        if (hasProviderUpdateStateForTargets(providersRef.current, providerInstanceIds)) {
+          clearLaunchTimeout(activeUpdateToast);
         }
       });
     };

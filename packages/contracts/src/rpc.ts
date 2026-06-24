@@ -252,6 +252,11 @@ export const WsServerRefreshUsageLimitsRpc = Rpc.make(WS_METHODS.serverRefreshUs
 });
 
 export const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
+  /**
+   * Starts or attaches to a server-owned provider update job. The response is
+   * an acknowledgement with current provider snapshots; terminal update
+   * results are delivered later through provider status updates.
+   */
   payload: ServerProviderUpdateInput,
   success: ServerProviderUpdatedPayload,
   error: ServerProviderUpdateError,

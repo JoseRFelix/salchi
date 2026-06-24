@@ -99,6 +99,10 @@ import {
   ProviderRegistry,
   type ProviderRegistryShape,
 } from "./provider/Services/ProviderRegistry.ts";
+import {
+  ProviderMaintenanceRunner,
+  type ProviderMaintenanceRunnerShape,
+} from "./provider/providerMaintenanceRunner.ts";
 import { ProviderService, type ProviderServiceShape } from "./provider/Services/ProviderService.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import { ServerLifecycleEvents, type ServerLifecycleEventsShape } from "./serverLifecycleEvents.ts";
@@ -342,6 +346,7 @@ const buildAppUnderTest = (options?: {
   layers?: {
     keybindings?: Partial<KeybindingsShape>;
     providerRegistry?: Partial<ProviderRegistryShape>;
+    providerMaintenanceRunner?: Partial<ProviderMaintenanceRunnerShape>;
     providerService?: Partial<ProviderServiceShape>;
     serverSettings?: Partial<ServerSettingsShape>;
     externalLauncher?: Partial<ExternalLauncher.ExternalLauncherShape>;
@@ -525,6 +530,22 @@ const buildAppUnderTest = (options?: {
           ...options.layers.vcsStatusBroadcaster,
         })
       : VcsStatusBroadcaster.layer.pipe(Layer.provide(gitWorkflowLayer));
+    const providerRegistryLayer = Layer.mock(ProviderRegistry)({
+      getProviders: Effect.succeed([]),
+      refresh: () => Effect.succeed([]),
+      refreshInstance: () => Effect.succeed([]),
+      getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
+        Effect.succeed(
+          makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null }),
+        ),
+      setProviderMaintenanceActionState: () => Effect.succeed([]),
+      streamChanges: Stream.empty,
+      ...options?.layers?.providerRegistry,
+    });
+    const providerMaintenanceRunnerLayer = Layer.mock(ProviderMaintenanceRunner)({
+      updateProvider: () => Effect.succeed({ providers: [] }),
+      ...options?.layers?.providerMaintenanceRunner,
+    });
 
     const servedRoutesLayer = HttpRouter.serve(makeRoutesLayer, {
       disableListenLog: true,
@@ -540,20 +561,7 @@ const buildAppUnderTest = (options?: {
           ...options?.layers?.keybindings,
         }),
       ),
-      Layer.provide(
-        Layer.mock(ProviderRegistry)({
-          getProviders: Effect.succeed([]),
-          refresh: () => Effect.succeed([]),
-          refreshInstance: () => Effect.succeed([]),
-          getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
-            Effect.succeed(
-              makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null }),
-            ),
-          setProviderMaintenanceActionState: () => Effect.succeed([]),
-          streamChanges: Stream.empty,
-          ...options?.layers?.providerRegistry,
-        }),
-      ),
+      Layer.provide(Layer.merge(providerRegistryLayer, providerMaintenanceRunnerLayer)),
       Layer.provide(
         Layer.mock(ProviderService)({
           startSession: () => Effect.die("Unsupported provider service call in test"),

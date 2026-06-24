@@ -15,6 +15,7 @@ import {
   type ServerConfig,
   type ServerProcessResourceHistoryResult,
   type ServerProvider,
+  type ServerProviderUpdateState,
   type SourceControlDiscoveryResult,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -31,6 +32,7 @@ import { ConnectionsSettings } from "./ConnectionsSettings";
 import { DiagnosticsSettingsPanel } from "./DiagnosticsSettings";
 import { GeneralSettingsPanel, ProviderSettingsPanel } from "./SettingsPanels";
 import { SourceControlSettingsPanel } from "./SourceControlSettings";
+import { toastManager } from "../ui/toast";
 
 vi.mock("./PushNotificationSettings", () => ({
   PushNotificationSettingsRow: () => null,
@@ -241,6 +243,33 @@ function createOutdatedProvider(
       checkedAt: "2026-05-04T10:00:00.000Z",
       updateCommand,
       canUpdate: true,
+    },
+  };
+}
+
+function createOutdatedProviderWithUpdateState(
+  driver: string,
+  status: ServerProviderUpdateState["status"],
+): ServerProvider {
+  const finishedAt =
+    status === "succeeded" || status === "failed" || status === "unchanged"
+      ? "2026-05-04T10:01:00.000Z"
+      : null;
+  return {
+    ...createOutdatedProvider(driver),
+    updateState: {
+      status,
+      startedAt: status === "queued" ? null : "2026-05-04T10:00:30.000Z",
+      finishedAt,
+      message:
+        status === "succeeded"
+          ? "Provider updated."
+          : status === "failed"
+            ? "Update command exited with code 1."
+            : status === "unchanged"
+              ? "Update command completed, but Salchi still detects an outdated provider version."
+              : "Updating provider.",
+      output: null,
     },
   };
 }
@@ -479,6 +508,8 @@ describe("GeneralSettingsPanel observability", () => {
     resetServerStateForTests();
     await __resetLocalApiForTests();
     authAccessHarness.reset();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("hides owner pairing tools in browser-served loopback builds without remote exposure", async () => {
@@ -1209,6 +1240,133 @@ describe("GeneralSettingsPanel observability", () => {
       provider: ProviderDriverKind.make("codex"),
       instanceId: ProviderInstanceId.make("codex"),
     });
+  });
+
+  it("clears the provider update launch spinner when streamed provider state finishes first", async () => {
+    const updateProvider = vi.fn<LocalApi["server"]["updateProvider"]>(
+      () => new Promise(() => undefined),
+    );
+    window.nativeApi = {
+      persistence: {
+        getClientSettings: vi.fn().mockResolvedValue(null),
+        setClientSettings: vi.fn().mockResolvedValue(undefined),
+      },
+      server: {
+        updateProvider,
+      },
+    } as unknown as LocalApi;
+
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      providers: [createOutdatedProvider("codex")],
+    });
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ProviderSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Update available — view details" }).click();
+    await page.getByRole("button", { name: "Update now" }).click();
+    await expect.element(page.getByRole("button", { name: "Updating" })).toBeInTheDocument();
+
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      providers: [createOutdatedProviderWithUpdateState("codex", "succeeded")],
+    });
+
+    await expect.element(page.getByRole("button", { name: "Update now" })).toBeInTheDocument();
+  });
+
+  it("ignores rejected provider update launch promises after provider state starts streaming", async () => {
+    let rejectUpdate!: (reason: unknown) => void;
+    const updateProvider = vi.fn<LocalApi["server"]["updateProvider"]>(
+      () =>
+        new Promise((_, reject) => {
+          rejectUpdate = reject;
+        }),
+    );
+    const toastAdd = vi
+      .spyOn(toastManager, "add")
+      .mockReturnValue("provider-update-toast" as ReturnType<typeof toastManager.add>);
+    window.nativeApi = {
+      persistence: {
+        getClientSettings: vi.fn().mockResolvedValue(null),
+        setClientSettings: vi.fn().mockResolvedValue(undefined),
+      },
+      server: {
+        updateProvider,
+      },
+    } as unknown as LocalApi;
+
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      providers: [createOutdatedProvider("codex")],
+    });
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ProviderSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Update available — view details" }).click();
+    await page.getByRole("button", { name: "Update now" }).click();
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      providers: [createOutdatedProviderWithUpdateState("codex", "running")],
+    });
+
+    rejectUpdate(new Error("WebSocket closed"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(toastAdd).not.toHaveBeenCalled();
+    await expect.element(page.getByRole("button", { name: "Updating" })).toBeInTheDocument();
+  });
+
+  it("times out an unconfirmed provider update launch", async () => {
+    vi.useFakeTimers();
+    const updateProvider = vi.fn<LocalApi["server"]["updateProvider"]>(
+      () => new Promise(() => undefined),
+    );
+    const toastAdd = vi
+      .spyOn(toastManager, "add")
+      .mockReturnValue("provider-update-toast" as ReturnType<typeof toastManager.add>);
+    window.nativeApi = {
+      persistence: {
+        getClientSettings: vi.fn().mockResolvedValue(null),
+        setClientSettings: vi.fn().mockResolvedValue(undefined),
+      },
+      server: {
+        updateProvider,
+      },
+    } as unknown as LocalApi;
+
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      providers: [createOutdatedProvider("codex")],
+    });
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ProviderSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Update available — view details" }).click();
+    await page.getByRole("button", { name: "Update now" }).click();
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(toastAdd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Could not confirm provider update",
+        description:
+          "The connection changed before Salchi could confirm the update started. Reconnect and try again.",
+      }),
+    );
+    await expect.element(page.getByRole("button", { name: "Update now" })).toBeInTheDocument();
   });
 
   it("keeps long provider update commands inside the fixed-width popover", async () => {
