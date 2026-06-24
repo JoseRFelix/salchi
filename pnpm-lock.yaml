@@ -248,8 +248,8 @@ importers:
         specifier: ^0.9.0
         version: 0.9.0
       '@legendapp/list':
-        specifier: 3.0.6
-        version: 3.0.6(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+        specifier: 3.2.0
+        version: 3.2.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
       '@lexical/react':
         specifier: ^0.44.0
         version: 0.44.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(yjs@13.6.31)
@@ -1888,8 +1888,8 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@legendapp/list@3.0.6':
-    resolution: {integrity: sha512-umEkE+WQpw61Ep1lLQC6f/UzXl19Jxqysg+WUP5VnvfA9TxCCj0VsxU8n2ukEFTovSIrY3ab4aFNKgJt9P1Ngg==}
+  '@legendapp/list@3.2.0':
+    resolution: {integrity: sha512-bN+g/oQYjFz+UAyuBN4cmYJAwdJS1TdNcZZOVlh3+VwCQUWrsg0PH46Mvm76gdZSCYMfoFanPY4dKnILcYEzeg==}
     peerDependencies:
       react: '*'
       react-dom: '*'
@@ -7960,7 +7960,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@legendapp/list@3.0.6(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
+  '@legendapp/list@3.2.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
     dependencies:
       react: 19.2.6
       use-sync-external-store: 1.6.0(react@19.2.6)
