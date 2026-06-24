@@ -6,6 +6,7 @@ import {
   type ServerProviderUpdateState,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -32,6 +33,20 @@ const CODEX_INSTANCE_ID = ProviderInstanceId.make("codex");
 const CURSOR_INSTANCE_ID = ProviderInstanceId.make("cursor");
 const OPENCODE_INSTANCE_ID = ProviderInstanceId.make("opencode");
 const encoder = new TextEncoder();
+
+interface ProviderStatusWaiter {
+  readonly instanceId: ProviderInstanceId;
+  readonly status: ServerProviderUpdateState["status"];
+  readonly deferred: Deferred.Deferred<ServerProvider>;
+}
+
+const providerStatusWaiters = new WeakMap<
+  ProviderRegistryShape,
+  (
+    instanceId: ProviderInstanceId,
+    status: ServerProviderUpdateState["status"],
+  ) => Effect.Effect<ServerProvider>
+>();
 
 afterEach(() => {
   clearLatestProviderVersionCacheForTests();
@@ -152,6 +167,7 @@ function makeRegistry(
       Array.isArray(initialProviders) ? initialProviders : [initialProviders],
     );
     const updateStatesRef = yield* Ref.make<ReadonlyArray<ServerProviderUpdateState>>([]);
+    const statusWaitersRef = yield* Ref.make<ReadonlyArray<ProviderStatusWaiter>>([]);
 
     const setProviderMaintenanceActionState = Effect.fn(
       "providerMaintenanceRunner.test.setProviderMaintenanceActionState",
@@ -164,7 +180,7 @@ function makeRegistry(
       if (updateState) {
         yield* Ref.update(updateStatesRef, (states) => [...states, updateState]);
       }
-      return yield* Ref.updateAndGet(providersRef, (providers) =>
+      const providers = yield* Ref.updateAndGet(providersRef, (providers) =>
         providers.map((candidate) => {
           if (candidate.instanceId !== input.instanceId) {
             return candidate;
@@ -179,6 +195,29 @@ function makeRegistry(
           };
         }),
       );
+      const updatedProvider = providers.find(
+        (provider) => provider.instanceId === input.instanceId,
+      );
+      if (updateState && updatedProvider) {
+        const matchingWaiters = yield* Ref.modify(statusWaitersRef, (waiters) => {
+          const matching: ProviderStatusWaiter[] = [];
+          const remaining: ProviderStatusWaiter[] = [];
+          for (const waiter of waiters) {
+            if (waiter.instanceId === input.instanceId && waiter.status === updateState.status) {
+              matching.push(waiter);
+            } else {
+              remaining.push(waiter);
+            }
+          }
+          return [matching, remaining] as const;
+        });
+        yield* Effect.forEach(
+          matchingWaiters,
+          (waiter) => Deferred.succeed(waiter.deferred, updatedProvider),
+          { discard: true },
+        );
+      }
+      return providers;
     });
 
     const registry: ProviderRegistryShape = {
@@ -190,6 +229,39 @@ function makeRegistry(
       setProviderMaintenanceActionState,
       streamChanges: Stream.empty,
     };
+
+    providerStatusWaiters.set(
+      registry,
+      (instanceId: ProviderInstanceId, status: ServerProviderUpdateState["status"]) =>
+        Effect.gen(function* () {
+          const existingProvider = (yield* Ref.get(providersRef)).find(
+            (provider) => provider.instanceId === instanceId,
+          );
+          if (existingProvider?.updateState?.status === status) {
+            return existingProvider;
+          }
+
+          const deferred = yield* Deferred.make<ServerProvider>();
+          const waiter: ProviderStatusWaiter = {
+            instanceId,
+            status,
+            deferred,
+          };
+          yield* Ref.update(statusWaitersRef, (waiters) => [...waiters, waiter]);
+
+          const providerAfterRegister = (yield* Ref.get(providersRef)).find(
+            (provider) => provider.instanceId === instanceId,
+          );
+          if (providerAfterRegister?.updateState?.status === status) {
+            yield* Ref.update(statusWaitersRef, (waiters) =>
+              waiters.filter((candidate) => candidate !== waiter),
+            );
+            return providerAfterRegister;
+          }
+
+          return yield* Deferred.await(deferred);
+        }),
+    );
 
     return {
       registry,
@@ -223,16 +295,11 @@ const waitForProviderUpdateStatus = (
   status: ServerProviderUpdateState["status"],
 ) =>
   Effect.gen(function* () {
-    for (let attempt = 0; attempt < 1_000; attempt += 1) {
-      const provider = (yield* registry.getProviders).find(
-        (candidate) => candidate.instanceId === instanceId,
-      );
-      if (provider?.updateState?.status === status) {
-        return provider;
-      }
-      yield* Effect.yieldNow;
+    const waitForStatus = providerStatusWaiters.get(registry);
+    if (!waitForStatus) {
+      assert.fail("Provider registry does not support test status waiting.");
     }
-    assert.fail(`Timed out waiting for provider ${instanceId} update status ${status}.`);
+    return yield* waitForStatus(instanceId, status);
   });
 
 describe("providerMaintenanceRunner", () => {
@@ -690,6 +757,53 @@ describe("providerMaintenanceRunner", () => {
 
       yield* Effect.promise(() => started);
       yield* Scope.close(callerScope, Exit.void);
+      assert.strictEqual((yield* registry.getProviders)[0]?.updateState?.status, "running");
+
+      releaseLatch.resolve();
+      const completedProvider = yield* waitForProviderUpdateStatus(
+        registry,
+        CODEX_INSTANCE_ID,
+        "succeeded",
+      );
+      assert.strictEqual(completedProvider.updateState?.status, "succeeded");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          latestVersionHttpClient("0.0.0"),
+          mockSpawnerLayer(() => {
+            startedLatch.resolve();
+            return {
+              stdout: "updated",
+              exitCode: Effect.promise(() => release).pipe(
+                Effect.as(ChildProcessSpawner.ExitCode(0)),
+              ),
+            };
+          }),
+        ),
+      ),
+    );
+  });
+
+  it.effect("continues the update job when the caller scope closes during launch", () => {
+    const startedLatch: { resolve: () => void } = { resolve: () => {} };
+    const releaseLatch: { resolve: () => void } = { resolve: () => {} };
+    const started = new Promise<void>((resolve) => {
+      startedLatch.resolve = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseLatch.resolve = resolve;
+    });
+    return Effect.gen(function* () {
+      const { registry } = yield* makeRegistry(baseProvider);
+      const updater = yield* makeTestRunner(registry);
+      const callerScope = yield* Scope.make("sequential");
+
+      yield* updater
+        .updateProvider(CODEX_DRIVER)
+        .pipe(Effect.forkIn(callerScope, { startImmediately: true }));
+      yield* Scope.close(callerScope, Exit.void);
+
+      yield* Effect.promise(() => started);
       assert.strictEqual((yield* registry.getProviders)[0]?.updateState?.status, "running");
 
       releaseLatch.resolve();

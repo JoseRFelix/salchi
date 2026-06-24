@@ -8,7 +8,6 @@ import {
   type ProviderInstanceConfig,
   type ProviderInstanceId,
   type ScopedThreadRef,
-  type ServerProvider,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
@@ -76,6 +75,10 @@ import {
 import { ProjectFavicon } from "../ProjectFavicon";
 import { useServerObservability, useServerProviders } from "../../rpc/serverState";
 import { PushNotificationSettingsRow } from "./PushNotificationSettings";
+import {
+  hasProviderUpdateStateForInstance,
+  PROVIDER_UPDATE_LAUNCH_TIMEOUT_MS,
+} from "../../providerUpdateLaunchState";
 
 const THEME_OPTIONS = [
   {
@@ -99,16 +102,6 @@ const TIMESTAMP_FORMAT_LABELS = {
 } as const;
 
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
-const PROVIDER_UPDATE_LAUNCH_TIMEOUT_MS = 10_000;
-
-function hasProviderUpdateStateForInstance(
-  providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "updateState">>,
-  instanceId: ProviderInstanceId,
-): boolean {
-  return providers.some(
-    (provider) => provider.instanceId === instanceId && provider.updateState !== undefined,
-  );
-}
 
 function withoutProviderInstanceKey<V>(
   record: Readonly<Record<ProviderInstanceId, V>> | undefined,

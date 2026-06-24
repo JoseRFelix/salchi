@@ -495,95 +495,99 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
       }),
     });
 
-    const launch = yield* SynchronizedRef.modifyEffect(
-      activeJobsRef,
-      (
-        activeJobs,
-      ): Effect.Effect<
-        readonly [ProviderUpdateLaunch, ReadonlyMap<ProviderInstanceId, ActiveProviderUpdateJob>]
-      > => {
-        if (activeJobs.has(instanceId)) {
-          return providerRegistry.getProviders.pipe(
-            Effect.tap(() =>
-              Effect.logInfo("provider update job attached to existing job", {
-                provider,
-                providerInstanceId: instanceId,
-              }),
-            ),
-            Effect.map(
-              (providers) =>
-                [
-                  {
-                    payload: { providers },
-                    startGate: null,
-                  },
-                  activeJobs,
-                ] as const,
-            ),
-          );
-        }
-
-        return Effect.gen(function* () {
-          const providers = yield* setLaunchQueuedState;
-          const jobId = yield* Ref.updateAndGet(nextJobIdRef, (current) => current + 1);
-          const startGate = yield* Deferred.make<void>();
-          const job = Deferred.await(startGate).pipe(
-            Effect.andThen(
-              runProviderUpdateToCompletion({
-                provider,
-                instanceId,
-                capabilities,
-                update,
-              }).pipe(
-                Effect.tap((payload) =>
-                  logCompletedJob({
-                    provider,
-                    instanceId,
-                    payload,
-                  }),
-                ),
-                Effect.catchCause((cause) => {
-                  if (Cause.hasInterruptsOnly(cause)) {
-                    return Effect.logWarning(
-                      "provider update job interrupted during server shutdown",
-                      {
-                        provider,
-                        providerInstanceId: instanceId,
-                      },
-                    );
-                  }
-                  return Effect.logError("provider update job failed", {
-                    provider,
-                    providerInstanceId: instanceId,
-                    cause: Cause.pretty(cause),
-                  });
+    const launch = yield* Effect.uninterruptible(
+      SynchronizedRef.modifyEffect(
+        activeJobsRef,
+        (
+          activeJobs,
+        ): Effect.Effect<
+          readonly [ProviderUpdateLaunch, ReadonlyMap<ProviderInstanceId, ActiveProviderUpdateJob>]
+        > => {
+          if (activeJobs.has(instanceId)) {
+            return providerRegistry.getProviders.pipe(
+              Effect.tap(() =>
+                Effect.logInfo("provider update job attached to existing job", {
+                  provider,
+                  providerInstanceId: instanceId,
                 }),
-                Effect.asVoid,
               ),
-            ),
-            Effect.ensuring(removeActiveJob(instanceId, jobId)),
-          );
-          const fiber = yield* job.pipe(Effect.forkIn(workerScope));
-          const next = new Map(activeJobs);
-          next.set(instanceId, { jobId, fiber });
-          return [
-            {
-              payload: { providers },
-              startGate,
-            },
-            next,
-          ] as const;
-        });
-      },
-    );
+              Effect.map(
+                (providers) =>
+                  [
+                    {
+                      payload: { providers },
+                      startGate: null,
+                    },
+                    activeJobs,
+                  ] as const,
+              ),
+            );
+          }
 
-    if (launch.startGate !== null) {
-      yield* Effect.logInfo("provider update job launched", {
-        provider,
-        providerInstanceId: instanceId,
-      });
-      yield* Deferred.succeed(launch.startGate, undefined);
-    }
+          return Effect.gen(function* () {
+            const providers = yield* setLaunchQueuedState;
+            const jobId = yield* Ref.updateAndGet(nextJobIdRef, (current) => current + 1);
+            const startGate = yield* Deferred.make<void>();
+            const job = Deferred.await(startGate).pipe(
+              Effect.andThen(
+                runProviderUpdateToCompletion({
+                  provider,
+                  instanceId,
+                  capabilities,
+                  update,
+                }).pipe(
+                  Effect.tap((payload) =>
+                    logCompletedJob({
+                      provider,
+                      instanceId,
+                      payload,
+                    }),
+                  ),
+                  Effect.catchCause((cause) => {
+                    if (Cause.hasInterruptsOnly(cause)) {
+                      return Effect.logWarning(
+                        "provider update job interrupted during server shutdown",
+                        {
+                          provider,
+                          providerInstanceId: instanceId,
+                        },
+                      );
+                    }
+                    return Effect.logError("provider update job failed", {
+                      provider,
+                      providerInstanceId: instanceId,
+                      cause: Cause.pretty(cause),
+                    });
+                  }),
+                  Effect.asVoid,
+                ),
+              ),
+              Effect.ensuring(removeActiveJob(instanceId, jobId)),
+            );
+            const fiber = yield* job.pipe(Effect.forkIn(workerScope));
+            const next = new Map(activeJobs);
+            next.set(instanceId, { jobId, fiber });
+            return [
+              {
+                payload: { providers },
+                startGate,
+              },
+              next,
+            ] as const;
+          });
+        },
+      ).pipe(
+        Effect.tap((launch) => {
+          if (launch.startGate === null) {
+            return Effect.void;
+          }
+          return Effect.logInfo("provider update job launched", {
+            provider,
+            providerInstanceId: instanceId,
+          }).pipe(Effect.andThen(Deferred.succeed(launch.startGate, undefined)));
+        }),
+      ),
+    );
 
     return launch.payload;
   });

@@ -1,14 +1,14 @@
 import { useNavigate } from "@tanstack/react-router";
 import { DownloadIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import {
-  type ProviderDriverKind,
-  type ProviderInstanceId,
-  type ServerProvider,
-} from "@t3tools/contracts";
+import { type ProviderDriverKind, type ProviderInstanceId } from "@t3tools/contracts";
 
 import { ensureLocalApi } from "../localApi";
 import { useDismissedProviderUpdateNotificationKeys } from "../providerUpdateDismissal";
+import {
+  haveAllProviderUpdateStatesForTargets,
+  PROVIDER_UPDATE_LAUNCH_TIMEOUT_MS,
+} from "../providerUpdateLaunchState";
 import { useServerProviders } from "../rpc/serverState";
 import { PROVIDER_ICON_BY_PROVIDER } from "./chat/providerIconUtils";
 import {
@@ -25,7 +25,6 @@ import {
 import { stackedThreadToast, toastManager } from "./ui/toast";
 
 const seenProviderUpdateNotificationKeys = new Set<string>();
-const PROVIDER_UPDATE_LAUNCH_TIMEOUT_MS = 10_000;
 type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
 
 type ActiveProviderUpdateToast =
@@ -38,16 +37,6 @@ type ActiveProviderUpdateToast =
       readonly providerCount: number;
       readonly launchTimeoutId: ReturnType<typeof setTimeout> | null;
     };
-
-function hasProviderUpdateStateForTargets(
-  providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "updateState">>,
-  providerInstanceIds: ReadonlySet<ProviderInstanceId>,
-): boolean {
-  return providers.some(
-    (provider) =>
-      providerInstanceIds.has(provider.instanceId) && provider.updateState !== undefined,
-  );
-}
 
 function ProviderUpdateToastIcon({ provider }: { provider: ProviderDriverKind }) {
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[provider];
@@ -187,7 +176,7 @@ export function ProviderUpdateLaunchNotification() {
     const activeProviders = providers.filter((provider) =>
       activeToast.providerInstanceIds.has(provider.instanceId),
     );
-    if (activeProviders.some((provider) => provider.updateState !== undefined)) {
+    if (haveAllProviderUpdateStatesForTargets(providers, activeToast.providerInstanceIds)) {
       clearLaunchTimeout(activeToast);
     }
     const view = getProviderUpdateProgressToastView({
@@ -246,7 +235,7 @@ export function ProviderUpdateLaunchNotification() {
         if (activeUpdateToast?.kind !== "update" || activeUpdateToast.toastId !== toastId) {
           return;
         }
-        if (hasProviderUpdateStateForTargets(providersRef.current, providerInstanceIds)) {
+        if (haveAllProviderUpdateStatesForTargets(providersRef.current, providerInstanceIds)) {
           clearLaunchTimeout(activeUpdateToast);
           return;
         }
@@ -291,7 +280,7 @@ export function ProviderUpdateLaunchNotification() {
         const rejectedMessage = firstRejectedProviderUpdateMessage(results);
         if (
           rejectedMessage &&
-          !hasProviderUpdateStateForTargets(providersRef.current, providerInstanceIds)
+          !haveAllProviderUpdateStatesForTargets(providersRef.current, providerInstanceIds)
         ) {
           clearLaunchTimeout(activeUpdateToast);
           updateProviderUpdateToast({
@@ -303,7 +292,7 @@ export function ProviderUpdateLaunchNotification() {
           return;
         }
 
-        if (hasProviderUpdateStateForTargets(providersRef.current, providerInstanceIds)) {
+        if (haveAllProviderUpdateStatesForTargets(providersRef.current, providerInstanceIds)) {
           clearLaunchTimeout(activeUpdateToast);
         }
       });

@@ -530,7 +530,7 @@ const buildAppUnderTest = (options?: {
           ...options.layers.vcsStatusBroadcaster,
         })
       : VcsStatusBroadcaster.layer.pipe(Layer.provide(gitWorkflowLayer));
-    const providerRegistryLayer = Layer.mock(ProviderRegistry)({
+    const providerRegistryMock = {
       getProviders: Effect.succeed([]),
       refresh: () => Effect.succeed([]),
       refreshInstance: () => Effect.succeed([]),
@@ -541,9 +541,11 @@ const buildAppUnderTest = (options?: {
       setProviderMaintenanceActionState: () => Effect.succeed([]),
       streamChanges: Stream.empty,
       ...options?.layers?.providerRegistry,
-    });
+    } satisfies ProviderRegistryShape;
+    const providerRegistryLayer = Layer.mock(ProviderRegistry)(providerRegistryMock);
     const providerMaintenanceRunnerLayer = Layer.mock(ProviderMaintenanceRunner)({
-      updateProvider: () => Effect.succeed({ providers: [] }),
+      updateProvider: () =>
+        providerRegistryMock.getProviders.pipe(Effect.map((providers) => ({ providers }))),
       ...options?.layers?.providerMaintenanceRunner,
     });
 
