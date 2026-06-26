@@ -129,6 +129,7 @@ import {
 import {
   ThemeImportInput,
   ThemeImportResult,
+  ThemePreviewResult,
   ThemeProviderError,
   ThemeSearchInput,
   ThemeSearchResult,
@@ -203,6 +204,7 @@ export const WS_METHODS = {
 
   // Theme provider methods
   themesSearch: "themes.search",
+  themesPreview: "themes.preview",
   themesImport: "themes.import",
 
   // Source control methods
@@ -354,6 +356,12 @@ export const WsServerSendTestPushNotificationRpc = Rpc.make(
 export const WsThemesSearchRpc = Rpc.make(WS_METHODS.themesSearch, {
   payload: ThemeSearchInput,
   success: ThemeSearchResult,
+  error: ThemeProviderError,
+});
+
+export const WsThemesPreviewRpc = Rpc.make(WS_METHODS.themesPreview, {
+  payload: ThemeImportInput,
+  success: ThemePreviewResult,
   error: ThemeProviderError,
 });
 
@@ -693,6 +701,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerUnregisterPushSubscriptionRpc,
   WsServerSendTestPushNotificationRpc,
   WsThemesSearchRpc,
+  WsThemesPreviewRpc,
   WsThemesImportRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,

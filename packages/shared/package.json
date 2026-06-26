@@ -63,6 +63,10 @@
       "types": "./src/toolActivity.ts",
       "import": "./src/toolActivity.ts"
     },
+    "./themePreview": {
+      "types": "./src/themePreview.ts",
+      "import": "./src/themePreview.ts"
+    },
     "./Struct": {
       "types": "./src/Struct.ts",
       "import": "./src/Struct.ts"

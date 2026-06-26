@@ -64,6 +64,7 @@ import type {
 import type {
   ThemeImportInput,
   ThemeImportResult,
+  ThemePreviewResult,
   ThemeSearchInput,
   ThemeSearchResult,
 } from "./theme.ts";
@@ -547,6 +548,7 @@ export interface LocalApi {
   };
   themes: {
     search: (input: ThemeSearchInput) => Promise<ThemeSearchResult>;
+    preview: (input: ThemeImportInput) => Promise<ThemePreviewResult>;
     import: (input: ThemeImportInput) => Promise<ThemeImportResult>;
   };
 }

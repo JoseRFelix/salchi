@@ -1,4 +1,11 @@
-import { ArchiveIcon, ArchiveX, LoaderIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
+import {
+  ArchiveIcon,
+  ArchiveX,
+  LoaderIcon,
+  PaletteIcon,
+  PlusIcon,
+  RefreshCwIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   defaultInstanceIdForDriver,
@@ -35,9 +42,9 @@ import {
   useColorTheme,
 } from "../../hooks/useColorTheme";
 import { BUNDLED_THEMES, findBundledTheme, type ThemeDescriptor } from "../../themes";
-import type { ResolvedThemeType } from "../../themeMapping";
 import {
   getImportedThemesSnapshot,
+  importedThemeRecordToReference,
   subscribeImportedThemes,
   type ImportedThemeRecord,
 } from "../../importedThemes";
@@ -60,15 +67,7 @@ import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTime, formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
-import {
-  Select,
-  SelectGroup,
-  SelectGroupLabel,
-  SelectItem,
-  SelectPopup,
-  SelectTrigger,
-  SelectValue,
-} from "../ui/select";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -496,62 +495,6 @@ function colorThemeLabel(id: string, themes: ReadonlyArray<ThemeDescriptor>): st
   return themes.find((theme) => theme.id === id)?.label ?? findBundledTheme(id)?.label ?? id;
 }
 
-function ColorThemeModeSelect({
-  mode,
-  label,
-  value,
-  bundled,
-  imported,
-  onChange,
-}: {
-  mode: ResolvedThemeType;
-  label: string;
-  value: string;
-  bundled: ReadonlyArray<ThemeDescriptor>;
-  imported: ReadonlyArray<ThemeDescriptor>;
-  onChange: (id: string) => void;
-}) {
-  const all = useMemo(() => [...imported, ...bundled], [imported, bundled]);
-  return (
-    <label className="flex items-center justify-between gap-3 text-sm">
-      <span className="text-muted-foreground">{label}</span>
-      <Select
-        value={value}
-        onValueChange={(next) => {
-          if (next) onChange(next);
-        }}
-      >
-        <SelectTrigger className="w-44" aria-label={`${mode} mode color theme`}>
-          <SelectValue>{colorThemeLabel(value, all)}</SelectValue>
-        </SelectTrigger>
-        <SelectPopup align="end" alignItemWithTrigger={false}>
-          <SelectItem hideIndicator value={DEFAULT_THEME_SENTINEL}>
-            Default (built-in)
-          </SelectItem>
-          {imported.length > 0 ? (
-            <SelectGroup>
-              <SelectGroupLabel>Imported</SelectGroupLabel>
-              {imported.map((option) => (
-                <SelectItem hideIndicator key={option.id} value={option.id}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          ) : null}
-          <SelectGroup>
-            <SelectGroupLabel>Bundled</SelectGroupLabel>
-            {bundled.map((option) => (
-              <SelectItem hideIndicator key={option.id} value={option.id}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        </SelectPopup>
-      </Select>
-    </label>
-  );
-}
-
 function useImportedThemes(): ReadonlyArray<ImportedThemeRecord> {
   return useSyncExternalStore(subscribeImportedThemes, getImportedThemesSnapshot, () => []);
 }
@@ -562,30 +505,17 @@ function ColorThemeSettingsRow() {
   const importedThemes = useImportedThemes();
   const [isImportOpen, setImportOpen] = useState(false);
 
-  const importedDescriptors = useMemo<ReadonlyArray<ThemeDescriptor>>(
-    () =>
-      importedThemes.map((theme) => ({
+  const themeDescriptors = useMemo<ReadonlyArray<ThemeDescriptor>>(
+    () => [
+      ...importedThemes.map((theme) => ({
         id: theme.id,
         label: theme.label,
         type: theme.type,
         source: "imported" as const,
       })),
+      ...BUNDLED_THEMES,
+    ],
     [importedThemes],
-  );
-
-  const bundledLight = BUNDLED_THEMES.filter((option) => option.type === "light");
-  const bundledDark = BUNDLED_THEMES.filter((option) => option.type === "dark");
-  const importedLight = importedDescriptors.filter((option) => option.type === "light");
-  const importedDark = importedDescriptors.filter((option) => option.type === "dark");
-
-  // Selection is applied immediately via localStorage (useColorTheme); we also
-  // persist the id pair to ClientSettings so it syncs across devices.
-  const selectForMode = useCallback(
-    (mode: ResolvedThemeType, id: string) => {
-      setThemeForMode(mode, id);
-      updateSettings(mode === "light" ? { colorThemeLight: id } : { colorThemeDark: id });
-    },
-    [setThemeForMode, updateSettings],
   );
 
   const handleReset = useCallback(() => {
@@ -599,31 +529,22 @@ function ColorThemeSettingsRow() {
   const handleImported = useCallback(
     (records: ReadonlyArray<ImportedThemeRecord>) => {
       // Sync lightweight references so other devices can re-fetch the colors.
+      const first = records[0];
       updateSettings({
         importedThemes: [
-          ...importedThemes.map((theme) => ({
-            id: theme.id,
-            label: theme.label,
-            type: theme.type,
-            namespace: theme.namespace,
-            name: theme.name,
-            version: theme.version,
-          })),
-          ...records.map((record) => ({
-            id: record.id,
-            label: record.label,
-            type: record.type,
-            namespace: record.namespace,
-            name: record.name,
-            version: record.version,
-          })),
+          ...importedThemes.map(importedThemeRecordToReference),
+          ...records.map(importedThemeRecordToReference),
         ],
+        ...(first
+          ? first.type === "light"
+            ? { colorThemeLight: first.id }
+            : { colorThemeDark: first.id }
+          : {}),
       });
       // Auto-select the first imported theme for its mode as a convenience.
-      const first = records[0];
-      if (first) selectForMode(first.type, first.id);
+      if (first) setThemeForMode(first.type, first.id);
     },
-    [importedThemes, selectForMode, updateSettings],
+    [importedThemes, setThemeForMode, updateSettings],
   );
 
   return (
@@ -638,30 +559,29 @@ function ColorThemeSettingsRow() {
         }
         control={
           <div className="flex w-full flex-col gap-2 sm:w-auto">
-            <ColorThemeModeSelect
-              mode="light"
-              label="Light"
-              value={selection.light}
-              bundled={bundledLight}
-              imported={importedLight}
-              onChange={(id) => selectForMode("light", id)}
-            />
-            <ColorThemeModeSelect
-              mode="dark"
-              label="Dark"
-              value={selection.dark}
-              bundled={bundledDark}
-              imported={importedDark}
-              onChange={(id) => selectForMode("dark", id)}
-            />
-            <Button
-              variant="ghost"
-              size="sm"
-              className="self-end"
-              onClick={() => setImportOpen(true)}
-            >
-              Import from Open VSX…
-            </Button>
+            <div className="grid min-w-56 gap-1 rounded-lg border border-border bg-card/24 px-3 py-2 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Light</span>
+                <span className="min-w-0 max-w-48 truncate text-right">
+                  {colorThemeLabel(selection.light, themeDescriptors)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Dark</span>
+                <span className="min-w-0 max-w-48 truncate text-right">
+                  {colorThemeLabel(selection.dark, themeDescriptors)}
+                </span>
+              </div>
+            </div>
+            <div className="flex flex-wrap justify-end gap-1.5">
+              <Button render={<a href="/themes" />} variant="ghost" size="sm">
+                <PaletteIcon className="size-4" />
+                Preview themes
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setImportOpen(true)}>
+                Import from Open VSX…
+              </Button>
+            </div>
           </div>
         }
       />

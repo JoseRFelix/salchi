@@ -197,6 +197,7 @@ export interface WsRpcClient {
   };
   readonly themes: {
     readonly search: RpcUnaryMethod<typeof WS_METHODS.themesSearch>;
+    readonly preview: RpcUnaryMethod<typeof WS_METHODS.themesPreview>;
     readonly import: RpcUnaryMethod<typeof WS_METHODS.themesImport>;
   };
   readonly shell: {
@@ -356,6 +357,7 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
     },
     themes: {
       search: (input) => transport.request((client) => client[WS_METHODS.themesSearch](input)),
+      preview: (input) => transport.request((client) => client[WS_METHODS.themesPreview](input)),
       import: (input) => transport.request((client) => client[WS_METHODS.themesImport](input)),
     },
     shell: {

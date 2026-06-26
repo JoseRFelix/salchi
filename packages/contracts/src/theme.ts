@@ -6,12 +6,19 @@ import { TrimmedNonEmptyString } from "./baseSchemas.ts";
  * Schemas for the VS Code theme provider. The app maps VS Code themes onto its
  * design tokens (see apps/web/src/themeMapping.ts); these contracts cover the
  * server-side provider that searches and imports themes from the Open VSX
- * registry (https://open-vsx.org), which serves extension files individually so
- * no .vsix extraction is required.
+ * registry (https://open-vsx.org).
  */
 
 export const ThemeColorMode = Schema.Literals(["light", "dark"]);
 export type ThemeColorMode = typeof ThemeColorMode.Type;
+
+export const ThemeTokenColor = Schema.Struct({
+  scope: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
+  settings: Schema.Struct({
+    foreground: Schema.optional(Schema.String),
+  }),
+});
+export type ThemeTokenColor = typeof ThemeTokenColor.Type;
 
 /** A single theme contributed by an extension, normalized for the client. */
 export const ImportedTheme = Schema.Struct({
@@ -21,15 +28,19 @@ export const ImportedTheme = Schema.Struct({
   type: ThemeColorMode,
   /** Workbench color map (`editor.background` -> `#rrggbb[aa]`). */
   colors: Schema.Record(Schema.String, Schema.String),
+  /** TextMate token color rules used for previews when workbench colors are sparse. */
+  tokenColors: Schema.optional(Schema.Array(ThemeTokenColor)),
 });
 export type ImportedTheme = typeof ImportedTheme.Type;
 
 // ── Search ────────────────────────────────────────────────────
 
 export const ThemeSearchInput = Schema.Struct({
-  query: Schema.String,
+  query: Schema.optional(Schema.String),
   /** Page size; the server clamps this to a sane maximum. */
   size: Schema.optional(Schema.Int),
+  /** Zero-based Open VSX result offset for category browsing. */
+  offset: Schema.optional(Schema.Int),
 });
 export type ThemeSearchInput = typeof ThemeSearchInput.Type;
 
@@ -45,10 +56,13 @@ export type ThemeSearchItem = typeof ThemeSearchItem.Type;
 
 export const ThemeSearchResult = Schema.Struct({
   items: Schema.Array(ThemeSearchItem),
+  offset: Schema.Int,
+  size: Schema.Int,
+  totalSize: Schema.Int,
 });
 export type ThemeSearchResult = typeof ThemeSearchResult.Type;
 
-// ── Import ────────────────────────────────────────────────────
+// ── Preview / Import ───────────────────────────────────────────
 
 export const ThemeImportInput = Schema.Struct({
   namespace: TrimmedNonEmptyString,
@@ -57,6 +71,18 @@ export const ThemeImportInput = Schema.Struct({
   version: Schema.optional(TrimmedNonEmptyString),
 });
 export type ThemeImportInput = typeof ThemeImportInput.Type;
+
+/** A preview-pruned theme, containing only fields needed to render preview cards. */
+export const ThemePreviewTheme = ImportedTheme;
+export type ThemePreviewTheme = typeof ThemePreviewTheme.Type;
+
+export const ThemePreviewResult = Schema.Struct({
+  namespace: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  version: TrimmedNonEmptyString,
+  themes: Schema.Array(ThemePreviewTheme),
+});
+export type ThemePreviewResult = typeof ThemePreviewResult.Type;
 
 export const ThemeImportResult = Schema.Struct({
   namespace: TrimmedNonEmptyString,
@@ -72,7 +98,7 @@ export type ThemeImportResult = typeof ThemeImportResult.Type;
 export class ThemeProviderError extends Schema.TaggedErrorClass<ThemeProviderError>()(
   "ThemeProviderError",
   {
-    operation: Schema.Literals(["search", "import"]),
+    operation: Schema.Literals(["search", "preview", "import"]),
     detail: Schema.String,
     cause: Schema.optional(Schema.Defect),
   },

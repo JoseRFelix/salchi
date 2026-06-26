@@ -8,7 +8,7 @@ import {
   type ResolvedThemeType,
 } from "../themeMapping";
 import { loadBundledTheme } from "../themes";
-import { getImportedTheme } from "../importedThemes";
+import { getImportedTheme, subscribeImportedThemes } from "../importedThemes";
 import { getResolvedMode, registerResolvedModeListener, syncBrowserChromeTheme } from "./useTheme";
 
 /**
@@ -22,7 +22,7 @@ import { getResolvedMode, registerResolvedModeListener, syncBrowserChromeTheme }
  * tokens), so existing users see no change until they opt in.
  *
  * Persistence (slice 1) is localStorage; slice 2 syncs the id pair through
- * ClientSettings and caches imported theme JSON. The resolved token maps are
+ * server settings and caches imported theme JSON. The resolved token maps are
  * cached locally for flash-free boot.
  */
 
@@ -117,6 +117,16 @@ function getCachedTokens(id: string): MappedTheme | undefined {
   return undefined;
 }
 
+function clearResolvedTokenCache() {
+  memoryTokenCache.clear();
+  if (!hasStorage()) return;
+  try {
+    localStorage.removeItem(TOKEN_CACHE_STORAGE_KEY);
+  } catch {
+    // Best-effort cache invalidation.
+  }
+}
+
 /**
  * Resolve a theme id to a mappable `{ colors, type }`. Bundled themes load from
  * Shiki; imported (Open VSX) themes resolve from the local import cache.
@@ -197,6 +207,10 @@ export function initColorTheme() {
   if (initialized || typeof document === "undefined") return;
   initialized = true;
   registerResolvedModeListener((mode) => applyForMode(mode));
+  subscribeImportedThemes(() => {
+    clearResolvedTokenCache();
+    applyForMode(getResolvedMode());
+  });
   applyForMode(getResolvedMode());
 
   if (hasStorage()) {
@@ -222,7 +236,7 @@ export function setColorTheme(mode: ResolvedThemeType, id: string) {
 }
 
 /**
- * Apply a full selection without writing back to ClientSettings — used to
+ * Apply a full selection without writing back to server settings — used to
  * reconcile a synced selection from another device into the local fast path.
  */
 export function setColorThemeSelection(light: string, dark: string) {

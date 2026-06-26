@@ -31,6 +31,10 @@ let clientSettingsSnapshot = DEFAULT_CLIENT_SETTINGS;
 let clientSettingsHydrated = false;
 let clientSettingsHydrationPromise: Promise<void> | null = null;
 
+// ── Key sets for routing patches ─────────────────────────────────────
+
+const SERVER_SETTINGS_KEYS = new Set<string>(Struct.keys(ServerSettings.fields));
+
 function emitClientSettingsChange() {
   for (const listener of clientSettingsListeners) {
     listener();
@@ -45,6 +49,11 @@ function emitClientSettingsHydrationChange() {
 
 function getClientSettingsSnapshot(): ClientSettings {
   return clientSettingsSnapshot;
+}
+
+function clientSettingsWithoutServerOwnedKeys(settings: ClientSettings): Partial<ClientSettings> {
+  const entries = Object.entries(settings).filter(([key]) => !SERVER_SETTINGS_KEYS.has(key));
+  return Object.fromEntries(entries) as Partial<ClientSettings>;
 }
 
 function replaceClientSettingsSnapshot(settings: ClientSettings): void {
@@ -120,10 +129,6 @@ function persistClientSettings(settings: ClientSettings): void {
     });
 }
 
-// ── Key sets for routing patches ─────────────────────────────────────
-
-const SERVER_SETTINGS_KEYS = new Set<string>(Struct.keys(ServerSettings.fields));
-
 function splitPatch(patch: Partial<UnifiedSettings>): {
   serverPatch: ServerSettingsPatch;
   clientPatch: ClientSettingsPatch;
@@ -176,10 +181,11 @@ export function useSettings<T = UnifiedSettings>(selector?: (s: UnifiedSettings)
   );
 
   const merged = useMemo<UnifiedSettings>(
-    () => ({
-      ...serverSettings,
-      ...clientSettings,
-    }),
+    () =>
+      ({
+        ...serverSettings,
+        ...clientSettingsWithoutServerOwnedKeys(clientSettings),
+      }) as UnifiedSettings,
     [clientSettings, serverSettings],
   );
 

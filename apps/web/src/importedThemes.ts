@@ -1,3 +1,5 @@
+import type { ImportedTheme as ContractImportedTheme, ThemeImportResult } from "@t3tools/contracts";
+
 import type { ResolvedThemeType } from "./themeMapping";
 
 /**
@@ -16,6 +18,16 @@ export interface ImportedThemeRecord {
   readonly name: string;
   readonly version: string;
   readonly colors: Readonly<Record<string, string>>;
+  readonly tokenColors?: ContractImportedTheme["tokenColors"];
+}
+
+export interface ImportedThemeReference {
+  readonly id: string;
+  readonly label: string;
+  readonly type: ResolvedThemeType;
+  readonly namespace: string;
+  readonly name: string;
+  readonly version: string;
 }
 
 const STORAGE_KEY = "t3code:colorTheme:imported";
@@ -96,4 +108,32 @@ function onStorageEvent(event: StorageEvent) {
 
 export function getImportedThemesSnapshot(): ReadonlyArray<ImportedThemeRecord> {
   return listImportedThemes();
+}
+
+export function importedThemeRecordToReference(
+  record: ImportedThemeRecord,
+): ImportedThemeReference {
+  return {
+    id: record.id,
+    label: record.label,
+    type: record.type,
+    namespace: record.namespace,
+    name: record.name,
+    version: record.version,
+  };
+}
+
+export function importedThemeRecordsFromImportResult(
+  result: ThemeImportResult,
+): ImportedThemeRecord[] {
+  return result.themes.map((theme) => ({
+    id: theme.id,
+    label: theme.label,
+    type: theme.type,
+    namespace: result.namespace,
+    name: result.name,
+    version: result.version,
+    colors: theme.colors,
+    ...(theme.tokenColors === undefined ? {} : { tokenColors: theme.tokenColors }),
+  }));
 }

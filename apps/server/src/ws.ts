@@ -1290,6 +1290,14 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             ),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.themesPreview]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.themesPreview,
+            OpenVsxProvider.previewTheme(input).pipe(
+              Effect.provideService(HttpClient.HttpClient, httpClient),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.themesImport]: (input) =>
           observeRpcEffect(
             WS_METHODS.themesImport,

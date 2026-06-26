@@ -196,6 +196,46 @@ describe("serverSettings helpers", () => {
     });
   });
 
+  it("replaces imported theme references instead of merging array entries", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      importedThemes: [
+        {
+          id: "old.extension/Old Theme",
+          label: "Old Theme",
+          type: "dark" as const,
+          namespace: "old",
+          name: "extension",
+          version: "1.0.0",
+        },
+      ],
+    };
+
+    expect(
+      applyServerSettingsPatch(current, {
+        importedThemes: [
+          {
+            id: "new.extension/New Theme",
+            label: "New Theme",
+            type: "light",
+            namespace: "new",
+            name: "extension",
+            version: "2.0.0",
+          },
+        ],
+      }).importedThemes,
+    ).toEqual([
+      {
+        id: "new.extension/New Theme",
+        label: "New Theme",
+        type: "light",
+        namespace: "new",
+        name: "extension",
+        version: "2.0.0",
+      },
+    ]);
+  });
+
   it("canonicalizes explicit built-in provider instances by removing nested legacy enabled", () => {
     expect(
       normalizeProviderInstanceConfigForPersistence({

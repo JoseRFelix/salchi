@@ -2,7 +2,11 @@ import { DownloadIcon, SearchIcon } from "lucide-react";
 import { useCallback, useState } from "react";
 
 import { ensureLocalApi } from "../../localApi";
-import { saveImportedThemes, type ImportedThemeRecord } from "../../importedThemes";
+import {
+  importedThemeRecordsFromImportResult,
+  saveImportedThemes,
+  type ImportedThemeRecord,
+} from "../../importedThemes";
 import type { ThemeSearchItem } from "@t3tools/contracts";
 import { Button } from "../ui/button";
 import {
@@ -72,15 +76,7 @@ export function ColorThemeImportDialog({
           name: item.name,
           version: item.version,
         });
-        const records: ImportedThemeRecord[] = result.themes.map((theme) => ({
-          id: theme.id,
-          label: theme.label,
-          type: theme.type,
-          namespace: result.namespace,
-          name: result.name,
-          version: result.version,
-          colors: theme.colors,
-        }));
+        const records = importedThemeRecordsFromImportResult(result);
         saveImportedThemes(records);
         onImported(records);
         toastManager.add({
