@@ -940,6 +940,32 @@ describe("SourceControlPanel git action runner", () => {
     }
   });
 
+  it("keeps the Initialize button loading until the repo is detected", async () => {
+    currentGitStatusRef.current = { ...createPanelStatus(), isRepo: false };
+    const { host, screen } = await renderPanel();
+
+    try {
+      const initButton = findButtonByText("Initialize Git");
+      expect(initButton).not.toBeNull();
+      expect(initButton?.disabled).toBe(false);
+
+      initButton?.click();
+
+      // The init RPC resolves before the fresh status (isRepo: true) is
+      // broadcast back over the status subscription. The button must stay in
+      // its loading state across that gap instead of flashing back to idle.
+      await vi.waitFor(() => {
+        const pendingButton = findButtonByText("Initializing...");
+        expect(pendingButton).not.toBeNull();
+        expect(pendingButton?.disabled).toBe(true);
+      });
+      expect(findButtonByExactText("Initialize Git")).toBeNull();
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
   it("promotes Push to the primary button with ahead/behind counts when the tree is clean", async () => {
     currentGitStatusRef.current = {
       ...createPanelStatus(),

@@ -184,6 +184,12 @@ function createBrowserLocalApi(rpcClient?: WsRpcClient): LocalApi {
           ? rpcClient.server.sendTestPushNotification(input)
           : Promise.reject(unavailableLocalBackendError()),
     },
+    themes: {
+      search: (input) =>
+        rpcClient ? rpcClient.themes.search(input) : Promise.reject(unavailableLocalBackendError()),
+      import: (input) =>
+        rpcClient ? rpcClient.themes.import(input) : Promise.reject(unavailableLocalBackendError()),
+    },
   };
 }
 

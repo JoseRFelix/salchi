@@ -42,12 +42,13 @@ import {
   orchestrationThreadDetailFingerprintsEqual,
 } from "@t3tools/shared/orchestrationThreadDetailFingerprint";
 import { clamp } from "effect/Number";
-import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
+import { HttpClient, HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery.ts";
 import { ServerConfig } from "./config.ts";
 import { probeDevServerUrl } from "./devServerReachability.ts";
+import * as OpenVsxProvider from "./theme/openVsxProvider.ts";
 import { Keybindings } from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
@@ -305,6 +306,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const serverEnvironment = yield* ServerEnvironment;
       const serverAuth = yield* ServerAuth;
       const sourceControlDiscovery = yield* SourceControlDiscoveryLayer.SourceControlDiscovery;
+      const httpClient = yield* HttpClient.HttpClient;
       const automaticGitFetchInterval = serverSettings.getSettings.pipe(
         Effect.map((settings) => settings.automaticGitFetchInterval),
         Effect.catch((cause) =>
@@ -1279,6 +1281,22 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.themesSearch]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.themesSearch,
+            OpenVsxProvider.searchThemes(input).pipe(
+              Effect.provideService(HttpClient.HttpClient, httpClient),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.themesImport]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.themesImport,
+            OpenVsxProvider.importTheme(input).pipe(
+              Effect.provideService(HttpClient.HttpClient, httpClient),
+            ),
+            { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           observeRpcEffect(

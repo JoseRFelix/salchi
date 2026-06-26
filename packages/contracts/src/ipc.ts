@@ -62,6 +62,12 @@ import type {
   ServerUnregisterPushSubscriptionInput,
 } from "./push.ts";
 import type {
+  ThemeImportInput,
+  ThemeImportResult,
+  ThemeSearchInput,
+  ThemeSearchResult,
+} from "./theme.ts";
+import type {
   TerminalClearInput,
   TerminalCloseInput,
   TerminalEvent,
@@ -538,6 +544,10 @@ export interface LocalApi {
     sendTestPushNotification: (
       input: ServerSendTestPushNotificationInput,
     ) => Promise<ServerPushSendResult>;
+  };
+  themes: {
+    search: (input: ThemeSearchInput) => Promise<ThemeSearchResult>;
+    import: (input: ThemeImportInput) => Promise<ThemeImportResult>;
   };
 }
 

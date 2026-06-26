@@ -17,6 +17,9 @@ import { syncDocumentWindowControlsOverlayClass } from "./lib/windowControlsOver
 import { installPwaAppBadgeSync } from "./pwa/appBadge";
 import { registerPwaServiceWorker } from "./pwa/registerPwaServiceWorker";
 import { installServiceWorkerNotificationNavigation } from "./push/notificationNavigation";
+// Side-effect import: applies the selected color theme on boot to avoid a flash
+// before React mounts. Self-initializes; the call below is explicit for clarity.
+import { initColorTheme } from "./hooks/useColorTheme";
 
 // Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
 const history = isElectron ? createHashHistory() : createBrowserHistory();
@@ -28,6 +31,7 @@ if (isElectron) {
   syncDocumentWindowControlsOverlayClass();
 }
 
+initColorTheme();
 installIosStandaloneBackSwipeGuard();
 installPwaAppBadgeSync();
 registerPwaServiceWorker();

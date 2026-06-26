@@ -1,5 +1,5 @@
 import { ArchiveIcon, ArchiveX, LoaderIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   defaultInstanceIdForDriver,
   type DesktopUpdateChannel,
@@ -29,6 +29,19 @@ import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import { useTheme } from "../../hooks/useTheme";
+import {
+  DEFAULT_THEME_SENTINEL,
+  isColorThemeCustomized,
+  useColorTheme,
+} from "../../hooks/useColorTheme";
+import { BUNDLED_THEMES, findBundledTheme, type ThemeDescriptor } from "../../themes";
+import type { ResolvedThemeType } from "../../themeMapping";
+import {
+  getImportedThemesSnapshot,
+  subscribeImportedThemes,
+  type ImportedThemeRecord,
+} from "../../importedThemes";
+import { ColorThemeImportDialog } from "./ColorThemeImportDialog";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useDesktopUpdateState } from "../../lib/desktopUpdateReactQuery";
@@ -47,7 +60,15 @@ import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTime, formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import {
+  Select,
+  SelectGroup,
+  SelectGroupLabel,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -366,6 +387,7 @@ function AboutVersionSection() {
 
 export function useSettingsRestore(onRestored?: () => void) {
   const { theme, setTheme } = useTheme();
+  const { selection: colorThemeSelection, reset: resetColorTheme } = useColorTheme();
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
 
@@ -377,6 +399,7 @@ export function useSettingsRestore(onRestored?: () => void) {
   const changedSettingLabels = useMemo(
     () => [
       ...(theme !== "system" ? ["Theme"] : []),
+      ...(isColorThemeCustomized(colorThemeSelection) ? ["Color theme"] : []),
       ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
         ? ["Time format"]
         : []),
@@ -427,6 +450,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
       theme,
+      colorThemeSelection,
     ],
   );
 
@@ -441,6 +465,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     if (!confirmed) return;
 
     setTheme("system");
+    resetColorTheme();
     updateSettings({
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
@@ -454,14 +479,199 @@ export function useSettingsRestore(onRestored?: () => void) {
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
+      colorThemeLight: DEFAULT_UNIFIED_SETTINGS.colorThemeLight,
+      colorThemeDark: DEFAULT_UNIFIED_SETTINGS.colorThemeDark,
     });
     onRestored?.();
-  }, [changedSettingLabels, onRestored, setTheme, updateSettings]);
+  }, [changedSettingLabels, onRestored, resetColorTheme, setTheme, updateSettings]);
 
   return {
     changedSettingLabels,
     restoreDefaults,
   };
+}
+
+function colorThemeLabel(id: string, themes: ReadonlyArray<ThemeDescriptor>): string {
+  if (id === DEFAULT_THEME_SENTINEL) return "Default (built-in)";
+  return themes.find((theme) => theme.id === id)?.label ?? findBundledTheme(id)?.label ?? id;
+}
+
+function ColorThemeModeSelect({
+  mode,
+  label,
+  value,
+  bundled,
+  imported,
+  onChange,
+}: {
+  mode: ResolvedThemeType;
+  label: string;
+  value: string;
+  bundled: ReadonlyArray<ThemeDescriptor>;
+  imported: ReadonlyArray<ThemeDescriptor>;
+  onChange: (id: string) => void;
+}) {
+  const all = useMemo(() => [...imported, ...bundled], [imported, bundled]);
+  return (
+    <label className="flex items-center justify-between gap-3 text-sm">
+      <span className="text-muted-foreground">{label}</span>
+      <Select
+        value={value}
+        onValueChange={(next) => {
+          if (next) onChange(next);
+        }}
+      >
+        <SelectTrigger className="w-44" aria-label={`${mode} mode color theme`}>
+          <SelectValue>{colorThemeLabel(value, all)}</SelectValue>
+        </SelectTrigger>
+        <SelectPopup align="end" alignItemWithTrigger={false}>
+          <SelectItem hideIndicator value={DEFAULT_THEME_SENTINEL}>
+            Default (built-in)
+          </SelectItem>
+          {imported.length > 0 ? (
+            <SelectGroup>
+              <SelectGroupLabel>Imported</SelectGroupLabel>
+              {imported.map((option) => (
+                <SelectItem hideIndicator key={option.id} value={option.id}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          ) : null}
+          <SelectGroup>
+            <SelectGroupLabel>Bundled</SelectGroupLabel>
+            {bundled.map((option) => (
+              <SelectItem hideIndicator key={option.id} value={option.id}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectPopup>
+      </Select>
+    </label>
+  );
+}
+
+function useImportedThemes(): ReadonlyArray<ImportedThemeRecord> {
+  return useSyncExternalStore(subscribeImportedThemes, getImportedThemesSnapshot, () => []);
+}
+
+function ColorThemeSettingsRow() {
+  const { selection, setThemeForMode, reset } = useColorTheme();
+  const { updateSettings } = useUpdateSettings();
+  const importedThemes = useImportedThemes();
+  const [isImportOpen, setImportOpen] = useState(false);
+
+  const importedDescriptors = useMemo<ReadonlyArray<ThemeDescriptor>>(
+    () =>
+      importedThemes.map((theme) => ({
+        id: theme.id,
+        label: theme.label,
+        type: theme.type,
+        source: "imported" as const,
+      })),
+    [importedThemes],
+  );
+
+  const bundledLight = BUNDLED_THEMES.filter((option) => option.type === "light");
+  const bundledDark = BUNDLED_THEMES.filter((option) => option.type === "dark");
+  const importedLight = importedDescriptors.filter((option) => option.type === "light");
+  const importedDark = importedDescriptors.filter((option) => option.type === "dark");
+
+  // Selection is applied immediately via localStorage (useColorTheme); we also
+  // persist the id pair to ClientSettings so it syncs across devices.
+  const selectForMode = useCallback(
+    (mode: ResolvedThemeType, id: string) => {
+      setThemeForMode(mode, id);
+      updateSettings(mode === "light" ? { colorThemeLight: id } : { colorThemeDark: id });
+    },
+    [setThemeForMode, updateSettings],
+  );
+
+  const handleReset = useCallback(() => {
+    reset();
+    updateSettings({
+      colorThemeLight: DEFAULT_UNIFIED_SETTINGS.colorThemeLight,
+      colorThemeDark: DEFAULT_UNIFIED_SETTINGS.colorThemeDark,
+    });
+  }, [reset, updateSettings]);
+
+  const handleImported = useCallback(
+    (records: ReadonlyArray<ImportedThemeRecord>) => {
+      // Sync lightweight references so other devices can re-fetch the colors.
+      updateSettings({
+        importedThemes: [
+          ...importedThemes.map((theme) => ({
+            id: theme.id,
+            label: theme.label,
+            type: theme.type,
+            namespace: theme.namespace,
+            name: theme.name,
+            version: theme.version,
+          })),
+          ...records.map((record) => ({
+            id: record.id,
+            label: record.label,
+            type: record.type,
+            namespace: record.namespace,
+            name: record.name,
+            version: record.version,
+          })),
+        ],
+      });
+      // Auto-select the first imported theme for its mode as a convenience.
+      const first = records[0];
+      if (first) selectForMode(first.type, first.id);
+    },
+    [importedThemes, selectForMode, updateSettings],
+  );
+
+  return (
+    <>
+      <SettingsRow
+        title="Color theme"
+        description="Use a VS Code theme for the app's colors. Light and dark mode can use different themes."
+        resetAction={
+          isColorThemeCustomized(selection) ? (
+            <SettingResetButton label="color theme" onClick={handleReset} />
+          ) : null
+        }
+        control={
+          <div className="flex w-full flex-col gap-2 sm:w-auto">
+            <ColorThemeModeSelect
+              mode="light"
+              label="Light"
+              value={selection.light}
+              bundled={bundledLight}
+              imported={importedLight}
+              onChange={(id) => selectForMode("light", id)}
+            />
+            <ColorThemeModeSelect
+              mode="dark"
+              label="Dark"
+              value={selection.dark}
+              bundled={bundledDark}
+              imported={importedDark}
+              onChange={(id) => selectForMode("dark", id)}
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              className="self-end"
+              onClick={() => setImportOpen(true)}
+            >
+              Import from Open VSX…
+            </Button>
+          </div>
+        }
+      />
+      <ColorThemeImportDialog
+        open={isImportOpen}
+        onOpenChange={setImportOpen}
+        onImported={handleImported}
+      />
+    </>
+  );
 }
 
 export function GeneralSettingsPanel() {
@@ -538,6 +748,8 @@ export function GeneralSettingsPanel() {
             </Select>
           }
         />
+
+        <ColorThemeSettingsRow />
 
         <SettingsRow
           title="Time format"

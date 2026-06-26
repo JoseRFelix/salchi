@@ -126,6 +126,13 @@ import {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
+import {
+  ThemeImportInput,
+  ThemeImportResult,
+  ThemeProviderError,
+  ThemeSearchInput,
+  ThemeSearchResult,
+} from "./theme.ts";
 import { VcsError } from "./vcs.ts";
 
 export const WS_METHODS = {
@@ -193,6 +200,10 @@ export const WS_METHODS = {
   serverRegisterPushSubscription: "server.registerPushSubscription",
   serverUnregisterPushSubscription: "server.unregisterPushSubscription",
   serverSendTestPushNotification: "server.sendTestPushNotification",
+
+  // Theme provider methods
+  themesSearch: "themes.search",
+  themesImport: "themes.import",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -339,6 +350,18 @@ export const WsServerSendTestPushNotificationRpc = Rpc.make(
     error: ServerPushNotificationError,
   },
 );
+
+export const WsThemesSearchRpc = Rpc.make(WS_METHODS.themesSearch, {
+  payload: ThemeSearchInput,
+  success: ThemeSearchResult,
+  error: ThemeProviderError,
+});
+
+export const WsThemesImportRpc = Rpc.make(WS_METHODS.themesImport, {
+  payload: ThemeImportInput,
+  success: ThemeImportResult,
+  error: ThemeProviderError,
+});
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
   WS_METHODS.sourceControlLookupRepository,
@@ -669,6 +692,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRegisterPushSubscriptionRpc,
   WsServerUnregisterPushSubscriptionRpc,
   WsServerSendTestPushNotificationRpc,
+  WsThemesSearchRpc,
+  WsThemesImportRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,

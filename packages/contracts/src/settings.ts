@@ -92,6 +92,23 @@ export const ClientSettingsSchema = Schema.Struct({
   timestampFormat: TimestampFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
   ),
+  // Color theme selection (light/dark mode each pick a VS Code theme id, or
+  // "default" for the built-in palette). Synced across devices; the imported
+  // theme color JSON itself is cached locally and re-fetched on demand.
+  colorThemeLight: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed("default"))),
+  colorThemeDark: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed("default"))),
+  // Lightweight references to imported (Open VSX) themes so any device can
+  // re-fetch the colors for a synced selection. No color data is stored here.
+  importedThemes: Schema.Array(
+    Schema.Struct({
+      id: TrimmedNonEmptyString,
+      label: TrimmedNonEmptyString,
+      type: Schema.Literals(["light", "dark"]),
+      namespace: TrimmedNonEmptyString,
+      name: TrimmedNonEmptyString,
+      version: TrimmedNonEmptyString,
+    }),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 

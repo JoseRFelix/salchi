@@ -5,11 +5,27 @@ import { Select as SelectPrimitive } from "@base-ui/react/select";
 import { useRender } from "@base-ui/react/use-render";
 import { cva, type VariantProps } from "class-variance-authority";
 import { ChevronDownIcon, ChevronsUpDownIcon, ChevronUpIcon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import type * as React from "react";
 
 import { cn } from "~/lib/utils";
 
 const Select = SelectPrimitive.Root;
+const DEFAULT_SELECT_COLLISION_PADDING = 5;
+
+interface SafeAreaInsets {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+const ZERO_SAFE_AREA_INSETS: SafeAreaInsets = {
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+};
 
 const selectTriggerVariants = cva(
   "relative inline-flex cursor-pointer select-none items-center justify-between gap-2 border rounded-lg text-left text-base outline-none transition-[color,box-shadow,background-color] data-disabled:pointer-events-none data-disabled:opacity-64 sm:text-sm [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4",
@@ -36,6 +52,116 @@ const selectTriggerVariants = cva(
 );
 
 const selectTriggerIconClassName = "-me-1 size-4.5 opacity-80 sm:size-4";
+
+function parseCssPixelValue(value: string) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+}
+
+function readSafeAreaInsets(): SafeAreaInsets {
+  if (typeof document === "undefined" || typeof window === "undefined") {
+    return ZERO_SAFE_AREA_INSETS;
+  }
+
+  const parent = document.body ?? document.documentElement;
+  if (!parent || typeof window.getComputedStyle !== "function") {
+    return ZERO_SAFE_AREA_INSETS;
+  }
+
+  const probe = document.createElement("div");
+  probe.style.position = "fixed";
+  probe.style.visibility = "hidden";
+  probe.style.pointerEvents = "none";
+  probe.style.paddingTop = "env(safe-area-inset-top, 0px)";
+  probe.style.paddingRight = "env(safe-area-inset-right, 0px)";
+  probe.style.paddingBottom = "env(safe-area-inset-bottom, 0px)";
+  probe.style.paddingLeft = "env(safe-area-inset-left, 0px)";
+
+  parent.appendChild(probe);
+  try {
+    const computed = window.getComputedStyle(probe);
+    return {
+      top: parseCssPixelValue(computed.paddingTop),
+      right: parseCssPixelValue(computed.paddingRight),
+      bottom: parseCssPixelValue(computed.paddingBottom),
+      left: parseCssPixelValue(computed.paddingLeft),
+    };
+  } finally {
+    parent.removeChild(probe);
+  }
+}
+
+function safeAreaInsetsEqual(a: SafeAreaInsets, b: SafeAreaInsets) {
+  return a.top === b.top && a.right === b.right && a.bottom === b.bottom && a.left === b.left;
+}
+
+function useSafeAreaInsets(): SafeAreaInsets {
+  const [insets, setInsets] = useState(readSafeAreaInsets);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    let frame: number | null = null;
+    const apply = () => {
+      frame = null;
+      const nextInsets = readSafeAreaInsets();
+      setInsets((current) => (safeAreaInsetsEqual(current, nextInsets) ? current : nextInsets));
+    };
+    const schedule = () => {
+      if (frame !== null) {
+        return;
+      }
+      frame = window.requestAnimationFrame(apply);
+    };
+
+    apply();
+    window.addEventListener("resize", schedule);
+    window.addEventListener("orientationchange", schedule);
+    window.visualViewport?.addEventListener("resize", schedule);
+    window.visualViewport?.addEventListener("scroll", schedule);
+
+    return () => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("orientationchange", schedule);
+      window.visualViewport?.removeEventListener("resize", schedule);
+      window.visualViewport?.removeEventListener("scroll", schedule);
+    };
+  }, []);
+
+  return insets;
+}
+
+function resolveSelectCollisionPadding(
+  collisionPadding: SelectPrimitive.Positioner.Props["collisionPadding"],
+  safeAreaInsets: SafeAreaInsets,
+): SelectPrimitive.Positioner.Props["collisionPadding"] {
+  const base =
+    typeof collisionPadding === "number" || collisionPadding === undefined
+      ? {
+          top: collisionPadding ?? DEFAULT_SELECT_COLLISION_PADDING,
+          right: collisionPadding ?? DEFAULT_SELECT_COLLISION_PADDING,
+          bottom: collisionPadding ?? DEFAULT_SELECT_COLLISION_PADDING,
+          left: collisionPadding ?? DEFAULT_SELECT_COLLISION_PADDING,
+        }
+      : {
+          top: collisionPadding.top ?? 0,
+          right: collisionPadding.right ?? 0,
+          bottom: collisionPadding.bottom ?? 0,
+          left: collisionPadding.left ?? 0,
+        };
+
+  return {
+    top: base.top + safeAreaInsets.top,
+    right: base.right + safeAreaInsets.right,
+    bottom: base.bottom + safeAreaInsets.bottom,
+    left: base.left + safeAreaInsets.left,
+  };
+}
 
 interface SelectButtonProps extends useRender.ComponentProps<"button"> {
   size?: VariantProps<typeof selectTriggerVariants>["size"];
@@ -114,6 +240,7 @@ function SelectPopup({
   alignItemWithTrigger = true,
   matchTriggerWidth = true,
   anchor,
+  collisionPadding,
   ...props
 }: SelectPrimitive.Popup.Props & {
   popupClassName?: string;
@@ -124,7 +251,14 @@ function SelectPopup({
   alignItemWithTrigger?: SelectPrimitive.Positioner.Props["alignItemWithTrigger"];
   matchTriggerWidth?: boolean;
   anchor?: SelectPrimitive.Positioner.Props["anchor"];
+  collisionPadding?: SelectPrimitive.Positioner.Props["collisionPadding"];
 }) {
+  const safeAreaInsets = useSafeAreaInsets();
+  const resolvedCollisionPadding = useMemo(
+    () => resolveSelectCollisionPadding(collisionPadding, safeAreaInsets),
+    [collisionPadding, safeAreaInsets],
+  );
+
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Positioner
@@ -133,6 +267,7 @@ function SelectPopup({
         alignOffset={alignOffset}
         anchor={anchor}
         className="z-50 select-none"
+        collisionPadding={resolvedCollisionPadding}
         data-slot="select-positioner"
         side={side}
         sideOffset={sideOffset}
@@ -258,4 +393,5 @@ export {
   SelectSeparator,
   SelectGroup,
   SelectGroupLabel,
+  resolveSelectCollisionPadding,
 };
