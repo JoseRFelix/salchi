@@ -537,29 +537,19 @@ function ThemeSettingsRow() {
       description="Follow your OS with built-in colors, or pick a theme to pin Salchi to that theme's mode."
       control={
         <div className="flex w-full flex-col gap-2 sm:w-auto">
-          <div
-            className="flex min-w-64 cursor-pointer items-center justify-between gap-3 rounded-lg border border-border bg-card/24 px-3 py-2 text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-            onClick={goToThemes}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                goToThemes();
-              }
-            }}
-            role="button"
-            tabIndex={0}
-          >
-            <span className="inline-flex min-w-0 items-center gap-1.5 font-medium">
+          <div className="flex min-w-64 items-center gap-2">
+            <button
+              className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-card/24 px-3 py-2 font-medium text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+              onClick={goToThemes}
+              type="button"
+            >
               <DisplayIcon className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 truncate">{displayLabel}</span>
-            </span>
+            </button>
             {isThemeDirty ? (
               <button
                 className="shrink-0 rounded-full border border-border bg-background px-2 py-0.5 font-medium text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  handleUseSystemDefault();
-                }}
+                onClick={handleUseSystemDefault}
                 type="button"
               >
                 Restore

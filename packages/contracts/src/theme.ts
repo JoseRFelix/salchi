@@ -72,7 +72,7 @@ export const ThemeImportInput = Schema.Struct({
 });
 export type ThemeImportInput = typeof ThemeImportInput.Type;
 
-/** A preview-pruned theme, containing only fields needed to render preview cards. */
+/** A normalized contributed theme returned by preview and import operations. */
 export const ThemePreviewTheme = ImportedTheme;
 export type ThemePreviewTheme = typeof ThemePreviewTheme.Type;
 

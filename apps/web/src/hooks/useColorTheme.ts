@@ -194,14 +194,22 @@ function applyForMode(mode: ResolvedThemeType) {
     return;
   }
 
-  void ensureMappedTheme(id).then((mapped) => {
-    // Guard against a race: the active mode/selection may have changed while
-    // the dynamic import was in flight.
-    if (getResolvedMode() !== mode) return;
-    if (getSelectionSnapshot()[mode] !== id) return;
-    applyMappedOrDefault(id, mapped);
-    syncBrowserChromeTheme();
-  });
+  void ensureMappedTheme(id)
+    .then((mapped) => {
+      // Guard against a race: the active mode/selection may have changed while
+      // the dynamic import was in flight.
+      if (getResolvedMode() !== mode) return;
+      if (getSelectionSnapshot()[mode] !== id) return;
+      applyMappedOrDefault(id, mapped);
+      syncBrowserChromeTheme();
+    })
+    .catch((cause) => {
+      if (getResolvedMode() !== mode) return;
+      if (getSelectionSnapshot()[mode] !== id) return;
+      console.warn("Failed to apply color theme.", cause);
+      applyMappedOrDefault(id, null);
+      syncBrowserChromeTheme();
+    });
 }
 
 let initialized = false;
@@ -230,10 +238,29 @@ export function initColorTheme() {
 // Apply immediately on module load to minimize flash.
 initColorTheme();
 
+function writeSelection(next: ColorThemeSelection): boolean {
+  if (!hasStorage()) return false;
+  try {
+    localStorage.setItem(SELECTION_STORAGE_KEY, JSON.stringify(next));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function removeSelection(): boolean {
+  if (!hasStorage()) return false;
+  try {
+    localStorage.removeItem(SELECTION_STORAGE_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function setColorTheme(mode: ResolvedThemeType, id: string) {
-  if (!hasStorage()) return;
   const next: ColorThemeSelection = { ...getSelectionSnapshot(), [mode]: id };
-  localStorage.setItem(SELECTION_STORAGE_KEY, JSON.stringify(next));
+  if (!writeSelection(next)) return;
   emitSelectionChange();
   // Re-apply only when the change affects the currently active mode.
   if (getResolvedMode() === mode) applyForMode(mode);
@@ -244,17 +271,15 @@ export function setColorTheme(mode: ResolvedThemeType, id: string) {
  * reconcile a synced selection from another device into the local fast path.
  */
 export function setColorThemeSelection(light: string, dark: string) {
-  if (!hasStorage()) return;
   const current = getSelectionSnapshot();
   if (current.light === light && current.dark === dark) return;
-  localStorage.setItem(SELECTION_STORAGE_KEY, JSON.stringify({ light, dark }));
+  if (!writeSelection({ light, dark })) return;
   emitSelectionChange();
   applyForMode(getResolvedMode());
 }
 
 export function resetColorTheme() {
-  if (!hasStorage()) return;
-  localStorage.removeItem(SELECTION_STORAGE_KEY);
+  if (!removeSelection()) return;
   emitSelectionChange();
   applyForMode(getResolvedMode());
 }

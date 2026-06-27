@@ -31,6 +31,9 @@ const OPEN_VSX_API = "https://open-vsx.org/api";
 const DEFAULT_SEARCH_SIZE = 25;
 const MAX_SEARCH_SIZE = 50;
 const REQUEST_TIMEOUT_MS = 15_000;
+const MAX_VSIX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
+const MAX_ZIP_ENTRY_COMPRESSED_BYTES = 16 * 1024 * 1024;
+const MAX_ZIP_ENTRY_EXPANDED_BYTES = 16 * 1024 * 1024;
 const THEME_PREVIEW_CACHE_MIN_THEMES = 100;
 const THEME_PREVIEW_CACHE_MAX_THEMES = 1_000;
 const THEME_PREVIEW_CACHE_TARGET_BYTES = 12 * 1024 * 1024;
@@ -68,6 +71,7 @@ interface ZipEntry {
   readonly name: string;
   readonly compressionMethod: number;
   readonly compressedSize: number;
+  readonly uncompressedSize: number;
   readonly localHeaderOffset: number;
 }
 
@@ -93,6 +97,30 @@ function trimToFallback(value: unknown, fallback: string): string {
 
 function themeError(operation: ThemeOperation, detail: string, cause?: unknown) {
   return new ThemeProviderError({ operation, detail, cause });
+}
+
+function parseContentLength(headers: Readonly<Record<string, string | undefined>>): number | null {
+  const value = headers["content-length"];
+  if (value === undefined) return null;
+  const bytes = Number(value);
+  return Number.isFinite(bytes) && bytes >= 0 ? bytes : null;
+}
+
+function assertBufferRange(
+  buffer: Buffer,
+  offset: number,
+  byteLength: number,
+  detail: string,
+): void {
+  if (
+    !Number.isInteger(offset) ||
+    !Number.isInteger(byteLength) ||
+    offset < 0 ||
+    byteLength < 0 ||
+    offset + byteLength > buffer.length
+  ) {
+    throw new Error(detail);
+  }
 }
 
 /**
@@ -205,9 +233,22 @@ const fetchBinary = Effect.fn("openVsx.fetchBinary")(function* (
   if (httpResponse.status < 200 || httpResponse.status >= 300) {
     return yield* themeError(operation, `HTTP ${httpResponse.status} for ${url}`);
   }
+  const contentLength = parseContentLength(httpResponse.headers);
+  if (contentLength !== null && contentLength > MAX_VSIX_DOWNLOAD_BYTES) {
+    return yield* themeError(
+      operation,
+      `VSIX download exceeded ${MAX_VSIX_DOWNLOAD_BYTES} bytes for ${url}`,
+    );
+  }
   const arrayBuffer = yield* httpResponse.arrayBuffer.pipe(
     Effect.mapError((cause) => themeError(operation, `failed reading ${url}`, cause)),
   );
+  if (arrayBuffer.byteLength > MAX_VSIX_DOWNLOAD_BYTES) {
+    return yield* themeError(
+      operation,
+      `VSIX download exceeded ${MAX_VSIX_DOWNLOAD_BYTES} bytes for ${url}`,
+    );
+  }
   return Buffer.from(arrayBuffer);
 });
 
@@ -236,6 +277,7 @@ function readZipEntries(buffer: Buffer): Map<string, ZipEntry> {
 
     const compressionMethod = buffer.readUInt16LE(offset + 10);
     const compressedSize = buffer.readUInt32LE(offset + 20);
+    const uncompressedSize = buffer.readUInt32LE(offset + 24);
     const fileNameLength = buffer.readUInt16LE(offset + 28);
     const extraFieldLength = buffer.readUInt16LE(offset + 30);
     const fileCommentLength = buffer.readUInt16LE(offset + 32);
@@ -248,6 +290,7 @@ function readZipEntries(buffer: Buffer): Map<string, ZipEntry> {
         name,
         compressionMethod,
         compressedSize,
+        uncompressedSize,
         localHeaderOffset,
       });
     }
@@ -260,20 +303,43 @@ function readZipEntries(buffer: Buffer): Map<string, ZipEntry> {
 
 function readZipEntry(buffer: Buffer, entry: ZipEntry): Buffer {
   const localHeaderOffset = entry.localHeaderOffset;
+  assertBufferRange(buffer, localHeaderOffset, 30, `Invalid zip local header for ${entry.name}`);
   if (buffer.readUInt32LE(localHeaderOffset) !== ZIP_LOCAL_FILE_SIGNATURE) {
     throw new Error(`Invalid zip local header for ${entry.name}`);
+  }
+  if (entry.compressedSize > MAX_ZIP_ENTRY_COMPRESSED_BYTES) {
+    throw new Error(
+      `Compressed zip entry ${entry.name} exceeded ${MAX_ZIP_ENTRY_COMPRESSED_BYTES} bytes`,
+    );
+  }
+  if (entry.uncompressedSize > MAX_ZIP_ENTRY_EXPANDED_BYTES) {
+    throw new Error(
+      `Expanded zip entry ${entry.name} exceeded ${MAX_ZIP_ENTRY_EXPANDED_BYTES} bytes`,
+    );
   }
 
   const fileNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
   const extraFieldLength = buffer.readUInt16LE(localHeaderOffset + 28);
   const dataStart = localHeaderOffset + 30 + fileNameLength + extraFieldLength;
+  assertBufferRange(
+    buffer,
+    dataStart,
+    entry.compressedSize,
+    `Invalid zip data range for ${entry.name}`,
+  );
   const compressed = buffer.subarray(dataStart, dataStart + entry.compressedSize);
 
   if (entry.compressionMethod === ZIP_COMPRESSION_STORED) {
     return Buffer.from(compressed);
   }
   if (entry.compressionMethod === ZIP_COMPRESSION_DEFLATED) {
-    return inflateRawSync(compressed);
+    const inflated = inflateRawSync(compressed);
+    if (inflated.byteLength > MAX_ZIP_ENTRY_EXPANDED_BYTES) {
+      throw new Error(
+        `Expanded zip entry ${entry.name} exceeded ${MAX_ZIP_ENTRY_EXPANDED_BYTES} bytes`,
+      );
+    }
+    return inflated;
   }
   throw new Error(
     `Unsupported zip compression method ${entry.compressionMethod} for ${entry.name}`,
@@ -665,7 +731,10 @@ const loadThemeImportResult = Effect.fn("openVsx.loadThemeImportResult")(functio
 
   const vsix = yield* fetchBinary(downloadUrl, operation);
 
-  const manifestText = readZipTextFile(vsix, "extension/package.json");
+  const manifestText = yield* Effect.try({
+    try: () => readZipTextFile(vsix, "extension/package.json"),
+    catch: (cause) => themeError(operation, `${namespace}.${name} VSIX could not be read`, cause),
+  });
   if (manifestText === undefined) {
     return yield* themeError(operation, `${namespace}.${name} VSIX contains no package.json`);
   }

@@ -39,11 +39,41 @@ function hasStorage() {
   return typeof window !== "undefined" && typeof localStorage !== "undefined";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  if (!isRecord(value)) return false;
+  return Object.values(value).every((entry) => typeof entry === "string");
+}
+
+function isImportedThemeRecord(value: unknown): value is ImportedThemeRecord {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.label === "string" &&
+    (value.type === "light" || value.type === "dark") &&
+    typeof value.namespace === "string" &&
+    typeof value.name === "string" &&
+    typeof value.version === "string" &&
+    isStringRecord(value.colors) &&
+    (value.tokenColors === undefined || Array.isArray(value.tokenColors))
+  );
+}
+
 function readAll(): Record<string, ImportedThemeRecord> {
   if (!hasStorage()) return {};
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, ImportedThemeRecord>) : {};
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRecord(parsed)) return {};
+    const valid: Record<string, ImportedThemeRecord> = {};
+    for (const value of Object.values(parsed)) {
+      if (isImportedThemeRecord(value)) valid[value.id] = value;
+    }
+    return valid;
   } catch {
     return {};
   }
@@ -90,7 +120,7 @@ export function removeImportedTheme(id: string) {
 }
 
 export function subscribeImportedThemes(listener: () => void): () => void {
-  listeners.push(listener);
+  if (!listeners.includes(listener)) listeners.push(listener);
   if (hasStorage()) {
     window.addEventListener("storage", onStorageEvent);
   }

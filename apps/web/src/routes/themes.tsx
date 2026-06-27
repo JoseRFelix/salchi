@@ -474,6 +474,7 @@ function ThemePreviewRouteView() {
   const [onlineThemes, setOnlineThemes] = useState<ReadonlyArray<PreviewTheme>>([]);
   const [onlineLoading, setOnlineLoading] = useState(false);
   const [onlineLoaded, setOnlineLoaded] = useState(false);
+  const [onlineError, setOnlineError] = useState<string | null>(null);
   const [onlineNextOffset, setOnlineNextOffset] = useState(0);
   const [onlineTotalSize, setOnlineTotalSize] = useState(0);
   const [filter, setFilter] = useState<ThemeFilter>("all");
@@ -508,7 +509,7 @@ function ThemePreviewRouteView() {
     [filter, onlineThemes],
   );
   const visibleThemes = category === "online" ? visibleOnlineThemes : visibleInstalledThemes;
-  const canLoadMoreOnline = !onlineLoaded || onlineNextOffset < onlineTotalSize;
+  const canLoadMoreOnline = !onlineError && (!onlineLoaded || onlineNextOffset < onlineTotalSize);
   const minimumVisibleOnlineThemeCount = Math.max(3, themePreviewColumnCount * 3);
 
   const loadMoreOnlineThemes = useCallback(async () => {
@@ -518,6 +519,7 @@ function ThemePreviewRouteView() {
     const startOffset = onlineNextOffset;
     onlineLoadingRef.current = true;
     setOnlineLoading(true);
+    setOnlineError(null);
     let cursor = startOffset;
     let totalSize = onlineTotalSize;
     try {
@@ -572,10 +574,12 @@ function ThemePreviewRouteView() {
       setOnlineTotalSize(totalSize);
       setOnlineLoaded(true);
     } catch (error) {
+      const description = errorMessage(error, "Could not reach the Open VSX registry.");
+      setOnlineError(description);
       toastManager.add({
         type: "error",
         title: "Theme page failed",
-        description: errorMessage(error, "Could not reach the Open VSX registry."),
+        description,
       });
     } finally {
       onlineLoadingRef.current = false;
@@ -589,12 +593,20 @@ function ThemePreviewRouteView() {
   }, [canLoadMoreOnline, category, loadMoreOnlineThemes, onlineLoading]);
 
   useEffect(() => {
-    if (category !== "online" || onlineLoaded || onlineLoading) return;
+    if (category !== "online" || onlineLoaded || onlineLoading || onlineError) return;
     void loadMoreOnlineThemes();
-  }, [category, loadMoreOnlineThemes, onlineLoaded, onlineLoading]);
+  }, [category, loadMoreOnlineThemes, onlineError, onlineLoaded, onlineLoading]);
 
   useEffect(() => {
-    if (category !== "online" || !onlineLoaded || onlineLoading || !canLoadMoreOnline) return;
+    if (
+      category !== "online" ||
+      !onlineLoaded ||
+      onlineLoading ||
+      onlineError ||
+      !canLoadMoreOnline
+    ) {
+      return;
+    }
     if (visibleOnlineThemes.length >= minimumVisibleOnlineThemeCount) return;
     void loadMoreOnlineThemes();
   }, [
@@ -602,6 +614,7 @@ function ThemePreviewRouteView() {
     category,
     loadMoreOnlineThemes,
     minimumVisibleOnlineThemeCount,
+    onlineError,
     onlineLoaded,
     onlineLoading,
     visibleOnlineThemes.length,
@@ -727,12 +740,22 @@ function ThemePreviewRouteView() {
               </div>
             ) : (
               <div className="mx-auto w-full max-w-7xl px-3 sm:px-5 lg:px-8">
-                <div className="flex min-h-52 items-center justify-center rounded-lg border border-dashed border-border bg-card/20 px-6 text-center text-muted-foreground text-sm">
+                <div className="flex min-h-52 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-card/20 px-6 text-center text-muted-foreground text-sm">
                   {category === "online"
                     ? canLoadMoreOnline
                       ? "Looking for previewable themes."
-                      : "No previewable themes were found."
+                      : (onlineError ?? "No previewable themes were found.")
                     : "No themes match your filters."}
+                  {category === "online" && onlineError ? (
+                    <Button
+                      className="mt-3"
+                      onClick={() => void loadMoreOnlineThemes()}
+                      size="xs"
+                      variant="outline"
+                    >
+                      Retry
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             )}

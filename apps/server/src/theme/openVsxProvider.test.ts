@@ -17,15 +17,23 @@ import {
 } from "./openVsxProvider.ts";
 import type { ThemeImportResult, ThemePreviewResult } from "@t3tools/contracts";
 
-function makeZip(files: Readonly<Record<string, string>>): Buffer {
+interface TestZipFile {
+  readonly contents: string;
+  readonly uncompressedSize?: number;
+}
+
+function makeZip(files: Readonly<Record<string, string | TestZipFile>>): Buffer {
   const localParts: Buffer[] = [];
   const centralParts: Buffer[] = [];
   let offset = 0;
 
-  for (const [name, contents] of Object.entries(files)) {
+  for (const [name, file] of Object.entries(files)) {
+    const contents = typeof file === "string" ? file : file.contents;
+    const uncompressedSize = typeof file === "string" ? undefined : file.uncompressedSize;
     const nameBuffer = Buffer.from(name, "utf8");
     const contentsBuffer = Buffer.from(contents, "utf8");
     const compressed = deflateRawSync(contentsBuffer);
+    const storedUncompressedSize = uncompressedSize ?? contentsBuffer.length;
 
     const localHeader = Buffer.alloc(30);
     localHeader.writeUInt32LE(0x04034b50, 0);
@@ -35,7 +43,7 @@ function makeZip(files: Readonly<Record<string, string>>): Buffer {
     localHeader.writeUInt32LE(0, 10);
     localHeader.writeUInt32LE(0, 14);
     localHeader.writeUInt32LE(compressed.length, 18);
-    localHeader.writeUInt32LE(contentsBuffer.length, 22);
+    localHeader.writeUInt32LE(storedUncompressedSize, 22);
     localHeader.writeUInt16LE(nameBuffer.length, 26);
     localHeader.writeUInt16LE(0, 28);
 
@@ -50,7 +58,7 @@ function makeZip(files: Readonly<Record<string, string>>): Buffer {
     centralHeader.writeUInt32LE(0, 12);
     centralHeader.writeUInt32LE(0, 16);
     centralHeader.writeUInt32LE(compressed.length, 20);
-    centralHeader.writeUInt32LE(contentsBuffer.length, 24);
+    centralHeader.writeUInt32LE(storedUncompressedSize, 24);
     centralHeader.writeUInt16LE(nameBuffer.length, 28);
     centralHeader.writeUInt16LE(0, 30);
     centralHeader.writeUInt16LE(0, 32);
@@ -161,6 +169,19 @@ describe("VSIX zip theme loading", () => {
     });
 
     expect(readZipTextFile(vsix, "extension/package.json")).toBe('{"name":"sample"}');
+  });
+
+  it("rejects zip entries whose declared expanded size exceeds the cap", () => {
+    const vsix = makeZip({
+      "extension/package.json": {
+        contents: '{"name":"sample"}',
+        uncompressedSize: 17 * 1024 * 1024,
+      },
+    });
+
+    expect(() => readZipTextFile(vsix, "extension/package.json")).toThrow(
+      /Expanded zip entry extension\/package\.json exceeded/,
+    );
   });
 
   it("loads theme colors and token colors through include chains", () => {
