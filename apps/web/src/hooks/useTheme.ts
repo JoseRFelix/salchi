@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
-type Theme = "light" | "dark" | "system";
+export type Theme = "light" | "dark" | "system";
 type ThemeSnapshot = {
   theme: Theme;
   systemDark: boolean;
@@ -195,6 +195,24 @@ function subscribe(listener: () => void): () => void {
     mq.removeEventListener("change", handleChange);
     window.removeEventListener("storage", handleStorage);
   };
+}
+
+/** The locally-stored appearance mode, readable outside React. */
+export function getStoredTheme(): Theme {
+  return getStored();
+}
+
+/**
+ * Apply an appearance mode synced from server settings into the local store.
+ * No-ops when it already matches so reconciliation doesn't fight the local
+ * value or write back to the server (which would loop). Used by the theme sync
+ * hook so a mode chosen on one device follows the user to another.
+ */
+export function syncThemeModeFromServer(next: Theme) {
+  if (!hasThemeStorage() || getStored() === next) return;
+  localStorage.setItem(STORAGE_KEY, next);
+  applyTheme(next, true);
+  emitChange();
 }
 
 export function useTheme() {

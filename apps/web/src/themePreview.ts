@@ -92,6 +92,41 @@ const DARK_FALLBACKS: ThemePreviewPalette = {
   statusForeground: "#adbac7",
 };
 
+const DEFAULT_APP_PREVIEW_PALETTES: Record<ResolvedThemeType, ThemePreviewPalette> = {
+  light: {
+    background: "#ffffff",
+    foreground: "#262626",
+    chrome: "#ffffff",
+    chromeForeground: "#525252",
+    panel: "#ffffff",
+    tabActive: "#ffffff",
+    tabInactive: "rgba(0, 0, 0, 0.04)",
+    border: "rgba(0, 0, 0, 0.08)",
+    accent: "oklch(0.488 0.217 264)",
+    muted: "#525252",
+    activityBar: "#ffffff",
+    activityBarForeground: "#525252",
+    statusBar: "oklch(0.488 0.217 264)",
+    statusForeground: "#ffffff",
+  },
+  dark: {
+    background: "#141414",
+    foreground: "#f5f5f5",
+    chrome: "#141414",
+    chromeForeground: "#a3a3a3",
+    panel: "#161616",
+    tabActive: "#161616",
+    tabInactive: "rgba(255, 255, 255, 0.04)",
+    border: "rgba(255, 255, 255, 0.06)",
+    accent: "oklch(0.588 0.217 264)",
+    muted: "#a3a3a3",
+    activityBar: "#161616",
+    activityBarForeground: "#a3a3a3",
+    statusBar: "oklch(0.588 0.217 264)",
+    statusForeground: "#ffffff",
+  },
+};
+
 const FALLBACK_SYNTAX_BY_TYPE: Record<ResolvedThemeType, ThemePreviewSyntax> = {
   light: {
     plain: LIGHT_FALLBACKS.foreground,
@@ -261,6 +296,18 @@ export function createFallbackThemePreview(type: ResolvedThemeType): ThemePrevie
     type,
     palette,
     syntax: FALLBACK_SYNTAX_BY_TYPE[type],
+    swatches: previewSwatches({ colors: {}, type }, palette),
+  };
+}
+
+export function createDefaultThemePreview(type: ResolvedThemeType): ThemePreviewData {
+  const palette = DEFAULT_APP_PREVIEW_PALETTES[type];
+  const fallback = createFallbackThemePreview(type);
+
+  return {
+    type,
+    palette,
+    syntax: fallback.syntax,
     swatches: previewSwatches({ colors: {}, type }, palette),
   };
 }

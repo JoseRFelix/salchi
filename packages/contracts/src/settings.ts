@@ -119,6 +119,12 @@ export const DEFAULT_CLIENT_SETTINGS: ClientSettings = Schema.decodeSync(ClientS
 export const ThreadEnvMode = Schema.Literals(["local", "worktree"]);
 export type ThreadEnvMode = typeof ThreadEnvMode.Type;
 
+// Light/dark/system appearance mode. Server-authoritative so the mode follows
+// every browser connected to this Salchi server, in lockstep with the color
+// theme id pair below.
+export const ThemeMode = Schema.Literals(["light", "dark", "system"]);
+export type ThemeMode = typeof ThemeMode.Type;
+
 const makeBinaryPathSetting = (fallback: string) =>
   TrimmedString.pipe(
     Schema.decodeTo(
@@ -399,6 +405,11 @@ export const ServerSettings = Schema.Struct({
       }),
     ),
   ),
+  // Appearance mode (light/dark/system). Server-authoritative so a mode chosen
+  // on one device follows the user to every other connected browser.
+  themeMode: ThemeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("system" as const satisfies ThemeMode)),
+  ),
   // Color theme selection (light/dark mode each pick a VS Code theme id, or
   // "default" for the built-in palette). Server-authoritative so the selection
   // follows every browser connected to this Salchi server.
@@ -510,6 +521,7 @@ export const ServerSettingsPatch = Schema.Struct({
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
+  themeMode: Schema.optionalKey(ThemeMode),
   colorThemeLight: Schema.optionalKey(Schema.String),
   colorThemeDark: Schema.optionalKey(Schema.String),
   importedThemes: Schema.optionalKey(Schema.Array(ImportedColorThemeReference)),

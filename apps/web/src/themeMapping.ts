@@ -113,8 +113,13 @@ const TOKEN_SOURCES: Readonly<Record<string, TokenSource>> = {
     derive: () => "color-mix(in srgb, var(--foreground) 12%, transparent)",
   },
   "--input": {
-    keys: ["input.background", "dropdown.background"],
-    derive: () => "color-mix(in srgb, var(--foreground) 12%, transparent)",
+    // Intentionally *not* sourced from `input.background`/`dropdown.background`:
+    // many themes (e.g. GitHub Dark Default) set those equal to the editor
+    // background, which collapses controls that fill with `--input` — the Switch
+    // off-track, text-field fills — into the surface behind them. A translucent
+    // foreground overlay (mirroring the app's default theme) always contrasts.
+    keys: [],
+    derive: () => "color-mix(in srgb, var(--foreground) 14%, transparent)",
   },
   "--ring": {
     keys: ["focusBorder", "button.background"],

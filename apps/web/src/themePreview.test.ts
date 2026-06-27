@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { createFallbackThemePreview, createThemePreview } from "./themePreview";
+import {
+  createDefaultThemePreview,
+  createFallbackThemePreview,
+  createThemePreview,
+} from "./themePreview";
 
 describe("theme preview", () => {
   it("uses workbench colors for preview chrome", () => {
@@ -75,5 +79,16 @@ describe("theme preview", () => {
     expect(preview.palette.background).toBeTruthy();
     expect(preview.syntax.keyword).toBeTruthy();
     expect(preview.swatches.length).toBeGreaterThan(0);
+  });
+
+  it("keeps default light and dark previews mode-specific", () => {
+    const light = createDefaultThemePreview("light");
+    const dark = createDefaultThemePreview("dark");
+
+    expect(light.palette.background).toBe("#ffffff");
+    expect(dark.palette.background).not.toBe(light.palette.background);
+    expect(light.syntax.keyword).not.toBe(dark.syntax.keyword);
+    expect(light.swatches.length).toBeGreaterThan(0);
+    expect(dark.swatches.length).toBeGreaterThan(0);
   });
 });

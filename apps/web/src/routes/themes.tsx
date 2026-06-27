@@ -1,5 +1,6 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import {
+  ArrowLeftIcon,
   BlocksIcon,
   CheckIcon,
   DownloadIcon,
@@ -22,10 +23,12 @@ import type { UnifiedSettings } from "@t3tools/contracts/settings";
 import { Button } from "../components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../components/ui/input-group";
 import { SidebarInset, SidebarTrigger } from "../components/ui/sidebar";
+import { Skeleton } from "../components/ui/skeleton";
 import { Spinner } from "../components/ui/spinner";
 import { toastManager } from "../components/ui/toast";
-import { useColorTheme } from "../hooks/useColorTheme";
+import { DEFAULT_THEME_SENTINEL, useColorTheme } from "../hooks/useColorTheme";
 import { useUpdateSettings } from "../hooks/useSettings";
+import { useTheme } from "../hooks/useTheme";
 import {
   getImportedThemesSnapshot,
   importedThemeRecordsFromImportResult,
@@ -36,6 +39,7 @@ import {
 } from "../importedThemes";
 import { ensureLocalApi } from "../localApi";
 import {
+  createDefaultThemePreview,
   createFallbackThemePreview,
   createThemePreview,
   type ThemePreviewData,
@@ -51,6 +55,27 @@ type ThemeFilter = "all" | ResolvedThemeType;
 const ONLINE_THEME_PAGE_SIZE = 12;
 const ONLINE_THEME_EXTENSION_SCAN_LIMIT = 60;
 const THEME_PREVIEW_ROW_GAP_PX = 16;
+
+// Stable keys for the placeholder cards/swatches shown while online themes load.
+const THEME_PREVIEW_SKELETON_KEYS = [
+  "sk-1",
+  "sk-2",
+  "sk-3",
+  "sk-4",
+  "sk-5",
+  "sk-6",
+  "sk-7",
+  "sk-8",
+  "sk-9",
+] as const;
+const THEME_PREVIEW_SWATCH_SKELETON_KEYS = [
+  "sw-1",
+  "sw-2",
+  "sw-3",
+  "sw-4",
+  "sw-5",
+  "sw-6",
+] as const;
 
 const THEME_CATEGORIES: ReadonlyArray<{
   readonly value: ThemeCategory;
@@ -83,7 +108,7 @@ interface CodeLine {
   readonly tokens: readonly CodeToken[];
 }
 
-type PreviewThemeSource = ThemeDescriptor["source"] | "online";
+type PreviewThemeSource = ThemeDescriptor["source"] | "online" | "default";
 
 interface OnlineThemeReference {
   readonly namespace: string;
@@ -105,9 +130,19 @@ interface PreviewTheme {
   readonly downloadCount?: number;
 }
 
+interface SkeletonCell {
+  readonly skeletonId: string;
+}
+
+type ThemeGridCell = PreviewTheme | SkeletonCell;
+
+function isSkeletonCell(cell: ThemeGridCell): cell is SkeletonCell {
+  return "skeletonId" in cell;
+}
+
 interface ThemePreviewGridRow {
   readonly id: string;
-  readonly themes: readonly PreviewTheme[];
+  readonly cells: readonly ThemeGridCell[];
 }
 
 const SAMPLE_CODE_LINES: readonly CodeLine[] = [
@@ -209,6 +244,15 @@ function useImportedThemes(): ReadonlyArray<ImportedThemeRecord> {
   return useSyncExternalStore(subscribeImportedThemes, getImportedThemesSnapshot, () => []);
 }
 
+function defaultThemePreview(type: ResolvedThemeType): PreviewTheme {
+  return {
+    id: DEFAULT_THEME_SENTINEL,
+    label: type === "light" ? "Default Light" : "Default Dark",
+    type,
+    source: "default",
+  };
+}
+
 function bundledThemePreview(theme: ThemeDescriptor): PreviewTheme {
   return {
     id: theme.id,
@@ -268,6 +312,9 @@ function themeSearchText(theme: PreviewTheme): string {
 }
 
 function themeSourceLabel(theme: PreviewTheme): string {
+  if (theme.source === "default") {
+    return "Built-in app colors";
+  }
   if (theme.source === "online" && theme.onlineExtension) {
     return `Open VSX · ${theme.onlineExtension.namespace}.${theme.onlineExtension.name}`;
   }
@@ -275,10 +322,6 @@ function themeSourceLabel(theme: PreviewTheme): string {
     return `Imported from ${theme.record.namespace}.${theme.record.name}`;
   }
   return "Bundled Shiki theme";
-}
-
-function modeLabel(mode: ResolvedThemeType): string {
-  return mode === "light" ? "light" : "dark";
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -317,20 +360,58 @@ async function importOnlineThemeRecord(theme: PreviewTheme): Promise<ImportedThe
 }
 
 function themePreviewKey(theme: PreviewTheme): string {
-  return `${theme.source}:${theme.id}`;
+  return `${theme.source}:${theme.type}:${theme.id}`;
+}
+
+// Cache resolved preview data so cards re-mounted by the virtualized list paint
+// their final colors immediately instead of flashing the fallback while a
+// bundled theme re-loads — that flash (and the height changes it caused) was the
+// main source of scroll jank.
+const previewDataCache = new Map<string, ThemePreviewData>();
+
+function buildSyncPreview(theme: PreviewTheme): ThemePreviewData | null {
+  if (theme.source === "default") return null;
+  const source = theme.record ?? theme.preview;
+  if (!source) return null;
+  return createThemePreview({
+    colors: source.colors,
+    type: source.type,
+    ...(source.tokenColors === undefined ? {} : { tokenColors: source.tokenColors }),
+  });
+}
+
+function initialPreviewState(theme: PreviewTheme): {
+  readonly preview: ThemePreviewData;
+  readonly loading: boolean;
+} {
+  if (theme.source === "default") {
+    return { preview: createDefaultThemePreview(theme.type), loading: false };
+  }
+  const cached = previewDataCache.get(themePreviewKey(theme));
+  if (cached) return { preview: cached, loading: false };
+  if (theme.source === "imported" || theme.source === "online") {
+    const sync = buildSyncPreview(theme);
+    if (sync) {
+      previewDataCache.set(themePreviewKey(theme), sync);
+      return { preview: sync, loading: false };
+    }
+  }
+  return { preview: createFallbackThemePreview(theme.type), loading: theme.source === "bundled" };
 }
 
 function createThemePreviewRows(
-  themes: ReadonlyArray<PreviewTheme>,
+  cells: ReadonlyArray<ThemeGridCell>,
   columnCount: number,
 ): ThemePreviewGridRow[] {
   const rows: ThemePreviewGridRow[] = [];
   const safeColumnCount = Math.max(1, Math.trunc(columnCount));
-  for (let index = 0; index < themes.length; index += safeColumnCount) {
-    const rowThemes = themes.slice(index, index + safeColumnCount);
+  for (let index = 0; index < cells.length; index += safeColumnCount) {
+    const rowCells = cells.slice(index, index + safeColumnCount);
     rows.push({
-      id: rowThemes.map(themePreviewKey).join("|"),
-      themes: rowThemes,
+      id: rowCells
+        .map((cell) => (isSkeletonCell(cell) ? cell.skeletonId : themePreviewKey(cell)))
+        .join("|"),
+      cells: rowCells,
     });
   }
   return rows;
@@ -338,8 +419,8 @@ function createThemePreviewRows(
 
 function getThemePreviewColumnCount(): number {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") return 1;
-  if (window.matchMedia("(min-width: 1536px)").matches) return 3;
-  if (window.matchMedia("(min-width: 1024px)").matches) return 2;
+  if (window.matchMedia("(min-width: 1280px)").matches) return 3;
+  if (window.matchMedia("(min-width: 768px)").matches) return 2;
   return 1;
 }
 
@@ -350,8 +431,8 @@ function useThemePreviewColumnCount(): number {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
 
     const queries = [
-      window.matchMedia("(min-width: 1536px)"),
-      window.matchMedia("(min-width: 1024px)"),
+      window.matchMedia("(min-width: 1280px)"),
+      window.matchMedia("(min-width: 768px)"),
     ];
     const update = () => setColumnCount(getThemePreviewColumnCount());
     update();
@@ -370,16 +451,22 @@ function useThemePreviewColumnCount(): number {
 }
 
 function estimatedThemePreviewRowSize(columnCount: number): number {
-  if (columnCount >= 3) return 430 + THEME_PREVIEW_ROW_GAP_PX;
-  if (columnCount === 2) return 500 + THEME_PREVIEW_ROW_GAP_PX;
-  return 420 + THEME_PREVIEW_ROW_GAP_PX;
+  if (columnCount >= 3) return 360 + THEME_PREVIEW_ROW_GAP_PX;
+  if (columnCount === 2) return 400 + THEME_PREVIEW_ROW_GAP_PX;
+  return 380 + THEME_PREVIEW_ROW_GAP_PX;
 }
 
 function ThemePreviewRouteView() {
+  const navigate = useNavigate();
   const importedThemes = useImportedThemes();
   const themePreviewColumnCount = useThemePreviewColumnCount();
   const installedThemes = useMemo(
-    () => [...importedThemes.map(importedThemePreview), ...BUNDLED_THEMES.map(bundledThemePreview)],
+    () => [
+      defaultThemePreview("light"),
+      defaultThemePreview("dark"),
+      ...importedThemes.map(importedThemePreview),
+      ...BUNDLED_THEMES.map(bundledThemePreview),
+    ],
     [importedThemes],
   );
   const [category, setCategory] = useState<ThemeCategory>("installed");
@@ -391,7 +478,20 @@ function ThemePreviewRouteView() {
   const [onlineTotalSize, setOnlineTotalSize] = useState(0);
   const [filter, setFilter] = useState<ThemeFilter>("all");
   const onlineLoadingRef = useRef(false);
+  const seenOnlineKeysRef = useRef<Set<string>>(new Set());
   const normalizedInstalledQuery = installedQuery.trim().toLowerCase();
+
+  // Append freshly-resolved online previews, skipping any already shown. Returns
+  // how many were newly added so the loader can decide whether to keep scanning.
+  const appendOnlineThemes = useCallback((previews: ReadonlyArray<PreviewTheme>): number => {
+    const fresh = previews.filter(
+      (preview) => !seenOnlineKeysRef.current.has(themePreviewKey(preview)),
+    );
+    if (fresh.length === 0) return 0;
+    for (const preview of fresh) seenOnlineKeysRef.current.add(themePreviewKey(preview));
+    setOnlineThemes((current) => [...current, ...fresh]);
+    return fresh.length;
+  }, []);
 
   const visibleInstalledThemes = useMemo(
     () =>
@@ -408,12 +508,8 @@ function ThemePreviewRouteView() {
     [filter, onlineThemes],
   );
   const visibleThemes = category === "online" ? visibleOnlineThemes : visibleInstalledThemes;
-  const totalThemes = category === "online" ? onlineTotalSize : installedThemes.length;
   const canLoadMoreOnline = !onlineLoaded || onlineNextOffset < onlineTotalSize;
   const minimumVisibleOnlineThemeCount = Math.max(3, themePreviewColumnCount * 3);
-  const scannedOnlineCount = onlineLoaded
-    ? Math.min(onlineNextOffset, onlineTotalSize)
-    : onlineNextOffset;
 
   const loadMoreOnlineThemes = useCallback(async () => {
     if (onlineLoadingRef.current) return;
@@ -422,15 +518,15 @@ function ThemePreviewRouteView() {
     const startOffset = onlineNextOffset;
     onlineLoadingRef.current = true;
     setOnlineLoading(true);
+    let cursor = startOffset;
+    let totalSize = onlineTotalSize;
     try {
       const api = ensureLocalApi();
-      const previews: PreviewTheme[] = [];
-      let cursor = startOffset;
-      let totalSize = onlineTotalSize;
+      let addedCount = 0;
       let scannedExtensions = 0;
 
       while (
-        previews.length < ONLINE_THEME_PAGE_SIZE &&
+        addedCount < ONLINE_THEME_PAGE_SIZE &&
         scannedExtensions < ONLINE_THEME_EXTENSION_SCAN_LIMIT
       ) {
         const result = await api.themes.search({
@@ -443,45 +539,35 @@ function ThemePreviewRouteView() {
           break;
         }
 
-        const importedResults = await Promise.allSettled(
+        // Stream each extension's previews into the grid as they resolve rather
+        // than blocking on the slowest VSIX download in the batch — the first
+        // cards appear as soon as the first theme is parsed.
+        const settled = await Promise.allSettled(
           result.items.map(async (item) => {
             const preview = await api.themes.preview({
               namespace: item.namespace,
               name: item.name,
               version: item.version,
             });
-            return preview.themes.map((theme) =>
+            const mapped = preview.themes.map((theme) =>
               onlineThemePreview(theme, item, {
                 namespace: preview.namespace,
                 name: preview.name,
                 version: preview.version,
               }),
             );
+            return appendOnlineThemes(mapped);
           }),
         );
 
-        previews.push(
-          ...importedResults.flatMap((resultItem) =>
-            resultItem.status === "fulfilled" ? resultItem.value : [],
-          ),
-        );
+        for (const outcome of settled) {
+          if (outcome.status === "fulfilled") addedCount += outcome.value;
+        }
         scannedExtensions += result.items.length;
         cursor = Math.min(result.offset + result.size, result.totalSize);
         if (cursor >= result.totalSize) break;
       }
 
-      setOnlineThemes((currentThemes) => {
-        if (previews.length === 0) return currentThemes;
-        const seen = new Set(currentThemes.map(themePreviewKey));
-        const nextThemes = [...currentThemes];
-        for (const preview of previews) {
-          const key = themePreviewKey(preview);
-          if (seen.has(key)) continue;
-          seen.add(key);
-          nextThemes.push(preview);
-        }
-        return nextThemes;
-      });
       setOnlineNextOffset(cursor);
       setOnlineTotalSize(totalSize);
       setOnlineLoaded(true);
@@ -495,7 +581,7 @@ function ThemePreviewRouteView() {
       onlineLoadingRef.current = false;
       setOnlineLoading(false);
     }
-  }, [onlineLoaded, onlineNextOffset, onlineTotalSize]);
+  }, [appendOnlineThemes, onlineLoaded, onlineNextOffset, onlineTotalSize]);
 
   const handleThemeListEndReached = useCallback(() => {
     if (category !== "online" || onlineLoading || !canLoadMoreOnline) return;
@@ -526,82 +612,55 @@ function ThemePreviewRouteView() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
         <header className="shrink-0 border-b border-border px-3 py-2 sm:px-5">
           <div className="flex min-h-8 items-center gap-2">
+            <Button
+              className="shrink-0 md:hidden"
+              onClick={() => void navigate({ to: "/settings/general" })}
+              size="xs"
+              variant="outline"
+            >
+              <ArrowLeftIcon className="size-3.5" />
+              Back
+            </Button>
             <SidebarTrigger className="size-7 shrink-0 md:hidden" />
             <PaletteIcon className="size-4 text-muted-foreground" />
             <h1 className="min-w-0 truncate font-medium text-[15px] text-foreground md:text-sm">
               Theme previews
             </h1>
-            <div className="ms-auto flex items-center gap-2">
-              <Button render={<a href="/settings/general" />} size="xs" variant="outline">
-                Settings
-              </Button>
-            </div>
           </div>
         </header>
 
-        <main className="min-h-0 flex-1 px-3 py-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] sm:px-5 lg:px-8">
-          <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col gap-4">
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-              <div
-                aria-label="Theme category"
-                className="inline-flex w-fit overflow-hidden rounded-lg border border-input bg-background shadow-xs/5"
-                role="group"
-              >
-                {THEME_CATEGORIES.map((item) => {
-                  const Icon = item.icon;
-                  const pressed = category === item.value;
-                  return (
-                    <button
-                      aria-pressed={pressed}
-                      className={cn(
-                        "inline-flex h-8 items-center gap-1.5 border-input px-3 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background not-first:border-s",
-                        pressed
-                          ? "bg-primary text-primary-foreground"
-                          : "text-muted-foreground hover:bg-accent hover:text-foreground",
-                      )}
-                      key={item.value}
-                      onClick={() => setCategory(item.value)}
-                      type="button"
-                    >
-                      <Icon className="size-3.5" />
-                      {item.label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {category === "installed" ? (
-                <InputGroup className="w-full min-w-0 xl:max-w-lg">
-                  <InputGroupAddon>
-                    <SearchIcon className="size-4" />
-                  </InputGroupAddon>
-                  <InputGroupInput
-                    aria-label="Search themes"
-                    nativeInput
-                    onChange={(event) => setInstalledQuery(event.currentTarget.value)}
-                    placeholder="Search themes..."
-                    type="search"
-                    value={installedQuery}
-                  />
-                </InputGroup>
-              ) : (
-                <div className="flex w-full min-w-0 items-center text-muted-foreground text-xs xl:max-w-lg xl:justify-end">
-                  <span className="min-w-0 truncate">
-                    {onlineLoading && !onlineLoaded ? (
-                      <span className="inline-flex min-w-0 items-center gap-1.5">
-                        <Spinner />
-                        <span className="truncate">Loading Open VSX</span>
-                      </span>
-                    ) : onlineLoaded ? (
-                      `${onlineThemes.length} loaded · scanned ${scannedOnlineCount} of ${onlineTotalSize}`
-                    ) : (
-                      "Open VSX"
-                    )}
-                  </span>
+        <main className="flex min-h-0 flex-1 flex-col py-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))]">
+          <div className="mx-auto w-full max-w-7xl shrink-0 px-3 sm:px-5 lg:px-8">
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                <div
+                  aria-label="Theme category"
+                  className="inline-flex w-fit overflow-hidden rounded-lg border border-input bg-background shadow-xs/5"
+                  role="group"
+                >
+                  {THEME_CATEGORIES.map((item) => {
+                    const Icon = item.icon;
+                    const pressed = category === item.value;
+                    return (
+                      <button
+                        aria-pressed={pressed}
+                        className={cn(
+                          "inline-flex h-8 items-center gap-1.5 border-input px-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background not-first:border-s sm:px-3 sm:text-sm",
+                          pressed
+                            ? "bg-primary text-primary-foreground"
+                            : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                        )}
+                        key={item.value}
+                        onClick={() => setCategory(item.value)}
+                        type="button"
+                      >
+                        <Icon className="size-3.5" />
+                        {item.label}
+                      </button>
+                    );
+                  })}
                 </div>
-              )}
 
-              <div className="flex flex-wrap gap-2 xl:justify-end">
                 <div
                   aria-label="Theme type"
                   className="inline-flex w-fit overflow-hidden rounded-lg border border-input bg-background shadow-xs/5"
@@ -614,7 +673,7 @@ function ThemePreviewRouteView() {
                       <button
                         aria-pressed={pressed}
                         className={cn(
-                          "inline-flex h-8 items-center gap-1.5 border-input px-3 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background not-first:border-s",
+                          "inline-flex h-8 items-center gap-1.5 border-input px-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background not-first:border-s sm:px-3 sm:text-sm",
                           pressed
                             ? "bg-primary text-primary-foreground"
                             : "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -630,22 +689,34 @@ function ThemePreviewRouteView() {
                   })}
                 </div>
               </div>
-            </div>
 
-            <div className="flex items-center justify-between gap-3 text-muted-foreground text-xs">
-              <span>
-                {category === "online"
-                  ? `${visibleThemes.length} shown from loaded previews`
-                  : `${visibleThemes.length} of ${totalThemes} themes`}
-              </span>
+              {category === "installed" ? (
+                <InputGroup className="w-full min-w-0 sm:max-w-md">
+                  <InputGroupAddon>
+                    <SearchIcon className="size-4" />
+                  </InputGroupAddon>
+                  <InputGroupInput
+                    aria-label="Search themes"
+                    nativeInput
+                    onChange={(event) => setInstalledQuery(event.currentTarget.value)}
+                    placeholder="Search themes..."
+                    type="search"
+                    value={installedQuery}
+                  />
+                </InputGroup>
+              ) : null}
             </div>
+          </div>
 
+          <div className="mt-4 min-h-0 flex-1">
             {category === "online" && onlineLoading && onlineThemes.length === 0 ? (
-              <div className="flex min-h-52 items-center justify-center rounded-lg border border-border bg-card/20 px-6 text-muted-foreground text-sm">
-                <Spinner />
+              <div className="h-full overflow-y-auto">
+                <div className="mx-auto w-full max-w-7xl px-3 sm:px-5 lg:px-8">
+                  <ThemePreviewSkeletonGrid count={themePreviewColumnCount * 3} />
+                </div>
               </div>
             ) : visibleThemes.length > 0 ? (
-              <div className="min-h-0 flex-1">
+              <div className="h-full">
                 <ThemePreviewVirtualGrid
                   canLoadMore={category === "online" && canLoadMoreOnline}
                   columnCount={themePreviewColumnCount}
@@ -655,18 +726,54 @@ function ThemePreviewRouteView() {
                 />
               </div>
             ) : (
-              <div className="flex min-h-52 items-center justify-center rounded-lg border border-dashed border-border bg-card/20 px-6 text-center text-muted-foreground text-sm">
-                {category === "online"
-                  ? canLoadMoreOnline
-                    ? "Looking for previewable color themes."
-                    : "No previewable color themes were found."
-                  : "No themes match your filters."}
+              <div className="mx-auto w-full max-w-7xl px-3 sm:px-5 lg:px-8">
+                <div className="flex min-h-52 items-center justify-center rounded-lg border border-dashed border-border bg-card/20 px-6 text-center text-muted-foreground text-sm">
+                  {category === "online"
+                    ? canLoadMoreOnline
+                      ? "Looking for previewable themes."
+                      : "No previewable themes were found."
+                    : "No themes match your filters."}
+                </div>
               </div>
             )}
           </div>
         </main>
       </div>
     </SidebarInset>
+  );
+}
+
+function ThemePreviewSkeletonCard() {
+  return (
+    <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm/5">
+      <Skeleton className="aspect-[16/9] w-full rounded-none" />
+      <div className="flex flex-col gap-2.5 p-3">
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-4 w-12 rounded-full" />
+        </div>
+        <Skeleton className="h-3 w-40" />
+        <div className="flex items-center gap-1">
+          {THEME_PREVIEW_SWATCH_SKELETON_KEYS.map((key) => (
+            <Skeleton className="size-4 rounded-full" key={key} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ThemePreviewSkeletonGrid({ count }: { readonly count: number }) {
+  const keys = THEME_PREVIEW_SKELETON_KEYS.slice(
+    0,
+    Math.min(THEME_PREVIEW_SKELETON_KEYS.length, Math.max(1, count)),
+  );
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {keys.map((key) => (
+        <ThemePreviewSkeletonCard key={key} />
+      ))}
+    </div>
   );
 }
 
@@ -683,28 +790,49 @@ function ThemePreviewVirtualGrid({
   readonly onEndReached: () => void;
   readonly themes: ReadonlyArray<PreviewTheme>;
 }) {
-  const rows = useMemo(() => createThemePreviewRows(themes, columnCount), [columnCount, themes]);
+  const safeColumnCount = Math.max(1, Math.trunc(columnCount));
   const estimatedRowSize = estimatedThemePreviewRowSize(columnCount);
+
+  // While paging, append skeleton cells so they first complete the partial last
+  // row and then fill a couple more rows — filling the empty space instead of
+  // floating a lonely skeleton row below a gap.
+  const remainderToFillLastRow =
+    themes.length % safeColumnCount === 0 ? 0 : safeColumnCount - (themes.length % safeColumnCount);
+  const skeletonCount = loadingMore
+    ? Math.min(THEME_PREVIEW_SKELETON_KEYS.length, remainderToFillLastRow + safeColumnCount * 2)
+    : 0;
+
+  const cells = useMemo<ThemeGridCell[]>(() => {
+    if (skeletonCount === 0) return [...themes];
+    const skeletons = THEME_PREVIEW_SKELETON_KEYS.slice(0, skeletonCount).map((skeletonId) => ({
+      skeletonId,
+    }));
+    return [...themes, ...skeletons];
+  }, [skeletonCount, themes]);
+
+  const rows = useMemo(
+    () => createThemePreviewRows(cells, safeColumnCount),
+    [cells, safeColumnCount],
+  );
 
   const renderRow = useCallback(
     ({ item }: { readonly item: ThemePreviewGridRow; readonly index: number }) => (
-      <div className="grid grid-cols-1 gap-4 pb-4 lg:grid-cols-2 2xl:grid-cols-3">
-        {item.themes.map((theme) => (
-          <ThemePreviewCard key={themePreviewKey(theme)} theme={theme} />
-        ))}
+      <div className="mx-auto grid w-full max-w-7xl grid-cols-1 gap-4 px-3 pb-4 sm:px-5 md:grid-cols-2 lg:px-8 xl:grid-cols-3">
+        {item.cells.map((cell) =>
+          isSkeletonCell(cell) ? (
+            <ThemePreviewSkeletonCard key={cell.skeletonId} />
+          ) : (
+            <ThemePreviewCard key={themePreviewKey(cell)} theme={cell} />
+          ),
+        )}
       </div>
     ),
     [],
   );
 
   const footer = (
-    <div className="flex min-h-12 items-center justify-center pb-1 text-muted-foreground text-xs">
-      {loadingMore ? (
-        <span className="inline-flex items-center gap-1.5">
-          <Spinner />
-          Loading more themes
-        </span>
-      ) : canLoadMore ? (
+    <div className="mx-auto flex min-h-12 w-full max-w-7xl items-center justify-center px-3 pb-1 text-muted-foreground text-xs sm:px-5 lg:px-8">
+      {loadingMore ? null : canLoadMore ? (
         <span>Scroll for more themes</span>
       ) : (
         <span>End of results</span>
@@ -730,71 +858,87 @@ function ThemePreviewVirtualGrid({
 }
 
 function ThemePreviewCard({ theme }: { readonly theme: PreviewTheme }) {
-  const [preview, setPreview] = useState(() => createFallbackThemePreview(theme.type));
-  const [loading, setLoading] = useState(theme.source === "bundled");
+  const { theme: appearanceTheme, setTheme } = useTheme();
+  const { resolvedMode, activeThemeId, setThemeForMode } = useColorTheme();
+  const initial = useMemo(() => initialPreviewState(theme), [theme]);
+  const [preview, setPreview] = useState(initial.preview);
+  const [loading, setLoading] = useState(initial.loading);
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
-  const { selection, setThemeForMode } = useColorTheme();
   const { updateSettings } = useUpdateSettings();
-  const selected = selection[theme.type] === theme.id;
+  const selected =
+    appearanceTheme !== "system" && resolvedMode === theme.type && activeThemeId === theme.id;
 
   useEffect(() => {
-    let cancelled = false;
-    setPreview(createFallbackThemePreview(theme.type));
-    setLoading(theme.source === "bundled");
+    if (theme.source === "default") {
+      setPreview(createDefaultThemePreview(theme.type));
+      setLoading(false);
+      setFailed(false);
+      return;
+    }
+
+    const key = themePreviewKey(theme);
+    const cached = previewDataCache.get(key);
+    if (cached) {
+      setPreview(cached);
+      setLoading(false);
+      setFailed(false);
+      return;
+    }
+
     setFailed(false);
 
-    const loadPreview = async () => {
-      if (theme.source === "imported" || theme.source === "online") {
-        const previewSource = theme.record ?? theme.preview;
-        if (!previewSource) {
-          setFailed(true);
-          return;
-        }
-        setPreview(
-          createThemePreview({
-            colors: previewSource.colors,
-            type: previewSource.type,
-            ...(previewSource.tokenColors === undefined
-              ? {}
-              : { tokenColors: previewSource.tokenColors }),
-          }),
-        );
+    if (theme.source === "imported" || theme.source === "online") {
+      const sync = buildSyncPreview(theme);
+      if (!sync) {
+        setFailed(true);
         return;
       }
+      previewDataCache.set(key, sync);
+      setPreview(sync);
+      setLoading(false);
+      return;
+    }
 
+    let cancelled = false;
+    setPreview(createFallbackThemePreview(theme.type));
+    setLoading(true);
+    void (async () => {
       try {
         const bundled = await loadBundledTheme(theme.id);
         if (!bundled || cancelled) return;
-        setPreview(createThemePreview(bundled));
+        const built = createThemePreview(bundled);
+        previewDataCache.set(key, built);
+        setPreview(built);
       } catch {
         if (!cancelled) setFailed(true);
       } finally {
         if (!cancelled) setLoading(false);
       }
-    };
-
-    void loadPreview();
+    })();
     return () => {
       cancelled = true;
     };
-  }, [theme.id, theme.preview, theme.record, theme.source, theme.type]);
+  }, [theme]);
 
   const handleUseTheme = useCallback(async () => {
     if (theme.source === "online") {
       setSaving(true);
       try {
         const record = await importOnlineThemeRecord(theme);
+        setTheme(theme.type);
         syncImportedThemeRecords(
           [record],
           updateSettings,
-          theme.type === "light" ? { colorThemeLight: theme.id } : { colorThemeDark: theme.id },
+          theme.type === "light"
+            ? { colorThemeLight: theme.id, themeMode: theme.type }
+            : { colorThemeDark: theme.id, themeMode: theme.type },
         );
         setThemeForMode(theme.type, theme.id);
         toastManager.add({
           type: "success",
           title: `Imported ${theme.label}`,
-          description: `Using for ${modeLabel(theme.type)} mode.`,
+          description: "Using theme.",
         });
       } catch (error) {
         toastManager.add({
@@ -808,13 +952,17 @@ function ThemePreviewCard({ theme }: { readonly theme: PreviewTheme }) {
       return;
     }
 
+    setTheme(theme.type);
     setThemeForMode(theme.type, theme.id);
     updateSettings(
-      theme.type === "light" ? { colorThemeLight: theme.id } : { colorThemeDark: theme.id },
+      theme.type === "light"
+        ? { colorThemeLight: theme.id, themeMode: theme.type }
+        : { colorThemeDark: theme.id, themeMode: theme.type },
     );
-  }, [setThemeForMode, theme, updateSettings]);
+  }, [setTheme, setThemeForMode, theme, updateSettings]);
 
   const handleImportTheme = useCallback(async () => {
+    if (theme.source === "default") return;
     setSaving(true);
     try {
       const record =
@@ -837,16 +985,39 @@ function ThemePreviewCard({ theme }: { readonly theme: PreviewTheme }) {
     }
   }, [theme, updateSettings]);
 
+  const handleCardActivate = useCallback(() => {
+    if (selected || saving) return;
+    void handleUseTheme();
+  }, [handleUseTheme, saving, selected]);
+
   return (
-    <article className="overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-sm/5">
+    <article
+      aria-pressed={selected}
+      className={cn(
+        "cursor-pointer overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm/5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+        selected
+          ? "border-primary ring-1 ring-primary"
+          : "border-border hover:border-foreground/24",
+        saving ? "pointer-events-none opacity-80" : null,
+      )}
+      onClick={handleCardActivate}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          handleCardActivate();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+    >
       <ThemePreviewMockup preview={preview} themeName={theme.label} />
 
-      <div className="grid gap-3 p-4 sm:grid-cols-[1fr_auto] sm:items-end">
+      <div className={cn("h-0.5 shrink-0", loading ? "bg-primary/40" : "bg-transparent")} />
+
+      <div className="flex flex-col gap-2.5 p-3">
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2">
-            <h2 className="min-w-0 truncate font-medium text-base text-foreground">
-              {theme.label}
-            </h2>
+            <h2 className="min-w-0 truncate font-medium text-sm text-foreground">{theme.label}</h2>
             <span
               className={cn(
                 "shrink-0 rounded-full border px-2 py-0.5 font-medium text-[11px]",
@@ -858,57 +1029,63 @@ function ThemePreviewCard({ theme }: { readonly theme: PreviewTheme }) {
               {theme.type}
             </span>
           </div>
-          <p className="mt-1 truncate text-muted-foreground text-sm">{themeSourceLabel(theme)}</p>
-          {theme.downloadCount ? (
-            <p className="mt-1 text-muted-foreground/70 text-xs">
-              {theme.downloadCount.toLocaleString()} downloads
-            </p>
-          ) : null}
-          {failed ? (
-            <p className="mt-1 text-destructive text-xs">Preview colors could not be loaded.</p>
-          ) : null}
+          <p className="mt-1 h-4 truncate text-muted-foreground text-xs leading-4">
+            {failed ? (
+              <span className="text-destructive">Preview colors could not be loaded.</span>
+            ) : theme.downloadCount ? (
+              `${theme.downloadCount.toLocaleString()} downloads · ${themeSourceLabel(theme)}`
+            ) : (
+              themeSourceLabel(theme)
+            )}
+          </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 sm:justify-end">
-          <div className="flex items-center gap-1.5">
-            {preview.swatches.map((color) => (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1">
+            {preview.swatches.slice(0, 6).map((color) => (
               <span
                 aria-hidden="true"
-                className="size-5 rounded-full border border-border shadow-xs/10"
-                key={`${theme.id}:${color}`}
+                className="size-4 rounded-full border border-border shadow-xs/10"
+                key={`${themePreviewKey(theme)}:${color}`}
                 style={{ backgroundColor: color }}
               />
             ))}
           </div>
 
-          {theme.source === "online" ? (
-            <Button disabled={saving} onClick={handleImportTheme} size="xs" variant="ghost">
-              {saving ? <Spinner /> : <DownloadIcon className="size-3.5" />}
-              Import
-            </Button>
-          ) : null}
+          <div className="flex items-center gap-1.5">
+            {theme.source === "online" ? (
+              <Button
+                disabled={saving}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void handleImportTheme();
+                }}
+                size="xs"
+                variant="ghost"
+              >
+                {saving ? <Spinner /> : <DownloadIcon className="size-3.5" />}
+                Import
+              </Button>
+            ) : null}
 
-          <Button
-            disabled={selected || saving}
-            onClick={handleUseTheme}
-            size="xs"
-            variant="outline"
-          >
-            {selected ? (
-              <CheckIcon className="size-3.5" />
-            ) : saving ? (
-              <Spinner />
-            ) : theme.type === "light" ? (
-              <SunIcon className="size-3.5" />
-            ) : (
-              <MoonIcon className="size-3.5" />
-            )}
-            {selected ? "Selected" : `Use for ${modeLabel(theme.type)}`}
-          </Button>
+            {selected || saving ? (
+              <span className="inline-flex items-center gap-1.5 font-medium text-muted-foreground text-xs">
+                {selected ? (
+                  <>
+                    <CheckIcon className="size-3.5 text-primary" />
+                    Selected
+                  </>
+                ) : (
+                  <>
+                    <Spinner />
+                    Applying…
+                  </>
+                )}
+              </span>
+            ) : null}
+          </div>
         </div>
       </div>
-
-      {loading ? <div className="h-0.5 bg-primary/40" /> : null}
     </article>
   );
 }
@@ -923,7 +1100,7 @@ function ThemePreviewMockup({
   const palette = preview.palette;
   return (
     <div
-      className="aspect-[16/10] overflow-hidden border-b font-mono text-[11px] leading-5 sm:text-xs"
+      className="aspect-[16/9] overflow-hidden border-b font-mono text-[11px] leading-5"
       style={{
         backgroundColor: palette.background,
         borderColor: palette.border,

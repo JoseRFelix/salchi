@@ -42,7 +42,11 @@ describe("mapThemeToTokens", () => {
     expect(tokens["--primary-foreground"]).toBe("#2e3440");
     expect(tokens["--accent"]).toBe("#88c0d0");
     expect(tokens["--border"]).toBe("#3b4252");
-    expect(tokens["--input"]).toBe("#3b4252");
+    // --input intentionally ignores input.background (themes often set it equal
+    // to the editor background, hiding controls that fill with it) and always
+    // derives a contrasting foreground overlay instead.
+    expect(tokens["--input"]).toContain("color-mix");
+    expect(tokens["--input"]).toContain("var(--foreground)");
     expect(tokens["--destructive"]).toBe("#bf616a");
   });
 

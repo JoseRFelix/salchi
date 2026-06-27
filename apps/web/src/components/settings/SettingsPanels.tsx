@@ -2,10 +2,12 @@ import {
   ArchiveIcon,
   ArchiveX,
   LoaderIcon,
-  PaletteIcon,
+  MoonIcon,
   PlusIcon,
   RefreshCwIcon,
+  SunIcon,
 } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   defaultInstanceIdForDriver,
@@ -44,11 +46,9 @@ import {
 import { BUNDLED_THEMES, findBundledTheme, type ThemeDescriptor } from "../../themes";
 import {
   getImportedThemesSnapshot,
-  importedThemeRecordToReference,
   subscribeImportedThemes,
   type ImportedThemeRecord,
 } from "../../importedThemes";
-import { ColorThemeImportDialog } from "./ColorThemeImportDialog";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useDesktopUpdateState } from "../../lib/desktopUpdateReactQuery";
@@ -99,21 +99,6 @@ import {
   hasProviderUpdateStateForInstance,
   PROVIDER_UPDATE_LAUNCH_TIMEOUT_MS,
 } from "../../providerUpdateLaunchState";
-
-const THEME_OPTIONS = [
-  {
-    value: "system",
-    label: "System",
-  },
-  {
-    value: "light",
-    label: "Light",
-  },
-  {
-    value: "dark",
-    label: "Dark",
-  },
-] as const;
 
 const TIMESTAMP_FORMAT_LABELS = {
   locale: "System default",
@@ -389,6 +374,7 @@ export function useSettingsRestore(onRestored?: () => void) {
   const { selection: colorThemeSelection, reset: resetColorTheme } = useColorTheme();
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
+  const isThemeDirty = theme !== "system" || isColorThemeCustomized(colorThemeSelection);
 
   const isGitWritingModelDirty = !Equal.equals(
     settings.textGenerationModelSelection ?? null,
@@ -397,8 +383,7 @@ export function useSettingsRestore(onRestored?: () => void) {
 
   const changedSettingLabels = useMemo(
     () => [
-      ...(theme !== "system" ? ["Theme"] : []),
-      ...(isColorThemeCustomized(colorThemeSelection) ? ["Color theme"] : []),
+      ...(isThemeDirty ? ["Theme"] : []),
       ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
         ? ["Time format"]
         : []),
@@ -448,8 +433,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.enableAssistantStreaming,
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
-      theme,
-      colorThemeSelection,
+      isThemeDirty,
     ],
   );
 
@@ -466,6 +450,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     setTheme("system");
     resetColorTheme();
     updateSettings({
+      themeMode: DEFAULT_UNIFIED_SETTINGS.themeMode,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
@@ -490,8 +475,16 @@ export function useSettingsRestore(onRestored?: () => void) {
   };
 }
 
-function colorThemeLabel(id: string, themes: ReadonlyArray<ThemeDescriptor>): string {
-  if (id === DEFAULT_THEME_SENTINEL) return "Default (built-in)";
+function modeDisplayLabel(mode: ThemeDescriptor["type"]): string {
+  return mode === "light" ? "Light" : "Dark";
+}
+
+function colorThemeLabel(
+  id: string,
+  mode: ThemeDescriptor["type"],
+  themes: ReadonlyArray<ThemeDescriptor>,
+): string {
+  if (id === DEFAULT_THEME_SENTINEL) return `Default ${modeDisplayLabel(mode)}`;
   return themes.find((theme) => theme.id === id)?.label ?? findBundledTheme(id)?.label ?? id;
 }
 
@@ -499,11 +492,12 @@ function useImportedThemes(): ReadonlyArray<ImportedThemeRecord> {
   return useSyncExternalStore(subscribeImportedThemes, getImportedThemesSnapshot, () => []);
 }
 
-function ColorThemeSettingsRow() {
-  const { selection, setThemeForMode, reset } = useColorTheme();
+function ThemeSettingsRow() {
+  const { theme, setTheme } = useTheme();
+  const { selection, resolvedMode, reset } = useColorTheme();
   const { updateSettings } = useUpdateSettings();
   const importedThemes = useImportedThemes();
-  const [isImportOpen, setImportOpen] = useState(false);
+  const navigate = useNavigate();
 
   const themeDescriptors = useMemo<ReadonlyArray<ThemeDescriptor>>(
     () => [
@@ -518,84 +512,67 @@ function ColorThemeSettingsRow() {
     [importedThemes],
   );
 
-  const handleReset = useCallback(() => {
+  const handleUseSystemDefault = useCallback(() => {
+    setTheme("system");
     reset();
     updateSettings({
+      themeMode: DEFAULT_UNIFIED_SETTINGS.themeMode,
       colorThemeLight: DEFAULT_UNIFIED_SETTINGS.colorThemeLight,
       colorThemeDark: DEFAULT_UNIFIED_SETTINGS.colorThemeDark,
     });
-  }, [reset, updateSettings]);
+  }, [reset, setTheme, updateSettings]);
 
-  const handleImported = useCallback(
-    (records: ReadonlyArray<ImportedThemeRecord>) => {
-      // Sync lightweight references so other devices can re-fetch the colors.
-      const first = records[0];
-      updateSettings({
-        importedThemes: [
-          ...importedThemes.map(importedThemeRecordToReference),
-          ...records.map(importedThemeRecordToReference),
-        ],
-        ...(first
-          ? first.type === "light"
-            ? { colorThemeLight: first.id }
-            : { colorThemeDark: first.id }
-          : {}),
-      });
-      // Auto-select the first imported theme for its mode as a convenience.
-      if (first) setThemeForMode(first.type, first.id);
-    },
-    [importedThemes, setThemeForMode, updateSettings],
-  );
+  const goToThemes = useCallback(() => {
+    void navigate({ to: "/themes" });
+  }, [navigate]);
+
+  const isThemeDirty = theme !== "system" || isColorThemeCustomized(selection);
+  const displayMode = theme === "system" ? resolvedMode : theme;
+  const displayLabel = colorThemeLabel(selection[displayMode], displayMode, themeDescriptors);
+  const DisplayIcon = displayMode === "light" ? SunIcon : MoonIcon;
 
   return (
-    <>
-      <SettingsRow
-        title="Color theme"
-        description="Use a VS Code theme for the app's colors. Light and dark mode can use different themes."
-        resetAction={
-          isColorThemeCustomized(selection) ? (
-            <SettingResetButton label="color theme" onClick={handleReset} />
-          ) : null
-        }
-        control={
-          <div className="flex w-full flex-col gap-2 sm:w-auto">
-            <div className="grid min-w-56 gap-1 rounded-lg border border-border bg-card/24 px-3 py-2 text-sm">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">Light</span>
-                <span className="min-w-0 max-w-48 truncate text-right">
-                  {colorThemeLabel(selection.light, themeDescriptors)}
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">Dark</span>
-                <span className="min-w-0 max-w-48 truncate text-right">
-                  {colorThemeLabel(selection.dark, themeDescriptors)}
-                </span>
-              </div>
-            </div>
-            <div className="flex flex-wrap justify-end gap-1.5">
-              <Button render={<a href="/themes" />} variant="ghost" size="sm">
-                <PaletteIcon className="size-4" />
-                Preview themes
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setImportOpen(true)}>
-                Import from Open VSX…
-              </Button>
-            </div>
+    <SettingsRow
+      title="Theme"
+      description="Follow your OS with built-in colors, or pick a theme to pin Salchi to that theme's mode."
+      control={
+        <div className="flex w-full flex-col gap-2 sm:w-auto">
+          <div
+            className="flex min-w-64 cursor-pointer items-center justify-between gap-3 rounded-lg border border-border bg-card/24 px-3 py-2 text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+            onClick={goToThemes}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                goToThemes();
+              }
+            }}
+            role="button"
+            tabIndex={0}
+          >
+            <span className="inline-flex min-w-0 items-center gap-1.5 font-medium">
+              <DisplayIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 truncate">{displayLabel}</span>
+            </span>
+            {isThemeDirty ? (
+              <button
+                className="shrink-0 rounded-full border border-border bg-background px-2 py-0.5 font-medium text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleUseSystemDefault();
+                }}
+                type="button"
+              >
+                Restore
+              </button>
+            ) : null}
           </div>
-        }
-      />
-      <ColorThemeImportDialog
-        open={isImportOpen}
-        onOpenChange={setImportOpen}
-        onImported={handleImported}
-      />
-    </>
+        </div>
+      }
+    />
   );
 }
 
 export function GeneralSettingsPanel() {
-  const { theme, setTheme } = useTheme();
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const observability = useServerObservability();
@@ -636,40 +613,7 @@ export function GeneralSettingsPanel() {
       <SettingsSection title="General">
         <PushNotificationSettingsRow />
 
-        <SettingsRow
-          title="Theme"
-          description="Choose how Salchi looks across the app."
-          resetAction={
-            theme !== "system" ? (
-              <SettingResetButton label="theme" onClick={() => setTheme("system")} />
-            ) : null
-          }
-          control={
-            <Select
-              value={theme}
-              onValueChange={(value) => {
-                if (value === "system" || value === "light" || value === "dark") {
-                  setTheme(value);
-                }
-              }}
-            >
-              <SelectTrigger className="w-full sm:w-40" aria-label="Theme preference">
-                <SelectValue>
-                  {THEME_OPTIONS.find((option) => option.value === theme)?.label ?? "System"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                {THEME_OPTIONS.map((option) => (
-                  <SelectItem hideIndicator key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          }
-        />
-
-        <ColorThemeSettingsRow />
+        <ThemeSettingsRow />
 
         <SettingsRow
           title="Time format"

@@ -8,6 +8,7 @@ import {
   saveImportedThemes,
 } from "../importedThemes";
 import { DEFAULT_THEME_SENTINEL, setColorThemeSelection } from "./useColorTheme";
+import { getStoredTheme, syncThemeModeFromServer } from "./useTheme";
 import {
   getClientSettings,
   useClientSettingsHydrated,
@@ -23,6 +24,7 @@ import { useServerConfig } from "~/rpc/serverState";
  * the app root so a theme chosen on one device follows the user to another.
  */
 export function useColorThemeSync() {
+  const themeMode = useSettings((settings) => settings.themeMode);
   const colorThemeLight = useSettings((settings) => settings.colorThemeLight);
   const colorThemeDark = useSettings((settings) => settings.colorThemeDark);
   const importedThemes = useSettings((settings) => settings.importedThemes);
@@ -37,40 +39,54 @@ export function useColorThemeSync() {
     if (!attemptedLegacyMigrationRef.current) {
       attemptedLegacyMigrationRef.current = true;
       const legacyClientSettings = getClientSettings();
-      if (
-        shouldPromoteLegacyColorThemeSettings({
-          server: {
-            colorThemeLight,
-            colorThemeDark,
-            importedThemes,
-          },
-          legacy: {
-            colorThemeLight: legacyClientSettings.colorThemeLight,
-            colorThemeDark: legacyClientSettings.colorThemeDark,
-            importedThemes: legacyClientSettings.importedThemes,
-          },
-        })
-      ) {
-        updateSettings({
+      const promoteColorTheme = shouldPromoteLegacyColorThemeSettings({
+        server: {
+          colorThemeLight,
+          colorThemeDark,
+          importedThemes,
+        },
+        legacy: {
           colorThemeLight: legacyClientSettings.colorThemeLight,
           colorThemeDark: legacyClientSettings.colorThemeDark,
-          importedThemes: dedupeImportedThemeReferences(legacyClientSettings.importedThemes),
-        });
-        setColorThemeSelection(
-          legacyClientSettings.colorThemeLight,
-          legacyClientSettings.colorThemeDark,
-        );
-        return;
-      }
+          importedThemes: legacyClientSettings.importedThemes,
+        },
+      });
+      // The appearance mode was browser-local before it became
+      // server-authoritative; on the first connect after upgrade, push a
+      // non-default local mode up rather than letting the default "system"
+      // selection clobber it.
+      const localThemeMode = getStoredTheme();
+      const promoteThemeMode = themeMode === "system" && localThemeMode !== "system";
+
+      const patch = {
+        ...(promoteColorTheme
+          ? {
+              colorThemeLight: legacyClientSettings.colorThemeLight,
+              colorThemeDark: legacyClientSettings.colorThemeDark,
+              importedThemes: dedupeImportedThemeReferences(legacyClientSettings.importedThemes),
+            }
+          : {}),
+        ...(promoteThemeMode ? { themeMode: localThemeMode } : {}),
+      };
+      if (Object.keys(patch).length > 0) updateSettings(patch);
+
+      setColorThemeSelection(
+        promoteColorTheme ? legacyClientSettings.colorThemeLight : colorThemeLight,
+        promoteColorTheme ? legacyClientSettings.colorThemeDark : colorThemeDark,
+      );
+      if (!promoteThemeMode) syncThemeModeFromServer(themeMode);
+      return;
     }
 
     setColorThemeSelection(colorThemeLight, colorThemeDark);
+    syncThemeModeFromServer(themeMode);
   }, [
     clientSettingsHydrated,
     colorThemeDark,
     colorThemeLight,
     importedThemes,
     serverConfig,
+    themeMode,
     updateSettings,
   ]);
 

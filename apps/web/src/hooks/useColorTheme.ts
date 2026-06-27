@@ -39,7 +39,9 @@ export const DEFAULT_COLOR_THEME_SELECTION: ColorThemeSelection = {
 };
 
 const SELECTION_STORAGE_KEY = "t3code:colorTheme";
-const TOKEN_CACHE_STORAGE_KEY = "t3code:colorTheme:tokens";
+// Bump the version suffix whenever the token derivation in themeMapping changes
+// so already-cached resolutions don't pin users to the old mapping.
+const TOKEN_CACHE_STORAGE_KEY = "t3code:colorTheme:tokens:v2";
 
 function hasStorage() {
   return typeof window !== "undefined" && typeof localStorage !== "undefined";
