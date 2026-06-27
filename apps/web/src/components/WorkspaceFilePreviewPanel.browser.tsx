@@ -12,6 +12,7 @@ import {
   __setEnvironmentApiOverrideForTests,
 } from "../environmentApi";
 import { FILE_PREVIEW_WORD_WRAP_STORAGE_KEY } from "../filePreviewPreferences";
+import { resetColorTheme, setColorThemeSelection } from "../hooks/useColorTheme";
 import type {
   WorkspaceFilePanelHistoryEntry,
   WorkspaceFilePreviewTarget,
@@ -46,6 +47,8 @@ const {
       onLineClick?: (event: { lineNumber: number }) => void;
       onLineNumberClick?: (event: { lineNumber: number }) => void;
       overflow?: string;
+      theme?: string;
+      themeType?: string;
       unsafeCSS?: string;
     };
     renderAnnotation?: (annotation: {
@@ -181,6 +184,8 @@ vi.mock("@pierre/diffs/react", async () => {
         onLineClick?: (event: { lineNumber: number }) => void;
         onLineNumberClick?: (event: { lineNumber: number }) => void;
         overflow?: string;
+        theme?: string;
+        themeType?: string;
         unsafeCSS?: string;
       };
       renderAnnotation?: (annotation: {
@@ -653,7 +658,10 @@ describe("WorkspaceFilePreviewPanel", () => {
     refreshGitStatusMock.mockResolvedValue(null);
     resetGitStatusMock();
     resolveEnvironmentHttpUrlMock.mockClear();
+    resetColorTheme();
     window.localStorage.removeItem(FILE_PREVIEW_WORD_WRAP_STORAGE_KEY);
+    window.localStorage.removeItem("t3code:colorTheme");
+    window.localStorage.removeItem("t3code:theme");
     document.body.innerHTML = "";
     vi.restoreAllMocks();
   });
@@ -666,6 +674,27 @@ describe("WorkspaceFilePreviewPanel", () => {
       expect(rendered?.dataset.cacheKey).toContain("file-preview");
       expect(document.querySelector("code")?.textContent).toBe("export const value = 1;");
       expect(document.querySelector('[data-column-number="1"]')?.textContent).toBe("1");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("uses the selected syntax theme in file preview cache keys and render options", async () => {
+    localStorage.setItem("t3code:theme", "dark");
+    setColorThemeSelection("default", "github-dark-default");
+
+    const mounted = await renderPreview({});
+    try {
+      await vi.waitFor(() => {
+        expect(fileRenderCalls.at(-1)?.options?.theme).toBe("github-dark-default");
+      });
+
+      const rendered = document.querySelector<HTMLElement>("[data-testid='workspace-file-render']");
+      expect(rendered?.dataset.cacheKey).toContain("github-dark-default");
+      expect(fileRenderCalls.at(-1)?.options).toMatchObject({
+        theme: "github-dark-default",
+        themeType: "dark",
+      });
     } finally {
       await mounted.cleanup();
     }

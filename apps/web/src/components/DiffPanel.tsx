@@ -35,12 +35,8 @@ import {
   stripDiffSearchParams,
   type DiffRouteSource,
 } from "../diffRouteSearch";
-import { useTheme } from "../hooks/useTheme";
-import {
-  buildPatchCacheKey,
-  DIFF_MOBILE_TEXT_FLOOR_UNSAFE_CSS,
-  resolveDiffThemeName,
-} from "../lib/diffRendering";
+import { buildPatchCacheKey, DIFF_MOBILE_TEXT_FLOOR_UNSAFE_CSS } from "../lib/diffRendering";
+import { useSelectedSyntaxTheme } from "../syntaxThemes";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { selectProjectByRef, useStore } from "../store";
 import { createThreadSelectorByRef } from "../storeSelectors";
@@ -72,7 +68,6 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import type { Thread } from "../types";
 
 type DiffRenderMode = "stacked" | "split";
-type DiffThemeType = "light" | "dark";
 
 type DiffPanelThreadContext = Pick<
   Thread,
@@ -313,7 +308,7 @@ export { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 
 export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   const navigate = useNavigate();
-  const { resolvedTheme } = useTheme();
+  const selectedSyntaxTheme = useSelectedSyntaxTheme();
   const settings = useSettings();
   const [diffRenderMode, setDiffRenderMode] = useState<DiffRenderMode>("stacked");
   const [diffWordWrap, setDiffWordWrap] = useState(settings.diffWordWrap);
@@ -543,8 +538,8 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
   const renderablePatch = useMemo(
-    () => getRenderablePatch(selectedPatch, `diff-panel:${resolvedTheme}`),
-    [resolvedTheme, selectedPatch],
+    () => getRenderablePatch(selectedPatch, `diff-panel:${selectedSyntaxTheme.cacheKey}`),
+    [selectedPatch, selectedSyntaxTheme.cacheKey],
   );
   const renderableFiles = useMemo(() => {
     if (!renderablePatch || renderablePatch.kind !== "files") {
@@ -1133,7 +1128,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                   {renderableFiles.map((fileDiff) => {
                     const filePath = resolveFileDiffPath(fileDiff);
                     const fileKey = buildFileDiffRenderKey(fileDiff);
-                    const themedFileKey = `${fileKey}:${resolvedTheme}`;
+                    const themedFileKey = `${fileKey}:${selectedSyntaxTheme.cacheKey}`;
                     const collapsed = collapsedDiffFileKeys.has(fileKey);
                     const imagePreviewObjectId = resolveFileDiffPreviewObjectId(fileDiff);
                     const imagePreviewUrl =
@@ -1225,8 +1220,8 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                             diffStyle: diffRenderMode === "split" ? "split" : "unified",
                             lineDiffType: "none",
                             overflow: diffWordWrap ? "wrap" : "scroll",
-                            theme: resolveDiffThemeName(resolvedTheme),
-                            themeType: resolvedTheme as DiffThemeType,
+                            theme: selectedSyntaxTheme.themeName,
+                            themeType: selectedSyntaxTheme.themeType,
                             unsafeCSS: DIFF_PANEL_UNSAFE_CSS,
                           }}
                         />

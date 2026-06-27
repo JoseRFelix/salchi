@@ -48,7 +48,9 @@ function hasStorage() {
 }
 
 function rootElement(): HTMLElement | null {
-  return typeof document === "undefined" ? null : document.documentElement;
+  if (typeof document === "undefined") return null;
+  const element = document.documentElement;
+  return element.style ? element : null;
 }
 
 // --- selection persistence -------------------------------------------------
