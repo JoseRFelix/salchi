@@ -3,7 +3,6 @@ import {
   ArrowLeftIcon,
   BlocksIcon,
   CheckIcon,
-  DownloadIcon,
   FilesIcon,
   GitBranchIcon,
   GlobeIcon,
@@ -95,6 +94,12 @@ const THEME_FILTERS: ReadonlyArray<{
   { value: "light", label: "Light", icon: SunIcon },
   { value: "dark", label: "Dark", icon: MoonIcon },
 ];
+
+const THEME_SEGMENT_BUTTON_CLASS =
+  "inline-flex h-8 items-center gap-1.5 border-input px-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background not-first:border-s sm:px-3 sm:text-sm";
+const THEME_SEGMENT_BUTTON_ACTIVE_CLASS = "bg-primary text-primary-foreground";
+const THEME_SEGMENT_BUTTON_INACTIVE_CLASS =
+  "text-muted-foreground hover:bg-accent hover:text-foreground";
 
 type CodeTokenKind = keyof ThemePreviewData["syntax"];
 
@@ -626,13 +631,13 @@ function ThemePreviewRouteView() {
         <header className="shrink-0 border-b border-border px-3 py-2 sm:px-5">
           <div className="flex min-h-8 items-center gap-2">
             <Button
+              aria-label="Back"
               className="shrink-0 md:hidden"
               onClick={() => void navigate({ to: "/settings/general" })}
-              size="xs"
+              size="icon-sm"
               variant="outline"
             >
               <ArrowLeftIcon className="size-3.5" />
-              Back
             </Button>
             <SidebarTrigger className="size-7 shrink-0 md:hidden" />
             <PaletteIcon className="size-4 text-muted-foreground" />
@@ -658,10 +663,10 @@ function ThemePreviewRouteView() {
                       <button
                         aria-pressed={pressed}
                         className={cn(
-                          "inline-flex h-8 items-center gap-1.5 border-input px-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background not-first:border-s sm:px-3 sm:text-sm",
+                          THEME_SEGMENT_BUTTON_CLASS,
                           pressed
-                            ? "bg-primary text-primary-foreground"
-                            : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                            ? THEME_SEGMENT_BUTTON_ACTIVE_CLASS
+                            : THEME_SEGMENT_BUTTON_INACTIVE_CLASS,
                         )}
                         key={item.value}
                         onClick={() => setCategory(item.value)}
@@ -686,10 +691,10 @@ function ThemePreviewRouteView() {
                       <button
                         aria-pressed={pressed}
                         className={cn(
-                          "inline-flex h-8 items-center gap-1.5 border-input px-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background not-first:border-s sm:px-3 sm:text-sm",
+                          THEME_SEGMENT_BUTTON_CLASS,
                           pressed
-                            ? "bg-primary text-primary-foreground"
-                            : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                            ? THEME_SEGMENT_BUTTON_ACTIVE_CLASS
+                            : THEME_SEGMENT_BUTTON_INACTIVE_CLASS,
                         )}
                         key={item.value}
                         onClick={() => setFilter(item.value)}
@@ -840,7 +845,7 @@ function ThemePreviewVirtualGrid({
 
   const renderRow = useCallback(
     ({ item }: { readonly item: ThemePreviewGridRow; readonly index: number }) => (
-      <div className="mx-auto grid w-full max-w-7xl grid-cols-1 gap-4 px-3 pb-4 sm:px-5 md:grid-cols-2 lg:px-8 xl:grid-cols-3">
+      <div className="mx-auto grid w-full max-w-7xl grid-cols-1 gap-4 px-3 pt-1 pb-3 sm:px-5 md:grid-cols-2 lg:px-8 xl:grid-cols-3">
         {item.cells.map((cell) =>
           isSkeletonCell(cell) ? (
             <ThemePreviewSkeletonCard key={cell.skeletonId} />
@@ -958,11 +963,6 @@ function ThemePreviewCard({ theme }: { readonly theme: PreviewTheme }) {
             : { colorThemeDark: theme.id, themeMode: theme.type },
         );
         setThemeForMode(theme.type, theme.id);
-        toastManager.add({
-          type: "success",
-          title: `Imported ${theme.label}`,
-          description: "Using theme.",
-        });
       } catch (error) {
         toastManager.add({
           type: "error",
@@ -983,30 +983,6 @@ function ThemePreviewCard({ theme }: { readonly theme: PreviewTheme }) {
         : { colorThemeDark: theme.id, themeMode: theme.type },
     );
   }, [setTheme, setThemeForMode, theme, updateSettings]);
-
-  const handleImportTheme = useCallback(async () => {
-    if (theme.source === "default") return;
-    setSaving(true);
-    try {
-      const record =
-        theme.source === "online" ? await importOnlineThemeRecord(theme) : theme.record;
-      if (!record) return;
-      syncImportedThemeRecords([record], updateSettings);
-      toastManager.add({
-        type: "success",
-        title: `Imported ${theme.label}`,
-        description: "Added to your installed themes.",
-      });
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Import failed",
-        description: errorMessage(error, "Could not import this theme."),
-      });
-    } finally {
-      setSaving(false);
-    }
-  }, [theme, updateSettings]);
 
   const handleCardActivate = useCallback(() => {
     if (selected || saving) return;
@@ -1076,21 +1052,6 @@ function ThemePreviewCard({ theme }: { readonly theme: PreviewTheme }) {
           </div>
 
           <div className="flex items-center gap-1.5">
-            {theme.source === "online" ? (
-              <Button
-                disabled={saving}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void handleImportTheme();
-                }}
-                size="xs"
-                variant="ghost"
-              >
-                {saving ? <Spinner /> : <DownloadIcon className="size-3.5" />}
-                Import
-              </Button>
-            ) : null}
-
             {selected || saving ? (
               <span className="inline-flex items-center gap-1.5 font-medium text-muted-foreground text-xs">
                 {selected ? (
