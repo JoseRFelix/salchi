@@ -1,4 +1,4 @@
-import { parsePatchFiles } from "@pierre/diffs";
+import { DEFAULT_VIRTUAL_FILE_METRICS, parsePatchFiles } from "@pierre/diffs";
 import { FileDiff, Virtualizer, type FileDiffMetadata } from "@pierre/diffs/react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
@@ -304,6 +304,27 @@ interface DiffPanelProps {
   mode?: DiffPanelMode;
 }
 
+// The @pierre/diffs Virtualizer estimates each off-screen file's height from
+// `metrics.diffHeaderHeight` (default 44px), but our DIFF_PANEL_UNSAFE_CSS renders a
+// more compact header, and the header region is never re-measured (only [data-line]
+// rows are). That leaves a constant per-file gap between a file's real height (while
+// visible) and its estimate-based placeholder (while buffered), so each file jumps by
+// that gap every time it crosses the virtualization boundary while scrolling — the
+// scroll-up jank. We measure the real header height once from the live shadow DOM and
+// feed it back as the metric so the estimate matches reality. Cached at module scope so
+// only the first diff open in a session pays the re-measure; the value is device-stable.
+let cachedDiffHeaderHeightPx: number | null = null;
+
+function measureDiffHeaderHeight(viewport: HTMLElement | null): number | null {
+  const container = viewport?.querySelector("diffs-container");
+  const header = container?.shadowRoot?.querySelector("[data-diffs-header]");
+  if (!(header instanceof HTMLElement)) {
+    return null;
+  }
+  const height = header.getBoundingClientRect().height;
+  return height > 0 ? Math.round(height) : null;
+}
+
 export { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 
 export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
@@ -315,6 +336,9 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   const [diffIgnoreWhitespace, setDiffIgnoreWhitespace] = useState(settings.diffIgnoreWhitespace);
   const [collapsedDiffFileKeys, setCollapsedDiffFileKeys] = useState<ReadonlySet<string>>(
     () => new Set(),
+  );
+  const [diffHeaderHeightPx, setDiffHeaderHeightPx] = useState<number | null>(
+    () => cachedDiffHeaderHeightPx,
   );
   const patchViewportRef = useRef<HTMLDivElement>(null);
   const turnStripRef = useRef<HTMLDivElement>(null);
@@ -552,6 +576,37 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       }),
     );
   }, [renderablePatch]);
+
+  // Measure the real diff header height once it renders, then feed it back as the
+  // Virtualizer's header metric so off-screen placeholders match the visible height.
+  // See the cachedDiffHeaderHeightPx comment above.
+  const diffFileMetrics = useMemo(
+    () =>
+      diffHeaderHeightPx != null
+        ? { ...DEFAULT_VIRTUAL_FILE_METRICS, diffHeaderHeight: diffHeaderHeightPx }
+        : undefined,
+    [diffHeaderHeightPx],
+  );
+  useEffect(() => {
+    if (diffHeaderHeightPx != null || renderableFiles.length === 0) {
+      return;
+    }
+    let frame = 0;
+    let attempts = 0;
+    const tryMeasure = () => {
+      const measured = measureDiffHeaderHeight(patchViewportRef.current);
+      if (measured != null) {
+        cachedDiffHeaderHeightPx = measured;
+        setDiffHeaderHeightPx(measured);
+        return;
+      }
+      if (attempts++ < 60) {
+        frame = requestAnimationFrame(tryMeasure);
+      }
+    };
+    frame = requestAnimationFrame(tryMeasure);
+    return () => cancelAnimationFrame(frame);
+  }, [diffHeaderHeightPx, renderableFiles]);
 
   useEffect(() => {
     if (renderableFiles.length === 0) {
@@ -1128,7 +1183,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                   {renderableFiles.map((fileDiff) => {
                     const filePath = resolveFileDiffPath(fileDiff);
                     const fileKey = buildFileDiffRenderKey(fileDiff);
-                    const themedFileKey = `${fileKey}:${selectedSyntaxTheme.cacheKey}`;
+                    const themedFileKey = `${fileKey}:${selectedSyntaxTheme.cacheKey}:h${diffHeaderHeightPx ?? "x"}`;
                     const collapsed = collapsedDiffFileKeys.has(fileKey);
                     const imagePreviewObjectId = resolveFileDiffPreviewObjectId(fileDiff);
                     const imagePreviewUrl =
@@ -1169,6 +1224,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                       >
                         <FileDiff
                           fileDiff={fileDiff}
+                          {...(diffFileMetrics ? { metrics: diffFileMetrics } : {})}
                           renderHeaderPrefix={() => (
                             <button
                               type="button"
