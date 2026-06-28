@@ -1,22 +1,26 @@
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
-  BlocksIcon,
   CheckIcon,
-  FilesIcon,
+  DownloadIcon,
   GitBranchIcon,
   GlobeIcon,
   LibraryIcon,
   MoonIcon,
   PaletteIcon,
-  PlayIcon,
   SearchIcon,
   SlidersHorizontalIcon,
+  SparklesIcon,
   SunIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type * as React from "react";
-import type { ThemeImportResult, ThemePreviewTheme, ThemeSearchItem } from "@t3tools/contracts";
+import type {
+  ThemeImportResult,
+  ThemePreviewTheme,
+  ThemeSearchItem,
+  ThemeSortBy,
+} from "@t3tools/contracts";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
 
 import { Button } from "../components/ui/button";
@@ -27,7 +31,7 @@ import { Spinner } from "../components/ui/spinner";
 import { toastManager } from "../components/ui/toast";
 import { DEFAULT_THEME_SENTINEL, useColorTheme } from "../hooks/useColorTheme";
 import { useUpdateSettings } from "../hooks/useSettings";
-import { useTheme } from "../hooks/useTheme";
+import { useTheme, type Theme } from "../hooks/useTheme";
 import {
   getImportedThemesSnapshot,
   importedThemeRecordsFromImportResult,
@@ -93,6 +97,15 @@ const THEME_FILTERS: ReadonlyArray<{
   { value: "all", label: "All", icon: SlidersHorizontalIcon },
   { value: "light", label: "Light", icon: SunIcon },
   { value: "dark", label: "Dark", icon: MoonIcon },
+];
+
+const THEME_SORTS: ReadonlyArray<{
+  readonly value: ThemeSortBy;
+  readonly label: string;
+  readonly icon: React.ComponentType<{ className?: string }>;
+}> = [
+  { value: "downloadCount", label: "Downloads", icon: DownloadIcon },
+  { value: "relevance", label: "Relevance", icon: SparklesIcon },
 ];
 
 const THEME_SEGMENT_BUTTON_CLASS =
@@ -316,17 +329,27 @@ function themeSearchText(theme: PreviewTheme): string {
     .toLowerCase();
 }
 
-function themeSourceLabel(theme: PreviewTheme): string {
-  if (theme.source === "default") {
-    return "Built-in app colors";
+function formatDownloadCount(count: number): string {
+  if (count >= 1_000_000) {
+    return `${(count / 1_000_000).toFixed(count >= 10_000_000 ? 0 : 1)}M`;
   }
-  if (theme.source === "online" && theme.onlineExtension) {
-    return `Open VSX · ${theme.onlineExtension.namespace}.${theme.onlineExtension.name}`;
+  if (count >= 1_000) {
+    return `${(count / 1_000).toFixed(count >= 10_000 ? 0 : 1)}k`;
   }
-  if (theme.source === "imported" && theme.record) {
-    return `Imported from ${theme.record.namespace}.${theme.record.name}`;
-  }
-  return "Bundled Shiki theme";
+  return String(count);
+}
+
+// A theme is the active one only when the user has committed to an explicit
+// light/dark mode (not "system") and its id/type matches the current selection.
+// Shared by the card's "Selected" badge and the installed-list ordering so the
+// pinned-first theme is always the one rendered as selected.
+function isSelectedTheme(
+  theme: PreviewTheme,
+  appearanceTheme: Theme,
+  resolvedMode: ResolvedThemeType,
+  activeThemeId: string,
+): boolean {
+  return appearanceTheme !== "system" && theme.type === resolvedMode && theme.id === activeThemeId;
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -465,6 +488,14 @@ function ThemePreviewRouteView() {
   const navigate = useNavigate();
   const importedThemes = useImportedThemes();
   const themePreviewColumnCount = useThemePreviewColumnCount();
+  const { theme: appearanceTheme } = useTheme();
+  const { resolvedMode, activeThemeId } = useColorTheme();
+  // Capture the active theme once on mount so it can be pinned to the top of the
+  // installed list. We deliberately don't follow later selections — re-sorting
+  // the grid out from under the user as they click themes is jarring.
+  const [pinnedThemeKey] = useState(() =>
+    appearanceTheme === "system" ? null : `${resolvedMode}:${activeThemeId}`,
+  );
   const installedThemes = useMemo(
     () => [
       defaultThemePreview("light"),
@@ -476,6 +507,9 @@ function ThemePreviewRouteView() {
   );
   const [category, setCategory] = useState<ThemeCategory>("installed");
   const [installedQuery, setInstalledQuery] = useState("");
+  const [onlineQuery, setOnlineQuery] = useState("");
+  const [committedOnlineQuery, setCommittedOnlineQuery] = useState("");
+  const [onlineSort, setOnlineSort] = useState<ThemeSortBy>("downloadCount");
   const [onlineThemes, setOnlineThemes] = useState<ReadonlyArray<PreviewTheme>>([]);
   const [onlineLoading, setOnlineLoading] = useState(false);
   const [onlineLoaded, setOnlineLoaded] = useState(false);
@@ -485,6 +519,9 @@ function ThemePreviewRouteView() {
   const [filter, setFilter] = useState<ThemeFilter>("all");
   const onlineLoadingRef = useRef(false);
   const seenOnlineKeysRef = useRef<Set<string>>(new Set());
+  // Bumped whenever the online query resets the result list so an in-flight load
+  // started against an older query can detect it is stale and discard its results.
+  const onlineRequestRef = useRef(0);
   const normalizedInstalledQuery = installedQuery.trim().toLowerCase();
 
   // Append freshly-resolved online previews, skipping any already shown. Returns
@@ -499,15 +536,21 @@ function ThemePreviewRouteView() {
     return fresh.length;
   }, []);
 
-  const visibleInstalledThemes = useMemo(
-    () =>
-      installedThemes.filter((theme) => {
-        if (filter !== "all" && theme.type !== filter) return false;
-        if (!normalizedInstalledQuery) return true;
-        return themeSearchText(theme).includes(normalizedInstalledQuery);
-      }),
-    [filter, installedThemes, normalizedInstalledQuery],
-  );
+  const visibleInstalledThemes = useMemo(() => {
+    const filtered = installedThemes.filter((theme) => {
+      if (filter !== "all" && theme.type !== filter) return false;
+      if (!normalizedInstalledQuery) return true;
+      return themeSearchText(theme).includes(normalizedInstalledQuery);
+    });
+    // Pin the theme that was active on mount to the top so it's easy to spot
+    // among many cards; later selections don't reorder the grid.
+    const selectedIndex = pinnedThemeKey
+      ? filtered.findIndex((theme) => `${theme.type}:${theme.id}` === pinnedThemeKey)
+      : -1;
+    const selected = selectedIndex > 0 ? filtered[selectedIndex] : undefined;
+    if (!selected) return filtered;
+    return [selected, ...filtered.slice(0, selectedIndex), ...filtered.slice(selectedIndex + 1)];
+  }, [filter, installedThemes, normalizedInstalledQuery, pinnedThemeKey]);
 
   const visibleOnlineThemes = useMemo(
     () => onlineThemes.filter((theme) => filter === "all" || theme.type === filter),
@@ -521,6 +564,7 @@ function ThemePreviewRouteView() {
     if (onlineLoadingRef.current) return;
     if (onlineLoaded && onlineNextOffset >= onlineTotalSize) return;
 
+    const requestId = onlineRequestRef.current;
     const startOffset = onlineNextOffset;
     onlineLoadingRef.current = true;
     setOnlineLoading(true);
@@ -539,7 +583,12 @@ function ThemePreviewRouteView() {
         const result = await api.themes.search({
           offset: cursor,
           size: ONLINE_THEME_PAGE_SIZE,
+          sortBy: onlineSort,
+          ...(committedOnlineQuery ? { query: committedOnlineQuery } : {}),
         });
+        // The query changed (or reset) while this batch was in flight; drop the
+        // stale results so they don't pollute the new query's grid.
+        if (onlineRequestRef.current !== requestId) return;
         totalSize = result.totalSize;
         if (result.items.length === 0) {
           cursor = Math.min(result.offset + result.size, result.totalSize);
@@ -563,9 +612,12 @@ function ThemePreviewRouteView() {
                 version: preview.version,
               }),
             );
+            // Skip appends from a superseded query.
+            if (onlineRequestRef.current !== requestId) return 0;
             return appendOnlineThemes(mapped);
           }),
         );
+        if (onlineRequestRef.current !== requestId) return;
 
         for (const outcome of settled) {
           if (outcome.status === "fulfilled") addedCount += outcome.value;
@@ -579,6 +631,7 @@ function ThemePreviewRouteView() {
       setOnlineTotalSize(totalSize);
       setOnlineLoaded(true);
     } catch (error) {
+      if (onlineRequestRef.current !== requestId) return;
       const description = errorMessage(error, "Could not reach the Open VSX registry.");
       setOnlineError(description);
       toastManager.add({
@@ -590,12 +643,40 @@ function ThemePreviewRouteView() {
       onlineLoadingRef.current = false;
       setOnlineLoading(false);
     }
-  }, [appendOnlineThemes, onlineLoaded, onlineNextOffset, onlineTotalSize]);
+  }, [
+    appendOnlineThemes,
+    committedOnlineQuery,
+    onlineLoaded,
+    onlineNextOffset,
+    onlineSort,
+    onlineTotalSize,
+  ]);
 
   const handleThemeListEndReached = useCallback(() => {
     if (category !== "online" || onlineLoading || !canLoadMoreOnline) return;
     void loadMoreOnlineThemes();
   }, [canLoadMoreOnline, category, loadMoreOnlineThemes, onlineLoading]);
+
+  // Debounce the marketplace query so we don't fire a search request per keystroke.
+  useEffect(() => {
+    const trimmed = onlineQuery.trim();
+    if (trimmed === committedOnlineQuery) return;
+    const handle = setTimeout(() => setCommittedOnlineQuery(trimmed), 300);
+    return () => clearTimeout(handle);
+  }, [committedOnlineQuery, onlineQuery]);
+
+  // Start the online list over whenever the committed query or sort changes.
+  // Bumping the request id invalidates any load still in flight against the
+  // previous query/sort.
+  useEffect(() => {
+    onlineRequestRef.current += 1;
+    seenOnlineKeysRef.current = new Set();
+    setOnlineThemes([]);
+    setOnlineNextOffset(0);
+    setOnlineTotalSize(0);
+    setOnlineLoaded(false);
+    setOnlineError(null);
+  }, [committedOnlineQuery, onlineSort]);
 
   useEffect(() => {
     if (category !== "online" || onlineLoaded || onlineLoading || onlineError) return;
@@ -706,13 +787,56 @@ function ThemePreviewRouteView() {
                     );
                   })}
                 </div>
+
+                {category === "online" ? (
+                  <div
+                    aria-label="Sort online themes"
+                    className="inline-flex w-fit overflow-hidden rounded-lg border border-input bg-background shadow-xs/5"
+                    role="group"
+                  >
+                    {THEME_SORTS.map((item) => {
+                      const Icon = item.icon;
+                      const pressed = onlineSort === item.value;
+                      return (
+                        <button
+                          aria-pressed={pressed}
+                          className={cn(
+                            THEME_SEGMENT_BUTTON_CLASS,
+                            pressed
+                              ? THEME_SEGMENT_BUTTON_ACTIVE_CLASS
+                              : THEME_SEGMENT_BUTTON_INACTIVE_CLASS,
+                          )}
+                          key={item.value}
+                          onClick={() => setOnlineSort(item.value)}
+                          type="button"
+                        >
+                          <Icon className="size-3.5" />
+                          {item.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
               </div>
 
-              {category === "installed" ? (
-                <InputGroup className="w-full min-w-0 sm:max-w-md">
-                  <InputGroupAddon>
+              <InputGroup className="w-full min-w-0 sm:max-w-md">
+                <InputGroupAddon>
+                  {category === "online" && onlineLoading ? (
+                    <Spinner />
+                  ) : (
                     <SearchIcon className="size-4" />
-                  </InputGroupAddon>
+                  )}
+                </InputGroupAddon>
+                {category === "online" ? (
+                  <InputGroupInput
+                    aria-label="Search Open VSX themes"
+                    nativeInput
+                    onChange={(event) => setOnlineQuery(event.currentTarget.value)}
+                    placeholder="Search the Open VSX marketplace..."
+                    type="search"
+                    value={onlineQuery}
+                  />
+                ) : (
                   <InputGroupInput
                     aria-label="Search themes"
                     nativeInput
@@ -721,8 +845,8 @@ function ThemePreviewRouteView() {
                     type="search"
                     value={installedQuery}
                   />
-                </InputGroup>
-              ) : null}
+                )}
+              </InputGroup>
             </div>
           </div>
 
@@ -749,7 +873,10 @@ function ThemePreviewRouteView() {
                   {category === "online"
                     ? canLoadMoreOnline
                       ? "Looking for previewable themes."
-                      : (onlineError ?? "No previewable themes were found.")
+                      : (onlineError ??
+                        (committedOnlineQuery
+                          ? `No themes found for "${committedOnlineQuery}".`
+                          : "No previewable themes were found."))
                     : "No themes match your filters."}
                   {category === "online" && onlineError ? (
                     <Button
@@ -892,16 +1019,13 @@ function ThemePreviewCard({ theme }: { readonly theme: PreviewTheme }) {
   const [preview, setPreview] = useState(initial.preview);
   const [loading, setLoading] = useState(initial.loading);
   const [saving, setSaving] = useState(false);
-  const [failed, setFailed] = useState(false);
   const { updateSettings } = useUpdateSettings();
-  const selected =
-    appearanceTheme !== "system" && resolvedMode === theme.type && activeThemeId === theme.id;
+  const selected = isSelectedTheme(theme, appearanceTheme, resolvedMode, activeThemeId);
 
   useEffect(() => {
     if (theme.source === "default") {
       setPreview(createDefaultThemePreview(theme.type));
       setLoading(false);
-      setFailed(false);
       return;
     }
 
@@ -910,16 +1034,12 @@ function ThemePreviewCard({ theme }: { readonly theme: PreviewTheme }) {
     if (cached) {
       setPreview(cached);
       setLoading(false);
-      setFailed(false);
       return;
     }
-
-    setFailed(false);
 
     if (theme.source === "imported" || theme.source === "online") {
       const sync = buildSyncPreview(theme);
       if (!sync) {
-        setFailed(true);
         return;
       }
       previewDataCache.set(key, sync);
@@ -939,7 +1059,7 @@ function ThemePreviewCard({ theme }: { readonly theme: PreviewTheme }) {
         previewDataCache.set(key, built);
         setPreview(built);
       } catch {
-        if (!cancelled) setFailed(true);
+        // Preview falls back to the placeholder colors on failure.
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -1009,7 +1129,7 @@ function ThemePreviewCard({ theme }: { readonly theme: PreviewTheme }) {
       role="button"
       tabIndex={0}
     >
-      <ThemePreviewMockup preview={preview} themeName={theme.label} />
+      <ThemePreviewMockup preview={preview} />
 
       <div className={cn("h-0.5 shrink-0", loading ? "bg-primary/40" : "bg-transparent")} />
 
@@ -1028,15 +1148,6 @@ function ThemePreviewCard({ theme }: { readonly theme: PreviewTheme }) {
               {theme.type}
             </span>
           </div>
-          <p className="mt-1 h-4 truncate text-muted-foreground text-xs leading-4">
-            {failed ? (
-              <span className="text-destructive">Preview colors could not be loaded.</span>
-            ) : theme.downloadCount ? (
-              `${theme.downloadCount.toLocaleString()} downloads · ${themeSourceLabel(theme)}`
-            ) : (
-              themeSourceLabel(theme)
-            )}
-          </p>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1051,7 +1162,16 @@ function ThemePreviewCard({ theme }: { readonly theme: PreviewTheme }) {
             ))}
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2.5">
+            {theme.downloadCount !== undefined ? (
+              <span
+                className="inline-flex items-center gap-1 text-muted-foreground text-xs tabular-nums"
+                title={`${theme.downloadCount.toLocaleString()} downloads`}
+              >
+                <DownloadIcon className="size-3.5" />
+                {formatDownloadCount(theme.downloadCount)}
+              </span>
+            ) : null}
             {selected || saving ? (
               <span className="inline-flex items-center gap-1.5 font-medium text-muted-foreground text-xs">
                 {selected ? (
@@ -1061,7 +1181,7 @@ function ThemePreviewCard({ theme }: { readonly theme: PreviewTheme }) {
                   </>
                 ) : (
                   <>
-                    <Spinner />
+                    <Spinner className="size-3.5" />
                     Applying…
                   </>
                 )}
@@ -1074,97 +1194,200 @@ function ThemePreviewCard({ theme }: { readonly theme: PreviewTheme }) {
   );
 }
 
-function ThemePreviewMockup({
-  preview,
-  themeName,
-}: {
-  readonly preview: ThemePreviewData;
-  readonly themeName: string;
-}) {
+// Thread rows for the preview rail (real-looking titles, one active) so the
+// mockup reads like the app's project/thread list rather than a VS Code rail.
+const PREVIEW_THREAD_ROWS: ReadonlyArray<{
+  readonly id: string;
+  readonly title: string;
+  readonly active?: boolean;
+}> = [
+  { id: "t1", title: "Fix diff theme", active: true },
+  { id: "t2", title: "Theme previews" },
+  { id: "t3", title: "Usage polling" },
+  { id: "t4", title: "Rename UI" },
+];
+
+// Sample lines flagged as added/removed so the code panel reads like the app's
+// working-tree diff (left marker bar + tinted row), the surface themes most
+// affect in practice.
+const PREVIEW_ADDED_LINE_IDS = new Set(["increment", "call-render"]);
+const PREVIEW_REMOVED_LINE_IDS = new Set(["let-count"]);
+
+function previewTint(color: string, percent: number): string {
+  return `color-mix(in srgb, ${color} ${percent}%, transparent)`;
+}
+
+// The app's brand mark — same cropped mascot the sidebar renders, scaled down.
+function PreviewSalchiLogo() {
+  return (
+    <span aria-hidden="true" className="relative size-4 shrink-0 overflow-hidden">
+      <img
+        alt=""
+        className="absolute max-w-none"
+        src="/salchi-logo.png"
+        style={{ width: 25, height: 25, top: -3.4, left: -4.5 }}
+      />
+    </span>
+  );
+}
+
+function ThemePreviewMockup({ preview }: { readonly preview: ThemePreviewData }) {
   const palette = preview.palette;
+  const lineStatus = (id: string): "added" | "removed" | null =>
+    PREVIEW_ADDED_LINE_IDS.has(id) ? "added" : PREVIEW_REMOVED_LINE_IDS.has(id) ? "removed" : null;
+
   return (
     <div
-      className="aspect-[16/9] overflow-hidden border-b font-mono text-[11px] leading-5"
+      className="flex aspect-[16/9] overflow-hidden border-b font-mono text-[10px] leading-[1.6]"
       style={{
         backgroundColor: palette.background,
         borderColor: palette.border,
         color: palette.foreground,
       }}
     >
-      <div className="grid h-full grid-cols-[2.5rem_1fr] grid-rows-[1.7rem_1.7rem_1fr]">
+      {/* Sidebar: brand, search, thread list, status — mirrors the app rail. */}
+      <div
+        className="flex w-[36%] shrink-0 flex-col gap-1.5 border-r p-2"
+        style={{ backgroundColor: palette.panel, borderColor: palette.border }}
+      >
+        <div className="flex items-center gap-1.5">
+          <PreviewSalchiLogo />
+          <span className="truncate font-medium" style={{ color: palette.foreground }}>
+            Salchi
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1.5 px-1">
+          <SearchIcon className="size-2.5 shrink-0" style={{ color: palette.muted }} />
+          <span className="min-w-0 flex-1 truncate" style={{ color: palette.muted }}>
+            Search
+          </span>
+          <span
+            className="shrink-0 rounded-[3px] border px-1 text-[8px] leading-tight"
+            style={{
+              backgroundColor: previewTint(palette.foreground, 6),
+              borderColor: palette.border,
+              color: palette.muted,
+            }}
+          >
+            ⌘K
+          </span>
+        </div>
+
+        <div className="mt-0.5 flex min-h-0 flex-1 flex-col gap-0.5 overflow-hidden">
+          <span
+            className="px-1 pb-0.5 text-[8px] uppercase tracking-wide"
+            style={{ color: palette.muted }}
+          >
+            Projects
+          </span>
+          {PREVIEW_THREAD_ROWS.map((row) => (
+            <div
+              key={row.id}
+              className="flex items-center gap-1.5 rounded-[5px] px-1 py-[3px]"
+              style={
+                row.active ? { backgroundColor: previewTint(palette.foreground, 10) } : undefined
+              }
+            >
+              <GitBranchIcon className="size-2.5 shrink-0" style={{ color: palette.added }} />
+              <span
+                className="min-w-0 flex-1 truncate"
+                style={{
+                  color: row.active ? palette.foreground : previewTint(palette.foreground, 78),
+                }}
+              >
+                {row.title}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-1.5 px-1">
+          <span
+            className="size-1.5 shrink-0 rounded-full"
+            style={{ backgroundColor: palette.added }}
+          />
+          <span className="truncate" style={{ color: palette.muted }}>
+            Connected
+          </span>
+        </div>
+      </div>
+
+      {/* Main: diff/file header + line-numbered, syntax-highlighted code. */}
+      <div className="flex min-w-0 flex-1 flex-col">
         <div
-          className="col-span-2 flex items-center justify-center border-b px-2 tracking-wide"
+          className="flex items-center justify-between gap-2 border-b px-2 py-1.5"
           style={{
             backgroundColor: palette.chrome,
             borderColor: palette.border,
             color: palette.chromeForeground,
           }}
         >
-          <span className="max-w-full truncate">{themeName}</span>
-        </div>
-
-        <div
-          className="row-span-2 flex flex-col items-center gap-3 border-r px-1.5 py-3"
-          style={{
-            backgroundColor: palette.activityBar,
-            borderColor: palette.border,
-            color: palette.activityBarForeground,
-          }}
-        >
-          <FilesIcon className="size-4 opacity-90" />
-          <SearchIcon className="size-4 opacity-60" />
-          <span className="relative">
-            <GitBranchIcon className="size-4 opacity-60" />
+          <div className="flex min-w-0 items-center gap-1.5">
             <span
-              className="-right-2 -top-1 absolute flex size-4 items-center justify-center rounded-full text-[9px]"
-              style={{
-                backgroundColor: palette.accent,
-                color: palette.background,
-              }}
-            >
-              3
-            </span>
-          </span>
-          <PlayIcon className="size-4 opacity-60" />
-          <BlocksIcon className="size-4 opacity-60" />
-        </div>
-
-        <div
-          className="flex border-b"
-          style={{
-            backgroundColor: palette.tabInactive,
-            borderColor: palette.border,
-            color: palette.chromeForeground,
-          }}
-        >
-          <div
-            className="flex w-36 max-w-[45%] items-center justify-center border-r border-t-2 px-3"
-            style={{
-              backgroundColor: palette.tabActive,
-              borderColor: palette.border,
-              borderTopColor: palette.accent,
-              color: palette.foreground,
-            }}
-          >
-            main.js
+              className="size-1.5 shrink-0 rounded-full"
+              style={{ backgroundColor: palette.accent }}
+            />
+            <span className="truncate">main.ts</span>
           </div>
+          <span
+            className="shrink-0 rounded-full px-1.5 py-px font-medium text-[8px]"
+            style={{ backgroundColor: previewTint(palette.added, 18), color: palette.added }}
+          >
+            +7
+          </span>
         </div>
 
-        <div className="min-h-0 overflow-hidden px-4 py-3">
-          <pre className="m-0 overflow-hidden whitespace-pre">
-            {SAMPLE_CODE_LINES.map((line) => (
-              <div key={line.id} className={line.tokens.length === 0 ? "h-5" : undefined}>
-                {line.tokens.map((token) => (
-                  <span
-                    key={`${line.id}:${token.kind}:${token.text}`}
-                    style={{ color: preview.syntax[token.kind] }}
-                  >
-                    {token.text}
-                  </span>
-                ))}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden py-1">
+          {SAMPLE_CODE_LINES.map((line, index) => {
+            const status = lineStatus(line.id);
+            return (
+              <div
+                key={line.id}
+                className="flex items-stretch"
+                style={
+                  status
+                    ? {
+                        backgroundColor: previewTint(
+                          status === "added" ? palette.added : palette.removed,
+                          13,
+                        ),
+                      }
+                    : undefined
+                }
+              >
+                <span
+                  className="w-[2px] shrink-0"
+                  style={{
+                    backgroundColor:
+                      status === "added"
+                        ? palette.added
+                        : status === "removed"
+                          ? palette.removed
+                          : "transparent",
+                  }}
+                />
+                <span
+                  className="w-5 shrink-0 pr-1.5 text-right tabular-nums"
+                  style={{ color: previewTint(palette.muted, 70) }}
+                >
+                  {index + 1}
+                </span>
+                <span className="min-w-0 flex-1 overflow-hidden whitespace-pre pr-2">
+                  {line.tokens.length === 0
+                    ? " "
+                    : line.tokens.map((token) => (
+                        <span
+                          key={`${line.id}:${token.kind}:${token.text}`}
+                          style={{ color: preview.syntax[token.kind] }}
+                        >
+                          {token.text}
+                        </span>
+                      ))}
+                </span>
               </div>
-            ))}
-          </pre>
+            );
+          })}
         </div>
       </div>
     </div>

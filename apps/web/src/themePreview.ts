@@ -3,7 +3,7 @@ import {
   THEME_PREVIEW_COLOR_KEYS,
   THEME_PREVIEW_SWATCH_COLOR_KEYS,
   THEME_PREVIEW_TOKEN_SCOPES,
-  themePreviewScopeMatches,
+  scoreThemePreviewScopeMatch,
 } from "@t3tools/shared/themePreview";
 
 import { resolveThemeType, type ResolvedThemeType } from "./themeMapping";
@@ -36,6 +36,8 @@ export interface ThemePreviewPalette {
   readonly activityBarForeground: string;
   readonly statusBar: string;
   readonly statusForeground: string;
+  readonly added: string;
+  readonly removed: string;
 }
 
 export interface ThemePreviewSyntax {
@@ -73,6 +75,8 @@ const LIGHT_FALLBACKS: ThemePreviewPalette = {
   activityBarForeground: "#57606a",
   statusBar: "#f6f8fa",
   statusForeground: "#57606a",
+  added: "#1a7f37",
+  removed: "#cf222e",
 };
 
 const DARK_FALLBACKS: ThemePreviewPalette = {
@@ -90,6 +94,8 @@ const DARK_FALLBACKS: ThemePreviewPalette = {
   activityBarForeground: "#adbac7",
   statusBar: "#1f2428",
   statusForeground: "#adbac7",
+  added: "#3fb950",
+  removed: "#f85149",
 };
 
 const DEFAULT_APP_PREVIEW_PALETTES: Record<ResolvedThemeType, ThemePreviewPalette> = {
@@ -108,6 +114,8 @@ const DEFAULT_APP_PREVIEW_PALETTES: Record<ResolvedThemeType, ThemePreviewPalett
     activityBarForeground: "#525252",
     statusBar: "oklch(0.488 0.217 264)",
     statusForeground: "#ffffff",
+    added: "#1a7f37",
+    removed: "#cf222e",
   },
   dark: {
     background: "#141414",
@@ -124,6 +132,8 @@ const DEFAULT_APP_PREVIEW_PALETTES: Record<ResolvedThemeType, ThemePreviewPalett
     activityBarForeground: "#a3a3a3",
     statusBar: "oklch(0.588 0.217 264)",
     statusForeground: "#ffffff",
+    added: "#3fb950",
+    removed: "#f85149",
   },
 };
 
@@ -189,24 +199,38 @@ function tokenColor(
 ): string | undefined {
   if (!rules) return undefined;
 
-  for (let index = rules.length - 1; index >= 0; index -= 1) {
-    const rule = rules[index];
+  // Pick the rule that best applies to the requested scopes by TextMate-like
+  // precedence (exact > ancestor > shallowest descendant) instead of the first
+  // loose match. A loose "last match wins" pass would let an unrelated narrow
+  // sub-scope (e.g. `keyword.operator.quantifier.regexp`) hijack a generic kind
+  // like `keyword`, so the preview painted colors the real highlighter never
+  // uses. Ties prefer the earlier (more representative) requested scope, then a
+  // later rule in the array (TextMate's last-wins on equal specificity).
+  let best: { score: number; requestedIndex: number; ruleIndex: number; color: string } | undefined;
+
+  rules.forEach((rule, ruleIndex) => {
     const foreground = normalizeColor(rule?.settings?.foreground);
-    if (!foreground) continue;
+    if (!foreground) return;
 
-    const ruleScopes = parseRuleScopes(rule?.scope);
-    if (
-      ruleScopes.some((ruleScope) =>
-        requestedScopes.some((requestedScope) =>
-          themePreviewScopeMatches(ruleScope, requestedScope),
-        ),
-      )
-    ) {
-      return foreground;
+    for (const ruleScope of parseRuleScopes(rule?.scope)) {
+      requestedScopes.forEach((requestedScope, requestedIndex) => {
+        const score = scoreThemePreviewScopeMatch(ruleScope, requestedScope);
+        if (score === null) return;
+        if (
+          best === undefined ||
+          score > best.score ||
+          (score === best.score && requestedIndex < best.requestedIndex) ||
+          (score === best.score &&
+            requestedIndex === best.requestedIndex &&
+            ruleIndex > best.ruleIndex)
+        ) {
+          best = { score, requestedIndex, ruleIndex, color: foreground };
+        }
+      });
     }
-  }
+  });
 
-  return undefined;
+  return best?.color;
 }
 
 function previewPalette(theme: ThemePreviewInput, type: ResolvedThemeType): ThemePreviewPalette {
@@ -239,6 +263,8 @@ function previewPalette(theme: ThemePreviewInput, type: ResolvedThemeType): Them
       THEME_PREVIEW_COLOR_KEYS.statusForeground,
       fallback.statusForeground,
     ),
+    added: firstColor(colors, THEME_PREVIEW_COLOR_KEYS.added, fallback.added),
+    removed: firstColor(colors, THEME_PREVIEW_COLOR_KEYS.removed, fallback.removed),
   };
 }
 

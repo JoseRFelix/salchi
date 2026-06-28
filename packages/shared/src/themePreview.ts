@@ -19,6 +19,11 @@ export const THEME_PREVIEW_COLOR_KEYS = {
     "editorGroupHeader.tabsBackground",
   ],
   statusForeground: ["statusBar.foreground", "titleBar.activeForeground", "foreground"],
+  // Diff accents for the preview's code panel. We read the theme's chart/terminal
+  // greens and reds (already kept by pruning) rather than the alpha-blended
+  // diffEditor.* line backgrounds, which are often near-invisible on their own.
+  added: ["charts.green", "terminal.ansiGreen"],
+  removed: ["charts.red", "terminal.ansiRed"],
 } as const;
 
 export const THEME_PREVIEW_SWATCH_COLOR_KEYS = [
@@ -59,12 +64,35 @@ function parseRuleScopes(scope: string | readonly string[] | undefined): readonl
   return rawScopes.map((value) => value.trim()).filter(Boolean);
 }
 
+/**
+ * Score how well a theme rule's scope applies to a representative preview scope,
+ * mirroring TextMate precedence so previews pick the color the real highlighter
+ * would actually paint. Returns `null` when the rule does not apply at all.
+ *
+ * Higher is better:
+ *  - an exact match (`keyword` for requested `keyword`) is strongest;
+ *  - an *ancestor* rule (`keyword` for requested `keyword.control`) genuinely
+ *    applies to the requested scope, and a more specific ancestor wins;
+ *  - a *descendant* rule (`keyword.operator.quantifier.regexp` for requested
+ *    `keyword`) is only a weak last resort — it does not color the bare scope in
+ *    a real grammar — and among descendants the shallowest one wins.
+ *
+ * The descendant case exists so themes that only define narrow sub-scopes still
+ * produce a preview color, but it must never outrank an exact/ancestor match.
+ */
+export function scoreThemePreviewScopeMatch(
+  ruleScope: string,
+  requestedScope: string,
+): number | null {
+  if (ruleScope === requestedScope) return 1000;
+  const ruleDepth = ruleScope.split(".").length;
+  if (requestedScope.startsWith(`${ruleScope}.`)) return 500 + ruleDepth;
+  if (ruleScope.startsWith(`${requestedScope}.`)) return 100 - ruleDepth;
+  return null;
+}
+
 export function themePreviewScopeMatches(ruleScope: string, requestedScope: string): boolean {
-  return (
-    ruleScope === requestedScope ||
-    ruleScope.startsWith(`${requestedScope}.`) ||
-    requestedScope.startsWith(`${ruleScope}.`)
-  );
+  return scoreThemePreviewScopeMatch(ruleScope, requestedScope) !== null;
 }
 
 export function pruneThemePreviewColors(

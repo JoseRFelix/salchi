@@ -35,12 +35,17 @@ export type ImportedTheme = typeof ImportedTheme.Type;
 
 // ── Search ────────────────────────────────────────────────────
 
+export const ThemeSortBy = Schema.Literals(["relevance", "downloadCount"]);
+export type ThemeSortBy = typeof ThemeSortBy.Type;
+
 export const ThemeSearchInput = Schema.Struct({
   query: Schema.optional(Schema.String),
   /** Page size; the server clamps this to a sane maximum. */
   size: Schema.optional(Schema.Int),
   /** Zero-based Open VSX result offset for category browsing. */
   offset: Schema.optional(Schema.Int),
+  /** Overrides the default Open VSX sort order (relevance for queries, downloads otherwise). */
+  sortBy: Schema.optional(ThemeSortBy),
 });
 export type ThemeSearchInput = typeof ThemeSearchInput.Type;
 

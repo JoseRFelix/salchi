@@ -431,6 +431,83 @@ describe("SidebarUsageIndicator.logic", () => {
     expect(claudeRow?.threadId).toBe("thread-claude-zero");
   });
 
+  it("derives near-exhausted Claude usage from remaining percentage fields", () => {
+    const rows = deriveSidebarUsageProviderRows({
+      providerInstances: [
+        {
+          instanceId: ProviderInstanceId.make("claude_personal"),
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+        },
+      ],
+      threads: [],
+      accountRateLimitsByInstanceId: {
+        claude_personal: {
+          updatedAt: "2026-05-13T04:30:00.000Z",
+          rateLimits: {
+            source: "claude.oauth.usage",
+            primary: {
+              remaining_percentage: 1,
+              windowDurationMins: 300,
+              resetsAt: FUTURE_RESET_SECONDS,
+            },
+            secondary: {
+              percent_remaining: 88,
+              windowDurationMins: 10_080,
+              resetsAt: LATER_FUTURE_RESET_SECONDS,
+            },
+          },
+        },
+      },
+    });
+
+    const claudeRow = rows.find((row) => row.driverId === "claudeAgent");
+    expect(claudeRow?.windows.fiveHour?.usedPercent).toBe(99);
+    expect(claudeRow?.windows.fiveHour?.remainingPercent).toBe(1);
+    expect(getSidebarUsageDisplayPercent(claudeRow?.windows.fiveHour ?? null)).toBe(1);
+    expect(claudeRow?.windows.weekly?.usedPercent).toBe(12);
+    expect(claudeRow?.windows.weekly?.remainingPercent).toBe(88);
+  });
+
+  it("does not treat Claude remaining_percentage as a unit fraction", () => {
+    const rows = deriveSidebarUsageProviderRows({
+      providerInstances: [
+        {
+          instanceId: ProviderInstanceId.make("claude_personal"),
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+        },
+      ],
+      threads: [
+        {
+          id: "thread-claude-remaining-percent",
+          title: "Claude remaining percent",
+          modelSelectionInstanceId: ProviderInstanceId.make("claude_personal"),
+          activities: [
+            makeRateLimitActivity({
+              id: "activity-claude-remaining-percent",
+              createdAt: "2026-05-13T04:45:00.000Z",
+              payload: {
+                provider: "claudeAgent",
+                providerInstanceId: "claude_personal",
+                rateLimits: {
+                  type: "rate_limit_event",
+                  rate_limit_info: {
+                    rateLimitType: "five_hour",
+                    remaining_percentage: 1,
+                    resetsAt: FUTURE_RESET_SECONDS,
+                  },
+                },
+              },
+            }),
+          ],
+        },
+      ],
+    });
+
+    const claudeRow = rows.find((row) => row.driverId === "claudeAgent");
+    expect(claudeRow?.windows.fiveHour?.usedPercent).toBe(99);
+    expect(claudeRow?.windows.fiveHour?.remainingPercent).toBe(1);
+  });
+
   describe("getSidebarUsageBarPercent", () => {
     function makeStatusOnlyWindow(input: {
       readonly status: string;

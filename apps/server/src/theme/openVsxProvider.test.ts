@@ -139,6 +139,15 @@ describe("buildThemeSearchUrl", () => {
     expect(url.searchParams.get("offset")).toBe("16");
     expect(url.searchParams.get("sortBy")).toBe("relevance");
   });
+
+  it("honors an explicit sort order over the query default", () => {
+    const url = new URL(
+      buildThemeSearchUrl({ query: "catppuccin", sortBy: "downloadCount", size: 8 }),
+    );
+
+    expect(url.searchParams.get("query")).toBe("catppuccin");
+    expect(url.searchParams.get("sortBy")).toBe("downloadCount");
+  });
 });
 
 describe("extractTokenColors", () => {

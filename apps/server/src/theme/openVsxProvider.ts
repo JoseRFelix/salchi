@@ -538,11 +538,12 @@ export function buildThemeSearchUrl(input: ThemeSearchInput): string {
   const query = input.query?.trim() ?? "";
   const size = clamp(input.size ?? DEFAULT_SEARCH_SIZE, 1, MAX_SEARCH_SIZE);
   const offset = Math.max(0, Math.trunc(input.offset ?? 0));
+  const sortBy = input.sortBy ?? (query.length > 0 ? "relevance" : "downloadCount");
   const params = new URLSearchParams({
     category: "Themes",
     size: String(size),
     offset: String(offset),
-    sortBy: query.length > 0 ? "relevance" : "downloadCount",
+    sortBy,
     includeAllVersions: "false",
   });
   if (query.length > 0) {

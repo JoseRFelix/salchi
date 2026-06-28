@@ -58,6 +58,38 @@ describe("theme preview", () => {
     expect(preview.syntax.comment).toBe("#657085");
   });
 
+  it("prefers an exact scope rule over an unrelated narrow sub-scope (Gitpod Dark)", () => {
+    // Gitpod Dark colors `keyword`/`storage` with #569CD6 but also defines a
+    // late, narrow `keyword.operator.quantifier.regexp` rule (#D7BA7D). The
+    // preview must paint keywords the same blue the highlighter renders, not the
+    // regexp mustard.
+    const preview = createThemePreview({
+      type: "dark",
+      colors: {
+        "editor.background": "#12100c",
+        "editor.foreground": "#d4d4d4",
+      },
+      tokenColors: [
+        { scope: "keyword", settings: { foreground: "#569cd6" } },
+        { scope: "storage", settings: { foreground: "#569cd6" } },
+        { scope: "storage.type", settings: { foreground: "#569cd6" } },
+        { scope: "keyword.operator.quantifier.regexp", settings: { foreground: "#d7ba7d" } },
+      ],
+    });
+
+    expect(preview.syntax.keyword).toBe("#569cd6");
+  });
+
+  it("uses a narrow sub-scope only when no broader rule applies", () => {
+    const preview = createThemePreview({
+      type: "dark",
+      colors: { "editor.background": "#101216", "editor.foreground": "#d7dde8" },
+      tokenColors: [{ scope: "keyword.control.flow", settings: { foreground: "#ff708a" } }],
+    });
+
+    expect(preview.syntax.keyword).toBe("#ff708a");
+  });
+
   it("falls back to UI-derived syntax colors when token colors are unavailable", () => {
     const preview = createThemePreview({
       type: "light",

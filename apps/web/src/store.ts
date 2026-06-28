@@ -118,6 +118,11 @@ export interface AppState {
   >;
 }
 
+type AccountRateLimitsByInstanceId = AppState["accountRateLimitsByInstanceId"];
+type AccountRateLimitsUpdate =
+  | AccountRateLimitsByInstanceId
+  | ((current: AccountRateLimitsByInstanceId) => AccountRateLimitsByInstanceId);
+
 const initialEnvironmentState: EnvironmentState = {
   projectIds: [],
   projectById: {},
@@ -3128,7 +3133,7 @@ export function setThreadBranch(
 }
 
 interface AppStore extends AppState {
-  setAccountRateLimitsByInstanceId: (limits: AppState["accountRateLimitsByInstanceId"]) => void;
+  setAccountRateLimitsByInstanceId: (limits: AccountRateLimitsUpdate) => void;
   setActiveEnvironmentId: (environmentId: EnvironmentId) => void;
   removeEnvironmentState: (environmentId: EnvironmentId) => void;
   hydrateCachedEnvironmentState: (
@@ -3172,7 +3177,11 @@ interface AppStore extends AppState {
 
 export const useStore = create<AppStore>((set) => ({
   ...initialState,
-  setAccountRateLimitsByInstanceId: (limits) => set({ accountRateLimitsByInstanceId: limits }),
+  setAccountRateLimitsByInstanceId: (limits) =>
+    set((state) => ({
+      accountRateLimitsByInstanceId:
+        typeof limits === "function" ? limits(state.accountRateLimitsByInstanceId) : limits,
+    })),
   setActiveEnvironmentId: (environmentId) =>
     set((state) => setActiveEnvironmentId(state, environmentId)),
   removeEnvironmentState: (environmentId) =>
