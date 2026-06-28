@@ -79,6 +79,7 @@ describe("useColorTheme", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.doUnmock("../themes");
     vi.doUnmock("../importedThemes");

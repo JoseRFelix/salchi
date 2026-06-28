@@ -862,8 +862,10 @@ function ThemePreviewRouteView() {
                 <ThemePreviewVirtualGrid
                   canLoadMore={category === "online" && canLoadMoreOnline}
                   columnCount={themePreviewColumnCount}
+                  error={category === "online" ? onlineError : null}
                   loadingMore={category === "online" && onlineLoading && onlineThemes.length > 0}
                   onEndReached={handleThemeListEndReached}
+                  onRetry={() => void loadMoreOnlineThemes()}
                   themes={visibleThemes}
                 />
               </div>
@@ -935,14 +937,18 @@ function ThemePreviewSkeletonGrid({ count }: { readonly count: number }) {
 function ThemePreviewVirtualGrid({
   canLoadMore,
   columnCount,
+  error,
   loadingMore,
   onEndReached,
+  onRetry,
   themes,
 }: {
   readonly canLoadMore: boolean;
   readonly columnCount: number;
+  readonly error: string | null;
   readonly loadingMore: boolean;
   readonly onEndReached: () => void;
+  readonly onRetry: () => void;
   readonly themes: ReadonlyArray<PreviewTheme>;
 }) {
   const safeColumnCount = Math.max(1, Math.trunc(columnCount));
@@ -987,7 +993,14 @@ function ThemePreviewVirtualGrid({
 
   const footer = (
     <div className="mx-auto flex min-h-12 w-full max-w-7xl items-center justify-center px-3 pb-1 text-muted-foreground text-xs sm:px-5 lg:px-8">
-      {loadingMore ? null : canLoadMore ? (
+      {error ? (
+        <div className="flex items-center gap-2">
+          <span>{error}</span>
+          <Button onClick={onRetry} size="xs" variant="outline">
+            Retry
+          </Button>
+        </div>
+      ) : loadingMore ? null : canLoadMore ? (
         <span>Scroll for more themes</span>
       ) : (
         <span>End of results</span>
