@@ -57,7 +57,10 @@ import {
   getProviderOptionDescriptors,
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
-import { normalizeUsageWindowUsedPercent } from "@t3tools/shared/rateLimitUsage";
+import {
+  normalizeUsageWindowUsedPercent,
+  readFirstPresentValue,
+} from "@t3tools/shared/rateLimitUsage";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -454,18 +457,6 @@ function normalizeClaudeOAuthScopes(value: unknown, fallback: ReadonlyArray<stri
   return scopes.length > 0 ? scopes : fallback;
 }
 
-function readFirstValue(
-  record: Record<string, unknown>,
-  fieldNames: ReadonlyArray<string>,
-): unknown {
-  for (const fieldName of fieldNames) {
-    if (record[fieldName] !== undefined) {
-      return record[fieldName];
-    }
-  }
-  return undefined;
-}
-
 function normalizeClaudeOAuthUsageWindow(
   value: unknown,
   windowDurationMins: number,
@@ -476,7 +467,7 @@ function normalizeClaudeOAuthUsageWindow(
   }
 
   const usedPercent = normalizeUsageWindowUsedPercent(record);
-  const resetsAt = readFirstValue(record, ["resets_at", "resetsAt", "reset_at", "resetAt"]);
+  const resetsAt = readFirstPresentValue(record, ["resets_at", "resetsAt", "reset_at", "resetAt"]);
   const status = asNonEmptyString(record.status);
   if (usedPercent === null && resetsAt === undefined && status === undefined) {
     return undefined;
@@ -500,20 +491,20 @@ function normalizeClaudeAccountUsageRateLimits(
   }
 
   const primary = normalizeClaudeOAuthUsageWindow(
-    readFirstValue(record, ["five_hour", "fiveHour", "primary"]),
+    readFirstPresentValue(record, ["five_hour", "fiveHour", "primary"]),
     5 * 60,
   );
   const secondary =
     normalizeClaudeOAuthUsageWindow(
-      readFirstValue(record, ["seven_day", "sevenDay", "weekly", "secondary"]),
+      readFirstPresentValue(record, ["seven_day", "sevenDay", "weekly", "secondary"]),
       7 * 24 * 60,
     ) ??
     normalizeClaudeOAuthUsageWindow(
-      readFirstValue(record, ["seven_day_sonnet", "sevenDaySonnet"]),
+      readFirstPresentValue(record, ["seven_day_sonnet", "sevenDaySonnet"]),
       7 * 24 * 60,
     ) ??
     normalizeClaudeOAuthUsageWindow(
-      readFirstValue(record, ["seven_day_opus", "sevenDayOpus"]),
+      readFirstPresentValue(record, ["seven_day_opus", "sevenDayOpus"]),
       7 * 24 * 60,
     );
 

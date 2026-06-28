@@ -625,6 +625,66 @@ describe("SidebarUsageIndicator.logic", () => {
     expect(rows[1]?.windows.weekly?.usedPercent).toBe(15);
   });
 
+  it("falls back to later reset aliases when earlier aliases are null", () => {
+    const rows = deriveSidebarUsageProviderRows({
+      providerInstances: [
+        {
+          instanceId: ProviderInstanceId.make("codex_work"),
+          driverKind: ProviderDriverKind.make("codex"),
+        },
+        {
+          instanceId: ProviderInstanceId.make("claude_personal"),
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+        },
+      ],
+      threads: [
+        {
+          id: "thread-claude",
+          title: "Claude",
+          modelSelectionInstanceId: ProviderInstanceId.make("claude_personal"),
+          activities: [
+            makeRateLimitActivity({
+              id: "activity-claude",
+              createdAt: "2026-05-02T00:00:00.000Z",
+              payload: {
+                provider: "claudeAgent",
+                providerInstanceId: "claude_personal",
+                rateLimits: {
+                  type: "rate_limit_event",
+                  rate_limit_info: {
+                    status: "allowed_warning",
+                    rateLimitType: "five_hour",
+                    utilization: 0.5,
+                    resetsAt: null,
+                    resets_at: FUTURE_RESET_SECONDS,
+                  },
+                },
+              },
+            }),
+          ],
+        },
+      ],
+      accountRateLimitsByInstanceId: {
+        codex_work: {
+          updatedAt: "2026-05-01T00:00:00.000Z",
+          rateLimits: {
+            primary: {
+              usedPercent: 20,
+              windowDurationMins: 300,
+              resetsAt: null,
+              resets_at: FUTURE_RESET_SECONDS,
+            },
+          },
+        },
+      },
+    });
+
+    const codexRow = rows.find((row) => row.driverId === "codex");
+    const claudeRow = rows.find((row) => row.driverId === "claudeAgent");
+    expect(codexRow?.windows.fiveHour?.resetsAtMs).toBe(FUTURE_RESET_SECONDS * 1000);
+    expect(claudeRow?.windows.fiveHour?.resetsAtMs).toBe(FUTURE_RESET_SECONDS * 1000);
+  });
+
   it("prefers newer thread activity over older account-level limits", () => {
     const rows = deriveSidebarUsageProviderRows({
       providerInstances: [

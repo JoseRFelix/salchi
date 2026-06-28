@@ -57,6 +57,19 @@ function readFirstFiniteNumber(
   return null;
 }
 
+export function readFirstPresentValue(
+  record: Record<string, unknown>,
+  fieldNames: ReadonlyArray<string>,
+): unknown {
+  for (const fieldName of fieldNames) {
+    const value = record[fieldName];
+    if (value !== undefined && value !== null) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, value));
 }

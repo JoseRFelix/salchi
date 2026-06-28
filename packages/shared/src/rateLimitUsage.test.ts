@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeUsageWindowUsedPercent } from "./rateLimitUsage.ts";
+import { normalizeUsageWindowUsedPercent, readFirstPresentValue } from "./rateLimitUsage.ts";
 
 describe("normalizeUsageWindowUsedPercent", () => {
   it("normalizes explicit used percent aliases", () => {
@@ -21,5 +21,16 @@ describe("normalizeUsageWindowUsedPercent", () => {
   it("derives used percentage from quota fields", () => {
     expect(normalizeUsageWindowUsedPercent({ limit: 100, used: 64 })).toBe(64);
     expect(normalizeUsageWindowUsedPercent({ limit: 100, remaining: 12 })).toBe(88);
+  });
+});
+
+describe("readFirstPresentValue", () => {
+  it("skips null alias placeholders", () => {
+    expect(
+      readFirstPresentValue({ resets_at: null, resetsAt: "2026-06-28T12:00:00.000Z" }, [
+        "resets_at",
+        "resetsAt",
+      ]),
+    ).toBe("2026-06-28T12:00:00.000Z");
   });
 });

@@ -3,7 +3,10 @@ import {
   type OrchestrationThreadActivity,
   type ProviderInstanceId,
 } from "@t3tools/contracts";
-import { normalizeUsageWindowUsedPercent } from "@t3tools/shared/rateLimitUsage";
+import {
+  normalizeUsageWindowUsedPercent,
+  readFirstPresentValue,
+} from "@t3tools/shared/rateLimitUsage";
 
 export type SidebarUsageDriverId = "codex" | "claudeAgent";
 export type SidebarUsageWindowId = "fiveHour" | "weekly";
@@ -125,15 +128,6 @@ function readString(record: Record<string, unknown>, keys: ReadonlyArray<string>
   return null;
 }
 
-function readValue(record: Record<string, unknown>, keys: ReadonlyArray<string>): unknown {
-  for (const key of keys) {
-    if (record[key] !== undefined) {
-      return record[key];
-    }
-  }
-  return undefined;
-}
-
 function toTimestampMs(value: unknown): number | null {
   const numeric = asFiniteNumber(value);
   if (numeric !== null) {
@@ -217,7 +211,7 @@ function parseCodexWindow(
     id,
     usedPercent: normalizeUsageWindowUsedPercent(windowRecord),
     resetsAtMs: toTimestampMs(
-      readValue(windowRecord, ["resetsAt", "resets_at", "resetAt", "reset_at"]),
+      readFirstPresentValue(windowRecord, ["resetsAt", "resets_at", "resetAt", "reset_at"]),
     ),
     status:
       readString(windowRecord, ["status"]) ??
@@ -239,7 +233,9 @@ function parseClaudeWindow(
   return makeWindow({
     id,
     usedPercent: normalizeUsageWindowUsedPercent(info),
-    resetsAtMs: toTimestampMs(readValue(info, ["resetsAt", "resets_at", "resetAt", "reset_at"])),
+    resetsAtMs: toTimestampMs(
+      readFirstPresentValue(info, ["resetsAt", "resets_at", "resetAt", "reset_at"]),
+    ),
     status: readString(info, ["status"]),
     updatedAt,
   });
