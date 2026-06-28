@@ -123,6 +123,10 @@
       "types": "./src/oauthScope.ts",
       "import": "./src/oauthScope.ts"
     },
+    "./rateLimitUsage": {
+      "types": "./src/rateLimitUsage.ts",
+      "import": "./src/rateLimitUsage.ts"
+    },
     "./orchestrationThreadDetailFingerprint": {
       "types": "./src/orchestrationThreadDetailFingerprint.ts",
       "import": "./src/orchestrationThreadDetailFingerprint.ts"

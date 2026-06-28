@@ -57,6 +57,7 @@ import {
   getProviderOptionDescriptors,
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
+import { normalizeUsageWindowUsedPercent } from "@t3tools/shared/rateLimitUsage";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -453,19 +454,6 @@ function normalizeClaudeOAuthScopes(value: unknown, fallback: ReadonlyArray<stri
   return scopes.length > 0 ? scopes : fallback;
 }
 
-function readFirstFiniteNumber(
-  record: Record<string, unknown>,
-  fieldNames: ReadonlyArray<string>,
-): number | undefined {
-  for (const fieldName of fieldNames) {
-    const value = asFiniteNumber(record[fieldName]);
-    if (value !== undefined) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
 function readFirstValue(
   record: Record<string, unknown>,
   fieldNames: ReadonlyArray<string>,
@@ -478,77 +466,6 @@ function readFirstValue(
   return undefined;
 }
 
-function clampPercent(value: number): number {
-  return Math.max(0, Math.min(100, value));
-}
-
-function clampPercentLikeValue(value: number): number {
-  return clampPercent(value >= 0 && value <= 1 ? value * 100 : value);
-}
-
-function normalizeClaudeUsageWindowUsedPercent(
-  record: Record<string, unknown>,
-): number | undefined {
-  const usedPercent = readFirstFiniteNumber(record, [
-    "used_percentage",
-    "usedPercent",
-    "used_percent",
-    "usagePercentage",
-    "usage_percentage",
-    "usagePercent",
-    "usage_percent",
-    "percentUsed",
-    "percent_used",
-  ]);
-  if (usedPercent !== undefined) {
-    return clampPercent(usedPercent);
-  }
-
-  const usedFraction = readFirstFiniteNumber(record, [
-    "utilization",
-    "usedFraction",
-    "used_fraction",
-    "usageFraction",
-    "usage_fraction",
-  ]);
-  if (usedFraction !== undefined) {
-    return clampPercentLikeValue(usedFraction);
-  }
-
-  const remainingPercent = readFirstFiniteNumber(record, [
-    "remainingPercentage",
-    "remaining_percentage",
-    "remainingPercent",
-    "remaining_percent",
-    "percentRemaining",
-    "percent_remaining",
-  ]);
-  if (remainingPercent !== undefined) {
-    return clampPercent(100 - remainingPercent);
-  }
-
-  const remainingFraction = readFirstFiniteNumber(record, [
-    "remainingFraction",
-    "remaining_fraction",
-  ]);
-  if (remainingFraction !== undefined) {
-    return clampPercent(100 - clampPercentLikeValue(remainingFraction));
-  }
-
-  const limit = readFirstFiniteNumber(record, ["limit", "quota", "maximum", "max"]);
-  if (limit === undefined || limit <= 0) {
-    return undefined;
-  }
-
-  const used = readFirstFiniteNumber(record, ["used", "usage", "consumed", "current"]);
-  if (used !== undefined) {
-    return clampPercent((used / limit) * 100);
-  }
-
-  const remaining = readFirstFiniteNumber(record, ["remaining", "available"]);
-  return remaining === undefined ? undefined : clampPercent(((limit - remaining) / limit) * 100);
-}
-
 function normalizeClaudeOAuthUsageWindow(
   value: unknown,
   windowDurationMins: number,
@@ -558,15 +475,15 @@ function normalizeClaudeOAuthUsageWindow(
     return undefined;
   }
 
-  const usedPercent = normalizeClaudeUsageWindowUsedPercent(record);
+  const usedPercent = normalizeUsageWindowUsedPercent(record);
   const resetsAt = readFirstValue(record, ["resets_at", "resetsAt", "reset_at", "resetAt"]);
   const status = asNonEmptyString(record.status);
-  if (usedPercent === undefined && resetsAt === undefined && status === undefined) {
+  if (usedPercent === null && resetsAt === undefined && status === undefined) {
     return undefined;
   }
 
   return {
-    ...(usedPercent !== undefined ? { usedPercent } : {}),
+    ...(usedPercent !== null ? { usedPercent } : {}),
     windowDurationMins,
     ...(resetsAt !== undefined ? { resetsAt } : {}),
     ...(status !== undefined ? { status } : {}),

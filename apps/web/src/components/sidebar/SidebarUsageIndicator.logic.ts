@@ -3,6 +3,7 @@ import {
   type OrchestrationThreadActivity,
   type ProviderInstanceId,
 } from "@t3tools/contracts";
+import { normalizeUsageWindowUsedPercent } from "@t3tools/shared/rateLimitUsage";
 
 export type SidebarUsageDriverId = "codex" | "claudeAgent";
 export type SidebarUsageWindowId = "fiveHour" | "weekly";
@@ -133,70 +134,6 @@ function readValue(record: Record<string, unknown>, keys: ReadonlyArray<string>)
   return undefined;
 }
 
-function normalizePercent(value: unknown, options?: { readonly allowUnitFraction?: boolean }) {
-  const parsed = asFiniteNumber(value);
-  if (parsed === null) {
-    return null;
-  }
-  const percent =
-    options?.allowUnitFraction === true && parsed >= 0 && parsed <= 1 ? parsed * 100 : parsed;
-  return Math.max(0, Math.min(100, percent));
-}
-
-function normalizeUsedPercentFromFields(
-  record: Record<string, unknown>,
-  options?: { readonly allowUnitFraction?: boolean },
-): number | null {
-  const usedPercent = normalizePercent(
-    readValue(record, [
-      "utilization",
-      "usedFraction",
-      "used_fraction",
-      "usageFraction",
-      "usage_fraction",
-    ]),
-    options,
-  );
-  if (usedPercent !== null) {
-    return usedPercent;
-  }
-
-  const explicitUsedPercent = normalizePercent(
-    readValue(record, [
-      "usedPercent",
-      "used_percent",
-      "used_percentage",
-      "usagePercent",
-      "usage_percent",
-      "usage_percentage",
-      "percentUsed",
-      "percent_used",
-    ]),
-  );
-  if (explicitUsedPercent !== null) {
-    return explicitUsedPercent;
-  }
-
-  const remainingFraction = normalizePercent(
-    readValue(record, ["remainingFraction", "remaining_fraction"]),
-    options,
-  );
-  if (remainingFraction !== null) {
-    return 100 - remainingFraction;
-  }
-
-  const remainingPercent = normalizePercent(
-    readValue(record, [
-      "remainingPercent",
-      "remaining_percent",
-      "remaining_percentage",
-      "percentRemaining",
-      "percent_remaining",
-    ]),
-  );
-  return remainingPercent === null ? null : 100 - remainingPercent;
-}
-
 function toTimestampMs(value: unknown): number | null {
   const numeric = asFiniteNumber(value);
   if (numeric !== null) {
@@ -278,7 +215,7 @@ function parseCodexWindow(
   const id = windowIdFromDurationMins(durationMins) ?? fallbackId;
   return makeWindow({
     id,
-    usedPercent: normalizeUsedPercentFromFields(windowRecord),
+    usedPercent: normalizeUsageWindowUsedPercent(windowRecord),
     resetsAtMs: toTimestampMs(
       readValue(windowRecord, ["resetsAt", "resets_at", "resetAt", "reset_at"]),
     ),
@@ -301,7 +238,7 @@ function parseClaudeWindow(
 
   return makeWindow({
     id,
-    usedPercent: normalizeUsedPercentFromFields(info, { allowUnitFraction: true }),
+    usedPercent: normalizeUsageWindowUsedPercent(info),
     resetsAtMs: toTimestampMs(readValue(info, ["resetsAt", "resets_at", "resetAt", "reset_at"])),
     status: readString(info, ["status"]),
     updatedAt,

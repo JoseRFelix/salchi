@@ -278,10 +278,7 @@ export function SidebarUsageIndicator() {
       .then((result) => {
         const fetchedAt = new Date().toISOString();
         const updates = accountRateLimitsToStoreRecord(result.accountRateLimits, fetchedAt);
-        setAccountRateLimitsByInstanceId((current) => ({
-          ...current,
-          ...updates,
-        }));
+        setAccountRateLimitsByInstanceId(updates);
       })
       .catch(() => undefined)
       .finally(() => {
