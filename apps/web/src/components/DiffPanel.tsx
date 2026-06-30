@@ -168,6 +168,20 @@ const DIFF_PANEL_UNSAFE_CSS = `
   font-family: var(--font-sans) !important;
 }
 
+/* Pierre left-truncates the path (direction: rtl on title/prev-name) so the filename
+   stays visible when it overflows. On iOS Safari, rtl + text-overflow:ellipsis over the
+   inner <bdi> (unicode-bidi: isolate) renders a phantom space beside the leading ellipsis.
+   Dropping the isolate lets the run measure correctly while the parent's rtl still
+   truncates from the left and the <bdi> still keeps the path reading left-to-right. */
+[data-header-content] [data-title],
+[data-header-content] [data-prev-name] {
+  text-align: left !important;
+}
+[data-header-content] [data-title] bdi,
+[data-header-content] [data-prev-name] bdi {
+  unicode-bidi: normal !important;
+}
+
 [data-title]:hover {
   color: color-mix(in srgb, var(--foreground) 84%, var(--primary)) !important;
   text-decoration-color: currentColor;

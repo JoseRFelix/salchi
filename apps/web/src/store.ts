@@ -2365,6 +2365,7 @@ function applyEnvironmentOrchestrationEvent(
             updatedAt: event.payload.updatedAt,
           });
           const existingMessage = thread.messages.find((entry) => entry.id === message.id);
+          const effectiveTurnId = message.turnId ?? existingMessage?.turnId ?? null;
           const messages = existingMessage
             ? thread.messages.map((entry) =>
                 entry.id !== message.id
@@ -2377,7 +2378,7 @@ function applyEnvironmentOrchestrationEvent(
                           ? message.text
                           : entry.text,
                       streaming: message.streaming,
-                      ...(message.turnId !== undefined ? { turnId: message.turnId } : {}),
+                      turnId: effectiveTurnId,
                       ...(message.streaming
                         ? entry.completedAt !== undefined
                           ? { completedAt: entry.completedAt }
@@ -2393,10 +2394,10 @@ function applyEnvironmentOrchestrationEvent(
             : [...thread.messages, message];
           const cappedMessages = messages.slice(-MAX_THREAD_MESSAGES);
           const turnDiffSummaries =
-            event.payload.role === "assistant" && event.payload.turnId !== null
+            event.payload.role === "assistant" && effectiveTurnId !== null
               ? rebindTurnDiffSummariesForAssistantMessage(
                   thread.turnDiffSummaries,
-                  event.payload.turnId,
+                  effectiveTurnId,
                   event.payload.messageId,
                 )
               : thread.turnDiffSummaries;
@@ -2405,17 +2406,17 @@ function applyEnvironmentOrchestrationEvent(
           // assistant messages per turn, and the turn must stay unsettled
           // until the provider reports turn end.
           const turnStillRunning =
-            event.payload.turnId !== null &&
+            effectiveTurnId !== null &&
             thread.session?.orchestrationStatus === "running" &&
-            thread.session.activeTurnId === event.payload.turnId;
+            thread.session.activeTurnId === effectiveTurnId;
           const settlesTurn = !event.payload.streaming && !turnStillRunning;
           const latestTurn: Thread["latestTurn"] =
             event.payload.role === "assistant" &&
-            event.payload.turnId !== null &&
-            (thread.latestTurn === null || thread.latestTurn.turnId === event.payload.turnId)
+            effectiveTurnId !== null &&
+            (thread.latestTurn === null || thread.latestTurn.turnId === effectiveTurnId)
               ? buildLatestTurn({
                   previous: thread.latestTurn,
-                  turnId: event.payload.turnId,
+                  turnId: effectiveTurnId,
                   state: settlesTurn
                     ? thread.latestTurn?.state === "interrupted"
                       ? "interrupted"
@@ -2424,17 +2425,17 @@ function applyEnvironmentOrchestrationEvent(
                         : "completed"
                     : "running",
                   requestedAt:
-                    thread.latestTurn?.turnId === event.payload.turnId
+                    thread.latestTurn?.turnId === effectiveTurnId
                       ? thread.latestTurn.requestedAt
                       : event.payload.createdAt,
                   startedAt:
-                    thread.latestTurn?.turnId === event.payload.turnId
+                    thread.latestTurn?.turnId === effectiveTurnId
                       ? (thread.latestTurn.startedAt ?? event.payload.createdAt)
                       : event.payload.createdAt,
                   sourceProposedPlan: thread.pendingSourceProposedPlan,
                   completedAt: settlesTurn
                     ? event.payload.updatedAt
-                    : thread.latestTurn?.turnId === event.payload.turnId
+                    : thread.latestTurn?.turnId === effectiveTurnId
                       ? (thread.latestTurn.completedAt ?? null)
                       : null,
                   assistantMessageId: event.payload.messageId,

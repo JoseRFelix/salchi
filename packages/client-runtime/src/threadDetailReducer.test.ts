@@ -262,6 +262,84 @@ describe("applyThreadDetailEvent", () => {
       }
     });
 
+    it("preserves an existing assistant turn id for late null-turn message events", () => {
+      const turnId = TurnId.make("turn-late");
+      const messageId = MessageId.make("assistant-late");
+      const threadWithMessage: OrchestrationThread = {
+        ...baseThread,
+        latestTurn: {
+          turnId,
+          state: "completed",
+          requestedAt: "2026-04-01T06:00:00.000Z",
+          startedAt: "2026-04-01T06:00:00.000Z",
+          completedAt: "2026-04-01T06:01:00.000Z",
+          assistantMessageId: messageId,
+        },
+        messages: [
+          {
+            id: messageId,
+            role: "assistant",
+            text: "First chunk",
+            turnId,
+            streaming: false,
+            createdAt: "2026-04-01T06:00:00.000Z",
+            updatedAt: "2026-04-01T06:01:00.000Z",
+          },
+        ],
+      };
+
+      const deltaResult = applyThreadDetailEvent(threadWithMessage, {
+        ...baseEventFields,
+        sequence: 8,
+        occurredAt: "2026-04-01T06:02:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-sent",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId,
+          role: "assistant",
+          text: " late chunk",
+          turnId: null,
+          streaming: true,
+          createdAt: "2026-04-01T06:02:00.000Z",
+          updatedAt: "2026-04-01T06:02:00.000Z",
+        },
+      });
+
+      expect(deltaResult.kind).toBe("updated");
+      if (deltaResult.kind !== "updated") {
+        throw new Error("expected late delta to update thread");
+      }
+
+      const completionResult = applyThreadDetailEvent(deltaResult.thread, {
+        ...baseEventFields,
+        sequence: 9,
+        occurredAt: "2026-04-01T06:03:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-sent",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId,
+          role: "assistant",
+          text: "",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-04-01T06:03:00.000Z",
+          updatedAt: "2026-04-01T06:03:00.000Z",
+        },
+      });
+
+      expect(completionResult.kind).toBe("updated");
+      if (completionResult.kind === "updated") {
+        expect(completionResult.thread.messages[0]?.text).toBe("First chunk late chunk");
+        expect(completionResult.thread.messages[0]?.turnId).toBe("turn-late");
+        expect(completionResult.thread.messages[0]?.streaming).toBe(false);
+        expect(completionResult.thread.latestTurn?.assistantMessageId).toBe("assistant-late");
+      }
+    });
+
     it("updates latestTurn for assistant messages with a turn", () => {
       const result = applyThreadDetailEvent(baseThread, {
         ...baseEventFields,

@@ -218,6 +218,7 @@ export function applyThreadDetailEvent(
       };
 
       const existingMessage = thread.messages.find((entry) => entry.id === message.id);
+      const effectiveTurnId = message.turnId ?? existingMessage?.turnId ?? null;
       const messages = existingMessage
         ? Arr.map(thread.messages, (entry) =>
             entry.id !== message.id
@@ -230,7 +231,7 @@ export function applyThreadDetailEvent(
                       ? message.text
                       : entry.text,
                   streaming: message.streaming,
-                  ...(message.turnId !== undefined ? { turnId: message.turnId } : {}),
+                  turnId: effectiveTurnId,
                   ...(message.streaming ? {} : { updatedAt: message.updatedAt }),
                   ...(message.attachments !== undefined
                     ? { attachments: message.attachments }
@@ -246,16 +247,16 @@ export function applyThreadDetailEvent(
       // (commentary between tool calls), and the turn must stay unsettled
       // until the provider reports turn end.
       const turnStillRunning =
-        event.payload.turnId !== null &&
+        effectiveTurnId !== null &&
         thread.session?.status === "running" &&
-        thread.session.activeTurnId === event.payload.turnId;
+        thread.session.activeTurnId === effectiveTurnId;
       const settlesTurn = !event.payload.streaming && !turnStillRunning;
       const latestTurn: OrchestrationThread["latestTurn"] =
         event.payload.role === "assistant" &&
-        event.payload.turnId !== null &&
-        (thread.latestTurn === null || thread.latestTurn.turnId === event.payload.turnId)
+        effectiveTurnId !== null &&
+        (thread.latestTurn === null || thread.latestTurn.turnId === effectiveTurnId)
           ? {
-              turnId: event.payload.turnId,
+              turnId: effectiveTurnId,
               state: settlesTurn
                 ? thread.latestTurn?.state === "interrupted"
                   ? "interrupted"
@@ -264,16 +265,16 @@ export function applyThreadDetailEvent(
                     : "completed"
                 : "running",
               requestedAt:
-                thread.latestTurn?.turnId === event.payload.turnId
+                thread.latestTurn?.turnId === effectiveTurnId
                   ? thread.latestTurn.requestedAt
                   : event.payload.createdAt,
               startedAt:
-                thread.latestTurn?.turnId === event.payload.turnId
+                thread.latestTurn?.turnId === effectiveTurnId
                   ? (thread.latestTurn.startedAt ?? event.payload.createdAt)
                   : event.payload.createdAt,
               completedAt: settlesTurn
                 ? event.payload.updatedAt
-                : thread.latestTurn?.turnId === event.payload.turnId
+                : thread.latestTurn?.turnId === effectiveTurnId
                   ? (thread.latestTurn.completedAt ?? null)
                   : null,
               assistantMessageId: event.payload.messageId,
@@ -282,10 +283,10 @@ export function applyThreadDetailEvent(
 
       // Rebind checkpoint assistant message IDs for assistant messages.
       const checkpoints =
-        event.payload.role === "assistant" && event.payload.turnId !== null
+        event.payload.role === "assistant" && effectiveTurnId !== null
           ? rebindCheckpointAssistantMessage(
               thread.checkpoints,
-              event.payload.turnId,
+              effectiveTurnId,
               event.payload.messageId,
             )
           : thread.checkpoints;
