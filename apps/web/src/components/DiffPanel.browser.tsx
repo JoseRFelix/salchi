@@ -1,7 +1,7 @@
 import "../index.css";
 
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 const ENVIRONMENT_ID = "environment-diff-browser";
@@ -11,6 +11,7 @@ const {
   fileDiffRenderCalls,
   navigateSpy,
   openWorkspaceFilePreviewSpy,
+  parsePatchFilesMock,
   parsedFilesRef,
   sourceControlOpenRef,
   virtualizerRenderCalls,
@@ -18,10 +19,11 @@ const {
 } = vi.hoisted(() => ({
   fileDiffRenderCalls: [] as Array<{
     fileDiff: { name: string };
-    options: { collapsed?: boolean } | undefined;
+    options: { collapsed?: boolean; theme?: string; themeType?: string } | undefined;
   }>,
   navigateSpy: vi.fn(),
   openWorkspaceFilePreviewSpy: vi.fn(),
+  parsePatchFilesMock: vi.fn(),
   parsedFilesRef: {
     current: [] as Array<{
       cacheKey?: string;
@@ -81,7 +83,7 @@ vi.mock("@pierre/diffs", async () => {
   const actual = await vi.importActual<typeof import("@pierre/diffs")>("@pierre/diffs");
   return {
     ...actual,
-    parsePatchFiles: vi.fn(() => [{ files: parsedFilesRef.current }]),
+    parsePatchFiles: parsePatchFilesMock,
   };
 });
 
@@ -161,6 +163,9 @@ vi.mock("../hooks/useSettings", () => ({
 }));
 
 vi.mock("../hooks/useTheme", () => ({
+  getResolvedMode: vi.fn(() => "dark"),
+  registerResolvedModeListener: vi.fn(() => () => undefined),
+  syncBrowserChromeTheme: vi.fn(),
   useTheme: vi.fn(() => ({ resolvedTheme: "dark" })),
 }));
 
@@ -221,6 +226,7 @@ vi.mock("../workspaceImagePreview", () => ({
 }));
 
 import DiffPanel from "./DiffPanel";
+import { resetColorTheme, setColorThemeSelection } from "../hooks/useColorTheme";
 
 function fileDiff(name: string, unifiedLineCount = 4) {
   return {
@@ -233,13 +239,20 @@ function fileDiff(name: string, unifiedLineCount = 4) {
 }
 
 describe("DiffPanel", () => {
+  beforeEach(() => {
+    parsePatchFilesMock.mockImplementation(() => [{ files: parsedFilesRef.current }]);
+  });
+
   afterEach(() => {
     fileDiffRenderCalls.length = 0;
     virtualizerRenderCalls.length = 0;
     openWorkspaceFilePreviewSpy.mockClear();
+    parsePatchFilesMock.mockReset();
     parsedFilesRef.current = [];
     sourceControlOpenRef.current = false;
     workingTreeDiffRef.current = "diff --git a/src/App.tsx b/src/App.tsx";
+    resetColorTheme();
+    localStorage.clear();
     vi.clearAllMocks();
     document.body.innerHTML = "";
   });
@@ -263,6 +276,27 @@ describe("DiffPanel", () => {
         "src/App.tsx",
         "src/utils.ts",
       ]);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("uses the selected syntax theme in file options and patch cache scopes", async () => {
+    setColorThemeSelection("default", "github-dark-default");
+    parsedFilesRef.current = [fileDiff("src/App.tsx")];
+    const screen = await render(<DiffPanel mode="sidebar" />);
+
+    try {
+      await vi.waitFor(() => {
+        expect(fileDiffRenderCalls.at(-1)?.options?.theme).toBe("github-dark-default");
+      });
+      expect(fileDiffRenderCalls.at(-1)?.options).toMatchObject({
+        theme: "github-dark-default",
+        themeType: "dark",
+      });
+      expect(parsePatchFilesMock.mock.calls.at(-1)?.[1]).toContain(
+        "diff-panel:bundled:github-dark-default",
+      );
     } finally {
       await screen.unmount();
     }

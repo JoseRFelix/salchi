@@ -661,6 +661,147 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("normalizes near-exhausted OAuth usage from remaining capacity fields", () => {
+    const homeDir = mkdtempSync(path.join(os.tmpdir(), "claude-oauth-remaining-"));
+    const credentialsDir = path.join(homeDir, ".claude");
+    mkdirSync(credentialsDir, { recursive: true });
+    writeFileSync(
+      path.join(credentialsDir, ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "test-access-token",
+          refreshToken: "test-refresh-token",
+          expiresAt: 4_102_444_800_000,
+          scopes: ["user:profile", "user:inference"],
+          subscriptionType: "pro",
+          rateLimitTier: "default_claude_ai",
+        },
+      }),
+    );
+
+    const harness = makeHarness({
+      claudeConfig: { homePath: homeDir },
+      enableOAuthUsage: true,
+      fetchOAuthUsage: async ({ accessToken }) => {
+        assert.equal(accessToken, "test-access-token");
+        return {
+          five_hour: {
+            remaining_percentage: 1,
+            reset_at: "2026-05-18T06:20:00.000Z",
+          },
+          seven_day: {
+            limit: 100,
+            remaining: 12,
+            reset_at: "2026-05-19T18:00:00.000Z",
+          },
+        };
+      },
+    });
+
+    return Effect.gen(function* () {
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() =>
+          rmSync(homeDir, {
+            recursive: true,
+            force: true,
+          }),
+        ),
+      );
+
+      const adapter = yield* ClaudeAdapter;
+      const getAccountRateLimits = adapter.getAccountRateLimits;
+      assert.ok(getAccountRateLimits);
+      const rateLimits = yield* getAccountRateLimits();
+      assert.deepEqual(rateLimits, {
+        source: "claude.oauth.usage",
+        primary: {
+          usedPercent: 99,
+          windowDurationMins: 300,
+          resetsAt: "2026-05-18T06:20:00.000Z",
+        },
+        secondary: {
+          usedPercent: 88,
+          windowDurationMins: 10080,
+          resetsAt: "2026-05-19T18:00:00.000Z",
+        },
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("falls back to later reset aliases when OAuth usage contains null placeholders", () => {
+    const homeDir = mkdtempSync(path.join(os.tmpdir(), "claude-oauth-reset-alias-"));
+    const credentialsDir = path.join(homeDir, ".claude");
+    mkdirSync(credentialsDir, { recursive: true });
+    writeFileSync(
+      path.join(credentialsDir, ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "test-access-token",
+          refreshToken: "test-refresh-token",
+          expiresAt: 4_102_444_800_000,
+          scopes: ["user:profile", "user:inference"],
+          subscriptionType: "pro",
+          rateLimitTier: "default_claude_ai",
+        },
+      }),
+    );
+
+    const harness = makeHarness({
+      claudeConfig: { homePath: homeDir },
+      enableOAuthUsage: true,
+      fetchOAuthUsage: async ({ accessToken }) => {
+        assert.equal(accessToken, "test-access-token");
+        return {
+          five_hour: {
+            utilization: 18,
+            resets_at: null,
+            resetsAt: "2026-05-18T06:20:00.000Z",
+          },
+          seven_day: {
+            utilization: 27,
+            reset_at: null,
+            resetAt: "2026-05-19T18:00:00.000Z",
+          },
+        };
+      },
+    });
+
+    return Effect.gen(function* () {
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() =>
+          rmSync(homeDir, {
+            recursive: true,
+            force: true,
+          }),
+        ),
+      );
+
+      const adapter = yield* ClaudeAdapter;
+      const getAccountRateLimits = adapter.getAccountRateLimits;
+      assert.ok(getAccountRateLimits);
+      const rateLimits = yield* getAccountRateLimits();
+      assert.deepEqual(rateLimits, {
+        source: "claude.oauth.usage",
+        primary: {
+          usedPercent: 18,
+          windowDurationMins: 300,
+          resetsAt: "2026-05-18T06:20:00.000Z",
+        },
+        secondary: {
+          usedPercent: 27,
+          windowDurationMins: 10080,
+          resetsAt: "2026-05-19T18:00:00.000Z",
+        },
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("uses a Claude Code user agent for OAuth usage requests", () => {
     const homeDir = mkdtempSync(path.join(os.tmpdir(), "claude-oauth-default-fetch-"));
     const credentialsDir = path.join(homeDir, ".claude");

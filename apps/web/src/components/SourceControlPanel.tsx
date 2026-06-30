@@ -338,7 +338,8 @@ export default function SourceControlPanel({ mode = "sidebar", onClose }: Source
     runGitActionWithToast,
     runPull,
     openExistingPr,
-    initMutation,
+    initRepository,
+    isInitializingRepo,
     pendingDefaultBranchAction,
     setPendingDefaultBranchAction,
     continuePendingDefaultBranchAction,
@@ -1069,11 +1070,11 @@ export default function SourceControlPanel({ mode = "sidebar", onClose }: Source
             <Button
               size="sm"
               variant="outline"
-              disabled={initMutation.isPending}
-              onClick={() => initMutation.mutate()}
+              disabled={isInitializingRepo}
+              onClick={() => initRepository()}
             >
               <SourceControlIcon className="size-3.5" />
-              {initMutation.isPending ? "Initializing..." : "Initialize Git"}
+              {isInitializingRepo ? "Initializing..." : "Initialize Git"}
             </Button>
             {gitStatusError ? (
               <p className="text-xs text-destructive">{gitStatusError.message}</p>

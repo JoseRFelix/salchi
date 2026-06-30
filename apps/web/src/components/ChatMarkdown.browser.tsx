@@ -5,24 +5,28 @@ import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
-const { openInPreferredEditorMock, readLocalApiMock, resolveEnvironmentHttpUrlMock } = vi.hoisted(
-  () => ({
-    openInPreferredEditorMock: vi.fn(async () => "vscode"),
-    readLocalApiMock: vi.fn(() => ({
-      server: { getConfig: vi.fn(async () => ({ availableEditors: ["vscode"] })) },
-      shell: { openInEditor: vi.fn(async () => undefined) },
-    })),
-    resolveEnvironmentHttpUrlMock: vi.fn(
-      (input: { pathname: string; searchParams?: Record<string, string> }) => {
-        const url = new URL(`http://environment.test${input.pathname}`);
-        if (input.searchParams) {
-          url.search = new URLSearchParams(input.searchParams).toString();
-        }
-        return url.toString();
-      },
-    ),
-  }),
-);
+const {
+  codeHighlighterPromiseCalls,
+  openInPreferredEditorMock,
+  readLocalApiMock,
+  resolveEnvironmentHttpUrlMock,
+} = vi.hoisted(() => ({
+  codeHighlighterPromiseCalls: [] as Array<[language: string, themeName: string]>,
+  openInPreferredEditorMock: vi.fn(async () => "vscode"),
+  readLocalApiMock: vi.fn(() => ({
+    server: { getConfig: vi.fn(async () => ({ availableEditors: ["vscode"] })) },
+    shell: { openInEditor: vi.fn(async () => undefined) },
+  })),
+  resolveEnvironmentHttpUrlMock: vi.fn(
+    (input: { pathname: string; searchParams?: Record<string, string> }) => {
+      const url = new URL(`http://environment.test${input.pathname}`);
+      if (input.searchParams) {
+        url.search = new URLSearchParams(input.searchParams).toString();
+      }
+      return url.toString();
+    },
+  ),
+}));
 
 vi.mock("../editorPreferences", () => ({
   openInPreferredEditor: openInPreferredEditorMock,
@@ -47,15 +51,18 @@ vi.mock("../environments/runtime", () => ({
 vi.mock("../codeHighlighting", async (importActual) => {
   const actual = await importActual<typeof import("../codeHighlighting")>();
   const fakeHighlighter = {
-    codeToHtml: (code: string) =>
-      `<pre class="shiki test-shiki" style="overflow-x:auto;white-space:pre;margin:0"><code>${code
+    codeToHtml: (code: string, options?: { theme?: string }) =>
+      `<pre class="shiki test-shiki ${options?.theme ?? ""}" style="overflow-x:auto;white-space:pre;margin:0"><code>${code
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")}</code></pre>`,
   };
   const highlighterPromise = Promise.resolve(fakeHighlighter);
   return {
     ...actual,
-    getCodeHighlighterPromise: () => highlighterPromise,
+    getCodeHighlighterPromise: (language: string, themeName: string) => {
+      codeHighlighterPromiseCalls.push([language, themeName]);
+      return highlighterPromise;
+    },
   };
 });
 
@@ -65,13 +72,16 @@ import {
   __readWorkspaceFilePanelStateForTests,
   __resetWorkspaceFilePanelStateForTests,
 } from "../workspaceFilePreview";
+import { resetColorTheme, setColorThemeSelection } from "../hooks/useColorTheme";
 
 describe("ChatMarkdown", () => {
   afterEach(() => {
+    codeHighlighterPromiseCalls.length = 0;
     openInPreferredEditorMock.mockClear();
     readLocalApiMock.mockClear();
     resolveEnvironmentHttpUrlMock.mockClear();
     __resetWorkspaceFilePanelStateForTests();
+    resetColorTheme();
     localStorage.clear();
     document.body.innerHTML = "";
   });
@@ -249,6 +259,35 @@ describe("ChatMarkdown", () => {
         "const openDiffPanelExclusive",
       );
       await expect.element(page.getByText(/const openDiffPanelExclusive/)).toBeInTheDocument();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("uses the selected syntax theme for fenced code blocks only", async () => {
+    localStorage.setItem("t3code:theme", "dark");
+    setColorThemeSelection("default", "github-dark-default");
+
+    const screen = await render(
+      <ChatMarkdown text={"`inline`\n\n```ts\nconst value = 1;\n```"} cwd="/repo/project" />,
+    );
+
+    try {
+      await vi.waitFor(() => {
+        expect(
+          screen.container.querySelector('[data-code-highlight-state="highlighted"]'),
+        ).not.toBeNull();
+      });
+
+      expect(codeHighlighterPromiseCalls).toContainEqual(["ts", "github-dark-default"]);
+      expect(screen.container.querySelector("pre.shiki")?.className).toContain(
+        "github-dark-default",
+      );
+
+      const inlineCode = screen.container.querySelector<HTMLElement>("p > code");
+      expect(inlineCode?.textContent).toBe("inline");
+      expect(inlineCode?.closest("pre")).toBeNull();
+      expect(inlineCode?.querySelector(".line, span")).toBeNull();
     } finally {
       await screen.unmount();
     }

@@ -1,4 +1,4 @@
-import { parsePatchFiles } from "@pierre/diffs";
+import { parsePatchFiles, type DiffsThemeNames } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 
 export const DIFF_THEME_NAMES = {
@@ -6,9 +6,10 @@ export const DIFF_THEME_NAMES = {
   dark: "pierre-dark",
 } as const;
 
-export type DiffThemeName = (typeof DIFF_THEME_NAMES)[keyof typeof DIFF_THEME_NAMES];
+export type DefaultDiffThemeName = (typeof DIFF_THEME_NAMES)[keyof typeof DIFF_THEME_NAMES];
+export type DiffThemeName = DiffsThemeNames;
 
-export function resolveDiffThemeName(theme: "light" | "dark"): DiffThemeName {
+export function resolveDiffThemeName(theme: "light" | "dark"): DefaultDiffThemeName {
   return theme === "dark" ? DIFF_THEME_NAMES.dark : DIFF_THEME_NAMES.light;
 }
 

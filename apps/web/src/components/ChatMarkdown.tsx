@@ -41,7 +41,7 @@ import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "./ui/collapsi
 import { ScrollArea } from "./ui/scroll-area";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { stackedThreadToast, toastManager } from "./ui/toast";
-import { fnv1a32, resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
+import { fnv1a32 } from "../lib/diffRendering";
 import { useTheme } from "../hooks/useTheme";
 import {
   chatMarkdownClipboardPayload,
@@ -74,6 +74,7 @@ import {
   resolveCodeHighlightLanguageFromFenceClass,
   setCachedHighlightedCodeHtml,
 } from "../codeHighlighting";
+import { useSelectedSyntaxTheme, type SyntaxThemeName } from "../syntaxThemes";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 
 class CodeHighlightErrorBoundary extends React.Component<
@@ -614,7 +615,7 @@ export function StableCodeBlockFallback({
   themeName,
 }: {
   readonly code: string;
-  readonly themeName: DiffThemeName;
+  readonly themeName: SyntaxThemeName;
 }) {
   const lines = splitCodeBlockLinesForStableFallback(code);
   let nextLineStartOffset = 0;
@@ -642,7 +643,7 @@ export function StableCodeBlockFallback({
 interface SuspenseShikiCodeBlockProps {
   className: string | undefined;
   code: string;
-  themeName: DiffThemeName;
+  themeName: SyntaxThemeName;
   isStreaming: boolean;
 }
 
@@ -680,7 +681,7 @@ function SuspenseShikiCodeBlock({
 interface UncachedShikiCodeBlockProps {
   code: string;
   language: string;
-  themeName: DiffThemeName;
+  themeName: SyntaxThemeName;
   cacheKey: string;
   isStreaming: boolean;
 }
@@ -692,7 +693,7 @@ function UncachedShikiCodeBlock({
   cacheKey,
   isStreaming,
 }: UncachedShikiCodeBlockProps) {
-  const highlighter = use(getCodeHighlighterPromise(language));
+  const highlighter = use(getCodeHighlighterPromise(language, themeName));
   const highlightedHtml = useMemo(() => {
     return highlightCodeToHtml({ highlighter, code, language, themeName });
   }, [code, highlighter, language, themeName]);
@@ -1244,7 +1245,6 @@ type MarkdownFileLinkMeta = NonNullable<ReturnType<typeof resolveMarkdownFileLin
 
 interface ChatMarkdownRenderContextValue {
   readonly cwd: string | undefined;
-  readonly diffThemeName: DiffThemeName;
   readonly environmentId: EnvironmentId | undefined;
   readonly fileLinkParentSuffixByPath: ReadonlyMap<string, string>;
   readonly isStreaming: boolean;
@@ -1252,6 +1252,7 @@ interface ChatMarkdownRenderContextValue {
   readonly onImageExpand: ((preview: ExpandedImagePreview) => void) | undefined;
   readonly resolvedTheme: MarkdownFileLinkProps["theme"];
   readonly skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+  readonly syntaxThemeName: SyntaxThemeName;
 }
 
 const ChatMarkdownRenderContext = React.createContext<ChatMarkdownRenderContextValue | null>(null);
@@ -1420,7 +1421,7 @@ function ChatMarkdownPre({
   children,
   ...props
 }: React.ComponentProps<"pre"> & { node?: unknown }): React.ReactElement {
-  const { diffThemeName, isStreaming, resolvedTheme } = useChatMarkdownRenderContext();
+  const { isStreaming, resolvedTheme, syntaxThemeName } = useChatMarkdownRenderContext();
   const codeBlock = extractCodeBlock(children);
   if (!codeBlock) {
     return (
@@ -1431,7 +1432,7 @@ function ChatMarkdownPre({
   }
 
   const stableFallback = (
-    <StableCodeBlockFallback code={codeBlock.code} themeName={diffThemeName} />
+    <StableCodeBlockFallback code={codeBlock.code} themeName={syntaxThemeName} />
   );
   const language = extractFenceLanguage(codeBlock.className);
   const fenceTitle = extractFenceTitle(extractPreCodeMeta(node));
@@ -1448,7 +1449,7 @@ function ChatMarkdownPre({
           <SuspenseShikiCodeBlock
             className={codeBlock.className}
             code={codeBlock.code}
-            themeName={diffThemeName}
+            themeName={syntaxThemeName}
             isStreaming={isStreaming}
           />
         </Suspense>
@@ -1479,7 +1480,7 @@ function ChatMarkdown({
   onImageExpand,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
-  const diffThemeName = resolveDiffThemeName(resolvedTheme);
+  const selectedSyntaxTheme = useSelectedSyntaxTheme();
   const markdownFileLinkMetaByHref = useMemo(() => {
     const metaByHref = new Map<string, MarkdownFileLinkMeta>();
     for (const href of extractMarkdownLinkHrefs(text)) {
@@ -1513,7 +1514,6 @@ function ChatMarkdown({
   const renderContext = useMemo<ChatMarkdownRenderContextValue>(
     () => ({
       cwd,
-      diffThemeName,
       environmentId,
       fileLinkParentSuffixByPath,
       isStreaming,
@@ -1521,16 +1521,17 @@ function ChatMarkdown({
       onImageExpand,
       resolvedTheme,
       skills,
+      syntaxThemeName: selectedSyntaxTheme.themeName,
     }),
     [
       cwd,
-      diffThemeName,
       environmentId,
       fileLinkParentSuffixByPath,
       isStreaming,
       markdownFileLinkMetaByHref,
       onImageExpand,
       resolvedTheme,
+      selectedSyntaxTheme.themeName,
       skills,
     ],
   );

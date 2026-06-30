@@ -48,13 +48,10 @@ import { formatWorkspaceRelativePath } from "../filePathDisplay";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { MOBILE_EDGE_SWIPE_ALLOW_EDITABLE_ATTRIBUTE } from "../hooks/useMobileEdgeSwipe";
 import { useTheme } from "../hooks/useTheme";
-import {
-  DIFF_MOBILE_TEXT_FLOOR_UNSAFE_CSS,
-  resolveDiffThemeName,
-  type DiffThemeName,
-} from "../lib/diffRendering";
+import { DIFF_MOBILE_TEXT_FLOOR_UNSAFE_CSS } from "../lib/diffRendering";
 import { gitWorkingTreeDiffQueryOptions } from "../lib/gitReactQuery";
 import { refreshGitStatus, useGitStatus } from "../lib/gitStatusState";
+import { useSelectedSyntaxTheme, type SyntaxThemeName } from "../syntaxThemes";
 import type {
   WorkspaceFilePanelHistoryEntry,
   WorkspaceFilePreviewTarget,
@@ -343,7 +340,7 @@ function withContents(file: ProjectReadFileResult, contents: string): ProjectRea
   };
 }
 
-function refreshPreviewFileCacheKey(file: FileContents, diffThemeName: DiffThemeName): void {
+function refreshPreviewFileCacheKey(file: FileContents, diffThemeName: SyntaxThemeName): void {
   if (file.cacheKey === undefined) {
     return;
   }
@@ -362,7 +359,7 @@ function copyPreviewFile(file: FileContents): FileContents {
 function updateLivePreviewFileMetadata(
   liveFile: FileContents,
   sourceFile: FileContents,
-  diffThemeName: DiffThemeName,
+  diffThemeName: SyntaxThemeName,
 ): void {
   liveFile.name = sourceFile.name;
   if (sourceFile.lang === undefined) {
@@ -386,7 +383,7 @@ function updateLivePreviewFileMetadata(
 function updateLivePreviewFileContents(
   liveFile: FileContents,
   contents: string,
-  diffThemeName: DiffThemeName,
+  diffThemeName: SyntaxThemeName,
 ): void {
   if (liveFile.contents === contents) {
     return;
@@ -497,8 +494,8 @@ function WorkspaceInlineDiffAnnotation(props: {
   onClose: () => void;
   onNavigate: (direction: "prev" | "next") => void;
   options: {
-    diffThemeName: DiffThemeName;
-    resolvedTheme: "dark" | "light" | "system";
+    diffThemeName: SyntaxThemeName;
+    themeType: "dark" | "light";
     wordWrap: boolean;
   };
 }) {
@@ -560,7 +557,7 @@ function WorkspaceInlineDiffAnnotation(props: {
               lineDiffType: "word",
               overflow: props.options.wordWrap ? "wrap" : "scroll",
               theme: props.options.diffThemeName,
-              themeType: props.options.resolvedTheme,
+              themeType: props.options.themeType,
               tokenizeMaxLineLength: CODE_HIGHLIGHT_TOKENIZE_MAX_LINE_LENGTH,
               unsafeCSS: FILE_PREVIEW_INLINE_DIFF_UNSAFE_CSS,
             }}
@@ -667,13 +664,13 @@ function EditableWorkspaceFileSurface(props: {
   previewFile: FileContents;
   queryKey: WorkspaceFilePreviewQueryKey;
   virtualizerKey?: string | undefined;
-  diffThemeName: DiffThemeName;
+  diffThemeName: SyntaxThemeName;
   lineAnnotations: LineAnnotation<WorkspaceFileInlineDiffAnnotation>[];
   previewUnsafeCss: string;
   renderInlineDiffAnnotation: (
     annotation: LineAnnotation<WorkspaceFileInlineDiffAnnotation>,
   ) => ReactNode;
-  resolvedTheme: "light" | "dark";
+  themeType: "light" | "dark";
   selectedLines: { start: number; end: number } | null;
   style: CSSProperties;
   target: WorkspaceFilePreviewTarget;
@@ -691,7 +688,7 @@ function EditableWorkspaceFileSurface(props: {
     previewUnsafeCss,
     queryKey,
     renderInlineDiffAnnotation,
-    resolvedTheme,
+    themeType,
     selectedLines,
     style,
     target,
@@ -837,7 +834,7 @@ function EditableWorkspaceFileSurface(props: {
             lineHoverHighlight: "number",
             overflow: wordWrap ? "wrap" : "scroll",
             theme: diffThemeName,
-            themeType: resolvedTheme,
+            themeType,
             tokenizeMaxLineLength: CODE_HIGHLIGHT_TOKENIZE_MAX_LINE_LENGTH,
             unsafeCSS: previewUnsafeCss,
           }}
@@ -850,13 +847,13 @@ function EditableWorkspaceFileSurface(props: {
 function ReadonlyWorkspaceFileSurface(props: {
   previewFile: FileContents;
   virtualizerKey?: string | undefined;
-  diffThemeName: DiffThemeName;
+  diffThemeName: SyntaxThemeName;
   lineAnnotations: LineAnnotation<WorkspaceFileInlineDiffAnnotation>[];
   previewUnsafeCss: string;
   renderInlineDiffAnnotation: (
     annotation: LineAnnotation<WorkspaceFileInlineDiffAnnotation>,
   ) => ReactNode;
-  resolvedTheme: "light" | "dark";
+  themeType: "light" | "dark";
   selectedLines: { start: number; end: number } | null;
   style: CSSProperties;
   wordWrap: boolean;
@@ -883,7 +880,7 @@ function ReadonlyWorkspaceFileSurface(props: {
           lineHoverHighlight: "number",
           overflow: props.wordWrap ? "wrap" : "scroll",
           theme: props.diffThemeName,
-          themeType: props.resolvedTheme,
+          themeType: props.themeType,
           tokenizeMaxLineLength: CODE_HIGHLIGHT_TOKENIZE_MAX_LINE_LENGTH,
           unsafeCSS: props.previewUnsafeCss,
         }}
@@ -903,7 +900,8 @@ export function WorkspaceFilePreviewPanel(props: {
   showExplorerButton?: boolean;
 }) {
   const { resolvedTheme } = useTheme();
-  const diffThemeName = resolveDiffThemeName(resolvedTheme);
+  const selectedSyntaxTheme = useSelectedSyntaxTheme();
+  const diffThemeName = selectedSyntaxTheme.themeName;
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const [wordWrap, setWordWrap] = useFilePreviewWordWrapPreference();
   const [savePending, setSavePending] = useState(false);
@@ -1053,9 +1051,16 @@ export function WorkspaceFilePreviewPanel(props: {
       query.data.truncated ? query.data.sizeBytes : "editable",
       query.data.truncated
         ? (previewFile.cacheKey ?? previewFile.name)
-        : `${renderLanguage}:${diffThemeName}`,
+        : `${renderLanguage}:${selectedSyntaxTheme.cacheKey}`,
     ].join("\u0000");
-  }, [diffThemeName, isMediaPreviewTarget, previewFile, props.target, query.data, renderLanguage]);
+  }, [
+    isMediaPreviewTarget,
+    previewFile,
+    props.target,
+    query.data,
+    renderLanguage,
+    selectedSyntaxTheme.cacheKey,
+  ]);
   const virtualizerLayoutRevision = useFilePreviewVirtualizerLayoutRevision({
     enabled: panelOpen && query.data !== undefined && !isMediaPreviewTarget,
     layoutKey: previewVirtualizerLayoutKey,
@@ -1276,11 +1281,17 @@ export function WorkspaceFilePreviewPanel(props: {
           hunk={hunk}
           onClose={() => setExpandedDiffHunkId(null)}
           onNavigate={handleNavigateInlineDiff}
-          options={{ diffThemeName, resolvedTheme, wordWrap }}
+          options={{ diffThemeName, themeType: selectedSyntaxTheme.themeType, wordWrap }}
         />
       );
     },
-    [diffMarkers.hunksById, diffThemeName, handleNavigateInlineDiff, resolvedTheme, wordWrap],
+    [
+      diffMarkers.hunksById,
+      diffThemeName,
+      handleNavigateInlineDiff,
+      selectedSyntaxTheme.themeType,
+      wordWrap,
+    ],
   );
 
   const copyFile = useCallback(() => {
@@ -1428,7 +1439,7 @@ export function WorkspaceFilePreviewPanel(props: {
                 lineAnnotations={lineAnnotations}
                 previewUnsafeCss={previewUnsafeCss}
                 renderInlineDiffAnnotation={renderInlineDiffAnnotation}
-                resolvedTheme={resolvedTheme}
+                themeType={selectedSyntaxTheme.themeType}
                 selectedLines={selectedLines}
                 style={FILE_PREVIEW_RENDER_STYLE}
                 target={props.target}
@@ -1444,7 +1455,7 @@ export function WorkspaceFilePreviewPanel(props: {
                 lineAnnotations={lineAnnotations}
                 previewUnsafeCss={previewUnsafeCss}
                 renderInlineDiffAnnotation={renderInlineDiffAnnotation}
-                resolvedTheme={resolvedTheme}
+                themeType={selectedSyntaxTheme.themeType}
                 selectedLines={selectedLines}
                 style={FILE_PREVIEW_RENDER_STYLE}
                 wordWrap={wordWrap}

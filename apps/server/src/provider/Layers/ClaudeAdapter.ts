@@ -57,6 +57,10 @@ import {
   getProviderOptionDescriptors,
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
+import {
+  normalizeUsageWindowUsedPercent,
+  readFirstPresentValue,
+} from "@t3tools/shared/rateLimitUsage";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -462,16 +466,18 @@ function normalizeClaudeOAuthUsageWindow(
     return undefined;
   }
 
-  const utilization = asFiniteNumber(record.utilization ?? record.used_percentage);
-  const resetsAt = record.resets_at ?? record.resetsAt;
-  if (utilization === undefined && resetsAt === undefined) {
+  const usedPercent = normalizeUsageWindowUsedPercent(record);
+  const resetsAt = readFirstPresentValue(record, ["resets_at", "resetsAt", "reset_at", "resetAt"]);
+  const status = asNonEmptyString(record.status);
+  if (usedPercent === null && resetsAt === undefined && status === undefined) {
     return undefined;
   }
 
   return {
-    ...(utilization !== undefined ? { usedPercent: Math.max(0, Math.min(100, utilization)) } : {}),
+    ...(usedPercent !== null ? { usedPercent } : {}),
     windowDurationMins,
     ...(resetsAt !== undefined ? { resetsAt } : {}),
+    ...(status !== undefined ? { status } : {}),
   };
 }
 
@@ -484,11 +490,23 @@ function normalizeClaudeAccountUsageRateLimits(
     return undefined;
   }
 
-  const primary = normalizeClaudeOAuthUsageWindow(record.five_hour, 5 * 60);
+  const primary = normalizeClaudeOAuthUsageWindow(
+    readFirstPresentValue(record, ["five_hour", "fiveHour", "primary"]),
+    5 * 60,
+  );
   const secondary =
-    normalizeClaudeOAuthUsageWindow(record.seven_day, 7 * 24 * 60) ??
-    normalizeClaudeOAuthUsageWindow(record.seven_day_sonnet, 7 * 24 * 60) ??
-    normalizeClaudeOAuthUsageWindow(record.seven_day_opus, 7 * 24 * 60);
+    normalizeClaudeOAuthUsageWindow(
+      readFirstPresentValue(record, ["seven_day", "sevenDay", "weekly", "secondary"]),
+      7 * 24 * 60,
+    ) ??
+    normalizeClaudeOAuthUsageWindow(
+      readFirstPresentValue(record, ["seven_day_sonnet", "sevenDaySonnet"]),
+      7 * 24 * 60,
+    ) ??
+    normalizeClaudeOAuthUsageWindow(
+      readFirstPresentValue(record, ["seven_day_opus", "sevenDayOpus"]),
+      7 * 24 * 60,
+    );
 
   if (!primary && !secondary) {
     return undefined;

@@ -39,6 +39,16 @@ export const SidebarThreadPreviewCount = Schema.Int.check(
 export type SidebarThreadPreviewCount = typeof SidebarThreadPreviewCount.Type;
 export const DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT: SidebarThreadPreviewCount = 6;
 
+export const ImportedColorThemeReference = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  type: Schema.Literals(["light", "dark"]),
+  namespace: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  version: TrimmedNonEmptyString,
+});
+export type ImportedColorThemeReference = typeof ImportedColorThemeReference.Type;
+
 export const ClientSettingsSchema = Schema.Struct({
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -92,6 +102,13 @@ export const ClientSettingsSchema = Schema.Struct({
   timestampFormat: TimestampFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
   ),
+  // Legacy local color-theme fields. ServerSettings is now authoritative, but
+  // these remain decodable so existing browser-local values can be migrated.
+  colorThemeLight: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed("default"))),
+  colorThemeDark: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed("default"))),
+  importedThemes: Schema.Array(ImportedColorThemeReference).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
@@ -101,6 +118,12 @@ export const DEFAULT_CLIENT_SETTINGS: ClientSettings = Schema.decodeSync(ClientS
 
 export const ThreadEnvMode = Schema.Literals(["local", "worktree"]);
 export type ThreadEnvMode = typeof ThreadEnvMode.Type;
+
+// Light/dark/system appearance mode. Server-authoritative so the mode follows
+// every browser connected to this Salchi server, in lockstep with the color
+// theme id pair below.
+export const ThemeMode = Schema.Literals(["light", "dark", "system"]);
+export type ThemeMode = typeof ThemeMode.Type;
 
 const makeBinaryPathSetting = (fallback: string) =>
   TrimmedString.pipe(
@@ -382,6 +405,21 @@ export const ServerSettings = Schema.Struct({
       }),
     ),
   ),
+  // Appearance mode (light/dark/system). Server-authoritative so a mode chosen
+  // on one device follows the user to every other connected browser.
+  themeMode: ThemeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("system" as const satisfies ThemeMode)),
+  ),
+  // Color theme selection (light/dark mode each pick a VS Code theme id, or
+  // "default" for the built-in palette). Server-authoritative so the selection
+  // follows every browser connected to this Salchi server.
+  colorThemeLight: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed("default"))),
+  colorThemeDark: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed("default"))),
+  // Lightweight references to imported (Open VSX) themes so any device can
+  // re-fetch the colors for a synced selection. No color data is stored here.
+  importedThemes: Schema.Array(ImportedColorThemeReference).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 
   // Legacy single-instance-per-driver settings. Continues to be the source
   // of truth until `providerInstances` (below) lands per-driver migration
@@ -483,6 +521,10 @@ export const ServerSettingsPatch = Schema.Struct({
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
+  themeMode: Schema.optionalKey(ThemeMode),
+  colorThemeLight: Schema.optionalKey(Schema.String),
+  colorThemeDark: Schema.optionalKey(Schema.String),
+  importedThemes: Schema.optionalKey(Schema.Array(ImportedColorThemeReference)),
   observability: Schema.optionalKey(
     Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),

@@ -133,10 +133,11 @@ export function applyServerSettingsPatch(
   patch: ServerSettingsPatch,
 ): ServerSettings {
   const selectionPatch = patch.textGenerationModelSelection;
-  const { automaticGitFetchInterval, ...patchForMerge } = patch;
+  const { automaticGitFetchInterval, importedThemes, ...patchForMerge } = patch;
   const next = deepMerge(current, patchForMerge);
   const nextWithReplacements = {
     ...next,
+    ...(importedThemes !== undefined ? { importedThemes } : {}),
     ...(patch.providerInstances !== undefined
       ? {
           providerInstances: normalizeProviderInstanceConfigMapForPersistence(

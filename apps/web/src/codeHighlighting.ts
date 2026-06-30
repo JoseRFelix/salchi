@@ -2,10 +2,11 @@ import {
   getFiletypeFromFileName,
   getSharedHighlighter,
   type DiffsHighlighter,
+  type DiffsThemeNames,
   type SupportedLanguages,
 } from "@pierre/diffs";
 
-import { fnv1a32, resolveDiffThemeName, type DiffThemeName } from "./lib/diffRendering";
+import { fnv1a32 } from "./lib/diffRendering";
 import { LRUCache } from "./lib/lruCache";
 
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
@@ -48,7 +49,7 @@ export function resolveCodeHighlightLanguageFromPath(path: string): string {
 export function createCodeHighlightCacheKey(
   code: string,
   language: string,
-  themeName: DiffThemeName,
+  themeName: DiffsThemeNames,
   scope = "code",
 ): string {
   return `${scope}:${fnv1a32(code).toString(36)}:${code.length}:${language}:${themeName}`;
@@ -66,23 +67,27 @@ export function setCachedHighlightedCodeHtml(cacheKey: string, html: string, cod
   highlightedCodeHtmlCache.set(cacheKey, html, estimateHighlightedHtmlSize(html, code));
 }
 
-export function getCodeHighlighterPromise(language: string): Promise<DiffsHighlighter> {
+export function getCodeHighlighterPromise(
+  language: string,
+  themeName: DiffsThemeNames,
+): Promise<DiffsHighlighter> {
   const normalizedLanguage = normalizeCodeHighlightLanguage(language);
-  const cached = highlighterPromiseCache.get(normalizedLanguage);
+  const cacheKey = `${normalizedLanguage}\u0000${themeName}`;
+  const cached = highlighterPromiseCache.get(cacheKey);
   if (cached) return cached;
 
   const promise = getSharedHighlighter({
-    themes: [resolveDiffThemeName("dark"), resolveDiffThemeName("light")],
+    themes: [themeName],
     langs: [normalizedLanguage as SupportedLanguages],
     preferredHighlighter: "shiki-js",
   }).catch((err) => {
-    highlighterPromiseCache.delete(normalizedLanguage);
+    highlighterPromiseCache.delete(cacheKey);
     if (normalizedLanguage === "text") {
       throw err;
     }
-    return getCodeHighlighterPromise("text");
+    return getCodeHighlighterPromise("text", themeName);
   });
-  highlighterPromiseCache.set(normalizedLanguage, promise);
+  highlighterPromiseCache.set(cacheKey, promise);
   return promise;
 }
 
@@ -90,7 +95,7 @@ export function highlightCodeToHtml(input: {
   highlighter: DiffsHighlighter;
   code: string;
   language: string;
-  themeName: DiffThemeName;
+  themeName: DiffsThemeNames;
 }): string {
   const language = normalizeCodeHighlightLanguage(input.language);
   try {

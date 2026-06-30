@@ -1,5 +1,14 @@
-import { ArchiveIcon, ArchiveX, LoaderIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArchiveIcon,
+  ArchiveX,
+  LoaderIcon,
+  MoonIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  SunIcon,
+} from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   defaultInstanceIdForDriver,
   type DesktopUpdateChannel,
@@ -29,6 +38,17 @@ import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import { useTheme } from "../../hooks/useTheme";
+import {
+  DEFAULT_THEME_SENTINEL,
+  isColorThemeCustomized,
+  useColorTheme,
+} from "../../hooks/useColorTheme";
+import { BUNDLED_THEMES, findBundledTheme, type ThemeDescriptor } from "../../themes";
+import {
+  getImportedThemesSnapshot,
+  subscribeImportedThemes,
+  type ImportedThemeRecord,
+} from "../../importedThemes";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useDesktopUpdateState } from "../../lib/desktopUpdateReactQuery";
@@ -79,21 +99,6 @@ import {
   hasProviderUpdateStateForInstance,
   PROVIDER_UPDATE_LAUNCH_TIMEOUT_MS,
 } from "../../providerUpdateLaunchState";
-
-const THEME_OPTIONS = [
-  {
-    value: "system",
-    label: "System",
-  },
-  {
-    value: "light",
-    label: "Light",
-  },
-  {
-    value: "dark",
-    label: "Dark",
-  },
-] as const;
 
 const TIMESTAMP_FORMAT_LABELS = {
   locale: "System default",
@@ -366,8 +371,10 @@ function AboutVersionSection() {
 
 export function useSettingsRestore(onRestored?: () => void) {
   const { theme, setTheme } = useTheme();
+  const { selection: colorThemeSelection, reset: resetColorTheme } = useColorTheme();
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
+  const isThemeDirty = theme !== "system" || isColorThemeCustomized(colorThemeSelection);
 
   const isGitWritingModelDirty = !Equal.equals(
     settings.textGenerationModelSelection ?? null,
@@ -376,7 +383,7 @@ export function useSettingsRestore(onRestored?: () => void) {
 
   const changedSettingLabels = useMemo(
     () => [
-      ...(theme !== "system" ? ["Theme"] : []),
+      ...(isThemeDirty ? ["Theme"] : []),
       ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
         ? ["Time format"]
         : []),
@@ -426,7 +433,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.enableAssistantStreaming,
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
-      theme,
+      isThemeDirty,
     ],
   );
 
@@ -441,7 +448,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     if (!confirmed) return;
 
     setTheme("system");
+    resetColorTheme();
     updateSettings({
+      themeMode: DEFAULT_UNIFIED_SETTINGS.themeMode,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
@@ -454,9 +463,11 @@ export function useSettingsRestore(onRestored?: () => void) {
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
+      colorThemeLight: DEFAULT_UNIFIED_SETTINGS.colorThemeLight,
+      colorThemeDark: DEFAULT_UNIFIED_SETTINGS.colorThemeDark,
     });
     onRestored?.();
-  }, [changedSettingLabels, onRestored, setTheme, updateSettings]);
+  }, [changedSettingLabels, onRestored, resetColorTheme, setTheme, updateSettings]);
 
   return {
     changedSettingLabels,
@@ -464,8 +475,90 @@ export function useSettingsRestore(onRestored?: () => void) {
   };
 }
 
-export function GeneralSettingsPanel() {
+function modeDisplayLabel(mode: ThemeDescriptor["type"]): string {
+  return mode === "light" ? "Light" : "Dark";
+}
+
+function colorThemeLabel(
+  id: string,
+  mode: ThemeDescriptor["type"],
+  themes: ReadonlyArray<ThemeDescriptor>,
+): string {
+  if (id === DEFAULT_THEME_SENTINEL) return `Default ${modeDisplayLabel(mode)}`;
+  return themes.find((theme) => theme.id === id)?.label ?? findBundledTheme(id)?.label ?? id;
+}
+
+function useImportedThemes(): ReadonlyArray<ImportedThemeRecord> {
+  return useSyncExternalStore(subscribeImportedThemes, getImportedThemesSnapshot, () => []);
+}
+
+function ThemeSettingsRow() {
   const { theme, setTheme } = useTheme();
+  const { selection, resolvedMode, reset } = useColorTheme();
+  const { updateSettings } = useUpdateSettings();
+  const importedThemes = useImportedThemes();
+  const navigate = useNavigate();
+
+  const themeDescriptors = useMemo<ReadonlyArray<ThemeDescriptor>>(
+    () => [
+      ...importedThemes.map((theme) => ({
+        id: theme.id,
+        label: theme.label,
+        type: theme.type,
+        source: "imported" as const,
+      })),
+      ...BUNDLED_THEMES,
+    ],
+    [importedThemes],
+  );
+
+  const handleUseSystemDefault = useCallback(() => {
+    setTheme("system");
+    reset();
+    updateSettings({
+      themeMode: DEFAULT_UNIFIED_SETTINGS.themeMode,
+      colorThemeLight: DEFAULT_UNIFIED_SETTINGS.colorThemeLight,
+      colorThemeDark: DEFAULT_UNIFIED_SETTINGS.colorThemeDark,
+    });
+  }, [reset, setTheme, updateSettings]);
+
+  const goToThemes = useCallback(() => {
+    void navigate({ to: "/themes" });
+  }, [navigate]);
+
+  const isThemeDirty = theme !== "system" || isColorThemeCustomized(selection);
+  const displayMode = theme === "system" ? resolvedMode : theme;
+  const displayLabel = colorThemeLabel(selection[displayMode], displayMode, themeDescriptors);
+  const DisplayIcon = displayMode === "light" ? SunIcon : MoonIcon;
+
+  return (
+    <SettingsRow
+      title="Theme"
+      description="Follow your OS with built-in colors, or pick a theme to pin Salchi to that theme's mode."
+      control={
+        <div className="flex w-full flex-col gap-2 sm:w-auto">
+          <div className="flex min-w-64 items-center gap-2">
+            <Button className="min-w-0 flex-1 justify-start" onClick={goToThemes} variant="outline">
+              <DisplayIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 truncate">{displayLabel}</span>
+            </Button>
+            {isThemeDirty ? (
+              <button
+                className="shrink-0 rounded-full border border-border bg-background px-2 py-0.5 font-medium text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                onClick={handleUseSystemDefault}
+                type="button"
+              >
+                Restore
+              </button>
+            ) : null}
+          </div>
+        </div>
+      }
+    />
+  );
+}
+
+export function GeneralSettingsPanel() {
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const observability = useServerObservability();
@@ -506,38 +599,7 @@ export function GeneralSettingsPanel() {
       <SettingsSection title="General">
         <PushNotificationSettingsRow />
 
-        <SettingsRow
-          title="Theme"
-          description="Choose how Salchi looks across the app."
-          resetAction={
-            theme !== "system" ? (
-              <SettingResetButton label="theme" onClick={() => setTheme("system")} />
-            ) : null
-          }
-          control={
-            <Select
-              value={theme}
-              onValueChange={(value) => {
-                if (value === "system" || value === "light" || value === "dark") {
-                  setTheme(value);
-                }
-              }}
-            >
-              <SelectTrigger className="w-full sm:w-40" aria-label="Theme preference">
-                <SelectValue>
-                  {THEME_OPTIONS.find((option) => option.value === theme)?.label ?? "System"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                {THEME_OPTIONS.map((option) => (
-                  <SelectItem hideIndicator key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          }
-        />
+        <ThemeSettingsRow />
 
         <SettingsRow
           title="Time format"

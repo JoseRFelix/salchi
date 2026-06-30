@@ -30,11 +30,8 @@ import {
   workLogEntryIsToolLike,
 } from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
-import {
-  getRenderablePatch,
-  resolveDiffThemeName,
-  resolveFileDiffPath,
-} from "../../lib/diffRendering";
+import { getRenderablePatch, resolveFileDiffPath } from "../../lib/diffRendering";
+import { useSelectedSyntaxTheme, type SelectedSyntaxTheme } from "../../syntaxThemes";
 import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
@@ -121,6 +118,7 @@ interface TimelineRowSharedState {
   routeThreadKey: string;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
+  syntaxTheme: SelectedSyntaxTheme;
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
@@ -225,6 +223,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onUserScrollIntent,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
+  const selectedSyntaxTheme = useSelectedSyntaxTheme();
 
   // Toggling a fold inserts/removes rows between the fold row and the final
   // message — everything above the trigger is unchanged, so the trigger stays
@@ -474,6 +473,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       routeThreadKey,
       markdownCwd,
       resolvedTheme,
+      syntaxTheme: selectedSyntaxTheme,
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
@@ -488,6 +488,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       routeThreadKey,
       markdownCwd,
       resolvedTheme,
+      selectedSyntaxTheme,
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
@@ -1343,7 +1344,7 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
   const ctx = use(TimelineRowCtx);
   const renderablePatch = getRenderablePatch(
     buildReviewCommentRenderablePatch(comment),
-    `review-comment:${comment.id}`,
+    `review-comment:${comment.id}:${ctx.syntaxTheme.cacheKey}`,
   );
 
   return (
@@ -1369,7 +1370,8 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
             options={{
               collapsed: false,
               diffStyle: "unified",
-              theme: resolveDiffThemeName(ctx.resolvedTheme),
+              theme: ctx.syntaxTheme.themeName,
+              themeType: ctx.syntaxTheme.themeType,
             }}
           />
         ))}

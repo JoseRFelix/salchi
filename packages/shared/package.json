@@ -63,6 +63,10 @@
       "types": "./src/toolActivity.ts",
       "import": "./src/toolActivity.ts"
     },
+    "./themePreview": {
+      "types": "./src/themePreview.ts",
+      "import": "./src/themePreview.ts"
+    },
     "./Struct": {
       "types": "./src/Struct.ts",
       "import": "./src/Struct.ts"
@@ -118,6 +122,10 @@
     "./oauthScope": {
       "types": "./src/oauthScope.ts",
       "import": "./src/oauthScope.ts"
+    },
+    "./rateLimitUsage": {
+      "types": "./src/rateLimitUsage.ts",
+      "import": "./src/rateLimitUsage.ts"
     },
     "./orchestrationThreadDetailFingerprint": {
       "types": "./src/orchestrationThreadDetailFingerprint.ts",

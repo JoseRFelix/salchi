@@ -1,5 +1,5 @@
 import { ChevronDownIcon, GaugeIcon } from "lucide-react";
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import * as Schema from "effect/Schema";
 
 import { useLocalStorage } from "../../hooks/useLocalStorage";
@@ -24,6 +24,7 @@ import {
 } from "./SidebarUsageIndicator.logic";
 
 const SIDEBAR_USAGE_EXPANDED_STORAGE_KEY = "t3code:sidebar-usage-expanded:v1";
+const SIDEBAR_USAGE_POLL_INTERVAL_MS = 30_000;
 
 function collectSidebarUsageThreads(
   environmentStateById: AppState["environmentStateById"],
@@ -168,7 +169,7 @@ function SidebarUsageWindowMeter({
           {formatUsagePrimary(window)}
         </span>
       </div>
-      <div className="h-1 overflow-hidden rounded-full bg-background/80">
+      <div className="h-1 overflow-hidden rounded-full bg-foreground/10">
         <div
           className={cn(
             "h-full rounded-full transition-[width] duration-300",
@@ -245,6 +246,7 @@ export function SidebarUsageIndicator() {
   const { isMobile, open, openMobile } = useSidebar();
   const sidebarVisible = isMobile ? openMobile : open;
   const previousSidebarVisibleRef = useRef(false);
+  const refreshInFlightRef = useRef<Promise<unknown> | null>(null);
 
   const threads = useMemo(
     () => collectSidebarUsageThreads(environmentStateById),
@@ -266,6 +268,28 @@ export function SidebarUsageIndicator() {
   );
   const hasUsageProviders = rows.length > 0;
   const summary = useMemo(() => getSidebarUsageSummary(rows), [rows]);
+  const refreshUsageLimits = useCallback(() => {
+    if (refreshInFlightRef.current) {
+      return refreshInFlightRef.current;
+    }
+
+    const promise = ensureLocalApi()
+      .server.refreshUsageLimits()
+      .then((result) => {
+        const fetchedAt = new Date().toISOString();
+        const updates = accountRateLimitsToStoreRecord(result.accountRateLimits, fetchedAt);
+        setAccountRateLimitsByInstanceId(updates);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (refreshInFlightRef.current === promise) {
+          refreshInFlightRef.current = null;
+        }
+      });
+
+    refreshInFlightRef.current = promise;
+    return promise;
+  }, [setAccountRateLimitsByInstanceId]);
 
   useEffect(() => {
     const previousSidebarVisible = previousSidebarVisibleRef.current;
@@ -274,30 +298,27 @@ export function SidebarUsageIndicator() {
       return;
     }
 
-    void ensureLocalApi()
-      .server.refreshUsageLimits()
-      .then((result) => {
-        setAccountRateLimitsByInstanceId(
-          accountRateLimitsToStoreRecord(result.accountRateLimits, new Date().toISOString()),
-        );
-      })
-      .catch(() => undefined);
-  }, [expanded, hasUsageProviders, setAccountRateLimitsByInstanceId, sidebarVisible]);
+    void refreshUsageLimits();
+  }, [expanded, hasUsageProviders, refreshUsageLimits, sidebarVisible]);
 
   useEffect(() => {
     if (!hasUsageProviders) {
       return;
     }
 
-    void ensureLocalApi()
-      .server.refreshUsageLimits()
-      .then((result) => {
-        setAccountRateLimitsByInstanceId(
-          accountRateLimitsToStoreRecord(result.accountRateLimits, new Date().toISOString()),
-        );
-      })
-      .catch(() => undefined);
-  }, [hasUsageProviders, setAccountRateLimitsByInstanceId]);
+    void refreshUsageLimits();
+  }, [hasUsageProviders, refreshUsageLimits]);
+
+  useEffect(() => {
+    if (!hasUsageProviders || !sidebarVisible || !expanded) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshUsageLimits();
+    }, SIDEBAR_USAGE_POLL_INTERVAL_MS);
+    return () => window.clearInterval(intervalId);
+  }, [expanded, hasUsageProviders, refreshUsageLimits, sidebarVisible]);
 
   if (!hasUsageProviders) {
     return null;

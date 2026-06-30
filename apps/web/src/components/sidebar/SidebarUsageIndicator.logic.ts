@@ -3,6 +3,10 @@ import {
   type OrchestrationThreadActivity,
   type ProviderInstanceId,
 } from "@t3tools/contracts";
+import {
+  normalizeUsageWindowUsedPercent,
+  readFirstPresentValue,
+} from "@t3tools/shared/rateLimitUsage";
 
 export type SidebarUsageDriverId = "codex" | "claudeAgent";
 export type SidebarUsageWindowId = "fiveHour" | "weekly";
@@ -124,16 +128,6 @@ function readString(record: Record<string, unknown>, keys: ReadonlyArray<string>
   return null;
 }
 
-function normalizePercent(value: unknown, options?: { readonly allowUnitFraction?: boolean }) {
-  const parsed = asFiniteNumber(value);
-  if (parsed === null) {
-    return null;
-  }
-  const percent =
-    options?.allowUnitFraction === true && parsed >= 0 && parsed <= 1 ? parsed * 100 : parsed;
-  return Math.max(0, Math.min(100, percent));
-}
-
 function toTimestampMs(value: unknown): number | null {
   const numeric = asFiniteNumber(value);
   if (numeric !== null) {
@@ -215,9 +209,13 @@ function parseCodexWindow(
   const id = windowIdFromDurationMins(durationMins) ?? fallbackId;
   return makeWindow({
     id,
-    usedPercent: normalizePercent(windowRecord.usedPercent ?? windowRecord.used_percent),
-    resetsAtMs: toTimestampMs(windowRecord.resetsAt ?? windowRecord.resets_at),
-    status: readString(snapshot, ["rateLimitReachedType", "rate_limit_reached_type"]),
+    usedPercent: normalizeUsageWindowUsedPercent(windowRecord),
+    resetsAtMs: toTimestampMs(
+      readFirstPresentValue(windowRecord, ["resetsAt", "resets_at", "resetAt", "reset_at"]),
+    ),
+    status:
+      readString(windowRecord, ["status"]) ??
+      readString(snapshot, ["rateLimitReachedType", "rate_limit_reached_type"]),
     updatedAt,
   });
 }
@@ -234,8 +232,10 @@ function parseClaudeWindow(
 
   return makeWindow({
     id,
-    usedPercent: normalizePercent(info.utilization, { allowUnitFraction: true }),
-    resetsAtMs: toTimestampMs(info.resetsAt ?? info.resets_at),
+    usedPercent: normalizeUsageWindowUsedPercent(info),
+    resetsAtMs: toTimestampMs(
+      readFirstPresentValue(info, ["resetsAt", "resets_at", "resetAt", "reset_at"]),
+    ),
     status: readString(info, ["status"]),
     updatedAt,
   });

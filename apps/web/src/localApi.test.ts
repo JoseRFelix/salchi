@@ -687,6 +687,9 @@ describe("wsApi", () => {
       sidebarThreadSortOrder: "created_at" as const,
       sidebarThreadPreviewCount: 6,
       timestampFormat: "24-hour" as const,
+      colorThemeLight: "default",
+      colorThemeDark: "default",
+      importedThemes: [],
     };
     const getClientSettings = vi.fn().mockResolvedValue({
       ...clientSettings,
@@ -750,6 +753,9 @@ describe("wsApi", () => {
       sidebarThreadSortOrder: "created_at" as const,
       sidebarThreadPreviewCount: 6,
       timestampFormat: "24-hour" as const,
+      colorThemeLight: "default",
+      colorThemeDark: "default",
+      importedThemes: [],
     };
 
     await api.persistence.setClientSettings(clientSettings);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
-type Theme = "light" | "dark" | "system";
+export type Theme = "light" | "dark" | "system";
 type ThemeSnapshot = {
   theme: Theme;
   systemDark: boolean;
@@ -19,8 +19,30 @@ let listeners: Array<() => void> = [];
 let lastSnapshot: ThemeSnapshot | null = null;
 let lastDesktopTheme: Theme | null = null;
 
+type ResolvedMode = "light" | "dark";
+let resolvedModeListeners: Array<(mode: ResolvedMode) => void> = [];
+
 function emitChange() {
   for (const listener of listeners) listener();
+}
+
+/** Current light/dark mode after resolving "system" against the OS preference. */
+export function getResolvedMode(): ResolvedMode {
+  const theme = getStored();
+  const isDark = theme === "dark" || (theme === "system" && getSystemDark());
+  return isDark ? "dark" : "light";
+}
+
+/**
+ * Subscribe to resolved light/dark changes (mode set, OS preference flip, boot).
+ * The color-theme layer uses this to swap its token overrides in lockstep with
+ * the `.dark` class without re-implementing the matchMedia/storage plumbing.
+ */
+export function registerResolvedModeListener(listener: (mode: ResolvedMode) => void): () => void {
+  resolvedModeListeners.push(listener);
+  return () => {
+    resolvedModeListeners = resolvedModeListeners.filter((l) => l !== listener);
+  };
 }
 
 function hasThemeStorage() {
@@ -94,6 +116,10 @@ function applyTheme(theme: Theme, suppressTransitions = false) {
   }
   const isDark = theme === "dark" || (theme === "system" && getSystemDark());
   document.documentElement.classList.toggle("dark", isDark);
+  // Let the color-theme layer swap its token overrides before we measure the
+  // chrome background, so the native titlebar/meta color reflects the palette.
+  const resolvedMode: ResolvedMode = isDark ? "dark" : "light";
+  for (const listener of resolvedModeListeners) listener(resolvedMode);
   syncBrowserChromeTheme();
   syncDesktopTheme(theme);
   if (suppressTransitions) {
@@ -169,6 +195,24 @@ function subscribe(listener: () => void): () => void {
     mq.removeEventListener("change", handleChange);
     window.removeEventListener("storage", handleStorage);
   };
+}
+
+/** The locally-stored appearance mode, readable outside React. */
+export function getStoredTheme(): Theme {
+  return getStored();
+}
+
+/**
+ * Apply an appearance mode synced from server settings into the local store.
+ * No-ops when it already matches so reconciliation doesn't fight the local
+ * value or write back to the server (which would loop). Used by the theme sync
+ * hook so a mode chosen on one device follows the user to another.
+ */
+export function syncThemeModeFromServer(next: Theme) {
+  if (!hasThemeStorage() || getStored() === next) return;
+  localStorage.setItem(STORAGE_KEY, next);
+  applyTheme(next, true);
+  emitChange();
 }
 
 export function useTheme() {

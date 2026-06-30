@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createCodeHighlightCacheKey,
+  getCodeHighlighterPromise,
   normalizeCodeHighlightLanguage,
   resolveCodeHighlightLanguageFromFenceClass,
   resolveCodeHighlightLanguageFromPath,
@@ -39,5 +40,15 @@ describe("codeHighlighting", () => {
       createCodeHighlightCacheKey("const x = 1;", "ts", "pierre-light", "preview"),
     );
     expect(base).not.toBe(createCodeHighlightCacheKey("const x = 1;", "ts", "pierre-dark", "chat"));
+  });
+
+  it("caches highlighter promises by language and theme", async () => {
+    const darkPromise = getCodeHighlighterPromise("text", "pierre-dark");
+    expect(getCodeHighlighterPromise("text", "pierre-dark")).toBe(darkPromise);
+
+    const lightPromise = getCodeHighlighterPromise("text", "pierre-light");
+    expect(lightPromise).not.toBe(darkPromise);
+
+    await Promise.all([darkPromise, lightPromise]);
   });
 });

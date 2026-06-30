@@ -217,6 +217,31 @@ export function useGitActionRunner({
   const initMutation = useMutation(
     gitInitMutationOptions({ environmentId: activeEnvironmentId, cwd: gitCwd, queryClient }),
   );
+  // The init RPC resolves as soon as `git init` finishes, but the server
+  // broadcasts the fresh status (isRepo: true) a beat later via a detached
+  // fiber. Without bridging that gap the Initialize button flips back to idle
+  // while the repo is still being detected, looking like nothing happened.
+  // Keep an explicit "awaiting status" flag so the button stays in its loading
+  // state until the repo actually shows up.
+  const [isAwaitingInitStatus, setIsAwaitingInitStatus] = useState(false);
+  useEffect(() => {
+    // Reset when the target changes so a stale init can't keep another
+    // project's button spinning.
+    setIsAwaitingInitStatus(false);
+  }, [activeEnvironmentId, gitCwd]);
+  useEffect(() => {
+    // The fresh status landed (repo now exists) — stop waiting.
+    if (isRepo) {
+      setIsAwaitingInitStatus(false);
+    }
+  }, [isRepo]);
+  const initRepository = useCallback(() => {
+    setIsAwaitingInitStatus(true);
+    initMutation.mutate(undefined, {
+      onError: () => setIsAwaitingInitStatus(false),
+    });
+  }, [initMutation]);
+  const isInitializingRepo = initMutation.isPending || isAwaitingInitStatus;
   const runImmediateGitActionMutation = useMutation(
     gitRunStackedActionMutationOptions({
       environmentId: activeEnvironmentId,
@@ -695,6 +720,8 @@ export function useGitActionRunner({
     runPull,
     openExistingPr,
     initMutation,
+    initRepository,
+    isInitializingRepo,
     pendingDefaultBranchAction,
     setPendingDefaultBranchAction,
     continuePendingDefaultBranchAction,
