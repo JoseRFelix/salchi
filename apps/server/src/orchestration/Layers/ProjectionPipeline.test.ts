@@ -2074,6 +2074,134 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
+  it.effect("preserves assistant message turn ids when later repeat events omit them", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-01-01T00:00:00.000Z";
+      const threadId = ThreadId.make("thread-late-null-turn");
+      const turnId = TurnId.make("turn-late-null-turn");
+      const messageId = MessageId.make("assistant-late-null-turn");
+
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.make("evt-late-null-turn-1"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.make("project-late-null-turn"),
+        occurredAt: now,
+        commandId: CommandId.make("cmd-late-null-turn-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-late-null-turn-1"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.make("project-late-null-turn"),
+          title: "Project Late Null Turn",
+          workspaceRoot: "/tmp/project-late-null-turn",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      yield* eventStore.append(
+        makeThreadCreatedProjectionEvent({
+          eventId: "evt-late-null-turn-2",
+          commandId: "cmd-late-null-turn-2",
+          threadId,
+          projectId: ProjectId.make("project-late-null-turn"),
+          occurredAt: now,
+        }),
+      );
+
+      yield* eventStore.append({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-late-null-turn-3"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.make("cmd-late-null-turn-3"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-late-null-turn-3"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          role: "assistant",
+          text: "First chunk",
+          turnId,
+          streaming: true,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      yield* eventStore.append({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-late-null-turn-4"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-01-01T00:00:01.000Z",
+        commandId: CommandId.make("cmd-late-null-turn-4"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-late-null-turn-4"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          role: "assistant",
+          text: " late tail",
+          turnId: null,
+          streaming: true,
+          createdAt: "2026-01-01T00:00:01.000Z",
+          updatedAt: "2026-01-01T00:00:01.000Z",
+        },
+      });
+
+      yield* eventStore.append({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-late-null-turn-5"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-01-01T00:00:02.000Z",
+        commandId: CommandId.make("cmd-late-null-turn-5"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-late-null-turn-5"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          role: "assistant",
+          text: "",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-01-01T00:00:02.000Z",
+          updatedAt: "2026-01-01T00:00:02.000Z",
+        },
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const messageRows = yield* sql<{
+        readonly text: string;
+        readonly turnId: string | null;
+        readonly isStreaming: unknown;
+      }>`
+        SELECT
+          text,
+          turn_id AS "turnId",
+          is_streaming AS "isStreaming"
+        FROM projection_thread_messages
+        WHERE message_id = ${messageId}
+      `;
+      assert.equal(messageRows.length, 1);
+      assert.equal(messageRows[0]?.text, "First chunk late tail");
+      assert.equal(messageRows[0]?.turnId, turnId);
+      assert.isFalse(Boolean(messageRows[0]?.isStreaming));
+    }),
+  );
+
   it.effect(
     "resolves turn-count conflicts when checkpoint completion rewrites provisional turns",
     () =>

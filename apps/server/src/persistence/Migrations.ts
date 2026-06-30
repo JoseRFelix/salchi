@@ -50,6 +50,7 @@ import Migration0034 from "./Migrations/034_CanonicalizeQueuedMessageDispatchTim
 import Migration0035 from "./Migrations/035_CheckpointTurnFileSnapshots.ts";
 import Migration0036 from "./Migrations/036_ProjectionThreadSubagents.ts";
 import Migration0037 from "./Migrations/037_ProjectionThreadCreatedBy.ts";
+import Migration0038 from "./Migrations/038_RestoreAssistantMessageTurnIds.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -99,6 +100,7 @@ export const migrationEntries = [
   [35, "CheckpointTurnFileSnapshots", Migration0035],
   [36, "ProjectionThreadSubagents", Migration0036],
   [37, "ProjectionThreadCreatedBy", Migration0037],
+  [38, "RestoreAssistantMessageTurnIds", Migration0038],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

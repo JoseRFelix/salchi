@@ -1009,6 +1009,76 @@ describe("thread detail structural sharing", () => {
     expect(thread?.messages[0]?.completedAt).toBe("2026-02-13T00:03:00.000Z");
   });
 
+  it("keeps an existing assistant turn id when late repeat message events omit it", () => {
+    const threadId = ThreadId.make("thread-late-null-turn");
+    const messageId = MessageId.make("assistant-late-null-turn");
+    const turnId = TurnId.make("turn-late-null-turn");
+    const initialThread = makeThread({
+      id: threadId,
+      latestTurn: {
+        turnId,
+        state: "completed",
+        requestedAt: "2026-02-13T00:01:00.000Z",
+        startedAt: "2026-02-13T00:01:00.000Z",
+        completedAt: "2026-02-13T00:02:00.000Z",
+        assistantMessageId: messageId,
+      },
+      messages: [
+        {
+          id: messageId,
+          role: "assistant",
+          text: "Initial answer",
+          turnId,
+          createdAt: "2026-02-13T00:01:00.000Z",
+          completedAt: "2026-02-13T00:02:00.000Z",
+          streaming: false,
+        },
+      ],
+    });
+    const first = makeState(initialThread);
+
+    const second = applyOrchestrationEvents(
+      first,
+      [
+        makeEvent(
+          "thread.message-sent",
+          {
+            threadId,
+            messageId,
+            role: "assistant",
+            text: " late tail",
+            turnId: null,
+            streaming: true,
+            createdAt: "2026-02-13T00:03:00.000Z",
+            updatedAt: "2026-02-13T00:03:00.000Z",
+          },
+          { sequence: 2 },
+        ),
+        makeEvent(
+          "thread.message-sent",
+          {
+            threadId,
+            messageId,
+            role: "assistant",
+            text: "",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-02-13T00:03:01.000Z",
+            updatedAt: "2026-02-13T00:03:01.000Z",
+          },
+          { sequence: 3 },
+        ),
+      ],
+      localEnvironmentId,
+    );
+    const thread = selectThreadByRef(second, scopeThreadRef(localEnvironmentId, threadId));
+
+    expect(thread?.messages[0]?.text).toBe("Initial answer late tail");
+    expect(thread?.messages[0]?.turnId).toBe(turnId);
+    expect(thread?.messages[0]?.streaming).toBe(false);
+    expect(thread?.latestTurn?.assistantMessageId).toBe(messageId);
+  });
+
   it("reuses unchanged activity payloads from fresh snapshot objects", () => {
     const threadId = ThreadId.make("thread-activity-payload-same");
     const initialThread = makeThread({

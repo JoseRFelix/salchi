@@ -2651,6 +2651,7 @@ function coalesceOrchestrationUiEvents(
           ...event.payload,
           attachments: event.payload.attachments ?? previous.payload.attachments,
           createdAt: previous.payload.createdAt,
+          turnId: event.payload.turnId ?? previous.payload.turnId,
           text:
             !event.payload.streaming && event.payload.text.length > 0
               ? event.payload.text
