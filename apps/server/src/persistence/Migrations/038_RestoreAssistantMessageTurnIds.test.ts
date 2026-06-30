@@ -52,6 +52,17 @@ layer("038_RestoreAssistantMessageTurnIds", (it) => {
             '2026-06-01T00:01:10.000Z'
           ),
           (
+            'assistant-rebound',
+            'thread-repair',
+            NULL,
+            'assistant',
+            'rebound answer',
+            '[]',
+            0,
+            '2026-06-01T00:02:00.000Z',
+            '2026-06-01T00:02:10.000Z'
+          ),
+          (
             'user-detached',
             'thread-repair',
             NULL,
@@ -135,6 +146,34 @@ layer("038_RestoreAssistantMessageTurnIds", (it) => {
             'system',
             '{"threadId":"thread-repair","messageId":"user-detached","role":"user","text":"user message","turnId":"turn-user","streaming":false,"createdAt":"2026-06-01T00:02:00.000Z","updatedAt":"2026-06-01T00:02:00.000Z"}',
             '{}'
+          ),
+          (
+            'event-assistant-rebound-old',
+            'thread',
+            'thread-repair',
+            5,
+            'thread.message-sent',
+            '2026-06-01T00:03:00.000Z',
+            'cmd-assistant-rebound-old',
+            NULL,
+            'corr-assistant-rebound-old',
+            'system',
+            '{"threadId":"thread-repair","messageId":"assistant-rebound","role":"assistant","text":"old","turnId":"turn-z-old","streaming":true,"createdAt":"2026-06-01T00:03:00.000Z","updatedAt":"2026-06-01T00:03:00.000Z"}',
+            '{}'
+          ),
+          (
+            'event-assistant-rebound-new',
+            'thread',
+            'thread-repair',
+            6,
+            'thread.message-sent',
+            '2026-06-01T00:03:10.000Z',
+            'cmd-assistant-rebound-new',
+            NULL,
+            'corr-assistant-rebound-new',
+            'system',
+            '{"threadId":"thread-repair","messageId":"assistant-rebound","role":"assistant","text":"new","turnId":"turn-a-new","streaming":false,"createdAt":"2026-06-01T00:03:10.000Z","updatedAt":"2026-06-01T00:03:10.000Z"}',
+            '{}'
           )
       `;
 
@@ -152,6 +191,7 @@ layer("038_RestoreAssistantMessageTurnIds", (it) => {
       assert.deepEqual(rows, [
         { messageId: "assistant-detached", turnId: "turn-restored" },
         { messageId: "assistant-existing", turnId: "turn-existing" },
+        { messageId: "assistant-rebound", turnId: "turn-a-new" },
         { messageId: "user-detached", turnId: null },
       ]);
     }),

@@ -10,23 +10,36 @@ export default Effect.gen(function* () {
 
   yield* sql`
     CREATE TEMP TABLE assistant_message_turn_repair_candidates AS
-    SELECT
-      candidate.thread_id,
-      candidate.message_id,
-      MAX(candidate.turn_id) AS turn_id
-    FROM (
+    WITH candidate_events AS (
       SELECT
         json_extract(payload_json, '$.threadId') AS thread_id,
         json_extract(payload_json, '$.messageId') AS message_id,
-        json_extract(payload_json, '$.turnId') AS turn_id
+        json_extract(payload_json, '$.turnId') AS turn_id,
+        stream_version
       FROM orchestration_events
       WHERE event_type = 'thread.message-sent'
         AND json_extract(payload_json, '$.role') = 'assistant'
         AND json_extract(payload_json, '$.turnId') IS NOT NULL
         AND json_extract(payload_json, '$.threadId') IS NOT NULL
         AND json_extract(payload_json, '$.messageId') IS NOT NULL
-    ) AS candidate
-    GROUP BY candidate.thread_id, candidate.message_id
+    ),
+    ranked_candidate_events AS (
+      SELECT
+        thread_id,
+        message_id,
+        turn_id,
+        ROW_NUMBER() OVER (
+          PARTITION BY thread_id, message_id
+          ORDER BY stream_version DESC
+        ) AS candidate_rank
+      FROM candidate_events
+    )
+    SELECT
+      thread_id,
+      message_id,
+      turn_id
+    FROM ranked_candidate_events
+    WHERE candidate_rank = 1
   `;
 
   yield* sql`

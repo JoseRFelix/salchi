@@ -2199,6 +2199,26 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       assert.equal(messageRows[0]?.text, "First chunk late tail");
       assert.equal(messageRows[0]?.turnId, turnId);
       assert.isFalse(Boolean(messageRows[0]?.isStreaming));
+
+      const turnRows = yield* sql<{
+        readonly assistantMessageId: string | null;
+        readonly state: string;
+        readonly completedAt: string | null;
+      }>`
+        SELECT
+          assistant_message_id AS "assistantMessageId",
+          state,
+          completed_at AS "completedAt"
+        FROM projection_turns
+        WHERE thread_id = ${threadId} AND turn_id = ${turnId}
+      `;
+      assert.deepEqual(turnRows, [
+        {
+          assistantMessageId: messageId,
+          state: "completed",
+          completedAt: "2026-01-01T00:00:02.000Z",
+        },
+      ]);
     }),
   );
 

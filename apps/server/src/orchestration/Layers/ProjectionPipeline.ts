@@ -1301,7 +1301,19 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.message-sent": {
-          if (event.payload.turnId === null || event.payload.role !== "assistant") {
+          if (event.payload.role !== "assistant") {
+            return;
+          }
+          const projectedMessage = yield* projectionThreadMessageRepository.getByMessageId({
+            messageId: event.payload.messageId,
+          });
+          const effectiveTurnId =
+            event.payload.turnId ??
+            Option.match(projectedMessage, {
+              onNone: () => null,
+              onSome: (message) => message.turnId,
+            });
+          if (effectiveTurnId === null) {
             return;
           }
           // A completed assistant message only settles the turn once the
@@ -1315,11 +1327,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           const turnStillRunning =
             Option.isSome(session) &&
             session.value.status === "running" &&
-            session.value.activeTurnId === event.payload.turnId;
+            session.value.activeTurnId === effectiveTurnId;
           const settlesTurn = !event.payload.streaming && !turnStillRunning;
           const existingTurn = yield* projectionTurnRepository.getByTurnId({
             threadId: event.payload.threadId,
-            turnId: event.payload.turnId,
+            turnId: effectiveTurnId,
           });
           if (Option.isSome(existingTurn)) {
             yield* projectionTurnRepository.upsertByTurnId({
@@ -1341,7 +1353,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             return;
           }
           yield* projectionTurnRepository.upsertByTurnId({
-            turnId: event.payload.turnId,
+            turnId: effectiveTurnId,
             threadId: event.payload.threadId,
             pendingMessageId: null,
             sourceProposedPlanThreadId: null,
