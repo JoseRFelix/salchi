@@ -95,6 +95,10 @@ function getActionVelocity({
   return action === "open" ? openingVelocity : -openingVelocity;
 }
 
+function isPrimaryTouchPointer(event: PointerEvent): boolean {
+  return event.pointerType === "touch" && event.isPrimary !== false;
+}
+
 export function isMobileEdgeSwipeStart({
   edgeWidth = MOBILE_EDGE_SWIPE_EDGE_WIDTH_PX,
   startArea = "edge",
@@ -846,8 +850,7 @@ export function useMobileEdgeSwipe({
       );
       if (
         performance.now() < ignorePointerUntil ||
-        event.pointerType !== "touch" ||
-        event.isPrimary === false ||
+        !isPrimaryTouchPointer(event) ||
         blocker.kind === "hard-block" ||
         (blocker.kind === "horizontal-scroll-owner" &&
           (action !== "close" || startSurface !== "panel"))
@@ -867,7 +870,12 @@ export function useMobileEdgeSwipe({
     };
 
     const handlePointerMove = (event: PointerEvent) => {
-      if (!activeSwipe || activeSwipe.source !== "pointer" || activeSwipe.id !== event.pointerId) {
+      if (
+        !isPrimaryTouchPointer(event) ||
+        !activeSwipe ||
+        activeSwipe.source !== "pointer" ||
+        activeSwipe.id !== event.pointerId
+      ) {
         return;
       }
 
@@ -883,6 +891,10 @@ export function useMobileEdgeSwipe({
     };
 
     const handlePointerUp = (event: PointerEvent) => {
+      if (!isPrimaryTouchPointer(event)) {
+        return;
+      }
+
       endSwipe({
         clientX: event.clientX,
         clientY: event.clientY,

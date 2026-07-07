@@ -141,9 +141,14 @@ function appendVerticalScrollFixture(input: { readonly scrollTop: number }): HTM
 
 function dispatchTouchPointer(
   target: HTMLElement,
-  type: "pointerdown" | "pointermove",
+  type: "pointerdown" | "pointermove" | "pointerup",
   clientX: number,
   clientY = 40,
+  options: {
+    readonly isPrimary?: boolean;
+    readonly pointerId?: number;
+    readonly pointerType?: string;
+  } = {},
 ): PointerEvent {
   const event = new PointerEvent(type, {
     bubbles: true,
@@ -151,9 +156,9 @@ function dispatchTouchPointer(
     clientX,
     clientY,
     composed: true,
-    isPrimary: true,
-    pointerId: 7,
-    pointerType: "touch",
+    isPrimary: options.isPrimary ?? true,
+    pointerId: options.pointerId ?? 7,
+    pointerType: options.pointerType ?? "touch",
   });
   target.dispatchEvent(event);
   return event;
@@ -223,6 +228,44 @@ describe("useMobileEdgeSwipe gesture recognition", () => {
 
       expect(onSwipe).toHaveBeenCalledOnce();
     } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("ignores non-touch pointerup events while a touch pointer swipe is active", async () => {
+    const onSwipe = vi.fn();
+    const screen = await render(<RightPanelSwipeHarness onSwipe={onSwipe} />);
+    const nowSpy = vi.spyOn(performance, "now");
+
+    try {
+      const target = appendVerticalScrollFixture({ scrollTop: 40 });
+
+      nowSpy.mockReturnValue(0);
+      dispatchTouchPointer(target, "pointerdown", 200, 40);
+
+      nowSpy.mockReturnValue(20);
+      dispatchTouchPointer(target, "pointermove", 215, 40);
+
+      nowSpy.mockReturnValue(30);
+      const mouseUp = dispatchTouchPointer(target, "pointerup", 228, 40, {
+        pointerType: "mouse",
+      });
+      expect(mouseUp.defaultPrevented).toBe(false);
+      expect(onSwipe).not.toHaveBeenCalled();
+
+      nowSpy.mockReturnValue(35);
+      const secondaryTouchUp = dispatchTouchPointer(target, "pointerup", 228, 40, {
+        isPrimary: false,
+      });
+      expect(secondaryTouchUp.defaultPrevented).toBe(false);
+      expect(onSwipe).not.toHaveBeenCalled();
+
+      nowSpy.mockReturnValue(40);
+      const primaryTouchUp = dispatchTouchPointer(target, "pointerup", 228, 40);
+      expect(primaryTouchUp.defaultPrevented).toBe(true);
+      expect(onSwipe).toHaveBeenCalledOnce();
+    } finally {
+      nowSpy.mockRestore();
       await screen.unmount();
     }
   });
