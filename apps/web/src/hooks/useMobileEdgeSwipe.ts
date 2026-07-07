@@ -10,6 +10,8 @@ export const MOBILE_EDGE_SWIPE_TRIGGER_DISTANCE_PX = 56;
 export const MOBILE_EDGE_SWIPE_VERTICAL_CANCEL_DISTANCE_PX = 18;
 export const MOBILE_EDGE_SWIPE_HORIZONTAL_DOMINANCE_RATIO = 1.25;
 export const MOBILE_EDGE_SWIPE_OPEN_INTENT_TIMEOUT_MS = 350;
+export const MOBILE_EDGE_SWIPE_AXIS_LOCK_SLOP_PX = 12;
+export const MOBILE_EDGE_SWIPE_VELOCITY_WINDOW_MS = 100;
 export const MOBILE_EDGE_SWIPE_PANEL_ATTRIBUTE = "data-mobile-edge-swipe-panel";
 export const MOBILE_EDGE_SWIPE_ALLOW_EDITABLE_ATTRIBUTE = "data-mobile-edge-swipe-allow-editable";
 // Mark a subtree where a horizontal drag should scroll content (e.g. markdown
@@ -30,6 +32,7 @@ export const MOBILE_EDGE_SWIPE_FLICK_VELOCITY_PX_PER_MS = 0.5;
 export const MOBILE_EDGE_SWIPE_SCROLL_EDGE_EPSILON_PX = 1;
 
 export type MobileEdgeSwipeDecision = "cancel" | MobileEdgeSwipeAction | "pending";
+export type MobileEdgeSwipeAxisLock = "horizontal" | "pending" | "vertical";
 export type MobileEdgeSwipeHorizontalScrollOwnerScope =
   | "all"
   | "none"
@@ -45,15 +48,21 @@ export type HorizontalScrollOwnerSwipeDecision =
 
 export interface MobileEdgeSwipeDelta {
   readonly action?: MobileEdgeSwipeAction;
+  readonly axisLock?: MobileEdgeSwipeAxisLock;
   readonly deltaX: number;
   readonly deltaY: number;
   readonly elapsedMs?: number;
   readonly side: MobileEdgeSwipeSide;
   /**
-   * Instantaneous horizontal velocity (px/ms, signed like `deltaX`) sampled
-   * from the most recent move. Used to recognize quick flicks.
+   * Windowed horizontal velocity (px/ms, signed like `deltaX`) sampled from
+   * recent movement. Used to recognize quick flicks.
    */
   readonly velocityX?: number;
+}
+
+export interface MobileEdgeSwipeVelocitySample {
+  readonly time: number;
+  readonly x: number;
 }
 
 function getOpeningDistance(side: MobileEdgeSwipeSide, deltaX: number): number {
@@ -106,18 +115,65 @@ export function isMobileEdgeSwipeStart({
   return side === "left" ? x <= edgeWidth : viewportWidth - x <= edgeWidth;
 }
 
+export function resolveMobileEdgeSwipeAxisLock({
+  deltaX,
+  deltaY,
+  slopPx = MOBILE_EDGE_SWIPE_AXIS_LOCK_SLOP_PX,
+}: {
+  readonly deltaX: number;
+  readonly deltaY: number;
+  readonly slopPx?: number;
+}): MobileEdgeSwipeAxisLock {
+  const horizontalDistance = Math.abs(deltaX);
+  const verticalDistance = Math.abs(deltaY);
+  if (Math.max(horizontalDistance, verticalDistance) < slopPx) {
+    return "pending";
+  }
+
+  return horizontalDistance >= verticalDistance * MOBILE_EDGE_SWIPE_HORIZONTAL_DOMINANCE_RATIO
+    ? "horizontal"
+    : "vertical";
+}
+
+export function resolveWindowedVelocityX(
+  samples: readonly MobileEdgeSwipeVelocitySample[],
+  now: number,
+  windowMs = MOBILE_EDGE_SWIPE_VELOCITY_WINDOW_MS,
+): number {
+  const windowedSamples = samples.filter(
+    (sample) => sample.time <= now && now - sample.time <= windowMs,
+  );
+  if (windowedSamples.length < 2) {
+    return 0;
+  }
+
+  const first = windowedSamples[0];
+  const last = windowedSamples[windowedSamples.length - 1];
+  if (!first || !last || last.time <= first.time) {
+    return 0;
+  }
+
+  return (last.x - first.x) / (last.time - first.time);
+}
+
 export function resolveMobileEdgeSwipeDecision({
   action = "open",
+  axisLock,
   deltaX,
   deltaY,
   elapsedMs,
   side,
   velocityX = 0,
 }: MobileEdgeSwipeDelta): MobileEdgeSwipeDecision {
+  if (axisLock === "vertical") {
+    return "cancel";
+  }
+
   const horizontalDistance = Math.abs(deltaX);
   const verticalDistance = Math.abs(deltaY);
   const actionDistance = getActionDistance({ action, deltaX, side });
   const actionVelocity = getActionVelocity({ action, side, velocityX });
+  const isHorizontallyLocked = axisLock === "horizontal";
   const isHorizontallyDominant =
     horizontalDistance >= verticalDistance * MOBILE_EDGE_SWIPE_HORIZONTAL_DOMINANCE_RATIO;
 
@@ -127,13 +183,17 @@ export function resolveMobileEdgeSwipeDecision({
   if (
     actionDistance >= MOBILE_EDGE_SWIPE_FLICK_DISTANCE_PX &&
     actionVelocity >= MOBILE_EDGE_SWIPE_FLICK_VELOCITY_PX_PER_MS &&
-    isHorizontallyDominant
+    (isHorizontallyLocked || isHorizontallyDominant)
   ) {
     return action;
   }
 
-  if (actionDistance >= MOBILE_EDGE_SWIPE_TRIGGER_DISTANCE_PX && isHorizontallyDominant) {
+  if (
+    actionDistance >= MOBILE_EDGE_SWIPE_TRIGGER_DISTANCE_PX &&
+    (isHorizontallyLocked || isHorizontallyDominant)
+  ) {
     if (
+      !isHorizontallyLocked &&
       action === "open" &&
       elapsedMs != null &&
       elapsedMs > MOBILE_EDGE_SWIPE_OPEN_INTENT_TIMEOUT_MS
@@ -145,6 +205,7 @@ export function resolveMobileEdgeSwipeDecision({
   }
 
   if (
+    !isHorizontallyLocked &&
     verticalDistance >= MOBILE_EDGE_SWIPE_VERTICAL_CANCEL_DISTANCE_PX &&
     !isHorizontallyDominant
   ) {
@@ -158,6 +219,13 @@ export function resolveMobileEdgeSwipeDecision({
   }
 
   return "pending";
+}
+
+export function resolveMobileEdgeSwipeEndDecision(
+  input: MobileEdgeSwipeDelta,
+): MobileEdgeSwipeAction | "cancel" {
+  const decision = resolveMobileEdgeSwipeDecision(input);
+  return decision === "pending" ? "cancel" : decision;
 }
 
 export function hasActiveTextSelection(
@@ -449,17 +517,17 @@ export function useMobileEdgeSwipe({
     }
 
     let activeSwipe: {
+      axisLock: MobileEdgeSwipeAxisLock;
       id: number;
       source: "pointer" | "touch";
       horizontalScrollOwner?: {
         readonly startMaxScrollLeft: number;
         readonly startScrollLeft: number;
       };
+      samples: MobileEdgeSwipeVelocitySample[];
       startTime: number;
       startX: number;
       startY: number;
-      lastTime: number;
-      lastX: number;
     } | null = null;
     let ignorePointerUntil = 0;
 
@@ -503,6 +571,7 @@ export function useMobileEdgeSwipe({
 
       const now = performance.now();
       activeSwipe = {
+        axisLock: "pending",
         id,
         source,
         ...(blocker.kind === "horizontal-scroll-owner"
@@ -516,12 +585,50 @@ export function useMobileEdgeSwipe({
               },
             }
           : {}),
+        samples: [{ time: now, x: startX }],
         startTime: now,
         startX,
         startY,
-        lastTime: now,
-        lastX: startX,
       };
+    };
+
+    const resolveHorizontalScrollOwnerCapture = (deltaX: number): boolean | "cancel" => {
+      if (!activeSwipe) {
+        return false;
+      }
+
+      if (!activeSwipe.horizontalScrollOwner) {
+        return true;
+      }
+
+      const scrollOwnerDecision = resolveHorizontalScrollOwnerSwipeDecision({
+        action,
+        deltaX,
+        side,
+        startMaxScrollLeft: activeSwipe.horizontalScrollOwner.startMaxScrollLeft,
+        startScrollLeft: activeSwipe.horizontalScrollOwner.startScrollLeft,
+        startSurface,
+      });
+      if (scrollOwnerDecision === "cancel-panel-swipe") {
+        return "cancel";
+      }
+
+      return scrollOwnerDecision === "allow-panel-swipe";
+    };
+
+    const pushVelocitySample = (sample: MobileEdgeSwipeVelocitySample) => {
+      if (!activeSwipe) {
+        return;
+      }
+
+      activeSwipe.samples.push(sample);
+      while (
+        activeSwipe.samples.length > 0 &&
+        sample.time - (activeSwipe.samples[0]?.time ?? sample.time) >
+          MOBILE_EDGE_SWIPE_VELOCITY_WINDOW_MS
+      ) {
+        activeSwipe.samples.shift();
+      }
     };
 
     const updateSwipe = ({
@@ -545,31 +652,38 @@ export function useMobileEdgeSwipe({
       const now = performance.now();
       const deltaX = clientX - activeSwipe.startX;
       const deltaY = clientY - activeSwipe.startY;
+      const ownerAllowsCapture = resolveHorizontalScrollOwnerCapture(deltaX);
+      if (ownerAllowsCapture === "cancel") {
+        activeSwipe = null;
+        return;
+      }
 
-      if (activeSwipe.horizontalScrollOwner) {
-        const scrollOwnerDecision = resolveHorizontalScrollOwnerSwipeDecision({
-          action,
-          deltaX,
-          side,
-          startMaxScrollLeft: activeSwipe.horizontalScrollOwner.startMaxScrollLeft,
-          startScrollLeft: activeSwipe.horizontalScrollOwner.startScrollLeft,
-          startSurface,
-        });
-        if (scrollOwnerDecision === "cancel-panel-swipe") {
+      if (activeSwipe.axisLock === "pending") {
+        activeSwipe.axisLock = resolveMobileEdgeSwipeAxisLock({ deltaX, deltaY });
+        if (activeSwipe.axisLock === "vertical") {
           activeSwipe = null;
           return;
         }
       }
 
-      const sampleMs = now - activeSwipe.lastTime;
-      const velocityX = sampleMs > 0 ? (clientX - activeSwipe.lastX) / sampleMs : 0;
-      activeSwipe.lastTime = now;
-      activeSwipe.lastX = clientX;
+      if (activeSwipe.axisLock === "horizontal" && ownerAllowsCapture === true) {
+        // Once iOS sees a prevented horizontal touchmove, native scrolling will
+        // not resume for this touch even if a later opposite-direction dead zone
+        // cancels the panel action.
+        preventDefault();
+      }
+
+      pushVelocitySample({ time: now, x: clientX });
+      if (!activeSwipe) {
+        return;
+      }
+      const velocityX = resolveWindowedVelocityX(activeSwipe.samples, now);
 
       const decision = resolveMobileEdgeSwipeDecision({
         deltaX,
         deltaY,
         elapsedMs: now - activeSwipe.startTime,
+        axisLock: activeSwipe.axisLock,
         action,
         side,
         velocityX,
@@ -580,6 +694,49 @@ export function useMobileEdgeSwipe({
       }
 
       activeSwipe = null;
+      if (decision === action) {
+        preventDefault();
+        onSwipeRef.current();
+      }
+    };
+
+    const endSwipe = ({
+      clientX,
+      clientY,
+      id,
+      preventDefault,
+      source,
+    }: {
+      readonly clientX: number;
+      readonly clientY: number;
+      readonly id: number;
+      readonly preventDefault: () => void;
+      readonly source: "pointer" | "touch";
+    }) => {
+      if (!activeSwipe || activeSwipe.source !== source || activeSwipe.id !== id) {
+        return;
+      }
+
+      const swipe = activeSwipe;
+      const now = performance.now();
+      const deltaX = clientX - swipe.startX;
+      const deltaY = clientY - swipe.startY;
+      const ownerAllowsCapture = resolveHorizontalScrollOwnerCapture(deltaX);
+      activeSwipe = null;
+      if (ownerAllowsCapture !== true) {
+        return;
+      }
+
+      const decision = resolveMobileEdgeSwipeEndDecision({
+        action,
+        axisLock: swipe.axisLock,
+        deltaX,
+        deltaY,
+        elapsedMs: now - swipe.startTime,
+        side,
+        velocityX: resolveWindowedVelocityX(swipe.samples, now),
+      });
+
       if (decision === action) {
         preventDefault();
         onSwipeRef.current();
@@ -644,7 +801,37 @@ export function useMobileEdgeSwipe({
       updateSwipe({
         clientX: touch.clientX,
         clientY: touch.clientY,
-        preventDefault: () => event.preventDefault(),
+        preventDefault: () => {
+          if (event.cancelable) {
+            event.preventDefault();
+          }
+        },
+      });
+    };
+
+    const handleTouchEnd = (event: TouchEvent) => {
+      if (!activeSwipe || activeSwipe.source !== "touch") {
+        return;
+      }
+
+      const touchId = activeSwipe.id;
+      const touch = Array.from(event.changedTouches).find(
+        (changedTouch) => changedTouch.identifier === touchId,
+      );
+      if (!touch) {
+        return;
+      }
+
+      endSwipe({
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+        id: touch.identifier,
+        preventDefault: () => {
+          if (event.cancelable) {
+            event.preventDefault();
+          }
+        },
+        source: "touch",
       });
     };
 
@@ -687,27 +874,45 @@ export function useMobileEdgeSwipe({
       updateSwipe({
         clientX: event.clientX,
         clientY: event.clientY,
-        preventDefault: () => event.preventDefault(),
+        preventDefault: () => {
+          if (event.cancelable) {
+            event.preventDefault();
+          }
+        },
+      });
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      endSwipe({
+        clientX: event.clientX,
+        clientY: event.clientY,
+        id: event.pointerId,
+        preventDefault: () => {
+          if (event.cancelable) {
+            event.preventDefault();
+          }
+        },
+        source: "pointer",
       });
     };
 
     window.addEventListener("touchstart", handleTouchStart, { capture: true, passive: true });
     window.addEventListener("touchmove", handleTouchMove, { capture: true, passive: false });
-    window.addEventListener("touchend", resetSwipe, true);
+    window.addEventListener("touchend", handleTouchEnd, { capture: true, passive: false });
     window.addEventListener("touchcancel", resetSwipe, true);
     window.addEventListener("pointerdown", handlePointerDown, true);
     window.addEventListener("pointermove", handlePointerMove, { capture: true, passive: false });
-    window.addEventListener("pointerup", resetSwipe, true);
+    window.addEventListener("pointerup", handlePointerUp, true);
     window.addEventListener("pointercancel", resetSwipe, true);
 
     return () => {
       window.removeEventListener("touchstart", handleTouchStart, true);
       window.removeEventListener("touchmove", handleTouchMove, true);
-      window.removeEventListener("touchend", resetSwipe, true);
+      window.removeEventListener("touchend", handleTouchEnd, true);
       window.removeEventListener("touchcancel", resetSwipe, true);
       window.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("pointermove", handlePointerMove, true);
-      window.removeEventListener("pointerup", resetSwipe, true);
+      window.removeEventListener("pointerup", handlePointerUp, true);
       window.removeEventListener("pointercancel", resetSwipe, true);
     };
   }, [

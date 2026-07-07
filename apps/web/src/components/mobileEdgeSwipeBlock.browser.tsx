@@ -52,6 +52,18 @@ function RightPanelSwipeHarness(props: {
   );
 }
 
+function LeftOpenSwipeHarness(props: { onSwipe: () => void }) {
+  useMobileEdgeSwipe({
+    enabled: true,
+    onSwipe: props.onSwipe,
+    side: "left",
+    startArea: "edge",
+    startSurface: "outside-panels",
+  });
+
+  return <div data-testid="left-swipe-target" />;
+}
+
 function appendPierreShadowScrollFixture(input: {
   readonly allowEditablePanelSwipe?: boolean;
   readonly editable?: boolean;
@@ -131,20 +143,120 @@ function dispatchTouchPointer(
   target: HTMLElement,
   type: "pointerdown" | "pointermove",
   clientX: number,
-): void {
-  target.dispatchEvent(
-    new PointerEvent(type, {
-      bubbles: true,
-      cancelable: true,
-      clientX,
-      clientY: 40,
-      composed: true,
-      isPrimary: true,
-      pointerId: 7,
-      pointerType: "touch",
-    }),
-  );
+  clientY = 40,
+): PointerEvent {
+  const event = new PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    clientX,
+    clientY,
+    composed: true,
+    isPrimary: true,
+    pointerId: 7,
+    pointerType: "touch",
+  });
+  target.dispatchEvent(event);
+  return event;
 }
+
+function createTouch(target: EventTarget, identifier: number, clientX: number, clientY: number) {
+  return new Touch({ clientX, clientY, identifier, target });
+}
+
+function dispatchTouchEvent(
+  target: EventTarget,
+  type: "touchend" | "touchmove" | "touchstart",
+  touches: Touch[],
+  changedTouches: Touch[],
+): TouchEvent {
+  const event = new TouchEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    changedTouches,
+    touches,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+describe("useMobileEdgeSwipe gesture recognition", () => {
+  it("prevents post-lock touchmoves and fires a slow deliberate open drag", async () => {
+    const onSwipe = vi.fn();
+    const screen = await render(<LeftOpenSwipeHarness onSwipe={onSwipe} />);
+    const nowSpy = vi.spyOn(performance, "now");
+
+    try {
+      const target = document.querySelector<HTMLElement>('[data-testid="left-swipe-target"]');
+      expect(target).not.toBeNull();
+
+      nowSpy.mockReturnValue(0);
+      const startTouch = createTouch(target!, 1, 4, 40);
+      dispatchTouchEvent(target!, "touchstart", [startTouch], [startTouch]);
+
+      nowSpy.mockReturnValue(20);
+      const lockTouch = createTouch(target!, 1, 20, 42);
+      const lockMove = dispatchTouchEvent(target!, "touchmove", [lockTouch], [lockTouch]);
+      expect(lockMove.defaultPrevented).toBe(true);
+      expect(onSwipe).not.toHaveBeenCalled();
+
+      nowSpy.mockReturnValue(500);
+      const triggerTouch = createTouch(target!, 1, 60, 45);
+      const triggerMove = dispatchTouchEvent(target!, "touchmove", [triggerTouch], [triggerTouch]);
+      expect(triggerMove.defaultPrevented).toBe(true);
+      expect(onSwipe).toHaveBeenCalledOnce();
+    } finally {
+      nowSpy.mockRestore();
+      await screen.unmount();
+    }
+  });
+
+  it("fires after a horizontally locked arced pointer swipe", async () => {
+    const onSwipe = vi.fn();
+    const screen = await render(<RightPanelSwipeHarness onSwipe={onSwipe} />);
+
+    try {
+      const target = appendVerticalScrollFixture({ scrollTop: 40 });
+
+      dispatchTouchPointer(target, "pointerdown", 200, 40);
+      dispatchTouchPointer(target, "pointermove", 215, 52);
+      dispatchTouchPointer(target, "pointermove", 260, 90);
+
+      expect(onSwipe).toHaveBeenCalledOnce();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("fires a touch flick once when released before the sustained distance", async () => {
+    const onSwipe = vi.fn();
+    const screen = await render(<LeftOpenSwipeHarness onSwipe={onSwipe} />);
+    const nowSpy = vi.spyOn(performance, "now");
+
+    try {
+      const target = document.querySelector<HTMLElement>('[data-testid="left-swipe-target"]');
+      expect(target).not.toBeNull();
+
+      nowSpy.mockReturnValue(0);
+      const startTouch = createTouch(target!, 1, 4, 40);
+      dispatchTouchEvent(target!, "touchstart", [startTouch], [startTouch]);
+
+      nowSpy.mockReturnValue(20);
+      const moveTouch = createTouch(target!, 1, 20, 40);
+      dispatchTouchEvent(target!, "touchmove", [moveTouch], [moveTouch]);
+      expect(onSwipe).not.toHaveBeenCalled();
+
+      nowSpy.mockReturnValue(30);
+      const endTouch = createTouch(target!, 1, 28, 40);
+      const touchEnd = dispatchTouchEvent(target!, "touchend", [], [endTouch]);
+
+      expect(touchEnd.defaultPrevented).toBe(true);
+      expect(onSwipe).toHaveBeenCalledOnce();
+    } finally {
+      nowSpy.mockRestore();
+      await screen.unmount();
+    }
+  });
+});
 
 describe("isBlockedTarget", () => {
   it("does not block a swipe over a snippet that fits without scrolling", () => {
