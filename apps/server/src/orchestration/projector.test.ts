@@ -1,9 +1,11 @@
 import {
   CommandId,
   EventId,
+  MessageId,
   ProjectId,
   ProviderDriverKind,
   ThreadId,
+  TurnId,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -344,6 +346,262 @@ describe("orchestration projector", () => {
     expect(settledThread?.latestTurn?.turnId).toBe("turn-1");
     expect(settledThread?.latestTurn?.state).toBe("completed");
     expect(settledThread?.latestTurn?.completedAt).toBe(settledAt);
+  });
+
+  it("keeps a running latest turn when assistant completion arrives before running session state", async () => {
+    const createdAt = "2026-02-23T08:00:00.000Z";
+    const turnId = TurnId.make("turn-racy-message");
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(createdAt),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: createdAt,
+          commandId: "cmd-create",
+          payload: {
+            threadId: "thread-1",
+            projectId: "project-1",
+            title: "demo",
+            modelSelection: {
+              provider: ProviderDriverKind.make("codex"),
+              model: "gpt-5.3-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+    const model = {
+      ...afterCreate,
+      threads: afterCreate.threads.map((thread) => ({
+        ...thread,
+        session: {
+          threadId: thread.id,
+          status: "ready" as const,
+          providerName: "codex",
+          runtimeMode: "full-access" as const,
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-02-23T08:00:01.000Z",
+        },
+        latestTurn: {
+          turnId,
+          state: "running" as const,
+          requestedAt: "2026-02-23T08:00:01.000Z",
+          startedAt: "2026-02-23T08:00:01.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+      })),
+    };
+
+    const next = await Effect.runPromise(
+      projectEvent(
+        model,
+        makeEvent({
+          sequence: 2,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-02-23T08:00:02.000Z",
+          commandId: "cmd-message",
+          payload: {
+            threadId: "thread-1",
+            messageId: MessageId.make("assistant-racy-message"),
+            role: "assistant",
+            text: "still running",
+            turnId,
+            streaming: false,
+            createdAt: "2026-02-23T08:00:02.000Z",
+            updatedAt: "2026-02-23T08:00:02.000Z",
+          },
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.latestTurn?.state).toBe("running");
+    expect(next.threads[0]?.latestTurn?.completedAt).toBeNull();
+  });
+
+  it("anchors turn diff completion to the latest assistant message already projected for the turn", async () => {
+    const createdAt = "2026-02-23T08:00:00.000Z";
+    const events: ReadonlyArray<OrchestrationEvent> = [
+      makeEvent({
+        sequence: 1,
+        type: "thread.created",
+        aggregateKind: "thread",
+        aggregateId: "thread-1",
+        occurredAt: createdAt,
+        commandId: "cmd-create",
+        payload: {
+          threadId: "thread-1",
+          projectId: "project-1",
+          title: "demo",
+          modelSelection: {
+            provider: ProviderDriverKind.make("codex"),
+            model: "gpt-5.3-codex",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      }),
+      makeEvent({
+        sequence: 2,
+        type: "thread.message-sent",
+        aggregateKind: "thread",
+        aggregateId: "thread-1",
+        occurredAt: "2026-02-23T08:00:01.000Z",
+        commandId: "cmd-stale-message",
+        payload: {
+          threadId: "thread-1",
+          messageId: "assistant-stale",
+          role: "assistant",
+          text: "Whitespace check is clean.",
+          turnId: "turn-1",
+          streaming: false,
+          createdAt: "2026-02-23T08:00:01.000Z",
+          updatedAt: "2026-02-23T08:00:01.000Z",
+        },
+      }),
+      makeEvent({
+        sequence: 3,
+        type: "thread.message-sent",
+        aggregateKind: "thread",
+        aggregateId: "thread-1",
+        occurredAt: "2026-02-23T08:00:03.000Z",
+        commandId: "cmd-wrap-up-message",
+        payload: {
+          threadId: "thread-1",
+          messageId: "assistant-wrap-up",
+          role: "assistant",
+          text: "Implemented the fix.",
+          turnId: "turn-1",
+          streaming: false,
+          createdAt: "2026-02-23T08:00:03.000Z",
+          updatedAt: "2026-02-23T08:00:03.000Z",
+        },
+      }),
+      makeEvent({
+        sequence: 4,
+        type: "thread.turn-diff-completed",
+        aggregateKind: "thread",
+        aggregateId: "thread-1",
+        occurredAt: "2026-02-23T08:00:04.000Z",
+        commandId: "cmd-turn-diff",
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          checkpointTurnCount: 1,
+          checkpointRef: "refs/t3/checkpoints/thread-1/turn/1",
+          status: "ready",
+          files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
+          attribution: "edit-snapshots",
+          assistantMessageId: "assistant-stale",
+          completedAt: "2026-02-23T08:00:04.000Z",
+        },
+      }),
+    ];
+
+    const next = await events.reduce<Promise<ReturnType<typeof createEmptyReadModel>>>(
+      (statePromise, event) =>
+        statePromise.then((state) => Effect.runPromise(projectEvent(state, event))),
+      Promise.resolve(createEmptyReadModel(createdAt)),
+    );
+
+    expect(next.threads[0]?.checkpoints[0]?.assistantMessageId).toBe("assistant-wrap-up");
+    expect(next.threads[0]?.latestTurn?.assistantMessageId).toBe("assistant-wrap-up");
+  });
+
+  it("keeps a running latest turn when assistant completion active turn id mismatches", async () => {
+    const createdAt = "2026-02-23T08:00:00.000Z";
+    const turnId = TurnId.make("turn-racy-mismatch");
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(createdAt),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: createdAt,
+          commandId: "cmd-create",
+          payload: {
+            threadId: "thread-1",
+            projectId: "project-1",
+            title: "demo",
+            modelSelection: {
+              provider: ProviderDriverKind.make("codex"),
+              model: "gpt-5.3-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+    const model = {
+      ...afterCreate,
+      threads: afterCreate.threads.map((thread) => ({
+        ...thread,
+        session: {
+          threadId: thread.id,
+          status: "running" as const,
+          providerName: "codex",
+          runtimeMode: "full-access" as const,
+          activeTurnId: TurnId.make("turn-session-active"),
+          lastError: null,
+          updatedAt: "2026-02-23T08:00:01.000Z",
+        },
+        latestTurn: {
+          turnId,
+          state: "running" as const,
+          requestedAt: "2026-02-23T08:00:01.000Z",
+          startedAt: "2026-02-23T08:00:01.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+      })),
+    };
+
+    const next = await Effect.runPromise(
+      projectEvent(
+        model,
+        makeEvent({
+          sequence: 2,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-02-23T08:00:02.000Z",
+          commandId: "cmd-message",
+          payload: {
+            threadId: "thread-1",
+            messageId: MessageId.make("assistant-racy-mismatch"),
+            role: "assistant",
+            text: "still running",
+            turnId,
+            streaming: false,
+            createdAt: "2026-02-23T08:00:02.000Z",
+            updatedAt: "2026-02-23T08:00:02.000Z",
+          },
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.latestTurn?.state).toBe("running");
+    expect(next.threads[0]?.latestTurn?.completedAt).toBeNull();
   });
 
   it("updates canonical thread runtime mode from thread.runtime-mode-set", async () => {

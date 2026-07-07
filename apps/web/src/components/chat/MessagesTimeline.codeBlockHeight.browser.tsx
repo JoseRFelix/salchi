@@ -139,7 +139,6 @@ async function waitForLayout(): Promise<void> {
 const TimelineHarness = forwardRef<TimelineHarnessHandle>(function TimelineHarness(_, ref) {
   const timelineEntries = useMemo(() => buildTimelineEntries(TIMELINE_ROW_COUNT), []);
   const listRef = useRef<VirtualizedListHandle | null>(null);
-  const emptyTurnDiffSummary = useMemo(() => new Map(), []);
   const emptyRevertTurnCount = useMemo(() => new Map(), []);
 
   useImperativeHandle(
@@ -173,7 +172,7 @@ const TimelineHarness = forwardRef<TimelineHarnessHandle>(function TimelineHarne
         timelineEntries={timelineEntries}
         latestTurn={null}
         activeTurnId={null}
-        turnDiffSummaryByAssistantMessageId={emptyTurnDiffSummary}
+        turnDiffSummaries={[]}
         routeThreadKey="environment-local:thread-code-block-height"
         onOpenTurnDiff={() => {}}
         revertTurnCountByUserMessageId={emptyRevertTurnCount}

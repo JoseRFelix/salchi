@@ -1316,23 +1316,30 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (effectiveTurnId === null) {
             return;
           }
-          // A completed assistant message only settles the turn once the
-          // session is no longer running it — providers may emit several
-          // assistant messages per turn (commentary between tool calls), and
-          // the turn must stay unsettled until the provider reports turn end
-          // (projected as thread.session-set leaving the "running" status).
+          // A completed assistant message only settles the turn once there is
+          // no session/latest-turn evidence that work is still in flight.
+          // Providers may emit several assistant messages per turn (commentary
+          // between tool calls), and the turn must stay unsettled until the
+          // provider reports turn end (projected as thread.session-set leaving
+          // the "running" status).
           const session = yield* projectionThreadSessionRepository.getByThreadId({
             threadId: event.payload.threadId,
           });
-          const turnStillRunning =
-            Option.isSome(session) &&
-            session.value.status === "running" &&
-            session.value.activeTurnId === effectiveTurnId;
-          const settlesTurn = !event.payload.streaming && !turnStillRunning;
           const existingTurn = yield* projectionTurnRepository.getByTurnId({
             threadId: event.payload.threadId,
             turnId: effectiveTurnId,
           });
+          const sessionRunsThisTurn =
+            Option.isSome(session) &&
+            session.value.status === "running" &&
+            (session.value.activeTurnId === effectiveTurnId || session.value.activeTurnId === null);
+          const latestTurnStillRunning =
+            Option.isSome(session) &&
+            Option.isSome(existingTurn) &&
+            existingTurn.value.state === "running" &&
+            existingTurn.value.completedAt === null;
+          const turnStillRunning = sessionRunsThisTurn || latestTurnStillRunning;
+          const settlesTurn = !event.payload.streaming && !turnStillRunning;
           if (Option.isSome(existingTurn)) {
             yield* projectionTurnRepository.upsertByTurnId({
               ...existingTurn.value,
@@ -1430,11 +1437,21 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             turnId: event.payload.turnId,
             checkpointTurnCount: event.payload.checkpointTurnCount,
           });
+          const messages = yield* projectionThreadMessageRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const assistantMessageId =
+            messages
+              .toReversed()
+              .find(
+                (message) =>
+                  message.role === "assistant" && message.turnId === event.payload.turnId,
+              )?.messageId ?? event.payload.assistantMessageId;
 
           if (Option.isSome(existingTurn)) {
             yield* projectionTurnRepository.upsertByTurnId({
               ...existingTurn.value,
-              assistantMessageId: event.payload.assistantMessageId,
+              assistantMessageId,
               state: turnStillRunning ? existingTurn.value.state : nextState,
               checkpointTurnCount: event.payload.checkpointTurnCount,
               checkpointRef: event.payload.checkpointRef,
@@ -1453,7 +1470,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             pendingMessageId: null,
             sourceProposedPlanThreadId: null,
             sourceProposedPlanId: null,
-            assistantMessageId: event.payload.assistantMessageId,
+            assistantMessageId,
             state: turnStillRunning ? "running" : nextState,
             requestedAt: event.payload.completedAt,
             startedAt: event.payload.completedAt,

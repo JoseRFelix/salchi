@@ -227,6 +227,156 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
   );
 });
 
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-turn-diff-anchor-")))(
+  "OrchestrationProjectionPipeline",
+  (it) => {
+    it.effect(
+      "anchors turn diff completion to the latest projected assistant message for the turn",
+      () =>
+        Effect.gen(function* () {
+          const projectionPipeline = yield* OrchestrationProjectionPipeline;
+          const eventStore = yield* OrchestrationEventStore;
+          const sql = yield* SqlClient.SqlClient;
+          const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+            eventStore
+              .append(event)
+              .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+          const createdAt = "2026-02-23T08:00:00.000Z";
+          const threadId = ThreadId.make("thread-turn-diff-anchor");
+          const fallbackThreadId = ThreadId.make("thread-turn-diff-fallback");
+
+          yield* appendAndProject(
+            makeThreadCreatedProjectionEvent({
+              eventId: "evt-turn-diff-anchor-thread",
+              commandId: "cmd-turn-diff-anchor-thread",
+              threadId,
+              projectId: ProjectId.make("project-turn-diff-anchor"),
+              occurredAt: createdAt,
+            }),
+          );
+          yield* appendAndProject({
+            type: "thread.message-sent",
+            eventId: EventId.make("evt-turn-diff-anchor-stale-message"),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: "2026-02-23T08:00:01.000Z",
+            commandId: CommandId.make("cmd-turn-diff-anchor-stale-message"),
+            causationEventId: null,
+            correlationId: CorrelationId.make("cmd-turn-diff-anchor-stale-message"),
+            metadata: {},
+            payload: {
+              threadId,
+              messageId: MessageId.make("assistant-stale"),
+              role: "assistant",
+              text: "Whitespace check is clean.",
+              turnId: TurnId.make("turn-anchor"),
+              streaming: false,
+              createdAt: "2026-02-23T08:00:01.000Z",
+              updatedAt: "2026-02-23T08:00:01.000Z",
+            },
+          });
+          yield* appendAndProject({
+            type: "thread.message-sent",
+            eventId: EventId.make("evt-turn-diff-anchor-wrap-message"),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: "2026-02-23T08:00:03.000Z",
+            commandId: CommandId.make("cmd-turn-diff-anchor-wrap-message"),
+            causationEventId: null,
+            correlationId: CorrelationId.make("cmd-turn-diff-anchor-wrap-message"),
+            metadata: {},
+            payload: {
+              threadId,
+              messageId: MessageId.make("assistant-wrap-up"),
+              role: "assistant",
+              text: "Implemented the fix.",
+              turnId: TurnId.make("turn-anchor"),
+              streaming: false,
+              createdAt: "2026-02-23T08:00:03.000Z",
+              updatedAt: "2026-02-23T08:00:03.000Z",
+            },
+          });
+          yield* appendAndProject({
+            type: "thread.turn-diff-completed",
+            eventId: EventId.make("evt-turn-diff-anchor-complete"),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: "2026-02-23T08:00:04.000Z",
+            commandId: CommandId.make("cmd-turn-diff-anchor-complete"),
+            causationEventId: null,
+            correlationId: CorrelationId.make("cmd-turn-diff-anchor-complete"),
+            metadata: {},
+            payload: {
+              threadId,
+              turnId: TurnId.make("turn-anchor"),
+              checkpointTurnCount: 1,
+              checkpointRef: CheckpointRef.make(
+                "refs/t3/checkpoints/thread-turn-diff-anchor/turn/1",
+              ),
+              status: "ready",
+              files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
+              attribution: "edit-snapshots",
+              assistantMessageId: MessageId.make("assistant-stale"),
+              completedAt: "2026-02-23T08:00:04.000Z",
+            },
+          });
+
+          yield* appendAndProject(
+            makeThreadCreatedProjectionEvent({
+              eventId: "evt-turn-diff-fallback-thread",
+              commandId: "cmd-turn-diff-fallback-thread",
+              threadId: fallbackThreadId,
+              projectId: ProjectId.make("project-turn-diff-anchor"),
+              occurredAt: createdAt,
+            }),
+          );
+          yield* appendAndProject({
+            type: "thread.turn-diff-completed",
+            eventId: EventId.make("evt-turn-diff-fallback-complete"),
+            aggregateKind: "thread",
+            aggregateId: fallbackThreadId,
+            occurredAt: "2026-02-23T08:00:05.000Z",
+            commandId: CommandId.make("cmd-turn-diff-fallback-complete"),
+            causationEventId: null,
+            correlationId: CorrelationId.make("cmd-turn-diff-fallback-complete"),
+            metadata: {},
+            payload: {
+              threadId: fallbackThreadId,
+              turnId: TurnId.make("turn-fallback"),
+              checkpointTurnCount: 2,
+              checkpointRef: CheckpointRef.make(
+                "refs/t3/checkpoints/thread-turn-diff-fallback/turn/2",
+              ),
+              status: "ready",
+              files: [],
+              attribution: "unattributed",
+              assistantMessageId: MessageId.make("assistant-payload"),
+              completedAt: "2026-02-23T08:00:05.000Z",
+            },
+          });
+
+          const turnRows = yield* sql<{
+            readonly turnId: string;
+            readonly assistantMessageId: string | null;
+          }>`
+            SELECT
+              turn_id AS "turnId",
+              assistant_message_id AS "assistantMessageId"
+            FROM projection_turns
+            WHERE thread_id = ${threadId} OR thread_id = ${fallbackThreadId}
+            ORDER BY turn_id ASC
+          `;
+
+          assert.deepEqual(turnRows, [
+            { turnId: "turn-anchor", assistantMessageId: "assistant-wrap-up" },
+            { turnId: "turn-fallback", assistantMessageId: "assistant-payload" },
+          ]);
+        }),
+    );
+  },
+);
+
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-monotonic-thread-")))(
   "OrchestrationProjectionPipeline",
   (it) => {
@@ -1850,6 +2000,178 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       `;
       assert.deepEqual(settledRows, [
         { state: "completed", completedAt: "2026-01-01T00:01:00.000Z" },
+      ]);
+    }),
+  );
+
+  it.effect("keeps assistant completions from settling turns that are still locally running", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-01-01T00:00:00.000Z";
+
+      const appendThreadCreated = (sequence: number, threadId: ThreadId, projectId: ProjectId) =>
+        eventStore.append({
+          type: "thread.created",
+          eventId: EventId.make(`evt-racy-turn-${sequence}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: CommandId.make(`cmd-racy-turn-${sequence}`),
+          causationEventId: null,
+          correlationId: CorrelationId.make(`cmd-racy-turn-${sequence}`),
+          metadata: {},
+          payload: {
+            threadId,
+            projectId,
+            title: "Racy turn",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+
+      const appendAssistantMessage = (input: {
+        readonly sequence: number;
+        readonly threadId: ThreadId;
+        readonly turnId: TurnId;
+        readonly messageId: MessageId;
+        readonly streaming: boolean;
+        readonly occurredAt: string;
+      }) =>
+        eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.make(`evt-racy-turn-${input.sequence}`),
+          aggregateKind: "thread",
+          aggregateId: input.threadId,
+          occurredAt: input.occurredAt,
+          commandId: CommandId.make(`cmd-racy-turn-${input.sequence}`),
+          causationEventId: null,
+          correlationId: CorrelationId.make(`cmd-racy-turn-${input.sequence}`),
+          metadata: {},
+          payload: {
+            threadId: input.threadId,
+            messageId: input.messageId,
+            role: "assistant",
+            text: input.streaming ? "partial" : "",
+            turnId: input.turnId,
+            streaming: input.streaming,
+            createdAt: input.occurredAt,
+            updatedAt: input.occurredAt,
+          },
+        });
+
+      const beforeSessionThreadId = ThreadId.make("thread-message-before-session");
+      const beforeSessionTurnId = TurnId.make("turn-message-before-session");
+      const beforeSessionMessageId = MessageId.make("assistant-before-session");
+      yield* appendThreadCreated(1, beforeSessionThreadId, ProjectId.make("project-racy-before"));
+      yield* eventStore.append({
+        type: "thread.session-set",
+        eventId: EventId.make("evt-racy-turn-2"),
+        aggregateKind: "thread",
+        aggregateId: beforeSessionThreadId,
+        occurredAt: "2026-01-01T00:00:00.500Z",
+        commandId: CommandId.make("cmd-racy-turn-2"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-racy-turn-2"),
+        metadata: {},
+        payload: {
+          threadId: beforeSessionThreadId,
+          session: {
+            threadId: beforeSessionThreadId,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:00.500Z",
+          },
+        },
+      });
+      yield* appendAssistantMessage({
+        sequence: 3,
+        threadId: beforeSessionThreadId,
+        turnId: beforeSessionTurnId,
+        messageId: beforeSessionMessageId,
+        streaming: true,
+        occurredAt: "2026-01-01T00:00:01.000Z",
+      });
+      yield* appendAssistantMessage({
+        sequence: 4,
+        threadId: beforeSessionThreadId,
+        turnId: beforeSessionTurnId,
+        messageId: beforeSessionMessageId,
+        streaming: false,
+        occurredAt: "2026-01-01T00:00:02.000Z",
+      });
+
+      const mismatchThreadId = ThreadId.make("thread-message-active-mismatch");
+      const mismatchTurnId = TurnId.make("turn-message-active-mismatch");
+      const mismatchActiveTurnId = TurnId.make("turn-session-active-mismatch");
+      const mismatchMessageId = MessageId.make("assistant-active-mismatch");
+      yield* appendThreadCreated(5, mismatchThreadId, ProjectId.make("project-racy-mismatch"));
+      yield* eventStore.append({
+        type: "thread.session-set",
+        eventId: EventId.make("evt-racy-turn-6"),
+        aggregateKind: "thread",
+        aggregateId: mismatchThreadId,
+        occurredAt: "2026-01-01T00:00:01.000Z",
+        commandId: CommandId.make("cmd-racy-turn-6"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-racy-turn-6"),
+        metadata: {},
+        payload: {
+          threadId: mismatchThreadId,
+          session: {
+            threadId: mismatchThreadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: mismatchActiveTurnId,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:01.000Z",
+          },
+        },
+      });
+      yield* appendAssistantMessage({
+        sequence: 7,
+        threadId: mismatchThreadId,
+        turnId: mismatchTurnId,
+        messageId: mismatchMessageId,
+        streaming: true,
+        occurredAt: "2026-01-01T00:00:02.000Z",
+      });
+      yield* appendAssistantMessage({
+        sequence: 8,
+        threadId: mismatchThreadId,
+        turnId: mismatchTurnId,
+        messageId: mismatchMessageId,
+        streaming: false,
+        occurredAt: "2026-01-01T00:00:03.000Z",
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const rows = yield* sql<{
+        readonly turnId: string;
+        readonly state: string;
+        readonly completedAt: string | null;
+      }>`
+        SELECT turn_id AS "turnId", state, completed_at AS "completedAt"
+        FROM projection_turns
+        WHERE turn_id IN (${beforeSessionTurnId}, ${mismatchTurnId})
+        ORDER BY turn_id
+      `;
+      assert.deepEqual(rows, [
+        { turnId: mismatchTurnId, state: "running", completedAt: null },
+        { turnId: beforeSessionTurnId, state: "running", completedAt: null },
       ]);
     }),
   );

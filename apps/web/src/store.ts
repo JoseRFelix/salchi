@@ -588,6 +588,17 @@ function threadTurnStatesEqual(left: ThreadTurnState | undefined, right: ThreadT
   );
 }
 
+function isNewerIsoTimestamp(
+  existingUpdatedAt: string | undefined,
+  incomingUpdatedAt: string | undefined,
+): boolean {
+  return (
+    existingUpdatedAt !== undefined &&
+    incomingUpdatedAt !== undefined &&
+    existingUpdatedAt > incomingUpdatedAt
+  );
+}
+
 function threadDetailPageCursorsEqual(
   left: OrchestrationThreadDetailPageInfo["messages"]["startCursor"],
   right: OrchestrationThreadDetailPageInfo["messages"]["startCursor"],
@@ -1128,9 +1139,11 @@ function ensureThreadRegistered(
     };
   }
 
-  if (previousProjectId !== nextProjectId) {
+  const projectThreadIds = nextState.threadIdsByProjectId[nextProjectId] ?? EMPTY_THREAD_IDS;
+
+  if (previousProjectId !== nextProjectId || !projectThreadIds.includes(threadId)) {
     let threadIdsByProjectId = nextState.threadIdsByProjectId;
-    if (previousProjectId) {
+    if (previousProjectId && previousProjectId !== nextProjectId) {
       const previousIds = threadIdsByProjectId[previousProjectId] ?? EMPTY_THREAD_IDS;
       const nextIds = removeId(previousIds, threadId);
       if (nextIds.length === 0) {
@@ -1143,9 +1156,9 @@ function ensureThreadRegistered(
         };
       }
     }
-    const projectThreadIds = threadIdsByProjectId[nextProjectId] ?? EMPTY_THREAD_IDS;
-    const nextProjectThreadIds = appendId(projectThreadIds, threadId);
-    if (!arraysEqual(projectThreadIds, nextProjectThreadIds)) {
+    const currentProjectThreadIds = threadIdsByProjectId[nextProjectId] ?? EMPTY_THREAD_IDS;
+    const nextProjectThreadIds = appendId(currentProjectThreadIds, threadId);
+    if (!arraysEqual(currentProjectThreadIds, nextProjectThreadIds)) {
       threadIdsByProjectId = {
         ...threadIdsByProjectId,
         [nextProjectId]: nextProjectThreadIds,
@@ -1349,8 +1362,22 @@ function writeThreadShellState(
     turnState: ThreadTurnState;
     summary: SidebarThreadSummary;
   },
+  options: { preserveNewerState?: boolean } = {},
 ): EnvironmentState {
   const previousShell = state.threadShellById[nextThread.shell.id];
+  const previousSession = state.threadSessionById[nextThread.shell.id] ?? null;
+  const previousTurnState = state.threadTurnStateById[nextThread.shell.id];
+  const shouldPreserveSession =
+    options.preserveNewerState === true &&
+    previousSession !== null &&
+    nextThread.session !== null &&
+    isNewerIsoTimestamp(previousSession.updatedAt, nextThread.session.updatedAt);
+  const shouldPreserveTurnState =
+    options.preserveNewerState === true &&
+    previousTurnState !== undefined &&
+    isNewerIsoTimestamp(previousShell?.updatedAt, nextThread.shell.updatedAt);
+  const nextSession = shouldPreserveSession ? previousSession : nextThread.session;
+  const nextTurnState = shouldPreserveTurnState ? previousTurnState : nextThread.turnState;
 
   let nextState = ensureThreadRegistered(
     state,
@@ -1369,26 +1396,22 @@ function writeThreadShellState(
     };
   }
 
-  if (
-    !threadSessionsEqual(state.threadSessionById[nextThread.shell.id] ?? null, nextThread.session)
-  ) {
+  if (!threadSessionsEqual(previousSession, nextSession)) {
     nextState = {
       ...nextState,
       threadSessionById: {
         ...nextState.threadSessionById,
-        [nextThread.shell.id]: nextThread.session,
+        [nextThread.shell.id]: nextSession,
       },
     };
   }
 
-  if (
-    !threadTurnStatesEqual(state.threadTurnStateById[nextThread.shell.id], nextThread.turnState)
-  ) {
+  if (!threadTurnStatesEqual(previousTurnState, nextTurnState)) {
     nextState = {
       ...nextState,
       threadTurnStateById: {
         ...nextState.threadTurnStateById,
-        [nextThread.shell.id]: nextThread.turnState,
+        [nextThread.shell.id]: nextTurnState,
       },
     };
   }
@@ -1896,9 +1919,9 @@ function syncEnvironmentShellSnapshot(
     ...buildProjectState(nextProjects),
     threadIds: [],
     threadIdsByProjectId: {},
-    threadShellById: {},
-    threadSessionById: {},
-    threadTurnStateById: {},
+    threadShellById: retainThreadScopedRecord(state.threadShellById, nextThreadIds),
+    threadSessionById: retainThreadScopedRecord(state.threadSessionById, nextThreadIds),
+    threadTurnStateById: retainThreadScopedRecord(state.threadTurnStateById, nextThreadIds),
     sidebarThreadSummaryById: {},
     messageIdsByThreadId: retainThreadScopedRecord(state.messageIdsByThreadId, nextThreadIds),
     messageByThreadId: retainThreadScopedRecord(state.messageByThreadId, nextThreadIds),
@@ -1924,7 +1947,9 @@ function syncEnvironmentShellSnapshot(
   };
 
   for (const thread of snapshot.threads) {
-    nextState = writeThreadShellState(nextState, mapThreadShell(thread, environmentId));
+    nextState = writeThreadShellState(nextState, mapThreadShell(thread, environmentId), {
+      preserveNewerState: true,
+    });
   }
 
   return nextState;
@@ -2402,14 +2427,21 @@ function applyEnvironmentOrchestrationEvent(
                   event.payload.messageId,
                 )
               : thread.turnDiffSummaries;
-          // A completed assistant message only settles the turn once the
-          // session is no longer running it. Providers may emit several
-          // assistant messages per turn, and the turn must stay unsettled
-          // until the provider reports turn end.
-          const turnStillRunning =
-            effectiveTurnId !== null &&
+          // A completed assistant message only settles the turn once there is
+          // no session/latest-turn evidence that work is still in flight.
+          // Providers may emit several assistant messages per turn, and the
+          // turn must stay unsettled until the provider reports turn end.
+          const sessionRunsThisTurn =
             thread.session?.orchestrationStatus === "running" &&
-            thread.session.activeTurnId === effectiveTurnId;
+            (thread.session.activeTurnId === effectiveTurnId ||
+              thread.session.activeTurnId == null);
+          const latestTurnStillRunning =
+            thread.session !== null &&
+            thread.latestTurn?.turnId === effectiveTurnId &&
+            thread.latestTurn.state === "running" &&
+            thread.latestTurn.completedAt === null;
+          const turnStillRunning =
+            effectiveTurnId !== null && (sessionRunsThisTurn || latestTurnStillRunning);
           const settlesTurn = !event.payload.streaming && !turnStillRunning;
           const latestTurn: Thread["latestTurn"] =
             event.payload.role === "assistant" &&
@@ -2636,6 +2668,10 @@ function applyEnvironmentOrchestrationEvent(
         state,
         event.payload.threadId,
         (thread) => {
+          const assistantMessageId =
+            thread.messages.findLast(
+              (message) => message.role === "assistant" && message.turnId === event.payload.turnId,
+            )?.id ?? event.payload.assistantMessageId;
           const checkpoint = mapTurnDiffSummary({
             turnId: event.payload.turnId,
             checkpointTurnCount: event.payload.checkpointTurnCount,
@@ -2643,7 +2679,7 @@ function applyEnvironmentOrchestrationEvent(
             status: event.payload.status,
             files: event.payload.files,
             attribution: event.payload.attribution,
-            assistantMessageId: event.payload.assistantMessageId,
+            assistantMessageId,
             completedAt: event.payload.completedAt,
           });
           const existing = thread.turnDiffSummaries.find(
@@ -2677,7 +2713,7 @@ function applyEnvironmentOrchestrationEvent(
                   requestedAt: thread.latestTurn?.requestedAt ?? event.payload.completedAt,
                   startedAt: thread.latestTurn?.startedAt ?? event.payload.completedAt,
                   completedAt: event.payload.completedAt,
-                  assistantMessageId: event.payload.assistantMessageId,
+                  assistantMessageId,
                   sourceProposedPlan: thread.pendingSourceProposedPlan,
                 })
               : thread.latestTurn;
@@ -2830,7 +2866,9 @@ function applyEnvironmentShellEvent(
       };
     }
     case "thread-upserted":
-      return writeThreadShellState(state, mapThreadShell(event.thread, environmentId));
+      return writeThreadShellState(state, mapThreadShell(event.thread, environmentId), {
+        preserveNewerState: true,
+      });
     case "thread-removed":
       return removeThreadState(state, event.threadId);
   }

@@ -120,7 +120,8 @@ export function shouldShowChangedFilesReport(
 }
 
 function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<TimelineEntry>) {
-  const lastAssistantMessageIdByResponseKey = new Map<string, string>();
+  const lastAssistantMessageIdByResponseKey = new Map<string, MessageId>();
+  const terminalAssistantMessageIdByTurnId = new Map<TurnId, MessageId>();
   let nullTurnResponseIndex = 0;
 
   for (const timelineEntry of timelineEntries) {
@@ -140,9 +141,31 @@ function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<Timeli
       ? `turn:${message.turnId}`
       : `unkeyed:${nullTurnResponseIndex}`;
     lastAssistantMessageIdByResponseKey.set(responseKey, message.id);
+    if (message.turnId) {
+      terminalAssistantMessageIdByTurnId.set(message.turnId, message.id);
+    }
   }
 
-  return new Set(lastAssistantMessageIdByResponseKey.values());
+  return {
+    terminalAssistantMessageIds: new Set(lastAssistantMessageIdByResponseKey.values()),
+    terminalAssistantMessageIdByTurnId,
+  };
+}
+
+export function deriveTurnDiffSummaryByMessageId(input: {
+  turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
+  terminalAssistantMessageIdByTurnId: ReadonlyMap<TurnId, MessageId>;
+}): ReadonlyMap<MessageId, TurnDiffSummary> {
+  const byMessageId = new Map<MessageId, TurnDiffSummary>();
+  for (const summary of input.turnDiffSummaries) {
+    const anchor =
+      input.terminalAssistantMessageIdByTurnId.get(summary.turnId) ?? summary.assistantMessageId;
+    if (!anchor) {
+      continue;
+    }
+    byMessageId.set(anchor, summary);
+  }
+  return byMessageId;
 }
 
 interface TurnFold {
@@ -349,14 +372,19 @@ export function deriveMessagesTimelineRows(input: {
   expandedTurnIds?: ReadonlySet<TurnId>;
   isWorking: boolean;
   activeTurnStartedAt: string | null;
-  turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
+  turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
   const durationStartByMessageId = computeMessageDurationStart(
     input.timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
   );
-  const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(input.timelineEntries);
+  const { terminalAssistantMessageIds, terminalAssistantMessageIdByTurnId } =
+    deriveTerminalAssistantMessageIds(input.timelineEntries);
+  const turnDiffSummaryByAssistantMessageId = deriveTurnDiffSummaryByMessageId({
+    turnDiffSummaries: input.turnDiffSummaries,
+    terminalAssistantMessageIdByTurnId,
+  });
   const unsettledTurnIds = deriveUnsettledTurnIds({
     latestTurn: input.latestTurn ?? null,
     activeTurnId: input.activeTurnId ?? null,
@@ -466,7 +494,7 @@ export function deriveMessagesTimelineRows(input: {
       assistantCopyStreaming: timelineEntry.message.streaming || assistantTurnStillInProgress,
       assistantTurnDiffSummary:
         timelineEntry.message.role === "assistant"
-          ? input.turnDiffSummaryByAssistantMessageId.get(timelineEntry.message.id)
+          ? turnDiffSummaryByAssistantMessageId.get(timelineEntry.message.id)
           : undefined,
       revertTurnCount:
         timelineEntry.message.role === "user"

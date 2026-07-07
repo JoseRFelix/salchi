@@ -6,10 +6,13 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
   TurnId,
   type OrchestrationThread,
+  type OrchestrationThreadShell,
+  type OrchestrationShellSnapshot,
   type OrchestrationThreadDetailPageCursors,
   type OrchestrationThreadDetailPageInfo,
   type OrchestrationThreadDetailSnapshot,
@@ -20,6 +23,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   applyOrchestrationEvent,
   applyOrchestrationEvents,
+  applyShellEvent,
   hydrateCachedThreadDetail,
   removeEnvironmentState,
   selectEnvironmentState,
@@ -33,6 +37,7 @@ import {
   mergeServerThreadDetailPage,
   selectThreadsAcrossEnvironments,
   syncSidebarThreadSummariesForEnvironment,
+  syncServerShellSnapshot,
   syncServerThreadDetail,
   type AppState,
   type EnvironmentState,
@@ -292,6 +297,76 @@ function makeOrchestrationThread(
           updatedAt: thread.updatedAt ?? thread.createdAt,
         }
       : null,
+    ...overrides,
+  };
+}
+
+function makeOrchestrationThreadShell(
+  thread: Thread,
+  overrides: Partial<OrchestrationThreadShell> = {},
+): OrchestrationThreadShell {
+  return {
+    id: thread.id,
+    projectId: thread.projectId,
+    title: thread.title,
+    modelSelection: thread.modelSelection,
+    runtimeMode: thread.runtimeMode,
+    interactionMode: thread.interactionMode,
+    parentThreadId: thread.parentThreadId ?? null,
+    createdByThreadId: thread.createdByThreadId ?? null,
+    subagentKind: thread.subagentKind ?? null,
+    subagentNickname: thread.subagentNickname ?? null,
+    subagentRole: thread.subagentRole ?? null,
+    hiddenFromThreadList: thread.hiddenFromThreadList ?? false,
+    branch: thread.branch,
+    worktreePath: thread.worktreePath,
+    latestTurn: thread.latestTurn,
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt ?? thread.createdAt,
+    archivedAt: thread.archivedAt,
+    session: thread.session
+      ? {
+          threadId: thread.id,
+          status: thread.session.orchestrationStatus,
+          providerName: "codex",
+          ...(thread.session.providerInstanceId !== undefined
+            ? { providerInstanceId: thread.session.providerInstanceId }
+            : {}),
+          runtimeMode: thread.runtimeMode,
+          activeTurnId: thread.session.activeTurnId ?? null,
+          lastError: thread.session.lastError ?? null,
+          updatedAt: thread.session.updatedAt,
+        }
+      : null,
+    latestUserMessageAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+    ...overrides,
+  };
+}
+
+function makeShellSnapshot(
+  thread: Thread,
+  overrides: Partial<OrchestrationShellSnapshot> = {},
+): OrchestrationShellSnapshot {
+  const updatedAt = thread.updatedAt ?? thread.createdAt;
+  return {
+    snapshotSequence: 1,
+    projects: [
+      {
+        id: thread.projectId,
+        title: "Project",
+        workspaceRoot: "/tmp/project",
+        repositoryIdentity: null,
+        defaultModelSelection: thread.modelSelection,
+        scripts: [],
+        createdAt: thread.createdAt,
+        updatedAt,
+      },
+    ],
+    threads: [makeOrchestrationThreadShell(thread)],
+    updatedAt,
     ...overrides,
   };
 }
@@ -709,6 +784,50 @@ describe("thread selection memoization", () => {
       ),
     ).toBe(false);
     expect(selectThreadExistsByRef(state, null)).toBe(false);
+  });
+});
+
+describe("server shell snapshots", () => {
+  it("rebuilds project thread lists when existing thread shells are retained", () => {
+    const thread = makeThread({ id: ThreadId.make("thread-shell-snapshot-retained") });
+    const state = makeState(thread);
+    const snapshot = makeShellSnapshot(thread);
+
+    expect(localEnvironmentStateOf(state).threadShellById[thread.id]?.projectId).toBe(
+      thread.projectId,
+    );
+
+    const first = syncServerShellSnapshot(state, snapshot, localEnvironmentId);
+
+    expect(localEnvironmentStateOf(first).threadIdsByProjectId[thread.projectId]).toEqual([
+      thread.id,
+    ]);
+    expect(
+      selectSidebarThreadsForProjectRef(first, {
+        environmentId: localEnvironmentId,
+        projectId: thread.projectId,
+      }).map((sidebarThread) => sidebarThread.id),
+    ).toEqual([thread.id]);
+
+    const second = syncServerShellSnapshot(
+      first,
+      {
+        ...snapshot,
+        snapshotSequence: 2,
+        updatedAt: "2026-02-13T00:00:01.000Z",
+      },
+      localEnvironmentId,
+    );
+
+    expect(localEnvironmentStateOf(second).threadIdsByProjectId[thread.projectId]).toEqual([
+      thread.id,
+    ]);
+    expect(
+      selectSidebarThreadsForProjectRef(second, {
+        environmentId: localEnvironmentId,
+        projectId: thread.projectId,
+      }).map((sidebarThread) => sidebarThread.id),
+    ).toEqual([thread.id]);
   });
 });
 
@@ -2203,6 +2322,216 @@ describe("incremental orchestration updates", () => {
     expect(threadsOf(settled)[0]?.latestTurn?.completedAt).toBe("2026-02-27T00:00:04.000Z");
   });
 
+  it("keeps a running latest turn active when assistant completion arrives before running session state", () => {
+    const turnId = TurnId.make("turn-racy-message");
+    const thread = makeThread({
+      session: {
+        provider: ProviderDriverKind.make("codex"),
+        status: "ready",
+        orchestrationStatus: "ready",
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:00.000Z",
+      },
+      latestTurn: {
+        turnId,
+        state: "running",
+        requestedAt: "2026-02-27T00:00:01.000Z",
+        startedAt: "2026-02-27T00:00:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+    });
+
+    const next = applyOrchestrationEvent(
+      makeState(thread),
+      makeEvent("thread.message-sent", {
+        threadId: thread.id,
+        messageId: MessageId.make("assistant-racy-message"),
+        role: "assistant",
+        text: "still running",
+        turnId,
+        streaming: false,
+        createdAt: "2026-02-27T00:00:02.000Z",
+        updatedAt: "2026-02-27T00:00:02.000Z",
+      }),
+      localEnvironmentId,
+    );
+
+    expect(threadsOf(next)[0]?.latestTurn?.state).toBe("running");
+    expect(threadsOf(next)[0]?.latestTurn?.completedAt).toBeNull();
+    expect(threadsOf(next)[0]?.latestTurn?.assistantMessageId).toBe(
+      MessageId.make("assistant-racy-message"),
+    );
+  });
+
+  it("keeps a running latest turn active when the running session active turn id mismatches", () => {
+    const turnId = TurnId.make("turn-racy-mismatch");
+    const thread = makeThread({
+      session: {
+        provider: ProviderDriverKind.make("codex"),
+        status: "running",
+        orchestrationStatus: "running",
+        activeTurnId: TurnId.make("turn-session-active"),
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:00.000Z",
+      },
+      latestTurn: {
+        turnId,
+        state: "running",
+        requestedAt: "2026-02-27T00:00:01.000Z",
+        startedAt: "2026-02-27T00:00:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+    });
+
+    const next = applyOrchestrationEvent(
+      makeState(thread),
+      makeEvent("thread.message-sent", {
+        threadId: thread.id,
+        messageId: MessageId.make("assistant-racy-mismatch"),
+        role: "assistant",
+        text: "still running",
+        turnId,
+        streaming: false,
+        createdAt: "2026-02-27T00:00:02.000Z",
+        updatedAt: "2026-02-27T00:00:02.000Z",
+      }),
+      localEnvironmentId,
+    );
+
+    expect(threadsOf(next)[0]?.latestTurn?.state).toBe("running");
+    expect(threadsOf(next)[0]?.latestTurn?.completedAt).toBeNull();
+  });
+
+  it("settles assistant completion after the session has ended and updates the assistant message id", () => {
+    const turnId = TurnId.make("turn-settled-before-message");
+    const thread = makeThread({
+      session: {
+        provider: ProviderDriverKind.make("codex"),
+        status: "ready",
+        orchestrationStatus: "ready",
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:04.000Z",
+      },
+      latestTurn: {
+        turnId,
+        state: "completed",
+        requestedAt: "2026-02-27T00:00:01.000Z",
+        startedAt: "2026-02-27T00:00:01.000Z",
+        completedAt: "2026-02-27T00:00:04.000Z",
+        assistantMessageId: MessageId.make("assistant-placeholder"),
+      },
+    });
+
+    const next = applyOrchestrationEvent(
+      makeState(thread),
+      makeEvent("thread.message-sent", {
+        threadId: thread.id,
+        messageId: MessageId.make("assistant-final"),
+        role: "assistant",
+        text: "done",
+        turnId,
+        streaming: false,
+        createdAt: "2026-02-27T00:00:05.000Z",
+        updatedAt: "2026-02-27T00:00:05.000Z",
+      }),
+      localEnvironmentId,
+    );
+
+    expect(threadsOf(next)[0]?.latestTurn?.state).toBe("completed");
+    expect(threadsOf(next)[0]?.latestTurn?.completedAt).toBe("2026-02-27T00:00:05.000Z");
+    expect(threadsOf(next)[0]?.latestTurn?.assistantMessageId).toBe(
+      MessageId.make("assistant-final"),
+    );
+  });
+
+  it("does not regress live session or latest turn state from an older thread shell upsert", () => {
+    const turnId = TurnId.make("turn-shell-guard");
+    const runningLatestTurn = {
+      turnId,
+      state: "running" as const,
+      requestedAt: "2026-02-27T00:00:01.000Z",
+      startedAt: "2026-02-27T00:00:01.000Z",
+      completedAt: null,
+      assistantMessageId: null,
+    };
+    const thread = makeThread({
+      updatedAt: "2026-02-27T00:00:03.000Z",
+      session: {
+        provider: ProviderDriverKind.make("codex"),
+        status: "running",
+        orchestrationStatus: "running",
+        activeTurnId: turnId,
+        createdAt: "2026-02-27T00:00:01.000Z",
+        updatedAt: "2026-02-27T00:00:03.000Z",
+      },
+      latestTurn: runningLatestTurn,
+    });
+    const state = makeState(thread);
+
+    const stale = applyShellEvent(
+      state,
+      {
+        kind: "thread-upserted",
+        sequence: 2,
+        thread: makeOrchestrationThreadShell(thread, {
+          updatedAt: "2026-02-27T00:00:02.000Z",
+          latestTurn: {
+            ...runningLatestTurn,
+            state: "completed",
+            completedAt: "2026-02-27T00:00:02.000Z",
+          },
+          session: {
+            threadId: thread.id,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-02-27T00:00:02.000Z",
+          },
+        }),
+      },
+      localEnvironmentId,
+    );
+
+    expect(threadsOf(stale)[0]?.session?.orchestrationStatus).toBe("running");
+    expect(threadsOf(stale)[0]?.session?.activeTurnId).toBe(turnId);
+    expect(threadsOf(stale)[0]?.latestTurn).toEqual(runningLatestTurn);
+
+    const newer = applyShellEvent(
+      stale,
+      {
+        kind: "thread-upserted",
+        sequence: 3,
+        thread: makeOrchestrationThreadShell(thread, {
+          updatedAt: "2026-02-27T00:00:04.000Z",
+          latestTurn: {
+            ...runningLatestTurn,
+            state: "completed",
+            completedAt: "2026-02-27T00:00:04.000Z",
+            assistantMessageId: MessageId.make("assistant-shell-newer"),
+          },
+          session: {
+            threadId: thread.id,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-02-27T00:00:04.000Z",
+          },
+        }),
+      },
+      localEnvironmentId,
+    );
+
+    expect(threadsOf(newer)[0]?.session?.orchestrationStatus).toBe("ready");
+    expect(threadsOf(newer)[0]?.latestTurn?.state).toBe("completed");
+    expect(threadsOf(newer)[0]?.latestTurn?.completedAt).toBe("2026-02-27T00:00:04.000Z");
+  });
+
   it("does not regress latestTurn when an older turn diff completes late", () => {
     const state = makeState(
       makeThread({
@@ -2284,6 +2613,63 @@ describe("incremental orchestration updates", () => {
     expect(threadsOf(next)[0]?.latestTurn?.assistantMessageId).toBe(
       MessageId.make("assistant-real"),
     );
+  });
+
+  it("anchors turn diffs to an existing wrap-up assistant message when completion arrives later", () => {
+    const turnId = TurnId.make("turn-1");
+    const staleMessageId = MessageId.make("assistant-stale");
+    const wrapUpMessageId = MessageId.make("assistant-wrap-up");
+    const state = makeState(
+      makeThread({
+        messages: [
+          {
+            id: staleMessageId,
+            role: "assistant",
+            text: "Whitespace check is clean.",
+            turnId,
+            createdAt: "2026-02-27T00:00:01.000Z",
+            completedAt: "2026-02-27T00:00:01.000Z",
+            streaming: false,
+          },
+          {
+            id: wrapUpMessageId,
+            role: "assistant",
+            text: "Implemented the fix.",
+            turnId,
+            createdAt: "2026-02-27T00:00:03.000Z",
+            completedAt: "2026-02-27T00:00:03.000Z",
+            streaming: false,
+          },
+        ],
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:00.000Z",
+          completedAt: null,
+          assistantMessageId: staleMessageId,
+        },
+      }),
+    );
+
+    const next = applyOrchestrationEvent(
+      state,
+      makeEvent("thread.turn-diff-completed", {
+        threadId: ThreadId.make("thread-1"),
+        turnId,
+        checkpointTurnCount: 1,
+        checkpointRef: CheckpointRef.make("checkpoint-1"),
+        status: "ready",
+        files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
+        attribution: "edit-snapshots",
+        assistantMessageId: staleMessageId,
+        completedAt: "2026-02-27T00:00:04.000Z",
+      }),
+      localEnvironmentId,
+    );
+
+    expect(threadsOf(next)[0]?.turnDiffSummaries[0]?.assistantMessageId).toBe(wrapUpMessageId);
+    expect(threadsOf(next)[0]?.latestTurn?.assistantMessageId).toBe(wrapUpMessageId);
   });
 
   it("reverts messages, plans, activities, and checkpoints by retained turns", () => {

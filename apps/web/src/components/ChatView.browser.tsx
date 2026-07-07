@@ -6320,6 +6320,109 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("renders a stale-anchor changed-files card on the terminal assistant message", async () => {
+    const turnId = "turn-stale-anchor-changed-files-card" as TurnId;
+    const staleAssistantMessageId = "msg-assistant-stale-anchor" as MessageId;
+    const terminalAssistantMessageId = "msg-assistant-terminal-anchor" as MessageId;
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-stale-anchor-card" as MessageId,
+      targetText: "stale anchor changed files card",
+    });
+    const thread = snapshot.threads.find((entry) => entry.id === THREAD_ID);
+    if (!thread) {
+      throw new Error("Expected browser test thread in snapshot.");
+    }
+
+    const offsetSeconds = thread.messages.length * 3;
+    Object.assign(thread, {
+      messages: [
+        ...thread.messages,
+        createUserMessage({
+          id: "msg-user-stale-anchor-turn" as MessageId,
+          text: "Please implement the plan.",
+          offsetSeconds,
+        }),
+        {
+          ...createAssistantMessage({
+            id: staleAssistantMessageId,
+            text: "Whitespace check is clean.",
+            offsetSeconds: offsetSeconds + 3,
+          }),
+          turnId,
+        },
+        {
+          ...createAssistantMessage({
+            id: terminalAssistantMessageId,
+            text: "Implemented the stale-anchor changed-files card fix.",
+            offsetSeconds: offsetSeconds + 6,
+          }),
+          turnId,
+        },
+      ],
+      latestTurn: {
+        turnId,
+        state: "completed",
+        requestedAt: isoAt(offsetSeconds),
+        startedAt: isoAt(offsetSeconds + 1),
+        completedAt: isoAt(offsetSeconds + 7),
+        assistantMessageId: terminalAssistantMessageId,
+      },
+      checkpoints: [
+        {
+          turnId,
+          checkpointTurnCount: 1,
+          checkpointRef: CheckpointRef.make("checkpoint-stale-anchor-changed-files-card"),
+          status: "ready",
+          files: [
+            {
+              path: "src/app.ts",
+              kind: "modified",
+              additions: 1,
+              deletions: 0,
+            },
+          ],
+          assistantMessageId: staleAssistantMessageId,
+          completedAt: isoAt(offsetSeconds + 7),
+          attribution: "edit-snapshots",
+        },
+      ],
+    });
+
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot,
+    });
+
+    try {
+      await scrollTimelineToBottom();
+      const terminalRow = await waitForElement(
+        () =>
+          document.querySelector<HTMLElement>(`[data-message-id="${terminalAssistantMessageId}"]`),
+        "Terminal assistant row did not render.",
+      );
+      const changedFilesLabel = await waitForElement(
+        () =>
+          Array.from(terminalRow.querySelectorAll<HTMLElement>("p, span")).find((element) =>
+            element.textContent?.includes("1 changed files"),
+          ) ?? null,
+        "Changed-files card did not render under the terminal assistant row.",
+      );
+
+      expect(terminalRow.textContent).toContain(
+        "Implemented the stale-anchor changed-files card fix.",
+      );
+      expect(changedFilesLabel.textContent).toContain("1 changed files");
+      expect(terminalRow.textContent).toContain("src");
+      expect(terminalRow.textContent).toContain("app.ts");
+      expect(
+        document.querySelector<HTMLElement>(`[data-message-id="${staleAssistantMessageId}"]`)
+          ?.textContent ?? "",
+      ).not.toContain("1 changed files");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("opens the diff panel to unstaged changes in a new draft thread", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
