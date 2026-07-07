@@ -6,7 +6,7 @@ import vm from "node:vm";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const ORIGIN = "https://t3.example";
+const ORIGIN = "https://salchi.example";
 const TARGET_URL = `${ORIGIN}/env-1/thread-1`;
 const HOME_URL = `${ORIGIN}/`;
 const CROSS_ORIGIN_URL = "https://elsewhere.example/env-1/thread-1";
@@ -148,13 +148,13 @@ function createServiceWorkerTestHarness(): ServiceWorkerTestHarness {
         options.ackNotificationClick !== false &&
         typeof message === "object" &&
         message !== null &&
-        (message as { readonly type?: unknown }).type === "t3.notification-click" &&
+        (message as { readonly type?: unknown }).type === "salchi.notification-click" &&
         typeof (message as { readonly url?: unknown }).url === "string" &&
         typeof (message as { readonly openedAt?: unknown }).openedAt === "number" &&
         Number.isFinite((message as { readonly openedAt?: unknown }).openedAt)
       ) {
         dispatchWorkerMessage({
-          type: "t3.notification-click-ack",
+          type: "salchi.notification-click-ack",
           url: (message as { readonly url: string }).url,
           openedAt: (message as { readonly openedAt: number }).openedAt,
         });
@@ -284,14 +284,14 @@ function createServiceWorkerTestHarness(): ServiceWorkerTestHarness {
 
   const serviceWorkerPath = join(
     dirname(fileURLToPath(import.meta.url)),
-    "../../public/t3-push-service-worker.js",
+    "../../public/salchi-push-service-worker.js",
   );
   const source = readFileSync(serviceWorkerPath, "utf8");
 
   vm.createContext(context);
   vm.runInContext(
     `${source}
-this.__t3ServiceWorkerTestExports = {
+this.__salchiServiceWorkerTestExports = {
   notificationTitle,
   openNotificationUrl,
 };`,
@@ -423,7 +423,7 @@ this.__t3ServiceWorkerTestExports = {
 
 async function openNotificationUrl(harness: ServiceWorkerTestHarness, url: string): Promise<void> {
   await vm.runInContext(
-    `__t3ServiceWorkerTestExports.openNotificationUrl(${JSON.stringify(url)})`,
+    `__salchiServiceWorkerTestExports.openNotificationUrl(${JSON.stringify(url)})`,
     harness.context,
   );
 }
@@ -431,13 +431,13 @@ async function openNotificationUrl(harness: ServiceWorkerTestHarness, url: strin
 function notificationTitle(harness: ServiceWorkerTestHarness, rawTitle: unknown): string {
   return String(
     vm.runInContext(
-      `__t3ServiceWorkerTestExports.notificationTitle(${JSON.stringify(rawTitle)})`,
+      `__salchiServiceWorkerTestExports.notificationTitle(${JSON.stringify(rawTitle)})`,
       harness.context,
     ),
   );
 }
 
-describe("t3-service-worker app badge", () => {
+describe("salchi-service-worker app badge", () => {
   let harness: ServiceWorkerTestHarness;
 
   beforeEach(() => {
@@ -604,7 +604,7 @@ describe("t3-service-worker app badge", () => {
       url: `${ORIGIN}/env-1/thread-2`,
     });
 
-    await harness.dispatchMessage({ type: "t3.clear-turn-completion-notifications" });
+    await harness.dispatchMessage({ type: "salchi.clear-turn-completion-notifications" });
 
     expect(harness.getDisplayedNotificationCount()).toBe(0);
     expect(harness.getBadgeSetCalls()).toEqual([1, 2]);
@@ -618,7 +618,7 @@ describe("t3-service-worker app badge", () => {
     });
     harness.closeAllDisplayedNotificationsWithoutEvent();
 
-    await harness.dispatchMessage({ type: "t3.sync-displayed-notification-badge" });
+    await harness.dispatchMessage({ type: "salchi.sync-displayed-notification-badge" });
 
     expect(harness.getDisplayedNotificationCount()).toBe(0);
     expect(harness.getBadgeSetCalls()).toEqual([1]);
@@ -633,7 +633,7 @@ describe("t3-service-worker app badge", () => {
   });
 });
 
-describe("t3-service-worker notification click navigation", () => {
+describe("salchi-service-worker notification click navigation", () => {
   let harness: ServiceWorkerTestHarness;
 
   beforeEach(() => {
@@ -662,15 +662,15 @@ describe("t3-service-worker notification click navigation", () => {
 
     expect(harness.getBroadcastMessages()).toEqual([
       {
-        name: "t3-notification-click",
+        name: "salchi-notification-click",
         message: {
-          type: "t3.notification-click",
+          type: "salchi.notification-click",
           url: TARGET_URL,
           openedAt: expect.any(Number),
         },
       },
     ]);
-    expect(harness.getBroadcastCloseCalls()).toEqual(["t3-notification-click"]);
+    expect(harness.getBroadcastCloseCalls()).toEqual(["salchi-notification-click"]);
     expect(harness.operationLog.indexOf("persist")).toBeLessThan(
       harness.operationLog.indexOf("broadcast"),
     );
@@ -686,15 +686,15 @@ describe("t3-service-worker notification click navigation", () => {
 
     expect(harness.getBroadcastMessages()).toEqual([
       {
-        name: "t3-notification-click",
+        name: "salchi-notification-click",
         message: {
-          type: "t3.notification-click",
+          type: "salchi.notification-click",
           url: TARGET_URL,
           openedAt: expect.any(Number),
         },
       },
     ]);
-    expect(harness.getBroadcastCloseCalls()).toEqual(["t3-notification-click"]);
+    expect(harness.getBroadcastCloseCalls()).toEqual(["salchi-notification-click"]);
   });
 
   it("continues notification click handling when BroadcastChannel is unavailable", async () => {
@@ -716,7 +716,7 @@ describe("t3-service-worker notification click navigation", () => {
     expect(client?.url).toBe(HOME_URL);
     expect(client?.postMessageCalls).toEqual([
       {
-        type: "t3.notification-click",
+        type: "salchi.notification-click",
         url: TARGET_URL,
         openedAt: expect.any(Number),
       },
@@ -730,8 +730,8 @@ describe("t3-service-worker notification click navigation", () => {
 
     const [write] = harness.getPendingClickWrites();
     expect(write).toMatchObject({
-      cacheName: "t3-notification-click-v1",
-      requestUrl: `${ORIGIN}/__t3-notification-click/pending`,
+      cacheName: "salchi-notification-click-v1",
+      requestUrl: `${ORIGIN}/__salchi-notification-click/pending`,
       value: {
         url: TARGET_URL,
         openedAt: expect.any(Number),
@@ -763,7 +763,7 @@ describe("t3-service-worker notification click navigation", () => {
     expect(client?.navigateCalls).toEqual([]);
     expect(client?.postMessageCalls).toEqual([
       {
-        type: "t3.notification-click",
+        type: "salchi.notification-click",
         url: TARGET_URL,
         openedAt: expect.any(Number),
       },
@@ -798,7 +798,7 @@ describe("t3-service-worker notification click navigation", () => {
     expect(client?.focusCalls).toBe(1);
     expect(client?.postMessageCalls).toEqual([
       {
-        type: "t3.notification-click",
+        type: "salchi.notification-click",
         url: TARGET_URL,
         openedAt: expect.any(Number),
       },
@@ -826,7 +826,7 @@ describe("t3-service-worker notification click navigation", () => {
     expect(client?.focusCalls).toBe(2);
     expect(client?.postMessageCalls).toEqual([
       {
-        type: "t3.notification-click",
+        type: "salchi.notification-click",
         url: TARGET_URL,
         openedAt: expect.any(Number),
       },
@@ -872,7 +872,7 @@ describe("t3-service-worker notification click navigation", () => {
     expect(client?.focusCalls).toBe(1);
     expect(client?.postMessageCalls).toEqual([
       {
-        type: "t3.notification-click",
+        type: "salchi.notification-click",
         url: TARGET_URL,
         openedAt: expect.any(Number),
       },
@@ -896,7 +896,7 @@ describe("t3-service-worker notification click navigation", () => {
     expect(client?.focusCalls).toBe(1);
     expect(client?.postMessageCalls).toEqual([
       {
-        type: "t3.notification-click",
+        type: "salchi.notification-click",
         url: TARGET_URL,
         openedAt: expect.any(Number),
       },
@@ -919,7 +919,7 @@ describe("t3-service-worker notification click navigation", () => {
     expect(client?.focusCalls).toBe(1);
     expect(client?.postMessageCalls).toEqual([
       {
-        type: "t3.notification-click",
+        type: "salchi.notification-click",
         url: TARGET_URL,
         openedAt: expect.any(Number),
       },
@@ -943,7 +943,7 @@ describe("t3-service-worker notification click navigation", () => {
     expect(client?.focusCalls).toBe(1);
     expect(client?.postMessageCalls).toEqual([
       {
-        type: "t3.notification-click",
+        type: "salchi.notification-click",
         url: TARGET_URL,
         openedAt: expect.any(Number),
       },
@@ -967,7 +967,7 @@ describe("t3-service-worker notification click navigation", () => {
     expect(client?.focusCalls).toBe(1);
     expect(client?.postMessageCalls).toEqual([
       {
-        type: "t3.notification-click",
+        type: "salchi.notification-click",
         url: TARGET_URL,
         openedAt: expect.any(Number),
       },
@@ -989,7 +989,7 @@ describe("t3-service-worker notification click navigation", () => {
     expect(client?.focusCalls).toBe(1);
     expect(client?.postMessageCalls).toEqual([
       {
-        type: "t3.notification-click",
+        type: "salchi.notification-click",
         url: TARGET_URL,
         openedAt: expect.any(Number),
       },
@@ -1018,7 +1018,7 @@ describe("t3-service-worker notification click navigation", () => {
     expect(targetClient?.navigateCalls).toEqual([]);
     expect(targetClient?.postMessageCalls).toEqual([
       {
-        type: "t3.notification-click",
+        type: "salchi.notification-click",
         url: TARGET_URL,
         openedAt: expect.any(Number),
       },

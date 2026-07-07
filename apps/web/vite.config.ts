@@ -108,8 +108,8 @@ function resolveDevProxyTarget(wsUrl: string | undefined): string | undefined {
 
 const devProxyTarget = resolveDevProxyTarget(configuredWsUrl);
 const webAssetBrand = resolveWebAssetBrandForConfiguredChannel(configuredHostedAppChannel);
-const serviceWorkerFilename = "t3-service-worker.js";
-const pushServiceWorkerFilename = "t3-push-service-worker.js";
+const serviceWorkerFilename = "salchi-service-worker.js";
+const pushServiceWorkerFilename = "salchi-push-service-worker.js";
 const pushServiceWorkerVersion = createHash("sha256")
   .update(
     readFileSync(fileURLToPath(new URL(`./public/${pushServiceWorkerFilename}`, import.meta.url))),

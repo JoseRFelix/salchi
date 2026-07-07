@@ -5077,7 +5077,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       navigator.serviceWorker.dispatchEvent(
         new MessageEvent("message", {
           data: {
-            type: "t3.notification-click",
+            type: "salchi.notification-click",
             url: `/${LOCAL_ENVIRONMENT_ID}/${THREAD_ID}`,
             openedAt: Date.now(),
           },
@@ -5124,7 +5124,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       expect(mounted.router.state.location.pathname).toBe(serverThreadPath(THREAD_ID));
       const focusCallCount = hasFocusSpy.mock.calls.length;
       const message = {
-        type: "t3.notification-click",
+        type: "salchi.notification-click",
         url: `/${LOCAL_ENVIRONMENT_ID}/${targetThreadId}`,
         openedAt: Date.now(),
       };
@@ -5181,7 +5181,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       navigator.serviceWorker.dispatchEvent(
         new MessageEvent("message", {
           data: {
-            type: "t3.notification-click",
+            type: "salchi.notification-click",
             url: `/${LOCAL_ENVIRONMENT_ID}/${THREAD_ID}`,
             openedAt: Date.now(),
           },
@@ -5266,7 +5266,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       navigator.serviceWorker.dispatchEvent(
         new MessageEvent("message", {
           data: {
-            type: "t3.notification-click",
+            type: "salchi.notification-click",
             url: `/${LOCAL_ENVIRONMENT_ID}/${THREAD_ID}`,
             openedAt: Date.now(),
           },

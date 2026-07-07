@@ -3,8 +3,8 @@ export interface PendingNotificationClick {
   readonly openedAt: number;
 }
 
-export const PENDING_NOTIFICATION_CLICK_CACHE_NAME = "t3-notification-click-v1";
-export const PENDING_NOTIFICATION_CLICK_REQUEST_PATH = "/__t3-notification-click/pending";
+export const PENDING_NOTIFICATION_CLICK_CACHE_NAME = "salchi-notification-click-v1";
+export const PENDING_NOTIFICATION_CLICK_REQUEST_PATH = "/__salchi-notification-click/pending";
 
 function getCacheStorage(): CacheStorage | null {
   if (typeof window === "undefined" || !("caches" in window)) {

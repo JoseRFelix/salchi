@@ -3,12 +3,12 @@ import type { ServerPushSendResult, WebPushSubscriptionJson } from "@t3tools/con
 import { isElectron } from "../env";
 import { ensureLocalApi } from "../localApi";
 
-const SERVICE_WORKER_URL = "/t3-service-worker.js";
+const SERVICE_WORKER_URL = "/salchi-service-worker.js";
 const TURN_NOTIFICATION_TAG_PATTERN = /^thread:(.+):turn:[^:]+$/;
 const SERVICE_WORKER_READY_TIMEOUT_MS = 3000;
-export const SYNC_BADGE_MESSAGE_TYPE = "t3.sync-displayed-notification-badge";
+export const SYNC_BADGE_MESSAGE_TYPE = "salchi.sync-displayed-notification-badge";
 export const CLEAR_TURN_COMPLETION_NOTIFICATIONS_MESSAGE_TYPE =
-  "t3.clear-turn-completion-notifications";
+  "salchi.clear-turn-completion-notifications";
 
 export interface BrowserPushSupport {
   readonly supported: boolean;
@@ -43,7 +43,7 @@ export function getNotificationPermission(): NotificationPermission | "unsupport
   return "Notification" in window ? Notification.permission : "unsupported";
 }
 
-export async function ensureT3ServiceWorkerRegistration(): Promise<ServiceWorkerRegistration> {
+export async function ensureSalchiServiceWorkerRegistration(): Promise<ServiceWorkerRegistration> {
   const support = getBrowserPushSupport();
   if (!support.supported) {
     throw new Error(pushSupportReasonLabel(support.reason));
@@ -245,12 +245,12 @@ export async function clearTurnCompletionAlerts(
 }
 
 export async function getCurrentPushSubscription(): Promise<PushSubscription | null> {
-  const registration = await ensureT3ServiceWorkerRegistration();
+  const registration = await ensureSalchiServiceWorkerRegistration();
   return registration.pushManager.getSubscription();
 }
 
 export async function enablePushNotifications(): Promise<WebPushSubscriptionJson> {
-  const registration = await ensureT3ServiceWorkerRegistration();
+  const registration = await ensureSalchiServiceWorkerRegistration();
   const permission = await Notification.requestPermission();
   if (permission !== "granted") {
     throw new Error("Notification permission was not granted.");
