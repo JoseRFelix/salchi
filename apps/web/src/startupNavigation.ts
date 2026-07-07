@@ -2,6 +2,8 @@ import type { ThreadId } from "@t3tools/contracts";
 
 import type { NotificationNavigationTarget } from "./push/notificationNavigation";
 
+export const STARTUP_BOOTSTRAP_THREAD_STALE_AFTER_MS = 8 * 60 * 60 * 1000;
+
 export function shouldNavigateToStartupBootstrapThread(input: {
   readonly pathname: string;
   readonly bootstrapThreadId: ThreadId;
@@ -22,4 +24,20 @@ export function shouldNavigateToStartupBootstrapThread(input: {
   }
 
   return input.handledBootstrapThreadId !== input.bootstrapThreadId;
+}
+
+export function isStartupBootstrapThreadStale(input: {
+  readonly activityAt: string | null;
+  readonly now: number;
+}): boolean {
+  if (!input.activityAt) {
+    return false;
+  }
+
+  const activityMs = Date.parse(input.activityAt);
+  if (!Number.isFinite(activityMs)) {
+    return false;
+  }
+
+  return input.now - activityMs > STARTUP_BOOTSTRAP_THREAD_STALE_AFTER_MS;
 }

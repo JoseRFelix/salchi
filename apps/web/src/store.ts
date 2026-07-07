@@ -46,6 +46,7 @@ import {
   type TurnDiffFileChange,
   type TurnDiffSummary,
 } from "./types";
+import type { CachedThreadDetail } from "./orchestrationStartupCache";
 import { resolveEnvironmentHttpUrl } from "./environments/runtime";
 import { sanitizeThreadErrorMessage } from "./rpc/transportError";
 import { getThreadFromEnvironmentState } from "./threadDerivation";
@@ -3105,6 +3106,88 @@ export function hydrateCachedEnvironmentState(
   });
 }
 
+function hasStoredThreadDetail(state: EnvironmentState, threadId: ThreadId): boolean {
+  return (
+    (state.messageIdsByThreadId[threadId]?.length ?? 0) > 0 ||
+    (state.activityIdsByThreadId[threadId]?.length ?? 0) > 0 ||
+    (state.proposedPlanIdsByThreadId[threadId]?.length ?? 0) > 0 ||
+    (state.turnDiffIdsByThreadId[threadId]?.length ?? 0) > 0
+  );
+}
+
+function cachedThreadDetailHasContent(cached: CachedThreadDetail): boolean {
+  return (
+    cached.messageIds.length > 0 ||
+    cached.activityIds.length > 0 ||
+    cached.proposedPlanIds.length > 0 ||
+    cached.turnDiffIds.length > 0
+  );
+}
+
+export function hydrateCachedThreadDetail(
+  state: AppState,
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  cached: CachedThreadDetail,
+): AppState {
+  const currentEnvironmentState = getStoredEnvironmentState(state, environmentId);
+  if (
+    !currentEnvironmentState.threadShellById[threadId] ||
+    hasStoredThreadDetail(currentEnvironmentState, threadId) ||
+    !cachedThreadDetailHasContent(cached)
+  ) {
+    return state;
+  }
+
+  return commitEnvironmentState(state, environmentId, {
+    ...currentEnvironmentState,
+    messageIdsByThreadId: {
+      ...currentEnvironmentState.messageIdsByThreadId,
+      [threadId]: [...cached.messageIds],
+    },
+    messageByThreadId: {
+      ...currentEnvironmentState.messageByThreadId,
+      [threadId]: { ...cached.messageById },
+    },
+    queuedTurnIdsByThreadId: {
+      ...currentEnvironmentState.queuedTurnIdsByThreadId,
+      [threadId]: [...cached.queuedTurnIds],
+    },
+    queuedTurnByThreadId: {
+      ...currentEnvironmentState.queuedTurnByThreadId,
+      [threadId]: { ...cached.queuedTurnById },
+    },
+    activityIdsByThreadId: {
+      ...currentEnvironmentState.activityIdsByThreadId,
+      [threadId]: [...cached.activityIds],
+    },
+    activityByThreadId: {
+      ...currentEnvironmentState.activityByThreadId,
+      [threadId]: { ...cached.activityById },
+    },
+    proposedPlanIdsByThreadId: {
+      ...currentEnvironmentState.proposedPlanIdsByThreadId,
+      [threadId]: [...cached.proposedPlanIds],
+    },
+    proposedPlanByThreadId: {
+      ...currentEnvironmentState.proposedPlanByThreadId,
+      [threadId]: { ...cached.proposedPlanById },
+    },
+    turnDiffIdsByThreadId: {
+      ...currentEnvironmentState.turnDiffIdsByThreadId,
+      [threadId]: [...cached.turnDiffIds],
+    },
+    turnDiffSummaryByThreadId: {
+      ...currentEnvironmentState.turnDiffSummaryByThreadId,
+      [threadId]: { ...cached.turnDiffSummaryById },
+    },
+    threadDetailPageInfoByThreadId: {
+      ...currentEnvironmentState.threadDetailPageInfoByThreadId,
+      [threadId]: cached.pageInfo ?? EMPTY_ORCHESTRATION_THREAD_DETAIL_PAGE_INFO,
+    },
+  });
+}
+
 export function setThreadBranch(
   state: AppState,
   threadRef: ScopedThreadRef,
@@ -3135,6 +3218,11 @@ interface AppStore extends AppState {
   hydrateCachedEnvironmentState: (
     environmentId: EnvironmentId,
     cachedState: EnvironmentState,
+  ) => void;
+  hydrateCachedThreadDetail: (
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+    cached: CachedThreadDetail,
   ) => void;
   syncServerShellSnapshot: (
     snapshot: OrchestrationShellSnapshot,
@@ -3180,6 +3268,8 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => removeEnvironmentState(state, environmentId)),
   hydrateCachedEnvironmentState: (environmentId, cachedState) =>
     set((state) => hydrateCachedEnvironmentState(state, environmentId, cachedState)),
+  hydrateCachedThreadDetail: (environmentId, threadId, cached) =>
+    set((state) => hydrateCachedThreadDetail(state, environmentId, threadId, cached)),
   syncServerShellSnapshot: (snapshot, environmentId) =>
     set((state) => syncServerShellSnapshot(state, snapshot, environmentId)),
   syncServerThreadDetail: (thread, environmentId, options) =>

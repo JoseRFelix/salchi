@@ -775,6 +775,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           branch,
           worktree_path,
           latest_turn_id,
+          latest_user_message_at,
           created_at,
           updated_at,
           archived_at,
@@ -791,6 +792,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             NULL,
             NULL,
             NULL,
+            '2026-03-01T00:00:20.000Z',
             '2026-03-01T00:00:05.000Z',
             '2026-03-01T00:00:06.000Z',
             NULL,
@@ -806,6 +808,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             NULL,
             NULL,
             NULL,
+            NULL,
             '2026-03-01T00:00:07.000Z',
             '2026-03-01T00:00:08.000Z',
             NULL,
@@ -818,6 +821,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             '{"provider":"codex","model":"gpt-5-codex"}',
             'full-access',
             'default',
+            NULL,
             NULL,
             NULL,
             NULL,
@@ -843,12 +847,72 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         const missingProject = yield* snapshotQuery.getActiveProjectByWorkspaceRoot("/tmp/missing");
         assert.equal(missingProject._tag, "None");
 
-        const firstThreadId = yield* snapshotQuery.getFirstActiveThreadIdByProjectId(
+        const newestUserMessageThreadId =
+          yield* snapshotQuery.getMostRecentActiveThreadIdByProjectId(
+            asProjectId("project-active"),
+          );
+        assert.equal(newestUserMessageThreadId._tag, "Some");
+        if (newestUserMessageThreadId._tag === "Some") {
+          assert.equal(newestUserMessageThreadId.value, ThreadId.make("thread-first"));
+        }
+
+        yield* sql`
+          UPDATE projection_threads
+          SET updated_at = '2026-03-01T00:00:25.000Z'
+          WHERE thread_id = 'thread-second'
+        `;
+
+        const newestUpdatedThreadId = yield* snapshotQuery.getMostRecentActiveThreadIdByProjectId(
           asProjectId("project-active"),
         );
-        assert.equal(firstThreadId._tag, "Some");
-        if (firstThreadId._tag === "Some") {
-          assert.equal(firstThreadId.value, ThreadId.make("thread-first"));
+        assert.equal(newestUpdatedThreadId._tag, "Some");
+        if (newestUpdatedThreadId._tag === "Some") {
+          assert.equal(newestUpdatedThreadId.value, ThreadId.make("thread-second"));
+        }
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id,
+            project_id,
+            title,
+            model_selection_json,
+            runtime_mode,
+            interaction_mode,
+            branch,
+            worktree_path,
+            latest_turn_id,
+            latest_user_message_at,
+            hidden_from_thread_list,
+            created_at,
+            updated_at,
+            archived_at,
+            deleted_at
+          )
+          VALUES (
+            'thread-hidden',
+            'project-active',
+            'Hidden Thread',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access',
+            'default',
+            NULL,
+            NULL,
+            NULL,
+            '2026-03-01T00:00:40.000Z',
+            1,
+            '2026-03-01T00:00:30.000Z',
+            '2026-03-01T00:00:35.000Z',
+            NULL,
+            NULL
+          )
+        `;
+
+        const visibleThreadId = yield* snapshotQuery.getMostRecentActiveThreadIdByProjectId(
+          asProjectId("project-active"),
+        );
+        assert.equal(visibleThreadId._tag, "Some");
+        if (visibleThreadId._tag === "Some") {
+          assert.equal(visibleThreadId.value, ThreadId.make("thread-second"));
         }
       }),
   );

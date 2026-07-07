@@ -94,6 +94,7 @@ import { flushResumeDiagnostics, recordResumeDiagnostic } from "./resumeDiagnost
 import { getClientSettings } from "~/hooks/useSettings";
 import {
   readCachedEnvironmentState,
+  readCachedThreadDetail,
   removeCachedEnvironmentState,
   scheduleCachedEnvironmentStateWrite,
 } from "~/orchestrationStartupCache";
@@ -2241,6 +2242,8 @@ function retainThreadDetailSubscriptionInternal(
   threadId: ThreadId,
   options: { readonly active: boolean },
 ): () => void {
+  hydrateThreadDetailFromStartupCacheIfMissing(environmentId, threadId);
+
   const key = getThreadDetailSubscriptionKey(environmentId, threadId);
   const existing = threadDetailSubscriptions.get(key);
   if (existing) {
@@ -2721,6 +2724,29 @@ function hydrateEnvironmentFromStartupCache(environmentId: EnvironmentId): void 
   }
 
   reconcileSnapshotDerivedState();
+}
+
+function hydrateThreadDetailFromStartupCacheIfMissing(
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+): void {
+  const environmentState = useStore.getState().environmentStateById[environmentId];
+  if (
+    !environmentState?.threadShellById[threadId] ||
+    (environmentState.messageIdsByThreadId[threadId]?.length ?? 0) > 0 ||
+    (environmentState.activityIdsByThreadId[threadId]?.length ?? 0) > 0 ||
+    (environmentState.proposedPlanIdsByThreadId[threadId]?.length ?? 0) > 0 ||
+    (environmentState.turnDiffIdsByThreadId[threadId]?.length ?? 0) > 0
+  ) {
+    return;
+  }
+
+  const cachedDetail = readCachedThreadDetail(environmentId, threadId);
+  if (!cachedDetail) {
+    return;
+  }
+
+  useStore.getState().hydrateCachedThreadDetail(environmentId, threadId, cachedDetail);
 }
 
 function scheduleEnvironmentStartupCacheWrite(
