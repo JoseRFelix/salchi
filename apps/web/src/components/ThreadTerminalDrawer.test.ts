@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isVirtualKeyboardTarget,
   resolveRenderedDrawerHeight,
   resolveTerminalCellFromPoint,
+  resolveTerminalKeyboardBaseline,
   resolveTerminalSelectionActionPosition,
   resolveTerminalKeyboardViewport,
   resolveTerminalTouchSelectionRange,
@@ -149,9 +151,11 @@ describe("resolveTerminalKeyboardViewport", () => {
         layoutViewportHeight: 800,
         visualViewportHeight: 500,
         visualViewportOffsetTop: 0,
+        baselineViewportHeight: 800,
       }),
     ).toEqual({
       bottomInset: 300,
+      keyboardVisible: true,
       visibleHeight: 500,
     });
   });
@@ -162,9 +166,11 @@ describe("resolveTerminalKeyboardViewport", () => {
         layoutViewportHeight: 800,
         visualViewportHeight: 500,
         visualViewportOffsetTop: 40,
+        baselineViewportHeight: 800,
       }),
     ).toEqual({
       bottomInset: 260,
+      keyboardVisible: true,
       visibleHeight: 500,
     });
   });
@@ -175,10 +181,102 @@ describe("resolveTerminalKeyboardViewport", () => {
         layoutViewportHeight: 800,
         visualViewportHeight: 740,
         visualViewportOffsetTop: 0,
+        baselineViewportHeight: 800,
       }),
     ).toEqual({
       bottomInset: 0,
+      keyboardVisible: false,
       visibleHeight: null,
+    });
+  });
+
+  it("ignores browser chrome collapse that was already present in the baseline", () => {
+    expect(
+      resolveTerminalKeyboardViewport({
+        layoutViewportHeight: 800,
+        visualViewportHeight: 660,
+        visualViewportOffsetTop: 0,
+        baselineViewportHeight: 660,
+      }),
+    ).toEqual({
+      bottomInset: 0,
+      keyboardVisible: false,
+      visibleHeight: null,
+    });
+  });
+
+  it("ignores innerHeight lag when the visual viewport has not shrunk from baseline", () => {
+    expect(
+      resolveTerminalKeyboardViewport({
+        layoutViewportHeight: 900,
+        visualViewportHeight: 800,
+        visualViewportOffsetTop: 0,
+        baselineViewportHeight: 800,
+      }),
+    ).toEqual({
+      bottomInset: 0,
+      keyboardVisible: false,
+      visibleHeight: null,
+    });
+  });
+
+  it("detects a real iOS keyboard while preserving the bottom overlap", () => {
+    expect(
+      resolveTerminalKeyboardViewport({
+        layoutViewportHeight: 800,
+        visualViewportHeight: 460,
+        visualViewportOffsetTop: 0,
+        baselineViewportHeight: 780,
+      }),
+    ).toEqual({
+      bottomInset: 340,
+      keyboardVisible: true,
+      visibleHeight: 460,
+    });
+  });
+
+  it("detects an Android resizes-content keyboard without adding layout margin", () => {
+    expect(
+      resolveTerminalKeyboardViewport({
+        layoutViewportHeight: 460,
+        visualViewportHeight: 460,
+        visualViewportOffsetTop: 0,
+        baselineViewportHeight: 780,
+      }),
+    ).toEqual({
+      bottomInset: 0,
+      keyboardVisible: true,
+      visibleHeight: 460,
+    });
+  });
+
+  it("uses a proportional threshold to ignore residual chrome transitions", () => {
+    expect(
+      resolveTerminalKeyboardViewport({
+        layoutViewportHeight: 800,
+        visualViewportHeight: 700,
+        visualViewportOffsetTop: 0,
+        baselineViewportHeight: 800,
+      }),
+    ).toEqual({
+      bottomInset: 0,
+      keyboardVisible: false,
+      visibleHeight: null,
+    });
+  });
+
+  it("falls back to the layout overlap when no baseline is available", () => {
+    expect(
+      resolveTerminalKeyboardViewport({
+        layoutViewportHeight: 800,
+        visualViewportHeight: 650,
+        visualViewportOffsetTop: 0,
+        baselineViewportHeight: null,
+      }),
+    ).toEqual({
+      bottomInset: 150,
+      keyboardVisible: true,
+      visibleHeight: 650,
     });
   });
 
@@ -186,6 +284,7 @@ describe("resolveTerminalKeyboardViewport", () => {
     expect(
       resolveRenderedDrawerHeight(500, {
         bottomInset: 300,
+        keyboardVisible: true,
         visibleHeight: 400,
       }),
     ).toBe(300);
@@ -193,9 +292,74 @@ describe("resolveTerminalKeyboardViewport", () => {
     expect(
       resolveRenderedDrawerHeight(500, {
         bottomInset: 0,
+        keyboardVisible: false,
         visibleHeight: null,
       }),
     ).toBe(500);
+
+    expect(
+      resolveRenderedDrawerHeight(500, {
+        bottomInset: 0,
+        keyboardVisible: true,
+        visibleHeight: 400,
+      }),
+    ).toBe(300);
+  });
+});
+
+describe("resolveTerminalKeyboardBaseline", () => {
+  it("tracks the visual viewport height while no keyboard target is focused", () => {
+    expect(
+      resolveTerminalKeyboardBaseline({
+        previousBaseline: 780,
+        visualViewportHeight: 660,
+        keyboardTargetFocused: false,
+      }),
+    ).toBe(660);
+  });
+
+  it("latches the baseline when a focused keyboard target shrinks the viewport", () => {
+    expect(
+      resolveTerminalKeyboardBaseline({
+        previousBaseline: 780,
+        visualViewportHeight: 460,
+        keyboardTargetFocused: true,
+      }),
+    ).toBe(780);
+  });
+
+  it("follows viewport growth while a keyboard target remains focused", () => {
+    expect(
+      resolveTerminalKeyboardBaseline({
+        previousBaseline: 460,
+        visualViewportHeight: 700,
+        keyboardTargetFocused: true,
+      }),
+    ).toBe(700);
+  });
+
+  it("preserves the previous baseline when the visual viewport height is unavailable", () => {
+    expect(
+      resolveTerminalKeyboardBaseline({
+        previousBaseline: 780,
+        visualViewportHeight: null,
+        keyboardTargetFocused: false,
+      }),
+    ).toBe(780);
+  });
+});
+
+describe("isVirtualKeyboardTarget", () => {
+  it("accepts textarea, text input, and contenteditable targets", () => {
+    expect(isVirtualKeyboardTarget({ tagName: "textarea" })).toBe(true);
+    expect(isVirtualKeyboardTarget({ tagName: "input", inputType: "text" })).toBe(true);
+    expect(isVirtualKeyboardTarget({ tagName: "div", isContentEditable: true })).toBe(true);
+  });
+
+  it("rejects non-text controls and missing targets", () => {
+    expect(isVirtualKeyboardTarget({ tagName: "input", inputType: "checkbox" })).toBe(false);
+    expect(isVirtualKeyboardTarget({ tagName: "button" })).toBe(false);
+    expect(isVirtualKeyboardTarget({ tagName: null })).toBe(false);
   });
 });
 

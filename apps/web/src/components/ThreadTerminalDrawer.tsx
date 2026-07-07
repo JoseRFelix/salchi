@@ -62,7 +62,7 @@ import {
 } from "../types";
 import { readEnvironmentApi } from "~/environmentApi";
 import { readEnvironmentConnection } from "~/environments/runtime";
-import { useIsMobile } from "~/hooks/useMediaQuery";
+import { useIsMobile, useMediaQuery } from "~/hooks/useMediaQuery";
 import { readLocalApi } from "~/localApi";
 import { isTransportConnectionErrorMessage } from "~/rpc/transportError";
 import { selectTerminalEventEntries, useTerminalStateStore } from "../terminalStateStore";
@@ -72,6 +72,7 @@ const MIN_DRAWER_HEIGHT = 180;
 const MAX_DRAWER_HEIGHT_RATIO = 0.75;
 const MULTI_CLICK_SELECTION_ACTION_DELAY_MS = 260;
 const KEYBOARD_INSET_THRESHOLD = 80;
+const KEYBOARD_BASELINE_FRACTION = 0.15;
 const TOUCH_SCROLL_ACTIVATION_PX = 6;
 const TOUCH_LONG_PRESS_MS = 450;
 // A small amount of finger drift is tolerated before a hold is treated as a
@@ -90,11 +91,13 @@ interface TerminalSize {
 
 export interface TerminalKeyboardViewport {
   bottomInset: number;
+  keyboardVisible: boolean;
   visibleHeight: number | null;
 }
 
 const EMPTY_TERMINAL_KEYBOARD_VIEWPORT: TerminalKeyboardViewport = Object.freeze({
   bottomInset: 0,
+  keyboardVisible: false,
   visibleHeight: null,
 });
 
@@ -102,13 +105,78 @@ function terminalKeyboardViewportEqual(
   left: TerminalKeyboardViewport,
   right: TerminalKeyboardViewport,
 ): boolean {
-  return left.bottomInset === right.bottomInset && left.visibleHeight === right.visibleHeight;
+  return (
+    left.bottomInset === right.bottomInset &&
+    left.keyboardVisible === right.keyboardVisible &&
+    left.visibleHeight === right.visibleHeight
+  );
+}
+
+export function resolveTerminalKeyboardBaseline(input: {
+  previousBaseline: number | null;
+  visualViewportHeight: number | null | undefined;
+  keyboardTargetFocused: boolean;
+}): number | null {
+  const previousBaseline =
+    typeof input.previousBaseline === "number" && Number.isFinite(input.previousBaseline)
+      ? Math.max(0, input.previousBaseline)
+      : null;
+  const visualViewportHeight =
+    typeof input.visualViewportHeight === "number" && Number.isFinite(input.visualViewportHeight)
+      ? Math.max(0, input.visualViewportHeight)
+      : null;
+
+  if (visualViewportHeight === null) {
+    return previousBaseline;
+  }
+  if (!input.keyboardTargetFocused) {
+    return visualViewportHeight;
+  }
+  return Math.max(previousBaseline ?? visualViewportHeight, visualViewportHeight);
+}
+
+const NON_VIRTUAL_KEYBOARD_INPUT_TYPES = new Set([
+  "button",
+  "checkbox",
+  "radio",
+  "range",
+  "color",
+  "file",
+  "submit",
+  "reset",
+  "image",
+  "hidden",
+]);
+
+export function isVirtualKeyboardTarget(input: {
+  tagName: string | null | undefined;
+  inputType?: string | null;
+  isContentEditable?: boolean;
+}): boolean {
+  const tagName = input.tagName?.toUpperCase() ?? "";
+  if (tagName === "TEXTAREA") return true;
+  if (input.isContentEditable === true) return true;
+  if (tagName !== "INPUT") return false;
+
+  const inputType = input.inputType?.toLowerCase() ?? "text";
+  return !NON_VIRTUAL_KEYBOARD_INPUT_TYPES.has(inputType);
+}
+
+function readVirtualKeyboardTarget(element: Element | null): boolean {
+  if (!element) return false;
+  const editableElement = element as Element & { readonly isContentEditable?: boolean };
+  return isVirtualKeyboardTarget({
+    tagName: element.tagName,
+    inputType: element.getAttribute("type"),
+    isContentEditable: editableElement.isContentEditable === true,
+  });
 }
 
 export function resolveTerminalKeyboardViewport(input: {
   layoutViewportHeight: number;
   visualViewportHeight: number | null | undefined;
   visualViewportOffsetTop: number | null | undefined;
+  baselineViewportHeight: number | null;
 }): TerminalKeyboardViewport {
   const layoutViewportHeight = Number.isFinite(input.layoutViewportHeight)
     ? Math.max(0, input.layoutViewportHeight)
@@ -122,6 +190,11 @@ export function resolveTerminalKeyboardViewport(input: {
     Number.isFinite(input.visualViewportOffsetTop)
       ? Math.max(0, input.visualViewportOffsetTop)
       : 0;
+  const baselineViewportHeight =
+    typeof input.baselineViewportHeight === "number" &&
+    Number.isFinite(input.baselineViewportHeight)
+      ? Math.max(0, input.baselineViewportHeight)
+      : null;
 
   if (layoutViewportHeight <= 0 || visualViewportHeight === null || visualViewportHeight <= 0) {
     return EMPTY_TERMINAL_KEYBOARD_VIEWPORT;
@@ -131,17 +204,26 @@ export function resolveTerminalKeyboardViewport(input: {
     0,
     Math.ceil(layoutViewportHeight - visualViewportHeight - visualViewportOffsetTop),
   );
-  if (bottomInset < KEYBOARD_INSET_THRESHOLD) {
+  const keyboardDelta =
+    baselineViewportHeight === null ? bottomInset : baselineViewportHeight - visualViewportHeight;
+  const keyboardThreshold = Math.max(
+    KEYBOARD_INSET_THRESHOLD,
+    Math.round((baselineViewportHeight ?? layoutViewportHeight) * KEYBOARD_BASELINE_FRACTION),
+  );
+  if (keyboardDelta < keyboardThreshold) {
     return EMPTY_TERMINAL_KEYBOARD_VIEWPORT;
   }
 
   return {
     bottomInset,
+    keyboardVisible: true,
     visibleHeight: visualViewportHeight,
   };
 }
 
-function readTerminalKeyboardViewport(): TerminalKeyboardViewport {
+function readTerminalKeyboardViewport(
+  baselineViewportHeight: number | null,
+): TerminalKeyboardViewport {
   if (typeof window === "undefined" || !window.visualViewport) {
     return EMPTY_TERMINAL_KEYBOARD_VIEWPORT;
   }
@@ -150,6 +232,7 @@ function readTerminalKeyboardViewport(): TerminalKeyboardViewport {
     layoutViewportHeight: window.innerHeight,
     visualViewportHeight: window.visualViewport.height,
     visualViewportOffsetTop: window.visualViewport.offsetTop,
+    baselineViewportHeight,
   });
 }
 
@@ -168,7 +251,7 @@ export function resolveRenderedDrawerHeight(
   drawerHeight: number,
   keyboardViewport: TerminalKeyboardViewport,
 ): number {
-  if (keyboardViewport.bottomInset <= 0 || keyboardViewport.visibleHeight === null) {
+  if (!keyboardViewport.keyboardVisible || keyboardViewport.visibleHeight === null) {
     return drawerHeight;
   }
   const keyboardMaxHeight = Math.max(
@@ -1871,6 +1954,7 @@ export default function ThreadTerminalDrawer({
   keybindings,
 }: ThreadTerminalDrawerProps) {
   const isMobile = useIsMobile();
+  const isTouchMobile = useMediaQuery({ max: "md", pointer: "coarse" });
   const [drawerHeight, setDrawerHeight] = useState(() => clampDrawerHeight(height));
   const [keyboardViewport, setKeyboardViewport] = useState<TerminalKeyboardViewport>(
     EMPTY_TERMINAL_KEYBOARD_VIEWPORT,
@@ -1878,6 +1962,7 @@ export default function ThreadTerminalDrawer({
   const [resizeEpoch, setResizeEpoch] = useState(0);
   const drawerRef = useRef<HTMLElement>(null);
   const drawerHeightRef = useRef(drawerHeight);
+  const keyboardBaselineRef = useRef<number | null>(null);
   const keyboardViewportRef = useRef(keyboardViewport);
   const lastSyncedHeightRef = useRef(clampDrawerHeight(height));
   const onHeightChangeRef = useRef(onHeightChange);
@@ -2156,6 +2241,7 @@ export default function ThreadTerminalDrawer({
   useEffect(() => {
     if (!visible) {
       applyKeyboardViewport(EMPTY_TERMINAL_KEYBOARD_VIEWPORT);
+      keyboardBaselineRef.current = null;
       return;
     }
 
@@ -2180,6 +2266,7 @@ export default function ThreadTerminalDrawer({
   useEffect(() => {
     if (!visible) {
       applyKeyboardViewport(EMPTY_TERMINAL_KEYBOARD_VIEWPORT);
+      keyboardBaselineRef.current = null;
       return;
     }
 
@@ -2190,11 +2277,22 @@ export default function ThreadTerminalDrawer({
       frame = null;
       const drawer = drawerRef.current;
       const activeElement = document.activeElement;
-      const terminalFocused = Boolean(
-        drawer && activeElement instanceof Node && drawer.contains(activeElement),
+      const keyboardTargetFocused = Boolean(
+        drawer &&
+        activeElement instanceof Node &&
+        activeElement instanceof Element &&
+        drawer.contains(activeElement) &&
+        readVirtualKeyboardTarget(activeElement),
       );
+      keyboardBaselineRef.current = resolveTerminalKeyboardBaseline({
+        previousBaseline: keyboardBaselineRef.current,
+        visualViewportHeight: window.visualViewport?.height,
+        keyboardTargetFocused,
+      });
       applyKeyboardViewport(
-        terminalFocused ? readTerminalKeyboardViewport() : EMPTY_TERMINAL_KEYBOARD_VIEWPORT,
+        keyboardTargetFocused
+          ? readTerminalKeyboardViewport(keyboardBaselineRef.current)
+          : EMPTY_TERMINAL_KEYBOARD_VIEWPORT,
       );
     };
 
@@ -2574,7 +2672,7 @@ export default function ThreadTerminalDrawer({
         </div>
       </div>
 
-      {isMobile && keyboardViewport.bottomInset > 0 && (
+      {isTouchMobile && keyboardViewport.keyboardVisible && (
         <TerminalAccessoryKeyBar armedModifier={armedModifier} onKeyDown={handleAccessoryKey} />
       )}
     </aside>
