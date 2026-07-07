@@ -51,6 +51,7 @@ interface ServiceWorkerTestHarness {
   readonly dispatchNotificationClose: (index?: number) => Promise<void>;
   readonly removeAppBadgeSupport: () => void;
   readonly addClient: (options: {
+    readonly ackNotificationClick?: boolean;
     readonly url: string;
     readonly controlled?: boolean;
     readonly focusResult?: "self" | "throw";
@@ -80,6 +81,18 @@ function createServiceWorkerTestHarness(): ServiceWorkerTestHarness {
   const badgeSetCalls: number[] = [];
   let badgeClearCallCount = 0;
   const eventListeners: Record<string, Array<(event: unknown) => void>> = {};
+  const dispatchWorkerMessage = (payload: unknown) => {
+    const waitUntilPromises: Array<Promise<unknown>> = [];
+    const event = {
+      data: payload,
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(Promise.resolve(promise));
+      },
+    };
+    for (const listener of eventListeners.message ?? []) {
+      listener(event);
+    }
+  };
   const displayedNotifications: Array<
     Record<string, unknown> & {
       __closed: boolean;
@@ -89,6 +102,7 @@ function createServiceWorkerTestHarness(): ServiceWorkerTestHarness {
   let openWindowResult: "undefined" | "client-at-url" | "client-at-home" | "throw" = "undefined";
   let nextClientId = 1;
   const makeClient = (options: {
+    readonly ackNotificationClick?: boolean;
     readonly url: string;
     readonly controlled?: boolean;
     readonly focusResult?: "self" | "throw";
@@ -130,6 +144,21 @@ function createServiceWorkerTestHarness(): ServiceWorkerTestHarness {
     }
     client.postMessage = (message: unknown) => {
       (client.postMessageCalls as unknown[]).push(message);
+      if (
+        options.ackNotificationClick !== false &&
+        typeof message === "object" &&
+        message !== null &&
+        (message as { readonly type?: unknown }).type === "t3.notification-click" &&
+        typeof (message as { readonly url?: unknown }).url === "string" &&
+        typeof (message as { readonly openedAt?: unknown }).openedAt === "number" &&
+        Number.isFinite((message as { readonly openedAt?: unknown }).openedAt)
+      ) {
+        dispatchWorkerMessage({
+          type: "t3.notification-click-ack",
+          url: (message as { readonly url: string }).url,
+          openedAt: (message as { readonly openedAt: number }).openedAt,
+        });
+      }
     };
     return client;
   };
@@ -173,7 +202,9 @@ function createServiceWorkerTestHarness(): ServiceWorkerTestHarness {
     Request,
     Response,
     URL,
+    clearTimeout: (...args: Parameters<typeof clearTimeout>) => clearTimeout(...args),
     console,
+    setTimeout: (...args: Parameters<typeof setTimeout>) => setTimeout(...args),
     __windowClients: [] as Array<Record<string, unknown>>,
     self: {
       location: { origin: ORIGIN, href: `${ORIGIN}/` },
@@ -415,6 +446,7 @@ describe("t3-service-worker app badge", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("counts distinct threads with completed turns after pushes", async () => {
@@ -610,6 +642,7 @@ describe("t3-service-worker notification click navigation", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("strips the app source suffix from notification titles", () => {
@@ -750,7 +783,7 @@ describe("t3-service-worker notification click navigation", () => {
     expect(harness.openWindowCalls).toEqual([]);
   });
 
-  it("focuses and posts to a controlled client without navigating", async () => {
+  it("focuses and posts to a controlled client without navigating when the page acks", async () => {
     harness.addClient({
       url: HOME_URL,
       focused: true,
@@ -770,6 +803,56 @@ describe("t3-service-worker notification click navigation", () => {
         openedAt: expect.any(Number),
       },
     ]);
+    expect(harness.openWindowCalls).toEqual([]);
+  });
+
+  it("fallback navigates a controlled client when the page does not ack", async () => {
+    vi.useFakeTimers();
+    harness.addClient({
+      ackNotificationClick: false,
+      url: HOME_URL,
+      focused: true,
+      navigateResult: "self",
+    });
+
+    const openPromise = openNotificationUrl(harness, TARGET_URL);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2000);
+    await openPromise;
+
+    const [client] = harness.getClients();
+    expect(client?.url).toBe(TARGET_URL);
+    expect(client?.navigateCalls).toEqual([TARGET_URL]);
+    expect(client?.focusCalls).toBe(2);
+    expect(client?.postMessageCalls).toEqual([
+      {
+        type: "t3.notification-click",
+        url: TARGET_URL,
+        openedAt: expect.any(Number),
+      },
+    ]);
+    expect(harness.openWindowCalls).toEqual([]);
+  });
+
+  it("does not fallback navigate a controlled client already at the target URL", async () => {
+    vi.useFakeTimers();
+    harness.addClient({
+      ackNotificationClick: false,
+      url: TARGET_URL,
+      focused: true,
+      navigateResult: "self",
+    });
+
+    const openPromise = openNotificationUrl(harness, TARGET_URL);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2000);
+    await openPromise;
+
+    const [client] = harness.getClients();
+    expect(client?.url).toBe(TARGET_URL);
+    expect(client?.navigateCalls).toEqual([]);
+    expect(client?.focusCalls).toBe(1);
+    expect(client?.postMessageCalls).toHaveLength(1);
     expect(harness.openWindowCalls).toEqual([]);
   });
 

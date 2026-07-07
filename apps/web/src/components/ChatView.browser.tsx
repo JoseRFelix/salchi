@@ -8,6 +8,7 @@ import {
   EnvironmentId,
   type EnvironmentApi,
   type MessageId,
+  type OrchestrationEvent,
   type OrchestrationProposedPlanId,
   type OrchestrationReadModel,
   type ProjectId,
@@ -61,6 +62,7 @@ import { useLocalDispatchStore } from "../localDispatchStore";
 import { __resetLocalApiForTests } from "../localApi";
 import {
   installServiceWorkerNotificationNavigation,
+  NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME,
   resetNotificationNavigationStateForTests,
 } from "../push/notificationNavigation";
 import {
@@ -5098,6 +5100,58 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("navigates deferred broadcast notification clicks after the app regains focus", async () => {
+    const targetThreadId = NOTIFICATION_RECOVERY_OTHER_THREAD_ID;
+    const snapshot = addThreadToSnapshot(
+      createSnapshotForTargetUser({
+        targetMessageId: "msg-user-notification-deferred-broadcast-test" as MessageId,
+        targetText: "notification deferred broadcast test",
+      }),
+      targetThreadId,
+    );
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot,
+      initialPath: `/${LOCAL_ENVIRONMENT_ID}/${THREAD_ID}`,
+    });
+    const cleanupNotificationNavigation = installServiceWorkerNotificationNavigation(
+      mounted.router,
+    );
+    const hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const notificationChannel = new BroadcastChannel(NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME);
+
+    try {
+      expect(mounted.router.state.location.pathname).toBe(serverThreadPath(THREAD_ID));
+      const focusCallCount = hasFocusSpy.mock.calls.length;
+      const message = {
+        type: "t3.notification-click",
+        url: `/${LOCAL_ENVIRONMENT_ID}/${targetThreadId}`,
+        openedAt: Date.now(),
+      };
+      // BroadcastChannel.postMessage does not accept a target origin.
+      // oxlint-disable-next-line require-post-message-target-origin
+      notificationChannel.postMessage(message);
+
+      await vi.waitFor(() => {
+        expect(hasFocusSpy.mock.calls.length).toBeGreaterThan(focusCallCount);
+      });
+      expect(mounted.router.state.location.pathname).toBe(serverThreadPath(THREAD_ID));
+
+      hasFocusSpy.mockReturnValue(true);
+      window.dispatchEvent(new Event("focus"));
+
+      await waitForURL(
+        mounted.router,
+        (path) => path === serverThreadPath(targetThreadId),
+        "Deferred notification clicks should navigate once the app regains focus.",
+      );
+    } finally {
+      notificationChannel.close();
+      cleanupNotificationNavigation();
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps the notification target when the startup bootstrap thread differs", async () => {
     const bootstrapThreadId = NOTIFICATION_RECOVERY_OTHER_THREAD_ID;
     const snapshot = addThreadToSnapshot(
@@ -5350,6 +5404,155 @@ describe("ChatView timeline estimator parity (full app)", () => {
       expect(document.querySelectorAll(`[data-testid="thread-row-${newThreadId}"]`)).toHaveLength(
         1,
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the timeline working row visible through assistant completion before session running", async () => {
+    const sentText = "Trigger the working row race";
+    const turnId = "turn-working-row-race" as TurnId;
+    const assistantMessageId = "assistant-working-row-race" as MessageId;
+    let sequence = fixture.snapshot.snapshotSequence + 1;
+    const makeEvent = <T extends OrchestrationEvent["type"]>(
+      type: T,
+      payload: Extract<OrchestrationEvent, { type: T }>["payload"],
+      occurredAt: string,
+    ): Extract<OrchestrationEvent, { type: T }> =>
+      ({
+        sequence: sequence++,
+        eventId: EventId.make(`event-working-row-race-${sequence}`),
+        type,
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload,
+      }) as Extract<OrchestrationEvent, { type: T }>;
+    const applyEvent = (event: OrchestrationEvent) => {
+      useStore.getState().applyOrchestrationEvent(event, LOCAL_ENVIRONMENT_ID);
+    };
+    const queryWorkingRow = () =>
+      document.querySelector<HTMLElement>('[data-timeline-row-id="working-indicator-row"]');
+    const expectWorkingRow = async () => {
+      await waitForLayout();
+      await vi.waitFor(
+        () => {
+          expect(queryWorkingRow()?.textContent).toContain("Working");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    };
+    const expectNoWorkingRow = async () => {
+      await waitForLayout();
+      await vi.waitFor(
+        () => {
+          expect(queryWorkingRow()).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    };
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-working-row-race-test" as MessageId,
+        targetText: "working row race test",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return { sequence: sequence++ };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      await scrollTimelineToBottom();
+      await page.getByTestId("composer-editor").fill(sentText);
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      await sendButton.click();
+      await expectWorkingRow();
+
+      applyEvent(
+        makeEvent(
+          "thread.message-sent",
+          {
+            threadId: THREAD_ID,
+            messageId: assistantMessageId,
+            role: "assistant",
+            text: "partial",
+            turnId,
+            streaming: true,
+            createdAt: "2026-03-04T12:01:00.000Z",
+            updatedAt: "2026-03-04T12:01:00.000Z",
+          },
+          "2026-03-04T12:01:00.000Z",
+        ),
+      );
+      await expectWorkingRow();
+
+      applyEvent(
+        makeEvent(
+          "thread.message-sent",
+          {
+            threadId: THREAD_ID,
+            messageId: assistantMessageId,
+            role: "assistant",
+            text: "partial done",
+            turnId,
+            streaming: false,
+            createdAt: "2026-03-04T12:01:01.000Z",
+            updatedAt: "2026-03-04T12:01:01.000Z",
+          },
+          "2026-03-04T12:01:01.000Z",
+        ),
+      );
+      await expectWorkingRow();
+
+      applyEvent(
+        makeEvent(
+          "thread.session-set",
+          {
+            threadId: THREAD_ID,
+            session: {
+              threadId: THREAD_ID,
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: turnId,
+              lastError: null,
+              updatedAt: "2026-03-04T12:01:02.000Z",
+            },
+          },
+          "2026-03-04T12:01:02.000Z",
+        ),
+      );
+      await expectWorkingRow();
+
+      applyEvent(
+        makeEvent(
+          "thread.session-set",
+          {
+            threadId: THREAD_ID,
+            session: {
+              threadId: THREAD_ID,
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-03-04T12:01:03.000Z",
+            },
+          },
+          "2026-03-04T12:01:03.000Z",
+        ),
+      );
+      await expectNoWorkingRow();
     } finally {
       await mounted.cleanup();
     }

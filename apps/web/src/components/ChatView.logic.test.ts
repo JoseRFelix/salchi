@@ -1005,6 +1005,28 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     ).toBe(true);
   });
 
+  it("keeps local dispatch active when a completed turn precedes the updated session projection", () => {
+    const localDispatch = makeLocalDispatch();
+
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "ready",
+        latestTurn: {
+          ...previousLatestTurn,
+          turnId: TurnId.make("turn-2"),
+          requestedAt: "2026-03-29T00:01:00.000Z",
+          startedAt: "2026-03-29T00:01:00.500Z",
+          completedAt: "2026-03-29T00:01:01.000Z",
+        },
+        session: previousSession,
+        pendingApprovalCreatedAt: null,
+        pendingUserInputCreatedAt: null,
+        threadError: null,
+      }),
+    ).toBe(false);
+  });
+
   it("does not clear local dispatch while the session is running a newer turn than latestTurn", () => {
     const localDispatch = createLocalDispatchSnapshot({
       id: ThreadId.make("thread-1"),
