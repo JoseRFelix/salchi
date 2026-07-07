@@ -1,6 +1,7 @@
 import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 
 import type { EnvironmentState } from "./store";
+import { hasEnvironmentThreadDetailContent } from "./threadDetailContent";
 
 const STORAGE_KEY = "t3code:orchestration-startup-cache:v1";
 const DOCUMENT_VERSION = 1;
@@ -260,26 +261,19 @@ function retainOrderedThreadIds(state: EnvironmentState, preferredThreadIds: rea
   return shellThreadIds.filter((threadId) => retained.has(threadId));
 }
 
-function hasThreadDetail(state: EnvironmentState, threadId: ThreadId): boolean {
-  return (
-    (state.messageIdsByThreadId[threadId]?.length ?? 0) > 0 ||
-    (state.activityIdsByThreadId[threadId]?.length ?? 0) > 0 ||
-    (state.proposedPlanIdsByThreadId[threadId]?.length ?? 0) > 0 ||
-    (state.turnDiffIdsByThreadId[threadId]?.length ?? 0) > 0
-  );
-}
-
 function retainDetailThreadIds(
   state: EnvironmentState,
   retainedThreadIds: readonly ThreadId[],
   preferredThreadIds: readonly ThreadId[],
 ): Set<ThreadId> {
   const retainedThreadIdSet = new Set(retainedThreadIds);
-  const detailThreadIds = retainedThreadIds.filter((threadId) => hasThreadDetail(state, threadId));
+  const detailThreadIds = retainedThreadIds.filter((threadId) =>
+    hasEnvironmentThreadDetailContent(state, threadId),
+  );
   const retained = new Set<ThreadId>();
 
   for (const threadId of preferredThreadIds) {
-    if (retainedThreadIdSet.has(threadId) && hasThreadDetail(state, threadId)) {
+    if (retainedThreadIdSet.has(threadId) && hasEnvironmentThreadDetailContent(state, threadId)) {
       retained.add(threadId);
     }
   }
@@ -502,7 +496,7 @@ export function readCachedThreadDetail(
   threadId: ThreadId,
 ): CachedThreadDetail | null {
   const cached = readDocument().environments[environmentId];
-  if (!cached || !hasThreadDetail(cached.state, threadId)) {
+  if (!cached || !hasEnvironmentThreadDetailContent(cached.state, threadId)) {
     return null;
   }
 

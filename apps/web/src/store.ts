@@ -51,6 +51,10 @@ import { resolveEnvironmentHttpUrl } from "./environments/runtime";
 import { sanitizeThreadErrorMessage } from "./rpc/transportError";
 import { getThreadFromEnvironmentState } from "./threadDerivation";
 import { compareThreadActivitiesByOrder } from "./threadActivityOrdering";
+import {
+  hasCachedThreadDetailContent,
+  hasEnvironmentThreadDetailContent,
+} from "./threadDetailContent";
 const isProviderDriverKindValue = Schema.is(ProviderDriverKind);
 
 export interface EnvironmentState {
@@ -3106,24 +3110,6 @@ export function hydrateCachedEnvironmentState(
   });
 }
 
-function hasStoredThreadDetail(state: EnvironmentState, threadId: ThreadId): boolean {
-  return (
-    (state.messageIdsByThreadId[threadId]?.length ?? 0) > 0 ||
-    (state.activityIdsByThreadId[threadId]?.length ?? 0) > 0 ||
-    (state.proposedPlanIdsByThreadId[threadId]?.length ?? 0) > 0 ||
-    (state.turnDiffIdsByThreadId[threadId]?.length ?? 0) > 0
-  );
-}
-
-function cachedThreadDetailHasContent(cached: CachedThreadDetail): boolean {
-  return (
-    cached.messageIds.length > 0 ||
-    cached.activityIds.length > 0 ||
-    cached.proposedPlanIds.length > 0 ||
-    cached.turnDiffIds.length > 0
-  );
-}
-
 export function hydrateCachedThreadDetail(
   state: AppState,
   environmentId: EnvironmentId,
@@ -3133,8 +3119,8 @@ export function hydrateCachedThreadDetail(
   const currentEnvironmentState = getStoredEnvironmentState(state, environmentId);
   if (
     !currentEnvironmentState.threadShellById[threadId] ||
-    hasStoredThreadDetail(currentEnvironmentState, threadId) ||
-    !cachedThreadDetailHasContent(cached)
+    hasEnvironmentThreadDetailContent(currentEnvironmentState, threadId) ||
+    !hasCachedThreadDetailContent(cached)
   ) {
     return state;
   }

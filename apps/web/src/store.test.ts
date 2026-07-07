@@ -905,6 +905,34 @@ describe("thread detail structural sharing", () => {
     expect(next).toBe(state);
   });
 
+  it("preserves live queued turns when hydrating cached thread detail", () => {
+    const threadId = ThreadId.make("thread-cache-live-queued-turn");
+    const queuedTurn = { ...makeQueuedTurn(1), threadId };
+    const liveThread = makeThread({
+      id: threadId,
+      queuedTurns: [queuedTurn],
+    });
+    const cachedThread = makeThread({
+      id: threadId,
+      messages: [{ ...makeMessage(2), text: "cached should not replace live queued turns" }],
+    });
+    const state = makeState(liveThread);
+
+    const next = hydrateCachedThreadDetail(
+      state,
+      localEnvironmentId,
+      threadId,
+      makeCachedThreadDetail(cachedThread),
+    );
+    const hydratedThread = selectThreadByRef(next, scopeThreadRef(localEnvironmentId, threadId));
+
+    expect(next).toBe(state);
+    expect(hydratedThread?.queuedTurns.map((entry) => entry.messageId)).toEqual([
+      queuedTurn.messageId,
+    ]);
+    expect(hydratedThread?.messages).toEqual([]);
+  });
+
   it("does not hydrate cached thread detail when the shell is missing", () => {
     const threadId = ThreadId.make("thread-cache-missing-shell");
     const cachedThread = makeThread({

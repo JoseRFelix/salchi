@@ -601,9 +601,38 @@ function toShellSnapshot(snapshot: OrchestrationReadModel) {
   };
 }
 
+function toStartupCacheSidebarThreadSummary(
+  thread: OrchestrationReadModel["threads"][number],
+): EnvironmentState["sidebarThreadSummaryById"][ThreadId] {
+  return {
+    id: thread.id,
+    environmentId: LOCAL_ENVIRONMENT_ID,
+    projectId: thread.projectId,
+    title: thread.title,
+    interactionMode: thread.interactionMode,
+    session: null,
+    createdAt: thread.createdAt,
+    archivedAt: thread.archivedAt,
+    updatedAt: thread.updatedAt,
+    latestTurn: thread.latestTurn,
+    branch: thread.branch,
+    worktreePath: thread.worktreePath,
+    latestUserMessageAt:
+      thread.messages.findLast((message) => message.role === "user")?.createdAt ?? null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+  };
+}
+
 function createStartupCacheEnvironmentState(
   snapshot: OrchestrationReadModel,
   threadId: ThreadId,
+  options: {
+    readonly sidebarThreadSummary?: Partial<
+      EnvironmentState["sidebarThreadSummaryById"][ThreadId]
+    > | null;
+  } = {},
 ): EnvironmentState {
   const thread = snapshot.threads.find((entry) => entry.id === threadId);
   if (!thread) {
@@ -613,6 +642,13 @@ function createStartupCacheEnvironmentState(
   if (!project) {
     throw new Error(`Expected project ${thread.projectId} in startup cache fixture.`);
   }
+  const sidebarThreadSummary =
+    options.sidebarThreadSummary === undefined || options.sidebarThreadSummary === null
+      ? null
+      : {
+          ...toStartupCacheSidebarThreadSummary(thread),
+          ...options.sidebarThreadSummary,
+        };
 
   return {
     projectIds: [project.id],
@@ -741,7 +777,11 @@ function createStartupCacheEnvironmentState(
     threadDetailPageInfoByThreadId: {
       [thread.id]: EMPTY_ORCHESTRATION_THREAD_DETAIL_PAGE_INFO,
     },
-    sidebarThreadSummaryById: {},
+    sidebarThreadSummaryById: sidebarThreadSummary
+      ? {
+          [thread.id]: sidebarThreadSummary,
+        }
+      : {},
     bootstrapComplete: false,
   };
 }
@@ -4974,6 +5014,47 @@ describe("ChatView timeline estimator parity (full app)", () => {
         mounted.router,
         (path) => path === serverThreadPath(THREAD_ID),
         "Fresh startup bootstrap threads should open from the base route.",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("uses cached startup sidebar summaries when checking bootstrap freshness", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(BASE_TIME_MS + 9 * 60 * 60 * 1000);
+    const freshActivityAt = new Date(BASE_TIME_MS + 2 * 60 * 60 * 1000).toISOString();
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-sidebar-summary-bootstrap-test" as MessageId,
+      targetText: "sidebar summary bootstrap target",
+    });
+    const freshSnapshot = {
+      ...snapshot,
+      threads: snapshot.threads.map((thread) =>
+        thread.id === THREAD_ID ? { ...thread, updatedAt: freshActivityAt } : thread,
+      ),
+    };
+    writeCachedEnvironmentState(
+      LOCAL_ENVIRONMENT_ID,
+      createStartupCacheEnvironmentState(freshSnapshot, THREAD_ID, {
+        sidebarThreadSummary: {
+          latestUserMessageAt: freshActivityAt,
+          updatedAt: freshActivityAt,
+        },
+      }),
+      { preferredThreadIds: [THREAD_ID] },
+    );
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: freshSnapshot,
+      initialPath: "/",
+    });
+
+    try {
+      await waitForURL(
+        mounted.router,
+        (path) => path === serverThreadPath(THREAD_ID),
+        "Fresh startup sidebar summaries should open from the base route.",
       );
     } finally {
       await mounted.cleanup();

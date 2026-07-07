@@ -7,6 +7,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   TurnId,
+  type OrchestrationProposedPlanId,
   type OrchestrationThreadDetailPageInfo,
 } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -68,7 +69,7 @@ function makeEnvironmentState(
   const messageId = MessageId.make("message-1");
   const queuedTurnId = MessageId.make("queued-message-1");
   const activityId = EventId.make("activity-1");
-  const planId = "plan-1" as never;
+  const planId = "plan-1" as OrchestrationProposedPlanId;
   const turnId = TurnId.make("turn-1");
   const createdAt = "2026-04-01T00:01:00.000Z";
   const hasDetail = input.messageText !== undefined;

@@ -98,6 +98,7 @@ import {
   removeCachedEnvironmentState,
   scheduleCachedEnvironmentStateWrite,
 } from "~/orchestrationStartupCache";
+import { hasEnvironmentThreadDetailContent } from "~/threadDetailContent";
 import type { Thread } from "~/types";
 
 type BearerSessionLike =
@@ -2733,10 +2734,7 @@ function hydrateThreadDetailFromStartupCacheIfMissing(
   const environmentState = useStore.getState().environmentStateById[environmentId];
   if (
     !environmentState?.threadShellById[threadId] ||
-    (environmentState.messageIdsByThreadId[threadId]?.length ?? 0) > 0 ||
-    (environmentState.activityIdsByThreadId[threadId]?.length ?? 0) > 0 ||
-    (environmentState.proposedPlanIdsByThreadId[threadId]?.length ?? 0) > 0 ||
-    (environmentState.turnDiffIdsByThreadId[threadId]?.length ?? 0) > 0
+    hasEnvironmentThreadDetailContent(environmentState, threadId)
   ) {
     return;
   }
