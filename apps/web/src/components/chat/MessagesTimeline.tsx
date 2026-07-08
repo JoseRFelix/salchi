@@ -170,7 +170,7 @@ interface MessagesTimelineProps {
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   latestTurn: TimelineLatestTurn | null;
   activeTurnId: TurnId | null;
-  turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
@@ -203,7 +203,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   timelineEntries,
   latestTurn,
   activeTurnId,
-  turnDiffSummaryByAssistantMessageId,
+  turnDiffSummaries,
   routeThreadKey,
   onOpenTurnDiff,
   revertTurnCountByUserMessageId,
@@ -300,7 +300,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         expandedTurnIds,
         isWorking,
         activeTurnStartedAt,
-        turnDiffSummaryByAssistantMessageId,
+        turnDiffSummaries,
         revertTurnCountByUserMessageId,
       }),
     [
@@ -310,7 +310,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedTurnIds,
       isWorking,
       activeTurnStartedAt,
-      turnDiffSummaryByAssistantMessageId,
+      turnDiffSummaries,
       revertTurnCountByUserMessageId,
     ],
   );

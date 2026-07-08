@@ -9,14 +9,14 @@ import {
   readPendingNotificationClick,
 } from "./pendingNotificationClick";
 
-export const NOTIFICATION_CLICK_MESSAGE_TYPE = "t3.notification-click";
-// Mirrored in public/t3-push-service-worker.js. The service worker is a plain
+export const NOTIFICATION_CLICK_MESSAGE_TYPE = "salchi.notification-click";
+// Mirrored in public/salchi-push-service-worker.js. The service worker is a plain
 // public asset, so it cannot import this TypeScript helper directly.
-export const NOTIFICATION_CLICK_ACK_MESSAGE_TYPE = "t3.notification-click-ack";
-export const NOTIFICATION_CLICK_HANDLED_MESSAGE_TYPE = "t3.notification-click-handled";
-// Mirrored in public/t3-push-service-worker.js. The service worker is a plain
+export const NOTIFICATION_CLICK_ACK_MESSAGE_TYPE = "salchi.notification-click-ack";
+export const NOTIFICATION_CLICK_HANDLED_MESSAGE_TYPE = "salchi.notification-click-handled";
+// Mirrored in public/salchi-push-service-worker.js. The service worker is a plain
 // public asset, so it cannot import this TypeScript helper directly.
-export const NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME = "t3-notification-click";
+export const NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME = "salchi-notification-click";
 
 let lastNotificationNavigationTarget: NotificationNavigationTarget | null = null;
 let lastHandledClick: { readonly url: string; readonly openedAt: number } | null = null;

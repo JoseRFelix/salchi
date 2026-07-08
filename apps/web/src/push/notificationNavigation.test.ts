@@ -200,12 +200,12 @@ describe("notificationNavigation", () => {
   it("recognizes notification click service worker messages", () => {
     expect(
       isNotificationClickClientMessage({
-        type: "t3.notification-click",
+        type: "salchi.notification-click",
         url: "/env-1/thread-1",
       }),
     ).toBe(true);
     expect(isNotificationClickClientMessage({ type: "other", url: "/env-1/thread-1" })).toBe(false);
-    expect(isNotificationClickClientMessage({ type: "t3.notification-click" })).toBe(false);
+    expect(isNotificationClickClientMessage({ type: "salchi.notification-click" })).toBe(false);
   });
 
   it("resolves same-origin URLs and rejects cross-origin URLs", () => {
@@ -268,7 +268,7 @@ describe("notificationNavigation", () => {
     const cleanup = installServiceWorkerNotificationNavigation(router);
     const openedAt = Date.now();
     serviceWorker.dispatch({
-      type: "t3.notification-click",
+      type: "salchi.notification-click",
       url: "/env-1/thread-1",
       openedAt,
     });
@@ -300,7 +300,7 @@ describe("notificationNavigation", () => {
 
     cleanup();
     serviceWorker.dispatch({
-      type: "t3.notification-click",
+      type: "salchi.notification-click",
       url: "/env-2/thread-2",
     });
     expect(router.navigate).toHaveBeenCalledTimes(1);
@@ -326,7 +326,7 @@ describe("notificationNavigation", () => {
       openedAt,
     });
     serviceWorker.broadcastChannel?.dispatch(NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME, {
-      type: "t3.notification-click",
+      type: "salchi.notification-click",
       url: "/env-1/thread-1",
       openedAt,
     });
@@ -378,19 +378,19 @@ describe("notificationNavigation", () => {
 
     const cleanup = installServiceWorkerNotificationNavigation(router);
     serviceWorker.dispatch({
-      type: "t3.notification-click",
+      type: "salchi.notification-click",
       url: "/env-1/thread-1",
       openedAt,
     });
     serviceWorker.broadcastChannel?.dispatch(NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME, {
-      type: "t3.notification-click",
+      type: "salchi.notification-click",
       url: "/env-1/thread-1",
       openedAt,
     });
     expect(router.navigate).toHaveBeenCalledTimes(1);
 
     serviceWorker.broadcastChannel?.dispatch(NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME, {
-      type: "t3.notification-click",
+      type: "salchi.notification-click",
       url: "/env-1/thread-1",
       openedAt: openedAt + 1,
     });
@@ -424,7 +424,7 @@ describe("notificationNavigation", () => {
     serviceWorker.setCacheStorage(cacheStorage as unknown as CacheStorage);
     await flushMicrotasks();
     serviceWorker.broadcastChannel?.dispatch(NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME, {
-      type: "t3.notification-click",
+      type: "salchi.notification-click",
       url: "/env-1/thread-1",
       openedAt,
     });
@@ -451,7 +451,7 @@ describe("notificationNavigation", () => {
     await flushMicrotasks();
     serviceWorker.setDocumentHasFocus(false);
     serviceWorker.broadcastChannel?.dispatch(NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME, {
-      type: "t3.notification-click",
+      type: "salchi.notification-click",
       url: "/env-1/thread-1",
       openedAt,
     });
@@ -501,7 +501,7 @@ describe("notificationNavigation", () => {
     await flushMicrotasks();
     serviceWorker.setDocumentHasFocus(false);
     serviceWorker.broadcastChannel?.dispatch(NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME, {
-      type: "t3.notification-click",
+      type: "salchi.notification-click",
       url: "/env-1/thread-1",
       openedAt,
     });
@@ -531,7 +531,7 @@ describe("notificationNavigation", () => {
     await flushMicrotasks();
     serviceWorker.setDocumentHasFocus(false);
     serviceWorker.broadcastChannel?.dispatch(NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME, {
-      type: "t3.notification-click",
+      type: "salchi.notification-click",
       url: "/env-1/thread-1",
       openedAt,
     });
@@ -562,7 +562,7 @@ describe("notificationNavigation", () => {
 
     const cleanup = installServiceWorkerNotificationNavigation(router);
     serviceWorker.dispatch({
-      type: "t3.notification-click",
+      type: "salchi.notification-click",
       url: "/env-1/thread-1",
       openedAt,
     });

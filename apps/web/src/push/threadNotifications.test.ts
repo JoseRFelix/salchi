@@ -69,7 +69,7 @@ describe("closeThreadNotifications", () => {
       makeNotification("thread:thread-1:turn:turn-1"),
       makeNotification("thread:thread-1:approval:activity-1"),
       makeNotification("thread:thread-2:turn:turn-1"),
-      makeNotification("t3code"),
+      makeNotification("salchi-other"),
     ];
     installPushSupport(async () => ({
       getNotifications: async () => notifications,
@@ -243,7 +243,7 @@ describe("requestServiceWorkerBadgeSync", () => {
     await expect(requestServiceWorkerBadgeSync()).resolves.toBe(true);
 
     expect(postMessage).toHaveBeenCalledWith({
-      type: "t3.sync-displayed-notification-badge",
+      type: "salchi.sync-displayed-notification-badge",
     });
   });
 
@@ -283,7 +283,7 @@ describe("requestServiceWorkerTurnCompletionNotificationClear", () => {
     await expect(requestServiceWorkerTurnCompletionNotificationClear()).resolves.toBe(true);
 
     expect(postMessage).toHaveBeenCalledWith({
-      type: "t3.clear-turn-completion-notifications",
+      type: "salchi.clear-turn-completion-notifications",
     });
   });
 });
@@ -308,7 +308,7 @@ describe("clearTurnCompletionAlerts", () => {
 
     expect(notifications.map((notification) => notification.closed)).toEqual([true, false]);
     expect(postMessage).toHaveBeenCalledWith({
-      type: "t3.clear-turn-completion-notifications",
+      type: "salchi.clear-turn-completion-notifications",
     });
   });
 
@@ -327,7 +327,7 @@ describe("clearTurnCompletionAlerts", () => {
 
     expect(notifications[0]?.closed).toBe(true);
     expect(postMessage).toHaveBeenCalledWith({
-      type: "t3.clear-turn-completion-notifications",
+      type: "salchi.clear-turn-completion-notifications",
     });
   });
 });

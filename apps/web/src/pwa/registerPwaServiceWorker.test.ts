@@ -173,7 +173,7 @@ describe("registerPwaServiceWorker", () => {
     const registerOptions = readRegisterSWOptions();
     expect(registerOptions.immediate).toBe(true);
 
-    registerOptions.onRegisteredSW?.("/t3-service-worker.js", registration);
+    registerOptions.onRegisteredSW?.("/salchi-service-worker.js", registration);
 
     expect(registration.update).toHaveBeenCalledTimes(1);
     expect(usePwaServiceWorkerUpdateStore.getState().checkPhase).toBe("checking");
@@ -189,17 +189,17 @@ describe("registerPwaServiceWorker", () => {
     const registration = createRegistration(() => Promise.resolve(), null, { postMessage });
 
     registerPwaServiceWorker();
-    readRegisterSWOptions().onRegisteredSW?.("/t3-service-worker.js", registration);
+    readRegisterSWOptions().onRegisteredSW?.("/salchi-service-worker.js", registration);
 
     expect(postMessage).toHaveBeenCalledWith({
-      type: "t3.clear-turn-completion-notifications",
+      type: "salchi.clear-turn-completion-notifications",
     });
     postMessage.mockClear();
 
     browserEnvironment.dispatchVisibilityChange();
 
     expect(postMessage).toHaveBeenCalledWith({
-      type: "t3.clear-turn-completion-notifications",
+      type: "salchi.clear-turn-completion-notifications",
     });
   });
 
@@ -208,7 +208,7 @@ describe("registerPwaServiceWorker", () => {
     const registration = createRegistration();
 
     registerPwaServiceWorker();
-    readRegisterSWOptions().onRegisteredSW?.("/t3-service-worker.js", registration);
+    readRegisterSWOptions().onRegisteredSW?.("/salchi-service-worker.js", registration);
 
     expect(registration.update).not.toHaveBeenCalled();
     expect(usePwaServiceWorkerUpdateStore.getState().checkPhase).toBe("idle");
@@ -222,7 +222,7 @@ describe("registerPwaServiceWorker", () => {
     );
 
     registerPwaServiceWorker();
-    readRegisterSWOptions().onRegisteredSW?.("/t3-service-worker.js", registration);
+    readRegisterSWOptions().onRegisteredSW?.("/salchi-service-worker.js", registration);
 
     expect(browserEnvironment.intervalHandlers).toHaveLength(1);
     expect(registration.update).toHaveBeenCalledTimes(1);
@@ -248,7 +248,7 @@ describe("registerPwaServiceWorker", () => {
 
     registerPwaServiceWorker();
     const registerOptions = readRegisterSWOptions();
-    registerOptions.onRegisteredSW?.("/t3-service-worker.js", registration);
+    registerOptions.onRegisteredSW?.("/salchi-service-worker.js", registration);
 
     expect(usePwaServiceWorkerUpdateStore.getState().checkPhase).toBe("checking");
 
@@ -271,7 +271,7 @@ describe("registerPwaServiceWorker", () => {
 
     registerPwaServiceWorker();
     const registerOptions = readRegisterSWOptions();
-    registerOptions.onRegisteredSW?.("/t3-service-worker.js", registration);
+    registerOptions.onRegisteredSW?.("/salchi-service-worker.js", registration);
 
     expect(usePwaServiceWorkerUpdateStore.getState()).toMatchObject({
       checkPhase: "checking",
@@ -306,7 +306,7 @@ describe("registerPwaServiceWorker", () => {
     const registration = createRegistration(() => startupUpdate.promise, installingWorker);
 
     registerPwaServiceWorker();
-    readRegisterSWOptions().onRegisteredSW?.("/t3-service-worker.js", registration);
+    readRegisterSWOptions().onRegisteredSW?.("/salchi-service-worker.js", registration);
 
     startupUpdate.resolve();
     await flushMicrotasks();
@@ -329,7 +329,7 @@ describe("registerPwaServiceWorker", () => {
     const registration = createRegistration(() => Promise.resolve(), installingWorker);
 
     registerPwaServiceWorker();
-    readRegisterSWOptions().onRegisteredSW?.("/t3-service-worker.js", registration);
+    readRegisterSWOptions().onRegisteredSW?.("/salchi-service-worker.js", registration);
 
     await flushMicrotasks();
 

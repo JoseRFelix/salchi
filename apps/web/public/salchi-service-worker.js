@@ -1,4 +1,4 @@
-importScripts("/t3-push-service-worker.js");
+importScripts("/salchi-push-service-worker.js");
 
 self.addEventListener("install", (event) => {
   event.waitUntil(self.skipWaiting());

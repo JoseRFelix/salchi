@@ -182,7 +182,6 @@ const TimelineHarness = forwardRef<TimelineHarnessHandle>(function TimelineHarne
     buildTimelineEntries(TIMELINE_ROW_COUNT),
   );
   const listRef = useRef<VirtualizedListHandle | null>(null);
-  const emptyTurnDiffSummary = useMemo(() => new Map(), []);
   const emptyRevertTurnCount = useMemo(() => new Map(), []);
 
   useImperativeHandle(
@@ -266,7 +265,7 @@ const TimelineHarness = forwardRef<TimelineHarnessHandle>(function TimelineHarne
         timelineEntries={timelineEntries}
         latestTurn={null}
         activeTurnId={null}
-        turnDiffSummaryByAssistantMessageId={emptyTurnDiffSummary}
+        turnDiffSummaries={[]}
         routeThreadKey="environment-local:thread-real-list"
         onOpenTurnDiff={() => {}}
         revertTurnCountByUserMessageId={emptyRevertTurnCount}
@@ -293,7 +292,6 @@ function TimelineFixture({
   width: number;
 }) {
   const listRef = useRef<VirtualizedListHandle | null>(null);
-  const emptyTurnDiffSummary = useMemo(() => new Map(), []);
   const emptyRevertTurnCount = useMemo(() => new Map(), []);
 
   return (
@@ -314,7 +312,7 @@ function TimelineFixture({
         timelineEntries={timelineEntries}
         latestTurn={null}
         activeTurnId={null}
-        turnDiffSummaryByAssistantMessageId={emptyTurnDiffSummary}
+        turnDiffSummaries={[]}
         routeThreadKey="environment-local:thread-overflow"
         onOpenTurnDiff={() => {}}
         revertTurnCountByUserMessageId={emptyRevertTurnCount}

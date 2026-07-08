@@ -101,6 +101,10 @@ function isEnvironmentStateLike(value: unknown): value is EnvironmentState {
     isRecord(value.turnDiffSummaryByThreadId) &&
     (value.threadDetailPageInfoByThreadId === undefined ||
       isRecord(value.threadDetailPageInfoByThreadId)) &&
+    (value.lastAppliedEventSequenceByThreadId === undefined ||
+      isRecord(value.lastAppliedEventSequenceByThreadId)) &&
+    (value.lastAppliedEventIdByThreadId === undefined ||
+      isRecord(value.lastAppliedEventIdByThreadId)) &&
     isRecord(value.sidebarThreadSummaryById)
   );
 }
@@ -155,6 +159,14 @@ function readDocument(): CachedOrchestrationDocument {
           ...entry.state,
           threadDetailPageInfoByThreadId: isRecord(entry.state.threadDetailPageInfoByThreadId)
             ? entry.state.threadDetailPageInfoByThreadId
+            : {},
+          lastAppliedEventSequenceByThreadId: isRecord(
+            entry.state.lastAppliedEventSequenceByThreadId,
+          )
+            ? (entry.state.lastAppliedEventSequenceByThreadId as Record<ThreadId, number>)
+            : {},
+          lastAppliedEventIdByThreadId: isRecord(entry.state.lastAppliedEventIdByThreadId)
+            ? (entry.state.lastAppliedEventIdByThreadId as Record<ThreadId, string>)
             : {},
           bootstrapComplete: false,
         },
@@ -464,6 +476,14 @@ function createCachedEnvironmentState(
       state.threadDetailPageInfoByThreadId,
       detailThreadIds,
     ),
+    lastAppliedEventSequenceByThreadId: pickThreadRecord(
+      state.lastAppliedEventSequenceByThreadId ?? {},
+      retainedThreadIdSet,
+    ),
+    lastAppliedEventIdByThreadId: pickThreadRecord(
+      state.lastAppliedEventIdByThreadId ?? {},
+      retainedThreadIdSet,
+    ),
     sidebarThreadSummaryById: pickThreadRecord(state.sidebarThreadSummaryById, retainedThreadIdSet),
     bootstrapComplete: false,
   };
@@ -486,6 +506,8 @@ export function readCachedEnvironmentState(environmentId: EnvironmentId): Enviro
         ...cached.state,
         queuedTurnIdsByThreadId: cached.state.queuedTurnIdsByThreadId ?? {},
         queuedTurnByThreadId: cached.state.queuedTurnByThreadId ?? {},
+        lastAppliedEventSequenceByThreadId: cached.state.lastAppliedEventSequenceByThreadId ?? {},
+        lastAppliedEventIdByThreadId: cached.state.lastAppliedEventIdByThreadId ?? {},
         bootstrapComplete: false,
       }
     : null;

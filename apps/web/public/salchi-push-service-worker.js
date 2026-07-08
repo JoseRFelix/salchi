@@ -1,25 +1,26 @@
 const DEFAULT_NOTIFICATION_TITLE = "Salchi";
 const DEFAULT_NOTIFICATION_URL = "/";
-const NOTIFICATION_CLICK_MESSAGE_TYPE = "t3.notification-click";
+const NOTIFICATION_CLICK_MESSAGE_TYPE = "salchi.notification-click";
 // Mirrored in src/push/notificationNavigation.ts. The service worker is a
 // public plain JS asset, so it cannot import the TypeScript helper directly.
-const NOTIFICATION_CLICK_ACK_MESSAGE_TYPE = "t3.notification-click-ack";
+const NOTIFICATION_CLICK_ACK_MESSAGE_TYPE = "salchi.notification-click-ack";
 // Mirrored in src/push/notificationNavigation.ts. The service worker is a
 // public plain JS asset, so it cannot import the TypeScript helper directly.
-const NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME = "t3-notification-click";
+const NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME = "salchi-notification-click";
 const NOTIFICATION_CLICK_ACK_TIMEOUT_MS = 2000;
 const NOTIFICATION_TITLE_SOURCE_SUFFIX = /(?:^|\s+)from\s+Salchi\s*$/i;
 // Mirrored in src/push/pendingNotificationClick.ts. The service worker is a
 // public plain JS asset, so it cannot import the TypeScript helper directly.
-const PENDING_NOTIFICATION_CLICK_CACHE_NAME = "t3-notification-click-v1";
-const PENDING_NOTIFICATION_CLICK_REQUEST_PATH = "/__t3-notification-click/pending";
+const PENDING_NOTIFICATION_CLICK_CACHE_NAME = "salchi-notification-click-v1";
+const PENDING_NOTIFICATION_CLICK_REQUEST_PATH = "/__salchi-notification-click/pending";
 // Matches turn-completion notification tags (thread:{threadId}:turn:{turnId}).
 // The app icon badge counts only completed turns, so approval/input request
 // notifications and the default "salchi" tag must be excluded.
 const TURN_NOTIFICATION_TAG_PATTERN = /^thread:(.+):turn:[^:]+$/;
 const THREAD_NOTIFICATION_TAG_PREFIX = /^thread:(.+?):/;
-const SYNC_BADGE_MESSAGE_TYPE = "t3.sync-displayed-notification-badge";
-const CLEAR_TURN_COMPLETION_NOTIFICATIONS_MESSAGE_TYPE = "t3.clear-turn-completion-notifications";
+const SYNC_BADGE_MESSAGE_TYPE = "salchi.sync-displayed-notification-badge";
+const CLEAR_TURN_COMPLETION_NOTIFICATIONS_MESSAGE_TYPE =
+  "salchi.clear-turn-completion-notifications";
 const notificationClickAckWaiters = new Map();
 
 self.addEventListener("push", (event) => {

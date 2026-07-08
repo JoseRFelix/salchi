@@ -644,6 +644,11 @@ export function projectEvent(
         if (!thread) {
           return nextBase;
         }
+        const assistantMessageId =
+          thread.messages
+            .toReversed()
+            .find((message) => message.role === "assistant" && message.turnId === payload.turnId)
+            ?.id ?? payload.assistantMessageId;
 
         const checkpoint = yield* decodeForEvent(
           OrchestrationCheckpointSummary,
@@ -654,7 +659,7 @@ export function projectEvent(
             status: payload.status,
             files: payload.files,
             attribution: payload.attribution,
-            assistantMessageId: payload.assistantMessageId,
+            assistantMessageId,
             completedAt: payload.completedAt,
           },
           event.type,
@@ -701,7 +706,7 @@ export function projectEvent(
                       ? (thread.latestTurn.startedAt ?? payload.completedAt)
                       : payload.completedAt,
                   completedAt: payload.completedAt,
-                  assistantMessageId: payload.assistantMessageId,
+                  assistantMessageId,
                 },
             updatedAt: event.occurredAt,
           }),

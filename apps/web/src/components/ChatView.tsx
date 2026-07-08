@@ -2016,6 +2016,13 @@ export default function ChatView(props: ChatViewProps) {
   );
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
+  const turnDiffSummaryByTurnId = useMemo(() => {
+    const byTurnId = new Map<TurnId, TurnDiffSummary>();
+    for (const summary of turnDiffSummaries) {
+      byTurnId.set(summary.turnId, summary);
+    }
+    return byTurnId;
+  }, [turnDiffSummaries]);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
     const byMessageId = new Map<MessageId, TurnDiffSummary>();
     for (const summary of turnDiffSummaries) {
@@ -2040,7 +2047,10 @@ export default function ChatView(props: ChatViewProps) {
         if (nextEntry.message.role === "user") {
           break;
         }
-        const summary = turnDiffSummaryByAssistantMessageId.get(nextEntry.message.id);
+        const summary =
+          (nextEntry.message.turnId
+            ? turnDiffSummaryByTurnId.get(nextEntry.message.turnId)
+            : undefined) ?? turnDiffSummaryByAssistantMessageId.get(nextEntry.message.id);
         if (!summary) {
           continue;
         }
@@ -2055,7 +2065,12 @@ export default function ChatView(props: ChatViewProps) {
     }
 
     return byUserMessageId;
-  }, [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId]);
+  }, [
+    inferredCheckpointTurnCountByTurnId,
+    timelineEntries,
+    turnDiffSummaryByAssistantMessageId,
+    turnDiffSummaryByTurnId,
+  ]);
 
   const gitCwd = activeProject
     ? projectScriptCwd({
@@ -4674,7 +4689,7 @@ export default function ChatView(props: ChatViewProps) {
               timelineEntries={timelineEntries}
               latestTurn={activeLatestTurn}
               activeTurnId={activeThread.session?.activeTurnId ?? null}
-              turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+              turnDiffSummaries={turnDiffSummaries}
               activeThreadEnvironmentId={activeThread.environmentId}
               routeThreadKey={routeThreadKey}
               onOpenTurnDiff={onOpenTurnDiff}

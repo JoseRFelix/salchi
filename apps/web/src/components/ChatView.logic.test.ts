@@ -1217,7 +1217,10 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     for (const terminalSession of terminalSessions) {
       expect(
         hasServerAcknowledgedLocalDispatch({
-          localDispatch: makeLocalDispatch(),
+          localDispatch: {
+            ...makeLocalDispatch(),
+            startedAt: "2026-03-29T00:00:10.000Z",
+          },
           phase: "ready",
           latestTurn: previousLatestTurn,
           session: {
@@ -1230,6 +1233,35 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
           threadError: null,
         }),
       ).toBe(true);
+    }
+  });
+
+  it("does not clear local dispatch for stale terminal session status", () => {
+    const terminalSessions = [
+      { orchestrationStatus: "error" as const, status: "error" as const },
+      { orchestrationStatus: "stopped" as const, status: "closed" as const },
+      { orchestrationStatus: "interrupted" as const, status: "ready" as const },
+    ];
+
+    for (const terminalSession of terminalSessions) {
+      expect(
+        hasServerAcknowledgedLocalDispatch({
+          localDispatch: {
+            ...makeLocalDispatch(),
+            startedAt: "2026-03-29T00:00:12.000Z",
+          },
+          phase: "ready",
+          latestTurn: previousLatestTurn,
+          session: {
+            ...previousSession,
+            ...terminalSession,
+            updatedAt: "2026-03-29T00:00:11.000Z",
+          },
+          pendingApprovalCreatedAt: null,
+          pendingUserInputCreatedAt: null,
+          threadError: null,
+        }),
+      ).toBe(false);
     }
   });
 

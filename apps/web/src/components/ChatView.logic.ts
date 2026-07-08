@@ -537,7 +537,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     session?.orchestrationStatus === "stopped" ||
     session?.orchestrationStatus === "interrupted"
   ) {
-    return true;
+    return isLocalDispatchFollowUpTimestamp(session.updatedAt, input.localDispatch.startedAt);
   }
 
   if (
