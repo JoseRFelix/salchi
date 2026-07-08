@@ -19,6 +19,7 @@ import {
   toggleThreadExpanded,
   type UiState,
 } from "./uiStateStore";
+import { hasUnseenCompletion } from "./threadCompletion";
 
 function makeUiState(overrides: Partial<UiState> = {}): UiState {
   return {
@@ -395,6 +396,56 @@ describe("uiStateStore pure functions", () => {
     });
   });
 
+  it("syncThreads prunes only synced environments for scoped thread UI state", () => {
+    const envARetained = "envA:thread-retained";
+    const envADropped = "envA:thread-dropped";
+    const envBRetained = "envB:thread-retained";
+    const initialState = makeUiState({
+      threadExpandedById: {
+        [envARetained]: false,
+        [envADropped]: false,
+        [envBRetained]: false,
+      },
+      threadLastVisitedAtById: {
+        [envARetained]: "2026-02-25T12:35:00.000Z",
+        [envADropped]: "2026-02-25T12:36:00.000Z",
+        [envBRetained]: "2026-02-25T12:37:00.000Z",
+      },
+      seededThreadVisitedKeys: new Set([envARetained, envADropped, envBRetained]),
+      threadChangedFilesExpandedById: {
+        [envARetained]: {
+          "turn-retained-a": false,
+        },
+        [envADropped]: {
+          "turn-dropped-a": false,
+        },
+        [envBRetained]: {
+          "turn-retained-b": false,
+        },
+      },
+    });
+
+    const next = syncThreads(initialState, [{ key: envARetained }]);
+
+    expect(next.threadExpandedById).toEqual({
+      [envARetained]: false,
+      [envBRetained]: false,
+    });
+    expect(next.threadLastVisitedAtById).toEqual({
+      [envARetained]: "2026-02-25T12:35:00.000Z",
+      [envBRetained]: "2026-02-25T12:37:00.000Z",
+    });
+    expect(next.seededThreadVisitedKeys).toEqual(new Set([envARetained, envBRetained]));
+    expect(next.threadChangedFilesExpandedById).toEqual({
+      [envARetained]: {
+        "turn-retained-a": false,
+      },
+      [envBRetained]: {
+        "turn-retained-b": false,
+      },
+    });
+  });
+
   it("syncThreads seeds visit state for unseen snapshot threads", () => {
     const thread1 = ThreadId.make("thread-1");
     const initialState = makeUiState();
@@ -475,6 +526,34 @@ describe("uiStateStore pure functions", () => {
     expect(next).toBe(visited);
     expect(next.threadLastVisitedAtById[thread1]).toBe("2026-02-25T12:35:30.000Z");
     expect(next.seededThreadVisitedKeys).toEqual(new Set());
+  });
+
+  it("syncThreads does not bump restored real visits with snapshot seeds", () => {
+    const thread1 = "envA:thread-1";
+    const initialState = makeUiState({
+      threadLastVisitedAtById: {
+        [thread1]: "2026-02-25T12:35:30.000Z",
+      },
+    });
+
+    const next = syncThreads(initialState, [
+      {
+        key: thread1,
+        seedVisitedAt: "2026-02-25T12:36:00.000Z",
+      },
+    ]);
+
+    expect(next).toBe(initialState);
+    expect(next.threadLastVisitedAtById[thread1]).toBe("2026-02-25T12:35:30.000Z");
+    expect(next.seededThreadVisitedKeys).toEqual(new Set());
+    expect(
+      hasUnseenCompletion({
+        latestTurn: {
+          completedAt: "2026-02-25T12:35:31.000Z",
+        },
+        lastVisitedAt: next.threadLastVisitedAtById[thread1],
+      }),
+    ).toBe(true);
   });
 
   it("markThreadUnread un-seeds a thread so newer seeds do not overwrite the unread marker", () => {
@@ -773,6 +852,113 @@ describe("uiStateStore persistence round-trip", () => {
     vi.resetModules();
     const { useUiStateStore } = await import("./uiStateStore");
     expect(useUiStateStore.getState().threadExpandedById).toEqual({ [thread1]: false });
+  });
+
+  it("persists only non-seeded thread visit entries", () => {
+    const realVisitThread = "envA:thread-real";
+    const seededVisitThread = "envA:thread-seeded";
+    const state = makeUiState({
+      threadLastVisitedAtById: {
+        [realVisitThread]: "2026-02-25T12:35:00.000Z",
+        [seededVisitThread]: "2026-02-25T12:36:00.000Z",
+      },
+      seededThreadVisitedKeys: new Set([seededVisitThread]),
+    });
+
+    persistState(state);
+
+    const persisted = JSON.parse(
+      localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
+    ) as PersistedUiState;
+    expect(persisted.threadLastVisitedAtById).toEqual({
+      [realVisitThread]: "2026-02-25T12:35:00.000Z",
+    });
+  });
+
+  it("restores marked visited thread entries without seeded markers", async () => {
+    const thread1 = "envA:thread-visited";
+    const state = markThreadVisited(makeUiState(), thread1, "2026-02-25T12:35:00.000Z");
+
+    persistState(state);
+
+    vi.resetModules();
+    const { useUiStateStore } = await import("./uiStateStore");
+    expect(useUiStateStore.getState().threadLastVisitedAtById).toEqual({
+      [thread1]: "2026-02-25T12:35:00.000Z",
+    });
+    expect(useUiStateStore.getState().seededThreadVisitedKeys).toEqual(new Set());
+  });
+
+  it("restores marked unread thread entries", async () => {
+    const thread1 = "envA:thread-unread";
+    const state = markThreadUnread(makeUiState(), thread1, "2026-02-25T12:35:00.000Z");
+
+    persistState(state);
+
+    vi.resetModules();
+    const { useUiStateStore } = await import("./uiStateStore");
+    expect(useUiStateStore.getState().threadLastVisitedAtById).toEqual({
+      [thread1]: "2026-02-25T12:34:59.999Z",
+    });
+    expect(useUiStateStore.getState().seededThreadVisitedKeys).toEqual(new Set());
+  });
+
+  it("loads legacy blobs without thread visit state", async () => {
+    localStorageStub.setItem(
+      PERSISTED_STATE_KEY,
+      JSON.stringify({
+        collapsedProjectCwds: [],
+        expandedProjectCwds: [],
+      } satisfies PersistedUiState),
+    );
+
+    vi.resetModules();
+    const { useUiStateStore } = await import("./uiStateStore");
+    expect(useUiStateStore.getState().threadLastVisitedAtById).toEqual({});
+  });
+
+  it("sanitizes persisted thread visit entries", async () => {
+    localStorageStub.setItem(
+      PERSISTED_STATE_KEY,
+      JSON.stringify({
+        collapsedProjectCwds: [],
+        expandedProjectCwds: [],
+        threadLastVisitedAtById: {
+          "": "2026-02-25T12:35:00.000Z",
+          "envA:thread-valid": "2026-02-25T12:35:00.000Z",
+          "envA:thread-bad-date": "not-a-date",
+          "envA:thread-non-string": 123,
+        },
+      }),
+    );
+
+    vi.resetModules();
+    const { useUiStateStore } = await import("./uiStateStore");
+    expect(useUiStateStore.getState().threadLastVisitedAtById).toEqual({
+      "envA:thread-valid": "2026-02-25T12:35:00.000Z",
+    });
+  });
+
+  it("keeps restored thread visits for environments missing from the first sync", async () => {
+    const envAThread = "envA:thread-1";
+    const envBThread = "envB:thread-2";
+    const state = makeUiState({
+      threadLastVisitedAtById: {
+        [envAThread]: "2026-02-25T12:35:00.000Z",
+        [envBThread]: "2026-02-25T12:36:00.000Z",
+      },
+    });
+
+    persistState(state);
+
+    vi.resetModules();
+    const { useUiStateStore } = await import("./uiStateStore");
+    useUiStateStore.getState().syncThreads([{ key: envAThread }]);
+
+    expect(useUiStateStore.getState().threadLastVisitedAtById).toEqual({
+      [envAThread]: "2026-02-25T12:35:00.000Z",
+      [envBThread]: "2026-02-25T12:36:00.000Z",
+    });
   });
 
   it("preserves expand state across restart when project's logical key changes", () => {

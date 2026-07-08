@@ -1,4 +1,5 @@
 import { Debouncer } from "@tanstack/react-pacer";
+import { parseScopedThreadKey } from "@t3tools/client-runtime";
 import { create } from "zustand";
 
 export const PERSISTED_STATE_KEY = "t3code:ui-state:v1";
@@ -19,6 +20,7 @@ export interface PersistedUiState {
   collapsedProjectCwds?: string[];
   expandedProjectCwds?: string[];
   collapsedThreadKeys?: string[];
+  threadLastVisitedAtById?: Record<string, string>;
   projectOrderCwds?: string[];
   defaultAdvertisedEndpointKey?: string | null;
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
@@ -106,6 +108,7 @@ function readPersistedState(): UiState {
           ? parsed.defaultAdvertisedEndpointKey
           : null,
       threadExpandedById: sanitizePersistedCollapsedThreadKeys(parsed.collapsedThreadKeys),
+      threadLastVisitedAtById: sanitizePersistedThreadLastVisitedAt(parsed.threadLastVisitedAtById),
       threadChangedFilesExpandedById: sanitizePersistedThreadChangedFilesExpanded(
         parsed.threadChangedFilesExpandedById,
       ),
@@ -156,6 +159,24 @@ function sanitizePersistedCollapsedThreadKeys(
   );
 }
 
+function sanitizePersistedThreadLastVisitedAt(
+  value: PersistedUiState["threadLastVisitedAtById"],
+): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([threadKey, lastVisitedAt]) =>
+      threadKey.length > 0 &&
+      typeof lastVisitedAt === "string" &&
+      Number.isFinite(Date.parse(lastVisitedAt))
+        ? [[threadKey, lastVisitedAt] as const]
+        : [],
+    ),
+  );
+}
+
 export function hydratePersistedProjectState(parsed: PersistedUiState): void {
   persistedCollapsedProjectCwds.clear();
   persistedExpandedProjectCwds.clear();
@@ -201,6 +222,11 @@ export function persistState(state: UiState): void {
     const collapsedThreadKeys = Object.entries(state.threadExpandedById).flatMap(
       ([threadKey, expanded]) => (expanded === false ? [threadKey] : []),
     );
+    const threadLastVisitedAtById = Object.fromEntries(
+      Object.entries(state.threadLastVisitedAtById).filter(
+        ([threadKey]) => !state.seededThreadVisitedKeys.has(threadKey),
+      ),
+    );
     const threadChangedFilesExpandedById = Object.fromEntries(
       Object.entries(state.threadChangedFilesExpandedById).flatMap(([threadId, turns]) => {
         const nextTurns = Object.fromEntries(
@@ -215,6 +241,7 @@ export function persistState(state: UiState): void {
         collapsedProjectCwds,
         expandedProjectCwds,
         collapsedThreadKeys,
+        threadLastVisitedAtById,
         projectOrderCwds,
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
         threadChangedFilesExpandedById,
@@ -464,18 +491,35 @@ export function syncProjects(state: UiState, projects: readonly SyncProjectInput
 
 export function syncThreads(state: UiState, threads: readonly SyncThreadInput[]): UiState {
   const retainedThreadIds = new Set(threads.map((thread) => thread.key));
+  const syncedEnvironmentIds = new Set<string>();
+  for (const thread of threads) {
+    const parsedThreadKey = parseScopedThreadKey(thread.key);
+    if (parsedThreadKey) {
+      syncedEnvironmentIds.add(parsedThreadKey.environmentId);
+    }
+  }
+  const shouldRetainThreadUiEntry = (threadId: string): boolean => {
+    if (retainedThreadIds.has(threadId)) {
+      return true;
+    }
+    const parsedThreadKey = parseScopedThreadKey(threadId);
+    if (!parsedThreadKey) {
+      return false;
+    }
+    return !syncedEnvironmentIds.has(parsedThreadKey.environmentId);
+  };
   const nextThreadExpandedById = Object.fromEntries(
     Object.entries(state.threadExpandedById).filter(
-      ([threadId, expanded]) => expanded === false && retainedThreadIds.has(threadId),
+      ([threadId, expanded]) => expanded === false && shouldRetainThreadUiEntry(threadId),
     ),
   );
   const nextThreadLastVisitedAtById = Object.fromEntries(
     Object.entries(state.threadLastVisitedAtById).filter(([threadId]) =>
-      retainedThreadIds.has(threadId),
+      shouldRetainThreadUiEntry(threadId),
     ),
   );
   const nextSeededThreadVisitedKeys = new Set(
-    [...state.seededThreadVisitedKeys].filter((threadId) => retainedThreadIds.has(threadId)),
+    [...state.seededThreadVisitedKeys].filter((threadId) => shouldRetainThreadUiEntry(threadId)),
   );
   for (const thread of threads) {
     const seedVisitedAt = thread.seedVisitedAt;
@@ -496,7 +540,7 @@ export function syncThreads(state: UiState, threads: readonly SyncThreadInput[])
   }
   const nextThreadChangedFilesExpandedById = Object.fromEntries(
     Object.entries(state.threadChangedFilesExpandedById).filter(([threadId]) =>
-      retainedThreadIds.has(threadId),
+      shouldRetainThreadUiEntry(threadId),
     ),
   );
   if (
