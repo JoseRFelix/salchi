@@ -71,7 +71,11 @@ import {
 } from "../environments/primary";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 import { getLastNotificationNavigationTarget } from "../push/notificationNavigation";
-import { shouldNavigateToStartupBootstrapThread } from "../startupNavigation";
+import {
+  isStartupBootstrapThreadStale,
+  shouldNavigateToStartupBootstrapThread,
+} from "../startupNavigation";
+import { getThreadActivityTimestamp } from "../lib/threadSort";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -384,6 +388,19 @@ function EventRouter() {
           isStandalonePwa: isStandalonePwa(),
         })
       ) {
+        return;
+      }
+      const bootstrapSummary =
+        bootstrapEnvironmentState?.sidebarThreadSummaryById[bootstrapThreadId] ??
+        bootstrapEnvironmentState?.threadShellById[bootstrapThreadId] ??
+        null;
+      if (
+        isStartupBootstrapThreadStale({
+          activityAt: bootstrapSummary ? getThreadActivityTimestamp(bootstrapSummary) : null,
+          now: Date.now(),
+        })
+      ) {
+        handledBootstrapThreadIdRef.current = bootstrapThreadId;
         return;
       }
       await navigate({

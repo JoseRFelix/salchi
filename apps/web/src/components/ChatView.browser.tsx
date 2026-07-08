@@ -73,11 +73,17 @@ import { getServerConfig } from "../rpc/serverState";
 import { WsTransport } from "../rpc/wsTransport";
 import { getRouter } from "../router";
 import { deriveLogicalProjectKeyFromSettings } from "../logicalProject";
-import { selectBootstrapCompleteForActiveEnvironment, useStore } from "../store";
+import {
+  selectBootstrapCompleteForActiveEnvironment,
+  selectThreadByRef,
+  useStore,
+  type EnvironmentState,
+} from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { useUiStateStore } from "../uiStateStore";
 import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers";
 import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test/wsRpcHarness";
+import { writeCachedEnvironmentState } from "../orchestrationStartupCache";
 
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 
@@ -592,6 +598,211 @@ function toShellSnapshot(snapshot: OrchestrationReadModel) {
     })),
     threads: snapshot.threads.map(toShellThread),
     updatedAt: snapshot.updatedAt,
+  };
+}
+
+function toStartupCacheSidebarThreadSummary(
+  thread: OrchestrationReadModel["threads"][number],
+): EnvironmentState["sidebarThreadSummaryById"][ThreadId] {
+  return {
+    id: thread.id,
+    environmentId: LOCAL_ENVIRONMENT_ID,
+    projectId: thread.projectId,
+    title: thread.title,
+    interactionMode: thread.interactionMode,
+    session: null,
+    createdAt: thread.createdAt,
+    archivedAt: thread.archivedAt,
+    updatedAt: thread.updatedAt,
+    latestTurn: thread.latestTurn,
+    branch: thread.branch,
+    worktreePath: thread.worktreePath,
+    latestUserMessageAt:
+      thread.messages.findLast((message) => message.role === "user")?.createdAt ?? null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+  };
+}
+
+function createStartupCacheEnvironmentState(
+  snapshot: OrchestrationReadModel,
+  threadId: ThreadId,
+  options: {
+    readonly sidebarThreadSummary?: Partial<
+      EnvironmentState["sidebarThreadSummaryById"][ThreadId]
+    > | null;
+  } = {},
+): EnvironmentState {
+  const thread = snapshot.threads.find((entry) => entry.id === threadId);
+  if (!thread) {
+    throw new Error(`Expected thread ${threadId} in startup cache fixture.`);
+  }
+  const project = snapshot.projects.find((entry) => entry.id === thread.projectId);
+  if (!project) {
+    throw new Error(`Expected project ${thread.projectId} in startup cache fixture.`);
+  }
+  const sidebarThreadSummary =
+    options.sidebarThreadSummary === undefined || options.sidebarThreadSummary === null
+      ? null
+      : {
+          ...toStartupCacheSidebarThreadSummary(thread),
+          ...options.sidebarThreadSummary,
+        };
+
+  return {
+    projectIds: [project.id],
+    projectById: {
+      [project.id]: {
+        id: project.id,
+        environmentId: LOCAL_ENVIRONMENT_ID,
+        name: project.title,
+        cwd: project.workspaceRoot,
+        repositoryIdentity: project.repositoryIdentity ?? null,
+        defaultModelSelection: project.defaultModelSelection ?? null,
+        createdAt: project.createdAt,
+        updatedAt: project.updatedAt,
+        scripts: [...project.scripts],
+      },
+    } as EnvironmentState["projectById"],
+    threadIds: [thread.id],
+    threadIdsByProjectId: {
+      [thread.projectId]: [thread.id],
+    },
+    threadShellById: {
+      [thread.id]: {
+        id: thread.id,
+        environmentId: LOCAL_ENVIRONMENT_ID,
+        codexThreadId: null,
+        projectId: thread.projectId,
+        title: thread.title,
+        modelSelection: thread.modelSelection,
+        runtimeMode: thread.runtimeMode,
+        interactionMode: thread.interactionMode,
+        branch: thread.branch,
+        worktreePath: thread.worktreePath,
+        error: thread.session?.lastError ?? null,
+        createdAt: thread.createdAt,
+        archivedAt: thread.archivedAt,
+        updatedAt: thread.updatedAt,
+      },
+    },
+    threadSessionById: {
+      [thread.id]: null,
+    },
+    threadTurnStateById: {
+      [thread.id]: {
+        latestTurn: thread.latestTurn,
+      },
+    },
+    messageIdsByThreadId: {
+      [thread.id]: thread.messages.map((message) => message.id),
+    },
+    messageByThreadId: {
+      [thread.id]: Object.fromEntries(
+        thread.messages.map((message) => [
+          message.id,
+          {
+            id: message.id,
+            role: message.role,
+            text: message.text,
+            turnId: message.turnId,
+            createdAt: message.createdAt,
+            streaming: message.streaming,
+            ...(message.streaming ? {} : { completedAt: message.updatedAt }),
+          },
+        ]),
+      ) as EnvironmentState["messageByThreadId"][ThreadId],
+    },
+    queuedTurnIdsByThreadId: {
+      [thread.id]: thread.queuedTurns.map((queuedTurn) => queuedTurn.messageId),
+    },
+    queuedTurnByThreadId: {
+      [thread.id]: Object.fromEntries(
+        thread.queuedTurns.map((queuedTurn) => [
+          queuedTurn.messageId,
+          {
+            threadId: queuedTurn.threadId,
+            messageId: queuedTurn.messageId,
+            role: queuedTurn.role,
+            text: queuedTurn.text,
+            attachments: [],
+            modelSelection: queuedTurn.modelSelection,
+            titleSeed: queuedTurn.titleSeed,
+            runtimeMode: queuedTurn.runtimeMode,
+            interactionMode: queuedTurn.interactionMode,
+            sourceProposedPlan: queuedTurn.sourceProposedPlan,
+            createdAt: queuedTurn.createdAt,
+            updatedAt: queuedTurn.updatedAt,
+          },
+        ]),
+      ) as EnvironmentState["queuedTurnByThreadId"][ThreadId],
+    },
+    activityIdsByThreadId: {
+      [thread.id]: thread.activities.map((activity) => activity.id),
+    },
+    activityByThreadId: {
+      [thread.id]: Object.fromEntries(
+        thread.activities.map((activity) => [activity.id, { ...activity }]),
+      ) as EnvironmentState["activityByThreadId"][ThreadId],
+    },
+    proposedPlanIdsByThreadId: {
+      [thread.id]: thread.proposedPlans.map((plan) => plan.id),
+    },
+    proposedPlanByThreadId: {
+      [thread.id]: Object.fromEntries(
+        thread.proposedPlans.map((plan) => [plan.id, { ...plan }]),
+      ) as EnvironmentState["proposedPlanByThreadId"][ThreadId],
+    },
+    turnDiffIdsByThreadId: {
+      [thread.id]: thread.checkpoints.map((checkpoint) => checkpoint.turnId),
+    },
+    turnDiffSummaryByThreadId: {
+      [thread.id]: Object.fromEntries(
+        thread.checkpoints.map((checkpoint) => [
+          checkpoint.turnId,
+          {
+            turnId: checkpoint.turnId,
+            completedAt: checkpoint.completedAt,
+            status: checkpoint.status,
+            assistantMessageId: checkpoint.assistantMessageId ?? undefined,
+            checkpointTurnCount: checkpoint.checkpointTurnCount,
+            checkpointRef: checkpoint.checkpointRef,
+            attribution: checkpoint.attribution,
+            files: checkpoint.files.map((file) => ({ ...file })),
+          },
+        ]),
+      ) as EnvironmentState["turnDiffSummaryByThreadId"][ThreadId],
+    },
+    threadDetailPageInfoByThreadId: {
+      [thread.id]: EMPTY_ORCHESTRATION_THREAD_DETAIL_PAGE_INFO,
+    },
+    sidebarThreadSummaryById: sidebarThreadSummary
+      ? {
+          [thread.id]: sidebarThreadSummary,
+        }
+      : {},
+    bootstrapComplete: false,
+  };
+}
+
+function createShellOnlyStartupEnvironmentState(
+  snapshot: OrchestrationReadModel,
+  threadId: ThreadId,
+): EnvironmentState {
+  return {
+    ...createStartupCacheEnvironmentState(snapshot, threadId),
+    messageIdsByThreadId: {},
+    messageByThreadId: {},
+    queuedTurnIdsByThreadId: {},
+    queuedTurnByThreadId: {},
+    activityIdsByThreadId: {},
+    activityByThreadId: {},
+    proposedPlanIdsByThreadId: {},
+    proposedPlanByThreadId: {},
+    turnDiffIdsByThreadId: {},
+    turnDiffSummaryByThreadId: {},
+    threadDetailPageInfoByThreadId: {},
   };
 }
 
@@ -4762,6 +4973,166 @@ describe("ChatView timeline estimator parity (full app)", () => {
         .element(page.getByRole("searchbox", { name: "Search workspace files" }))
         .toBeVisible();
       await expect.element(page.getByRole("button", { name: "README.md" })).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps a stale startup bootstrap thread on the base route", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(BASE_TIME_MS + 9 * 60 * 60 * 1000);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-stale-bootstrap-test" as MessageId,
+        targetText: "stale bootstrap target",
+      }),
+      initialPath: "/",
+    });
+
+    try {
+      await waitForLayout();
+      expect(mounted.router.state.location.pathname).toBe("/");
+      await expect.element(page.getByText("No active thread")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens a fresh startup bootstrap thread from the base route", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(BASE_TIME_MS + 60 * 60 * 1000);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-fresh-bootstrap-test" as MessageId,
+        targetText: "fresh bootstrap target",
+      }),
+      initialPath: "/",
+    });
+
+    try {
+      await waitForURL(
+        mounted.router,
+        (path) => path === serverThreadPath(THREAD_ID),
+        "Fresh startup bootstrap threads should open from the base route.",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("uses cached startup sidebar summaries when checking bootstrap freshness", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(BASE_TIME_MS + 9 * 60 * 60 * 1000);
+    const freshActivityAt = new Date(BASE_TIME_MS + 2 * 60 * 60 * 1000).toISOString();
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-sidebar-summary-bootstrap-test" as MessageId,
+      targetText: "sidebar summary bootstrap target",
+    });
+    const freshSnapshot = {
+      ...snapshot,
+      threads: snapshot.threads.map((thread) =>
+        thread.id === THREAD_ID ? { ...thread, updatedAt: freshActivityAt } : thread,
+      ),
+    };
+    writeCachedEnvironmentState(
+      LOCAL_ENVIRONMENT_ID,
+      createStartupCacheEnvironmentState(freshSnapshot, THREAD_ID, {
+        sidebarThreadSummary: {
+          latestUserMessageAt: freshActivityAt,
+          updatedAt: freshActivityAt,
+        },
+      }),
+      { preferredThreadIds: [THREAD_ID] },
+    );
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: freshSnapshot,
+      initialPath: "/",
+    });
+
+    try {
+      await waitForURL(
+        mounted.router,
+        (path) => path === serverThreadPath(THREAD_ID),
+        "Fresh startup sidebar summaries should open from the base route.",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("paints cached thread detail before the live thread snapshot arrives", async () => {
+    const cachedMessageId = "msg-user-cached-thread-open-test" as MessageId;
+    const freshMessageId = "msg-user-cached-thread-open-fresh" as MessageId;
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: cachedMessageId,
+      targetText: "cached startup paint target",
+    });
+    writeCachedEnvironmentState(
+      LOCAL_ENVIRONMENT_ID,
+      createStartupCacheEnvironmentState(snapshot, THREAD_ID),
+      { preferredThreadIds: [THREAD_ID] },
+    );
+    useStore.setState({
+      activeEnvironmentId: LOCAL_ENVIRONMENT_ID,
+      environmentStateById: {
+        [LOCAL_ENVIRONMENT_ID]: createShellOnlyStartupEnvironmentState(snapshot, THREAD_ID),
+      },
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot,
+      initialPath: "/",
+      configureFixture: (fixture) => {
+        const { bootstrapThreadId: _bootstrapThreadId, ...welcome } = fixture.welcome;
+        fixture.welcome = welcome;
+      },
+      getInitialStreamValues: (request) => {
+        if (
+          request._tag === ORCHESTRATION_WS_METHODS.subscribeThread &&
+          request.threadId === THREAD_ID
+        ) {
+          return [];
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      expect(mounted.router.state.location.pathname).toBe("/");
+      await mounted.router.navigate({
+        to: "/$environmentId/$threadId",
+        params: {
+          environmentId: LOCAL_ENVIRONMENT_ID,
+          threadId: THREAD_ID,
+        },
+      });
+      await waitForURL(
+        mounted.router,
+        (path) => path === serverThreadPath(THREAD_ID),
+        "Thread route should open before the live detail snapshot arrives.",
+      );
+      await expect.element(page.getByText("cached startup paint target")).toBeInTheDocument();
+      await expect.element(page.getByText("Loading conversation...")).not.toBeInTheDocument();
+
+      fixture.snapshot = appendUserMessageToThreadSnapshot(fixture.snapshot, THREAD_ID, {
+        id: freshMessageId,
+        text: "fresh startup snapshot target",
+      });
+      emitThreadDetailSnapshot(THREAD_ID);
+
+      await expect.element(page.getByText("fresh startup snapshot target")).toBeInTheDocument();
+      await vi.waitFor(
+        () => {
+          const thread = selectThreadByRef(useStore.getState(), THREAD_REF);
+          expect(thread?.messages.filter((message) => message.id === cachedMessageId)).toHaveLength(
+            1,
+          );
+          expect(thread?.messages.some((message) => message.id === freshMessageId)).toBe(true);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
     } finally {
       await mounted.cleanup();
     }

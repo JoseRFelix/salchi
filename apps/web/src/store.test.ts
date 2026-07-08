@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   applyOrchestrationEvent,
   applyOrchestrationEvents,
+  hydrateCachedThreadDetail,
   removeEnvironmentState,
   selectEnvironmentState,
   selectProjectsAcrossEnvironments,
@@ -36,6 +37,7 @@ import {
   type AppState,
   type EnvironmentState,
 } from "./store";
+import type { CachedThreadDetail } from "./orchestrationStartupCache";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -338,6 +340,35 @@ function makeEmptyPageInfo(): OrchestrationThreadDetailPageInfo {
     proposedPlans: { hasMoreBefore: false, startCursor: null },
     activities: { hasMoreBefore: false, startCursor: null },
     checkpoints: { hasMoreBefore: false, startCursor: null },
+  };
+}
+
+function makeCachedThreadDetail(
+  thread: Thread,
+  pageInfo: OrchestrationThreadDetailPageInfo | null = makeEmptyPageInfo(),
+): CachedThreadDetail {
+  return {
+    messageIds: thread.messages.map((message) => message.id),
+    messageById: Object.fromEntries(
+      thread.messages.map((message) => [message.id, message] as const),
+    ) as CachedThreadDetail["messageById"],
+    queuedTurnIds: thread.queuedTurns.map((queuedTurn) => queuedTurn.messageId),
+    queuedTurnById: Object.fromEntries(
+      thread.queuedTurns.map((queuedTurn) => [queuedTurn.messageId, queuedTurn] as const),
+    ) as CachedThreadDetail["queuedTurnById"],
+    activityIds: thread.activities.map((activity) => activity.id),
+    activityById: Object.fromEntries(
+      thread.activities.map((activity) => [activity.id, activity] as const),
+    ) as CachedThreadDetail["activityById"],
+    proposedPlanIds: thread.proposedPlans.map((plan) => plan.id),
+    proposedPlanById: Object.fromEntries(
+      thread.proposedPlans.map((plan) => [plan.id, plan] as const),
+    ) as CachedThreadDetail["proposedPlanById"],
+    turnDiffIds: thread.turnDiffSummaries.map((summary) => summary.turnId),
+    turnDiffSummaryById: Object.fromEntries(
+      thread.turnDiffSummaries.map((summary) => [summary.turnId, summary] as const),
+    ) as CachedThreadDetail["turnDiffSummaryById"],
+    pageInfo,
   };
 }
 
@@ -813,6 +844,143 @@ describe("thread detail structural sharing", () => {
     expect(summary?.hasPendingUserInput).toBe(true);
     expect(summary?.hasActionableProposedPlan).toBe(true);
     expect(summary?.latestUserMessageAt).toBe("2026-02-13T00:00:00.000Z");
+  });
+
+  it("hydrates cached thread detail into an existing shell with empty detail", () => {
+    const threadId = ThreadId.make("thread-cache-hydrate");
+    const shellThread = makeThread({ id: threadId });
+    const cachedThread = makeThread({
+      id: threadId,
+      messages: [makeMessage(1)],
+      queuedTurns: [{ ...makeQueuedTurn(2), threadId }],
+      activities: [makeActivity(1)],
+      proposedPlans: [makePlan(1)],
+      turnDiffSummaries: [makeTurnDiffSummary(1)],
+    });
+    const pageInfo = makePageInfo({ hasMoreBefore: true, startIndex: 1 });
+
+    const next = hydrateCachedThreadDetail(
+      makeState(shellThread),
+      localEnvironmentId,
+      threadId,
+      makeCachedThreadDetail(cachedThread, pageInfo),
+    );
+    const hydratedThread = selectThreadByRef(next, scopeThreadRef(localEnvironmentId, threadId));
+
+    expect(hydratedThread?.messages.map((message) => message.id)).toEqual([
+      MessageId.make("message-1"),
+    ]);
+    expect(hydratedThread?.queuedTurns.map((queuedTurn) => queuedTurn.messageId)).toEqual([
+      MessageId.make("queued-message-2"),
+    ]);
+    expect(hydratedThread?.activities.map((activity) => activity.id)).toEqual([
+      EventId.make("activity-1"),
+    ]);
+    expect(hydratedThread?.proposedPlans.map((plan) => plan.id)).toEqual(["plan-1"]);
+    expect(hydratedThread?.turnDiffSummaries.map((summary) => summary.turnId)).toEqual([
+      TurnId.make("turn-1"),
+    ]);
+    expect(hydratedThread?.detailPageInfo).toEqual(pageInfo);
+  });
+
+  it("does not hydrate cached thread detail over live detail rows", () => {
+    const threadId = ThreadId.make("thread-cache-live-detail");
+    const liveThread = makeThread({
+      id: threadId,
+      messages: [makeMessage(1)],
+    });
+    const cachedThread = makeThread({
+      id: threadId,
+      messages: [{ ...makeMessage(2), text: "cached should not replace live detail" }],
+    });
+    const state = makeState(liveThread);
+
+    const next = hydrateCachedThreadDetail(
+      state,
+      localEnvironmentId,
+      threadId,
+      makeCachedThreadDetail(cachedThread),
+    );
+
+    expect(next).toBe(state);
+  });
+
+  it("preserves live queued turns when hydrating cached thread detail", () => {
+    const threadId = ThreadId.make("thread-cache-live-queued-turn");
+    const queuedTurn = { ...makeQueuedTurn(1), threadId };
+    const liveThread = makeThread({
+      id: threadId,
+      queuedTurns: [queuedTurn],
+    });
+    const cachedThread = makeThread({
+      id: threadId,
+      messages: [{ ...makeMessage(2), text: "cached should not replace live queued turns" }],
+    });
+    const state = makeState(liveThread);
+
+    const next = hydrateCachedThreadDetail(
+      state,
+      localEnvironmentId,
+      threadId,
+      makeCachedThreadDetail(cachedThread),
+    );
+    const hydratedThread = selectThreadByRef(next, scopeThreadRef(localEnvironmentId, threadId));
+
+    expect(next).toBe(state);
+    expect(hydratedThread?.queuedTurns.map((entry) => entry.messageId)).toEqual([
+      queuedTurn.messageId,
+    ]);
+    expect(hydratedThread?.messages).toEqual([]);
+  });
+
+  it("does not hydrate cached thread detail when the shell is missing", () => {
+    const threadId = ThreadId.make("thread-cache-missing-shell");
+    const cachedThread = makeThread({
+      id: threadId,
+      messages: [makeMessage(1)],
+    });
+    const state = makeEmptyState();
+
+    const next = hydrateCachedThreadDetail(
+      state,
+      localEnvironmentId,
+      threadId,
+      makeCachedThreadDetail(cachedThread),
+    );
+
+    expect(next).toBe(state);
+  });
+
+  it("dedupes overlapping cached rows when the tail snapshot arrives", () => {
+    const threadId = ThreadId.make("thread-cache-tail-dedupe");
+    const hydrated = hydrateCachedThreadDetail(
+      makeState(makeThread({ id: threadId })),
+      localEnvironmentId,
+      threadId,
+      makeCachedThreadDetail(
+        makeThread({
+          id: threadId,
+          messages: [makeMessage(1)],
+        }),
+      ),
+    );
+
+    const next = mergeServerThreadDetailTailSnapshot(
+      hydrated,
+      makeOrchestrationThread(
+        makeThread({
+          id: threadId,
+          messages: [makeMessage(1), makeMessage(2)],
+        }),
+      ),
+      localEnvironmentId,
+    );
+    const thread = selectThreadByRef(next, scopeThreadRef(localEnvironmentId, threadId));
+
+    expect(thread?.messages.map((message) => message.id)).toEqual([
+      MessageId.make("message-1"),
+      MessageId.make("message-2"),
+    ]);
   });
 
   it("can resync sidebar summaries for all known environment threads", () => {

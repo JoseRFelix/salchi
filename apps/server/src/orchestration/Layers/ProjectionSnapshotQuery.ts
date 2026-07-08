@@ -1023,7 +1023,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
-  const getFirstActiveThreadIdByProject = SqlSchema.findOneOption({
+  const getMostRecentActiveThreadIdByProject = SqlSchema.findOneOption({
     Request: ProjectIdLookupInput,
     Result: ProjectionThreadIdLookupRowSchema,
     execute: ({ projectId }) =>
@@ -1034,7 +1034,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE project_id = ${projectId}
           AND deleted_at IS NULL
           AND archived_at IS NULL
-        ORDER BY created_at ASC, thread_id ASC
+          AND hidden_from_thread_list = 0
+        ORDER BY MAX(
+            COALESCE(latest_user_message_at, created_at),
+            COALESCE(updated_at, created_at),
+            created_at
+          ) DESC, thread_id DESC
         LIMIT 1
       `,
   });
@@ -2440,13 +2445,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       ),
     );
 
-  const getFirstActiveThreadIdByProjectId: ProjectionSnapshotQueryShape["getFirstActiveThreadIdByProjectId"] =
+  const getMostRecentActiveThreadIdByProjectId: ProjectionSnapshotQueryShape["getMostRecentActiveThreadIdByProjectId"] =
     (projectId) =>
-      getFirstActiveThreadIdByProject({ projectId }).pipe(
+      getMostRecentActiveThreadIdByProject({ projectId }).pipe(
         Effect.mapError(
           toPersistenceSqlOrDecodeError(
-            "ProjectionSnapshotQuery.getFirstActiveThreadIdByProjectId:query",
-            "ProjectionSnapshotQuery.getFirstActiveThreadIdByProjectId:decodeRow",
+            "ProjectionSnapshotQuery.getMostRecentActiveThreadIdByProjectId:query",
+            "ProjectionSnapshotQuery.getMostRecentActiveThreadIdByProjectId:decodeRow",
           ),
         ),
         Effect.map(Option.map((row) => row.threadId)),
@@ -2899,7 +2904,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getCounts,
     getActiveProjectByWorkspaceRoot,
     getProjectShellById,
-    getFirstActiveThreadIdByProjectId,
+    getMostRecentActiveThreadIdByProjectId,
     getThreadCheckpointContext,
     getFullThreadDiffContext,
     getThreadShellById,

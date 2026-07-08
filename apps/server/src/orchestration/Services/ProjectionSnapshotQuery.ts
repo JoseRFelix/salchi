@@ -124,9 +124,9 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<OrchestrationProjectShell>, ProjectionRepositoryError>;
 
   /**
-   * Read the earliest active thread for a project.
+   * Read the most recently active visible thread for a project.
    */
-  readonly getFirstActiveThreadIdByProjectId: (
+  readonly getMostRecentActiveThreadIdByProjectId: (
     projectId: ProjectId,
   ) => Effect.Effect<Option.Option<ThreadId>, ProjectionRepositoryError>;
 

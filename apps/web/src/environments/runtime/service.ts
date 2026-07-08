@@ -94,9 +94,11 @@ import { flushResumeDiagnostics, recordResumeDiagnostic } from "./resumeDiagnost
 import { getClientSettings } from "~/hooks/useSettings";
 import {
   readCachedEnvironmentState,
+  readCachedThreadDetail,
   removeCachedEnvironmentState,
   scheduleCachedEnvironmentStateWrite,
 } from "~/orchestrationStartupCache";
+import { hasEnvironmentThreadDetailContent } from "~/threadDetailContent";
 import type { Thread } from "~/types";
 
 type BearerSessionLike =
@@ -2241,6 +2243,8 @@ function retainThreadDetailSubscriptionInternal(
   threadId: ThreadId,
   options: { readonly active: boolean },
 ): () => void {
+  hydrateThreadDetailFromStartupCacheIfMissing(environmentId, threadId);
+
   const key = getThreadDetailSubscriptionKey(environmentId, threadId);
   const existing = threadDetailSubscriptions.get(key);
   if (existing) {
@@ -2721,6 +2725,26 @@ function hydrateEnvironmentFromStartupCache(environmentId: EnvironmentId): void 
   }
 
   reconcileSnapshotDerivedState();
+}
+
+function hydrateThreadDetailFromStartupCacheIfMissing(
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+): void {
+  const environmentState = useStore.getState().environmentStateById[environmentId];
+  if (
+    !environmentState?.threadShellById[threadId] ||
+    hasEnvironmentThreadDetailContent(environmentState, threadId)
+  ) {
+    return;
+  }
+
+  const cachedDetail = readCachedThreadDetail(environmentId, threadId);
+  if (!cachedDetail) {
+    return;
+  }
+
+  useStore.getState().hydrateCachedThreadDetail(environmentId, threadId, cachedDetail);
 }
 
 function scheduleEnvironmentStartupCacheWrite(

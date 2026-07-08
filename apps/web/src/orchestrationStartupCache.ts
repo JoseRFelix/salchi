@@ -1,6 +1,7 @@
 import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 
 import type { EnvironmentState } from "./store";
+import { hasEnvironmentThreadDetailContent } from "./threadDetailContent";
 
 const STORAGE_KEY = "t3code:orchestration-startup-cache:v1";
 const DOCUMENT_VERSION = 1;
@@ -31,7 +32,29 @@ interface PendingEnvironmentWrite {
   timeoutId: ReturnType<typeof setTimeout> | null;
 }
 
+export interface CachedThreadDetail {
+  readonly messageIds: EnvironmentState["messageIdsByThreadId"][ThreadId];
+  readonly messageById: EnvironmentState["messageByThreadId"][ThreadId];
+  readonly queuedTurnIds: EnvironmentState["queuedTurnIdsByThreadId"][ThreadId];
+  readonly queuedTurnById: EnvironmentState["queuedTurnByThreadId"][ThreadId];
+  readonly activityIds: EnvironmentState["activityIdsByThreadId"][ThreadId];
+  readonly activityById: EnvironmentState["activityByThreadId"][ThreadId];
+  readonly proposedPlanIds: EnvironmentState["proposedPlanIdsByThreadId"][ThreadId];
+  readonly proposedPlanById: EnvironmentState["proposedPlanByThreadId"][ThreadId];
+  readonly turnDiffIds: EnvironmentState["turnDiffIdsByThreadId"][ThreadId];
+  readonly turnDiffSummaryById: EnvironmentState["turnDiffSummaryByThreadId"][ThreadId];
+  readonly pageInfo: EnvironmentState["threadDetailPageInfoByThreadId"][ThreadId] | null;
+}
+
 const pendingWrites = new Map<EnvironmentId, PendingEnvironmentWrite>();
+let memoizedDocument: {
+  readonly raw: string | null;
+  readonly document: CachedOrchestrationDocument;
+} | null = null;
+
+function invalidateDocumentMemo(): void {
+  memoizedDocument = null;
+}
 
 function storage(): Storage | null {
   if (typeof window === "undefined") {
@@ -97,8 +120,14 @@ function readDocument(): CachedOrchestrationDocument {
 
   try {
     const raw = resolvedStorage.getItem(STORAGE_KEY);
+    if (memoizedDocument?.raw === raw) {
+      return memoizedDocument.document;
+    }
+
     if (!raw) {
-      return emptyDocument();
+      const document = emptyDocument();
+      memoizedDocument = { raw, document };
+      return document;
     }
 
     const parsed = JSON.parse(raw) as unknown;
@@ -107,7 +136,9 @@ function readDocument(): CachedOrchestrationDocument {
       parsed.version !== DOCUMENT_VERSION ||
       !isRecord(parsed.environments)
     ) {
-      return emptyDocument();
+      const document = emptyDocument();
+      memoizedDocument = { raw, document };
+      return document;
     }
 
     const environments: Record<string, CachedEnvironmentEntry> = {};
@@ -130,12 +161,16 @@ function readDocument(): CachedOrchestrationDocument {
       };
     }
 
-    return {
+    const document: CachedOrchestrationDocument = {
       version: DOCUMENT_VERSION,
       environments,
     };
+    memoizedDocument = { raw, document };
+    return document;
   } catch {
-    return emptyDocument();
+    const document = emptyDocument();
+    memoizedDocument = { raw: null, document };
+    return document;
   }
 }
 
@@ -173,6 +208,7 @@ function writeDocument(document: CachedOrchestrationDocument): void {
 
     try {
       resolvedStorage.setItem(STORAGE_KEY, encoded);
+      invalidateDocumentMemo();
       return;
     } catch {
       nextDocument = removeOldestEnvironment(nextDocument);
@@ -225,26 +261,19 @@ function retainOrderedThreadIds(state: EnvironmentState, preferredThreadIds: rea
   return shellThreadIds.filter((threadId) => retained.has(threadId));
 }
 
-function hasThreadDetail(state: EnvironmentState, threadId: ThreadId): boolean {
-  return (
-    (state.messageIdsByThreadId[threadId]?.length ?? 0) > 0 ||
-    (state.activityIdsByThreadId[threadId]?.length ?? 0) > 0 ||
-    (state.proposedPlanIdsByThreadId[threadId]?.length ?? 0) > 0 ||
-    (state.turnDiffIdsByThreadId[threadId]?.length ?? 0) > 0
-  );
-}
-
 function retainDetailThreadIds(
   state: EnvironmentState,
   retainedThreadIds: readonly ThreadId[],
   preferredThreadIds: readonly ThreadId[],
 ): Set<ThreadId> {
   const retainedThreadIdSet = new Set(retainedThreadIds);
-  const detailThreadIds = retainedThreadIds.filter((threadId) => hasThreadDetail(state, threadId));
+  const detailThreadIds = retainedThreadIds.filter((threadId) =>
+    hasEnvironmentThreadDetailContent(state, threadId),
+  );
   const retained = new Set<ThreadId>();
 
   for (const threadId of preferredThreadIds) {
-    if (retainedThreadIdSet.has(threadId) && hasThreadDetail(state, threadId)) {
+    if (retainedThreadIdSet.has(threadId) && hasEnvironmentThreadDetailContent(state, threadId)) {
       retained.add(threadId);
     }
   }
@@ -462,6 +491,30 @@ export function readCachedEnvironmentState(environmentId: EnvironmentId): Enviro
     : null;
 }
 
+export function readCachedThreadDetail(
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+): CachedThreadDetail | null {
+  const cached = readDocument().environments[environmentId];
+  if (!cached || !hasEnvironmentThreadDetailContent(cached.state, threadId)) {
+    return null;
+  }
+
+  return {
+    messageIds: [...(cached.state.messageIdsByThreadId[threadId] ?? [])],
+    messageById: { ...cached.state.messageByThreadId[threadId] },
+    queuedTurnIds: [...(cached.state.queuedTurnIdsByThreadId[threadId] ?? [])],
+    queuedTurnById: { ...cached.state.queuedTurnByThreadId[threadId] },
+    activityIds: [...(cached.state.activityIdsByThreadId[threadId] ?? [])],
+    activityById: { ...cached.state.activityByThreadId[threadId] },
+    proposedPlanIds: [...(cached.state.proposedPlanIdsByThreadId[threadId] ?? [])],
+    proposedPlanById: { ...cached.state.proposedPlanByThreadId[threadId] },
+    turnDiffIds: [...(cached.state.turnDiffIdsByThreadId[threadId] ?? [])],
+    turnDiffSummaryById: { ...cached.state.turnDiffSummaryByThreadId[threadId] },
+    pageInfo: cached.state.threadDetailPageInfoByThreadId[threadId] ?? null,
+  };
+}
+
 export function writeCachedEnvironmentState(
   environmentId: EnvironmentId,
   state: EnvironmentState,
@@ -531,6 +584,7 @@ export function removeCachedEnvironmentState(environmentId: EnvironmentId): void
     version: DOCUMENT_VERSION,
     environments,
   });
+  invalidateDocumentMemo();
 }
 
 export function clearOrchestrationStartupCacheForTests(): void {
@@ -541,6 +595,7 @@ export function clearOrchestrationStartupCacheForTests(): void {
   }
   pendingWrites.clear();
   storage()?.removeItem(STORAGE_KEY);
+  invalidateDocumentMemo();
 }
 
 export const ORCHESTRATION_STARTUP_CACHE_STORAGE_KEY = STORAGE_KEY;
