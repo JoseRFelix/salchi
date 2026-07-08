@@ -4,9 +4,28 @@ import {
   hasActiveTextSelection,
   isMobileEdgeSwipeStart,
   MOBILE_EDGE_SWIPE_OPEN_INTENT_TIMEOUT_MS,
+  resolveMobileEdgeSwipeAxisLock,
   resolveHorizontalScrollOwnerSwipeDecision,
   resolveMobileEdgeSwipeDecision,
+  resolveMobileEdgeSwipeEndDecision,
+  resolveWindowedVelocityX,
 } from "./useMobileEdgeSwipe";
+
+describe("resolveMobileEdgeSwipeAxisLock", () => {
+  it("stays pending while movement is under the slop threshold", () => {
+    expect(resolveMobileEdgeSwipeAxisLock({ deltaX: 11, deltaY: 0 })).toBe("pending");
+    expect(resolveMobileEdgeSwipeAxisLock({ deltaX: 0, deltaY: 11 })).toBe("pending");
+  });
+
+  it("locks horizontal or vertical once movement reaches the slop threshold", () => {
+    expect(resolveMobileEdgeSwipeAxisLock({ deltaX: 15, deltaY: 12 })).toBe("horizontal");
+    expect(resolveMobileEdgeSwipeAxisLock({ deltaX: 8, deltaY: 12 })).toBe("vertical");
+  });
+
+  it("treats a non-dominant ratio tie as vertical", () => {
+    expect(resolveMobileEdgeSwipeAxisLock({ deltaX: 12, deltaY: 12 })).toBe("vertical");
+  });
+});
 
 describe("resolveMobileEdgeSwipeDecision", () => {
   it("opens the left panel after a horizontal rightward edge swipe", () => {
@@ -151,6 +170,51 @@ describe("resolveMobileEdgeSwipeDecision", () => {
     ).toBe("cancel");
   });
 
+  it("opens after a horizontally locked arced thumb swipe", () => {
+    expect(
+      resolveMobileEdgeSwipeDecision({
+        axisLock: "horizontal",
+        deltaX: 60,
+        deltaY: 50,
+        side: "left",
+      }),
+    ).toBe("open");
+  });
+
+  it("ignores the vertical cancel threshold and open timeout after horizontal lock", () => {
+    expect(
+      resolveMobileEdgeSwipeDecision({
+        axisLock: "horizontal",
+        deltaX: 64,
+        deltaY: 50,
+        elapsedMs: MOBILE_EDGE_SWIPE_OPEN_INTENT_TIMEOUT_MS + 1,
+        side: "left",
+      }),
+    ).toBe("open");
+  });
+
+  it("still cancels horizontally locked movement in the opposite direction", () => {
+    expect(
+      resolveMobileEdgeSwipeDecision({
+        axisLock: "horizontal",
+        deltaX: -19,
+        deltaY: 0,
+        side: "left",
+      }),
+    ).toBe("cancel");
+  });
+
+  it("cancels a vertically locked gesture even with large horizontal movement", () => {
+    expect(
+      resolveMobileEdgeSwipeDecision({
+        axisLock: "vertical",
+        deltaX: 80,
+        deltaY: 2,
+        side: "left",
+      }),
+    ).toBe("cancel");
+  });
+
   it("accepts starts within the configured left edge band", () => {
     expect(isMobileEdgeSwipeStart({ viewportWidth: 390, x: 63, side: "left" })).toBe(true);
     expect(isMobileEdgeSwipeStart({ viewportWidth: 390, x: 65, side: "left" })).toBe(false);
@@ -181,6 +245,89 @@ describe("resolveMobileEdgeSwipeDecision", () => {
         x: 195,
       }),
     ).toBe(true);
+  });
+});
+
+describe("resolveWindowedVelocityX", () => {
+  it("computes the slope across samples in the velocity window", () => {
+    expect(
+      resolveWindowedVelocityX(
+        [
+          { time: 0, x: 0 },
+          { time: 50, x: 30 },
+          { time: 100, x: 60 },
+        ],
+        100,
+      ),
+    ).toBe(0.6);
+  });
+
+  it("excludes stale samples before computing velocity", () => {
+    expect(
+      resolveWindowedVelocityX(
+        [
+          { time: 0, x: 0 },
+          { time: 100, x: 10 },
+          { time: 150, x: 40 },
+        ],
+        150,
+        75,
+      ),
+    ).toBe(0.6);
+  });
+
+  it("returns zero with fewer than two samples in the window", () => {
+    expect(resolveWindowedVelocityX([{ time: 0, x: 0 }], 0)).toBe(0);
+  });
+
+  it("decays to zero after a pause before lift", () => {
+    expect(
+      resolveWindowedVelocityX(
+        [
+          { time: 0, x: 0 },
+          { time: 40, x: 40 },
+        ],
+        200,
+      ),
+    ).toBe(0);
+  });
+});
+
+describe("resolveMobileEdgeSwipeEndDecision", () => {
+  it("fires an early-released flick", () => {
+    expect(
+      resolveMobileEdgeSwipeEndDecision({
+        axisLock: "horizontal",
+        deltaX: 28,
+        deltaY: 6,
+        side: "left",
+        velocityX: 0.8,
+      }),
+    ).toBe("open");
+  });
+
+  it("cancels a lift below the flick distance", () => {
+    expect(
+      resolveMobileEdgeSwipeEndDecision({
+        axisLock: "horizontal",
+        deltaX: 20,
+        deltaY: 4,
+        side: "left",
+        velocityX: 0.8,
+      }),
+    ).toBe("cancel");
+  });
+
+  it("cancels a zero-velocity short lift", () => {
+    expect(
+      resolveMobileEdgeSwipeEndDecision({
+        axisLock: "horizontal",
+        deltaX: 28,
+        deltaY: 4,
+        side: "left",
+        velocityX: 0,
+      }),
+    ).toBe("cancel");
   });
 });
 
