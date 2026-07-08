@@ -1160,6 +1160,37 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
   });
 
+  it("does not render null-turn assistant messages as settled standalone responses while working", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        makeMessageEntry({
+          id: "assistant-null-turn",
+          role: "assistant",
+          turnId: null,
+          createdAt: "2026-01-01T00:01:10Z",
+          completedAt: "2026-01-01T00:01:11Z",
+        }),
+      ],
+      latestTurn: {
+        turnId: "turn-active" as never,
+        state: "running",
+        startedAt: "2026-01-01T00:01:00Z",
+        completedAt: null,
+      },
+      activeTurnId: "turn-active" as never,
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:01:00Z",
+      turnDiffSummaries: [],
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.some((row) => row.kind === "turn-fold")).toBe(false);
+    const assistantRow = messageRowById(rows, "assistant-null-turn");
+    expect(assistantRow?.showAssistantMeta).toBe(false);
+    expect(assistantRow?.showAssistantCopyButton).toBe(false);
+    expect(assistantRow?.assistantCopyStreaming).toBe(true);
+  });
+
   it("does not fold the active in-progress turn", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [

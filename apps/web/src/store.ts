@@ -24,6 +24,11 @@ import type {
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
+  isTurnStillRunningForPacking,
+  resolveEffectiveMessageTurnId,
+  settledTurnStateForSessionStatus,
+} from "@t3tools/client-runtime";
+import {
   EMPTY_ORCHESTRATION_THREAD_DETAIL_PAGE_INFO,
   isProviderDriverKind,
   ProviderDriverKind,
@@ -94,6 +99,8 @@ export interface EnvironmentState {
   turnDiffIdsByThreadId: Record<ThreadId, TurnId[]>;
   turnDiffSummaryByThreadId: Record<ThreadId, Record<TurnId, TurnDiffSummary>>;
   threadDetailPageInfoByThreadId: Record<ThreadId, OrchestrationThreadDetailPageInfo>;
+  lastAppliedEventSequenceByThreadId?: Record<ThreadId, number>;
+  lastAppliedEventIdByThreadId?: Record<ThreadId, string>;
 
   // ---------------------------------------------------------------------------
   // Sidebar summary — written ONLY by the shell stream
@@ -138,6 +145,8 @@ const initialEnvironmentState: EnvironmentState = {
   turnDiffIdsByThreadId: {},
   turnDiffSummaryByThreadId: {},
   threadDetailPageInfoByThreadId: {},
+  lastAppliedEventSequenceByThreadId: {},
+  lastAppliedEventIdByThreadId: {},
   sidebarThreadSummaryById: {},
   bootstrapComplete: false,
 };
@@ -246,6 +255,23 @@ function mapMessage(environmentId: EnvironmentId, message: OrchestrationMessage)
   };
 }
 
+function mapThreadMessage(
+  environmentId: EnvironmentId,
+  message: OrchestrationMessage,
+  thread: Pick<OrchestrationThread, "session" | "latestTurn">,
+): ChatMessage {
+  return mapMessage(environmentId, {
+    ...message,
+    turnId: resolveEffectiveMessageTurnId({
+      role: message.role,
+      payloadTurnId: message.turnId,
+      existingTurnId: null,
+      session: thread.session,
+      latestTurn: thread.latestTurn,
+    }),
+  });
+}
+
 function mapQueuedTurn(
   environmentId: EnvironmentId,
   queuedTurn: OrchestrationQueuedTurn,
@@ -339,7 +365,7 @@ function mapThread(
     subagentRole: thread.subagentRole ?? null,
     hiddenFromThreadList: thread.hiddenFromThreadList ?? false,
     session: thread.session ? mapSession(thread.session) : null,
-    messages: thread.messages.map((message) => mapMessage(environmentId, message)),
+    messages: thread.messages.map((message) => mapThreadMessage(environmentId, message, thread)),
     queuedTurns: thread.queuedTurns.map((queuedTurn) => mapQueuedTurn(environmentId, queuedTurn)),
     proposedPlans: thread.proposedPlans.map(mapProposedPlan),
     error: sanitizeThreadErrorMessage(thread.session?.lastError),
@@ -1533,6 +1559,52 @@ function getOrchestrationEventThreadId(event: OrchestrationEvent): ThreadId | nu
   return event.aggregateKind === "thread" ? (event.aggregateId as ThreadId) : null;
 }
 
+function isStaleThreadEvent(state: EnvironmentState, event: OrchestrationEvent): boolean {
+  const threadId = getOrchestrationEventThreadId(event);
+  if (threadId === null) {
+    return false;
+  }
+  const lastAppliedSequence = state.lastAppliedEventSequenceByThreadId?.[threadId];
+  if (lastAppliedSequence === undefined) {
+    return false;
+  }
+  if (event.sequence < lastAppliedSequence) {
+    return true;
+  }
+  return (
+    event.sequence > 1 &&
+    event.sequence === lastAppliedSequence &&
+    state.lastAppliedEventIdByThreadId?.[threadId] === event.eventId
+  );
+}
+
+function recordAppliedThreadEventSequence(
+  state: EnvironmentState,
+  event: OrchestrationEvent,
+): EnvironmentState {
+  const threadId = getOrchestrationEventThreadId(event);
+  if (threadId === null) {
+    return state;
+  }
+  const lastAppliedByThreadId = state.lastAppliedEventSequenceByThreadId ?? {};
+  const current = lastAppliedByThreadId[threadId];
+  const lastEventIdByThreadId = state.lastAppliedEventIdByThreadId ?? {};
+  if (current !== undefined && current > event.sequence) {
+    return state;
+  }
+  return {
+    ...state,
+    lastAppliedEventSequenceByThreadId: {
+      ...lastAppliedByThreadId,
+      [threadId]: event.sequence,
+    },
+    lastAppliedEventIdByThreadId: {
+      ...lastEventIdByThreadId,
+      [threadId]: event.eventId,
+    },
+  };
+}
+
 function syncSidebarThreadSummariesForThreadIds(
   state: EnvironmentState,
   threadIds: Iterable<ThreadId>,
@@ -1631,6 +1703,8 @@ function removeThreadState(state: EnvironmentState, threadId: ThreadId): Environ
     turnDiffIdsByThreadId,
     turnDiffSummaryByThreadId,
     threadDetailPageInfoByThreadId,
+    lastAppliedEventSequenceByThreadId: state.lastAppliedEventSequenceByThreadId ?? {},
+    lastAppliedEventIdByThreadId: state.lastAppliedEventIdByThreadId ?? {},
     sidebarThreadSummaryById,
   };
 }
@@ -1692,24 +1766,6 @@ function buildLatestTurn(params: {
  * leaves the "running" status, or null while the session is (re)starting or
  * running and the turn must stay unsettled.
  */
-function settledTurnStateForSessionStatus(
-  status: OrchestrationSessionStatus,
-): "completed" | "interrupted" | "error" | null {
-  switch (status) {
-    case "idle":
-    case "ready":
-      return "completed";
-    case "error":
-      return "error";
-    case "interrupted":
-    case "stopped":
-      return "interrupted";
-    case "starting":
-    case "running":
-      return null;
-  }
-}
-
 function rebindTurnDiffSummariesForAssistantMessage(
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>,
   turnId: TurnId,
@@ -1943,6 +1999,14 @@ function syncEnvironmentShellSnapshot(
       state.threadDetailPageInfoByThreadId,
       nextThreadIds,
     ),
+    lastAppliedEventSequenceByThreadId: retainThreadScopedRecord(
+      state.lastAppliedEventSequenceByThreadId ?? {},
+      nextThreadIds,
+    ),
+    lastAppliedEventIdByThreadId: retainThreadScopedRecord(
+      state.lastAppliedEventIdByThreadId ?? {},
+      nextThreadIds,
+    ),
     bootstrapComplete: true,
   };
 
@@ -2118,7 +2182,7 @@ export function mergeServerThreadDetailPage(
   );
 }
 
-function applyEnvironmentOrchestrationEvent(
+function applyEnvironmentOrchestrationEventUnchecked(
   state: EnvironmentState,
   event: OrchestrationEvent,
   environmentId: EnvironmentId,
@@ -2391,7 +2455,18 @@ function applyEnvironmentOrchestrationEvent(
             updatedAt: event.payload.updatedAt,
           });
           const existingMessage = thread.messages.find((entry) => entry.id === message.id);
-          const effectiveTurnId = message.turnId ?? existingMessage?.turnId ?? null;
+          const effectiveTurnId = resolveEffectiveMessageTurnId({
+            role: message.role,
+            payloadTurnId: message.turnId,
+            existingTurnId: existingMessage?.turnId,
+            session: thread.session
+              ? {
+                  status: thread.session.orchestrationStatus,
+                  activeTurnId: thread.session.activeTurnId ?? null,
+                }
+              : null,
+            latestTurn: thread.latestTurn,
+          });
           const messages = existingMessage
             ? thread.messages.map((entry) =>
                 entry.id !== message.id
@@ -2417,7 +2492,7 @@ function applyEnvironmentOrchestrationEvent(
                         : {}),
                     },
               )
-            : [...thread.messages, message];
+            : [...thread.messages, { ...message, turnId: effectiveTurnId }];
           const cappedMessages = messages.slice(-MAX_THREAD_MESSAGES);
           const turnDiffSummaries =
             event.payload.role === "assistant" && effectiveTurnId !== null
@@ -2431,17 +2506,16 @@ function applyEnvironmentOrchestrationEvent(
           // no session/latest-turn evidence that work is still in flight.
           // Providers may emit several assistant messages per turn, and the
           // turn must stay unsettled until the provider reports turn end.
-          const sessionRunsThisTurn =
-            thread.session?.orchestrationStatus === "running" &&
-            (thread.session.activeTurnId === effectiveTurnId ||
-              thread.session.activeTurnId == null);
-          const latestTurnStillRunning =
-            thread.session !== null &&
-            thread.latestTurn?.turnId === effectiveTurnId &&
-            thread.latestTurn.state === "running" &&
-            thread.latestTurn.completedAt === null;
-          const turnStillRunning =
-            effectiveTurnId !== null && (sessionRunsThisTurn || latestTurnStillRunning);
+          const turnStillRunning = isTurnStillRunningForPacking({
+            turnId: effectiveTurnId,
+            session: thread.session
+              ? {
+                  status: thread.session.orchestrationStatus,
+                  activeTurnId: thread.session.activeTurnId ?? null,
+                }
+              : null,
+            latestTurn: thread.latestTurn,
+          });
           const settlesTurn = !event.payload.streaming && !turnStillRunning;
           const latestTurn: Thread["latestTurn"] =
             event.payload.role === "assistant" &&
@@ -2811,6 +2885,33 @@ function applyEnvironmentOrchestrationEvent(
   return state;
 }
 
+function applyEnvironmentOrchestrationEvent(
+  state: EnvironmentState,
+  event: OrchestrationEvent,
+  environmentId: EnvironmentId,
+  options: ThreadDetailWriteOptions = {},
+): EnvironmentState {
+  if (isStaleThreadEvent(state, event)) {
+    return state;
+  }
+
+  const nextState = applyEnvironmentOrchestrationEventUnchecked(
+    state,
+    event,
+    environmentId,
+    options,
+  );
+  const threadId = getOrchestrationEventThreadId(event);
+  if (
+    threadId === null ||
+    (state.threadShellById[threadId] === undefined &&
+      nextState.threadShellById[threadId] === undefined)
+  ) {
+    return nextState;
+  }
+  return recordAppliedThreadEventSequence(nextState, event);
+}
+
 function applyEnvironmentShellEvent(
   state: EnvironmentState,
   event: OrchestrationShellStreamEvent,
@@ -3140,6 +3241,8 @@ export function hydrateCachedEnvironmentState(
     ...cachedState,
     queuedTurnIdsByThreadId: cachedState.queuedTurnIdsByThreadId ?? {},
     queuedTurnByThreadId: cachedState.queuedTurnByThreadId ?? {},
+    lastAppliedEventSequenceByThreadId: cachedState.lastAppliedEventSequenceByThreadId ?? {},
+    lastAppliedEventIdByThreadId: cachedState.lastAppliedEventIdByThreadId ?? {},
     bootstrapComplete: false,
   });
 }

@@ -302,8 +302,12 @@ function proposedPlanIdForTurn(threadId: ThreadId, turnId: TurnId): string {
   return `plan:${threadId}:turn:${turnId}`;
 }
 
-function proposedPlanIdFromEvent(event: ProviderRuntimeEvent, threadId: ThreadId): string {
-  const turnId = toTurnId(event.turnId);
+function proposedPlanIdFromEvent(
+  event: ProviderRuntimeEvent,
+  threadId: ThreadId,
+  packedTurnId?: TurnId,
+): string {
+  const turnId = packedTurnId ?? toTurnId(event.turnId);
   if (turnId) {
     return proposedPlanIdForTurn(threadId, turnId);
   }
@@ -433,6 +437,7 @@ function toolActivityDataPayload(
 
 function runtimeEventToActivities(
   event: ProviderRuntimeEvent,
+  packedTurnId: TurnId | undefined,
 ): ReadonlyArray<OrchestrationThreadActivity> {
   const maybeSequence = (() => {
     const eventWithSequence = event as ProviderRuntimeEvent & { sessionSequence?: number };
@@ -466,7 +471,7 @@ function runtimeEventToActivities(
             requestType: event.payload.requestType,
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -490,7 +495,7 @@ function runtimeEventToActivities(
             requestType: event.payload.requestType,
             ...(event.payload.decision ? { decision: event.payload.decision } : {}),
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -507,7 +512,7 @@ function runtimeEventToActivities(
           payload: {
             message: truncateDetail(event.payload.message),
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -527,7 +532,7 @@ function runtimeEventToActivities(
             ...(event.payload.reason ? { detail: truncateDetail(event.payload.reason) } : {}),
             ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -545,7 +550,7 @@ function runtimeEventToActivities(
             message: truncateDetail(event.payload.message),
             ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -565,7 +570,7 @@ function runtimeEventToActivities(
               ? { explanation: event.payload.explanation }
               : {}),
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -583,7 +588,7 @@ function runtimeEventToActivities(
             ...(event.requestId ? { requestId: event.requestId } : {}),
             questions: event.payload.questions,
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -601,7 +606,7 @@ function runtimeEventToActivities(
             ...(event.requestId ? { requestId: event.requestId } : {}),
             answers: event.payload.answers,
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -627,7 +632,7 @@ function runtimeEventToActivities(
               ? { detail: truncateDetail(event.payload.description) }
               : {}),
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -648,7 +653,7 @@ function runtimeEventToActivities(
             ...(event.payload.lastToolName ? { lastToolName: event.payload.lastToolName } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -673,7 +678,7 @@ function runtimeEventToActivities(
             ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -707,7 +712,7 @@ function runtimeEventToActivities(
               : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -742,7 +747,7 @@ function runtimeEventToActivities(
             ...(event.payload.lastToolName ? { lastToolName: event.payload.lastToolName } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -784,7 +789,7 @@ function runtimeEventToActivities(
             ...(event.payload.error ? { error: truncateDetail(event.payload.error) } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -806,7 +811,7 @@ function runtimeEventToActivities(
             state: event.payload.state,
             ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -826,7 +831,7 @@ function runtimeEventToActivities(
           kind: "context-window.updated",
           summary: "Context window updated",
           payload,
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -853,7 +858,7 @@ function runtimeEventToActivities(
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...toolActivityDataPayload(event.payload.itemType, event.payload.data),
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -875,7 +880,7 @@ function runtimeEventToActivities(
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...toolActivityDataPayload(event.payload.itemType, event.payload.data),
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -896,7 +901,7 @@ function runtimeEventToActivities(
             itemType: event.payload.itemType,
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
           },
-          turnId: toTurnId(event.turnId) ?? null,
+          turnId: packedTurnId ?? null,
           ...maybeSequence,
         },
       ];
@@ -2335,12 +2340,13 @@ const make = Effect.gen(function* () {
       const now = event.createdAt;
       const eventTurnId = toTurnId(event.turnId);
       const activeTurnId = thread.session?.activeTurnId ?? null;
+      const packedEventTurnId = eventTurnId ?? activeTurnId ?? undefined;
 
-      if (eventTurnId) {
+      if (packedEventTurnId) {
         yield* recordTouchedPathsForTurn({
           event,
           threadId: thread.id,
-          turnId: eventTurnId,
+          turnId: packedEventTurnId,
         }).pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("provider runtime ingestion failed to record touched paths", {
@@ -2354,7 +2360,6 @@ const make = Effect.gen(function* () {
 
       const conflictsWithActiveTurn =
         activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
-      const missingTurnForActiveTurn = activeTurnId !== null && eventTurnId === undefined;
 
       // A turn.started that conflicts with the active turn is legitimate when
       // the server itself has a turn start pending for this thread AND the
@@ -2385,12 +2390,12 @@ const make = Effect.gen(function* () {
           case "turn.started":
             return !conflictsWithActiveTurn || conflictingTurnStartIsPendingTurnStart;
           case "turn.completed":
-            if (conflictsWithActiveTurn || missingTurnForActiveTurn) {
+            if (conflictsWithActiveTurn) {
               return false;
             }
             // Only the active turn may close the lifecycle state.
-            if (activeTurnId !== null && eventTurnId !== undefined) {
-              return sameId(activeTurnId, eventTurnId);
+            if (activeTurnId !== null && packedEventTurnId !== undefined) {
+              return sameId(activeTurnId, packedEventTurnId);
             }
             // If no active turn is tracked, accept completion scoped to this thread.
             return true;
@@ -2418,17 +2423,17 @@ const make = Effect.gen(function* () {
         const sessionStateReferencesCompletedLatestTurn =
           sessionStateStatus === "running" &&
           activeTurnId === null &&
-          eventTurnId !== undefined &&
-          sameId(thread.latestTurn?.turnId, eventTurnId) &&
+          packedEventTurnId !== undefined &&
+          sameId(thread.latestTurn?.turnId, packedEventTurnId) &&
           thread.latestTurn?.completedAt != null;
         const nextActiveTurnId =
           event.type === "turn.started"
-            ? (eventTurnId ?? null)
+            ? (packedEventTurnId ?? null)
             : event.type === "turn.completed" || event.type === "session.exited"
               ? null
               : sessionStateStatus === "running"
                 ? (activeTurnId ??
-                  (sessionStateReferencesCompletedLatestTurn ? null : (eventTurnId ?? null)))
+                  (sessionStateReferencesCompletedLatestTurn ? null : (packedEventTurnId ?? null)))
                 : activeTurnId;
         const status = (() => {
           switch (event.type) {
@@ -2509,7 +2514,7 @@ const make = Effect.gen(function* () {
         event.type === "turn.proposed.delta" ? event.payload.delta : undefined;
 
       if (assistantDelta && assistantDelta.length > 0) {
-        const turnId = toTurnId(event.turnId);
+        const turnId = packedEventTurnId;
         const assistantMessageId = yield* getOrCreateAssistantMessageId({
           threadId: thread.id,
           event,
@@ -2568,7 +2573,7 @@ const make = Effect.gen(function* () {
           )).filter((attachment): attachment is ChatAttachment => attachment !== null);
 
           if (attachments.length > 0) {
-            const turnId = toTurnId(event.turnId);
+            const turnId = packedEventTurnId;
             const assistantMessageId = yield* getOrCreateAssistantMessageId({
               threadId: thread.id,
               event,
@@ -2601,7 +2606,7 @@ const make = Effect.gen(function* () {
         });
 
         if (attachment) {
-          const turnId = toTurnId(event.turnId);
+          const turnId = packedEventTurnId;
           const assistantMessageId = yield* getOrCreateAssistantMessageId({
             threadId: thread.id,
             event,
@@ -2626,7 +2631,7 @@ const make = Effect.gen(function* () {
 
       const pauseForUserTurnId =
         event.type === "request.opened" || event.type === "user-input.requested"
-          ? toTurnId(event.turnId)
+          ? packedEventTurnId
           : undefined;
       if (pauseForUserTurnId) {
         const detailedThread = yield* getLoadedThreadDetail();
@@ -2670,7 +2675,7 @@ const make = Effect.gen(function* () {
       }
 
       if (proposedPlanDelta && proposedPlanDelta.length > 0) {
-        const planId = proposedPlanIdFromEvent(event, thread.id);
+        const planId = proposedPlanIdFromEvent(event, thread.id, packedEventTurnId);
         yield* appendBufferedProposedPlan(planId, proposedPlanDelta, now);
       }
 
@@ -2686,8 +2691,8 @@ const make = Effect.gen(function* () {
       const proposedPlanCompletion =
         event.type === "turn.proposed.completed"
           ? {
-              planId: proposedPlanIdFromEvent(event, thread.id),
-              turnId: toTurnId(event.turnId),
+              planId: proposedPlanIdFromEvent(event, thread.id, packedEventTurnId),
+              turnId: packedEventTurnId,
               planMarkdown: event.payload.planMarkdown,
             }
           : undefined;
@@ -2695,7 +2700,7 @@ const make = Effect.gen(function* () {
       if (assistantCompletion) {
         const detailedThread = yield* getLoadedThreadDetail();
         const messages = detailedThread?.messages ?? [];
-        const turnId = toTurnId(event.turnId);
+        const turnId = packedEventTurnId;
         const activeAssistantMessageId = turnId
           ? yield* getActiveAssistantMessageIdForTurn(thread.id, turnId)
           : Option.none<MessageId>();
@@ -2761,7 +2766,7 @@ const make = Effect.gen(function* () {
         const detailedThread = yield* getLoadedThreadDetail();
         const messages = detailedThread?.messages ?? [];
         const proposedPlans = detailedThread?.proposedPlans ?? [];
-        const turnId = toTurnId(event.turnId);
+        const turnId = packedEventTurnId;
         if (turnId) {
           const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
           yield* Effect.forEach(
@@ -2802,7 +2807,9 @@ const make = Effect.gen(function* () {
 
         const shouldApplyRuntimeError = !STRICT_PROVIDER_LIFECYCLE_GUARD
           ? true
-          : activeTurnId === null || eventTurnId === undefined || sameId(activeTurnId, eventTurnId);
+          : activeTurnId === null ||
+            packedEventTurnId === undefined ||
+            sameId(activeTurnId, packedEventTurnId);
 
         if (shouldApplyRuntimeError) {
           yield* orchestrationEngine.dispatch({
@@ -2817,7 +2824,7 @@ const make = Effect.gen(function* () {
                 ? { providerInstanceId: event.providerInstanceId }
                 : {}),
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
-              activeTurnId: eventTurnId ?? null,
+              activeTurnId: packedEventTurnId ?? null,
               lastError: runtimeErrorMessage,
               updatedAt: now,
             },
@@ -2836,7 +2843,7 @@ const make = Effect.gen(function* () {
       }
 
       if (event.type === "turn.diff.updated") {
-        const turnId = toTurnId(event.turnId);
+        const turnId = packedEventTurnId;
         const checkpointContext = turnId
           ? yield* projectionSnapshotQuery
               .getThreadCheckpointContext(thread.id)
@@ -2873,7 +2880,7 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const activities = runtimeEventToActivities(event);
+      const activities = runtimeEventToActivities(event, packedEventTurnId);
       yield* Effect.forEach(activities, (activity) =>
         providerCommandId(event, "thread-activity-append").pipe(
           Effect.flatMap((commandId) =>

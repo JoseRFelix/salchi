@@ -413,6 +413,93 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBe("turn failed");
   });
 
+  it("stamps omitted provider turn ids from the active turn across session replacement", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-active-omitted");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-omitted-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      turnId,
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.status === "running" && thread.session?.activeTurnId === turnId,
+    );
+
+    harness.emit({
+      type: "session.started",
+      eventId: asEventId("evt-omitted-session-replacement"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-omitted-content-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      itemId: asItemId("item-omitted-turn"),
+      createdAt: "2026-01-01T00:00:02.000Z",
+      payload: {
+        streamKind: "assistant_text",
+        delta: "packed from active turn",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-omitted-item-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      itemId: asItemId("item-omitted-turn"),
+      createdAt: "2026-01-01T00:00:03.000Z",
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+      },
+    });
+
+    let thread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message) =>
+          message.role === "assistant" &&
+          message.text === "packed from active turn" &&
+          message.turnId === turnId &&
+          message.streaming === false,
+      ),
+    );
+    expect(thread.messages.filter((message) => message.role === "assistant")).toHaveLength(1);
+    expect(thread.messages.find((message) => message.role === "assistant")?.turnId).toBe(turnId);
+    expect(thread.session?.status).toBe("running");
+    expect(thread.session?.activeTurnId).toBe(turnId);
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-omitted-turn-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:04.000Z",
+      payload: {
+        state: "completed",
+      },
+    });
+
+    thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.status === "ready" &&
+        entry.session?.activeTurnId === null &&
+        entry.latestTurn?.turnId === turnId &&
+        entry.latestTurn.completedAt === "2026-01-01T00:00:04.000Z",
+    );
+    expect(thread.latestTurn?.turnId).toBe(turnId);
+    expect(thread.messages.find((message) => message.role === "assistant")?.turnId).toBe(turnId);
+  });
+
   it("clears lastError when a new turn starts after a failed turn", async () => {
     const harness = await createHarness();
     const failedTurnAt = "2026-01-01T00:00:00.000Z";

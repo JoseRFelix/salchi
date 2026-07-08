@@ -50,6 +50,9 @@ import {
   type SidebarThreadSummary,
   type Thread,
 } from "./types";
+import { deriveTimelineEntries, deriveWorkLogEntries } from "./session-logic";
+import { deriveMessagesTimelineRows } from "./components/chat/MessagesTimeline.logic";
+import incidentReplayFixture from "./fixtures/incident-codex-tool-call-zVU4V3ZY0AzFMZdzyN3pI6HP.events.json";
 import {
   resetSavedEnvironmentRegistryStoreForTests,
   useSavedEnvironmentRegistryStore,
@@ -630,6 +633,178 @@ function makeEvent<T extends OrchestrationEvent["type"]>(
     ...overrides,
   } as Extract<OrchestrationEvent, { type: T }>;
 }
+
+const incidentReplayEvents = incidentReplayFixture.events as OrchestrationEvent[];
+const incidentThreadId = ThreadId.make(incidentReplayFixture.streamId);
+
+function deriveRowsForThread(thread: Thread) {
+  const timelineEntries = deriveTimelineEntries(
+    thread.messages,
+    thread.proposedPlans,
+    deriveWorkLogEntries(thread.activities),
+  );
+  return deriveMessagesTimelineRows({
+    timelineEntries,
+    latestTurn: thread.latestTurn,
+    activeTurnId: thread.session?.activeTurnId ?? null,
+    isWorking:
+      thread.session?.orchestrationStatus === "running" ||
+      (thread.latestTurn?.state === "running" && thread.latestTurn.completedAt === null),
+    activeTurnStartedAt: thread.latestTurn?.startedAt ?? null,
+    turnDiffSummaries: thread.turnDiffSummaries,
+    revertTurnCountByUserMessageId: new Map(),
+  });
+}
+
+function expectAccurateIncidentPacking(state: AppState, context: string): void {
+  const thread = selectThreadByRef(state, scopeThreadRef(localEnvironmentId, incidentThreadId));
+  if (!thread) {
+    return;
+  }
+
+  const rows = deriveRowsForThread(thread);
+  const turnFoldCount = rows.filter((row) => row.kind === "turn-fold").length;
+  const terminalAssistantCount = rows.filter(
+    (row) => row.kind === "message" && row.message.role === "assistant" && row.showAssistantMeta,
+  ).length;
+  const nullTurnTerminalAssistantCount = rows.filter(
+    (row) =>
+      row.kind === "message" &&
+      row.message.role === "assistant" &&
+      row.message.turnId == null &&
+      row.showAssistantMeta,
+  ).length;
+
+  expect(turnFoldCount, context).toBeLessThanOrEqual(1);
+  expect(terminalAssistantCount, context).toBeLessThanOrEqual(1);
+  expect(nullTurnTerminalAssistantCount, context).toBe(0);
+}
+
+function replayIncidentEvents(events: ReadonlyArray<OrchestrationEvent>, seed = makeEmptyState()) {
+  let state = seed;
+  for (const event of events) {
+    state = applyOrchestrationEvent(state, event, localEnvironmentId);
+    expectAccurateIncidentPacking(state, `after sequence ${event.sequence}`);
+  }
+  return state;
+}
+
+describe("incident message-to-turn packing replay", () => {
+  it("keeps the real incident event log packed as one turn after every event", () => {
+    const state = replayIncidentEvents(incidentReplayEvents);
+    const thread = selectThreadByRef(state, scopeThreadRef(localEnvironmentId, incidentThreadId));
+
+    expect(thread?.messages.filter((message) => message.role === "assistant")).toHaveLength(67);
+    expect(
+      new Set(thread?.messages.flatMap((message) => (message.turnId ? [message.turnId] : []))),
+    ).toEqual(new Set([TurnId.make("019f3ba3-e6a4-7b91-863a-b083f837241c")]));
+    expect(deriveRowsForThread(thread!).filter((row) => row.kind === "turn-fold")).toHaveLength(1);
+  });
+
+  it("keeps packing stable under duplicate delivery", () => {
+    let state = makeEmptyState();
+    for (const event of incidentReplayEvents) {
+      state = applyOrchestrationEvent(state, event, localEnvironmentId);
+      expectAccurateIncidentPacking(state, `after sequence ${event.sequence}`);
+      state = applyOrchestrationEvent(state, event, localEnvironmentId);
+      expectAccurateIncidentPacking(state, `after duplicate sequence ${event.sequence}`);
+    }
+  });
+
+  it("ignores stale catch-up events after a mid-turn gap recovery cursor", () => {
+    const gapStartIndex = incidentReplayEvents.findIndex((event) => event.sequence === 401803);
+    const gapEndIndex = incidentReplayEvents.findIndex((event) => event.sequence === 402196);
+    expect(gapStartIndex).toBeGreaterThan(0);
+    expect(gapEndIndex).toBeGreaterThan(gapStartIndex);
+
+    let state = replayIncidentEvents(incidentReplayEvents.slice(0, gapStartIndex));
+    state = replayIncidentEvents(incidentReplayEvents.slice(gapEndIndex, gapEndIndex + 25), state);
+    state = applyOrchestrationEvents(
+      state,
+      incidentReplayEvents.slice(gapStartIndex, gapEndIndex),
+      localEnvironmentId,
+      { syncSidebarSummaries: true },
+    );
+    expectAccurateIncidentPacking(state, "after stale catch-up batch");
+    state = replayIncidentEvents(incidentReplayEvents.slice(gapEndIndex + 25), state);
+
+    expectAccurateIncidentPacking(state, "after remaining live events");
+  });
+
+  it("ignores the older out-of-order session-set after the newer pair member arrived", () => {
+    const firstIndex = incidentReplayEvents.findIndex((event) => event.sequence === 401516);
+    const secondIndex = incidentReplayEvents.findIndex((event) => event.sequence === 401517);
+    expect(firstIndex).toBeGreaterThan(0);
+    expect(secondIndex).toBe(firstIndex + 1);
+
+    const reordered = [...incidentReplayEvents];
+    [reordered[firstIndex], reordered[secondIndex]] = [
+      reordered[secondIndex]!,
+      reordered[firstIndex]!,
+    ];
+
+    const state = replayIncidentEvents(reordered);
+    const thread = selectThreadByRef(state, scopeThreadRef(localEnvironmentId, incidentThreadId));
+
+    expect(thread?.latestTurn?.turnId).toBe(TurnId.make("019f3ba3-e6a4-7b91-863a-b083f837241c"));
+    expect(deriveRowsForThread(thread!).filter((row) => row.kind === "turn-fold")).toHaveLength(1);
+  });
+
+  it("repairs a mid-turn null-turn snapshot before live replay catches up", () => {
+    const snapshotThroughSequence = 401804;
+    const snapshotState = replayIncidentEvents(
+      incidentReplayEvents.filter((event) => event.sequence <= snapshotThroughSequence),
+    );
+    const snapshotThread = selectThreadByRef(
+      snapshotState,
+      scopeThreadRef(localEnvironmentId, incidentThreadId),
+    );
+    expect(snapshotThread?.session?.orchestrationStatus).toBe("running");
+    expect(snapshotThread?.session?.activeTurnId).toBe(
+      TurnId.make("019f3ba3-e6a4-7b91-863a-b083f837241c"),
+    );
+
+    const activeTurnId = snapshotThread!.session!.activeTurnId!;
+    const preRepairSnapshot = makeOrchestrationThread(snapshotThread!, {
+      session: {
+        threadId: incidentThreadId,
+        status: "running",
+        providerName: "codex",
+        runtimeMode: snapshotThread!.runtimeMode,
+        activeTurnId,
+        lastError: null,
+        updatedAt: snapshotThread!.session!.updatedAt,
+      },
+      messages: snapshotThread!.messages.map((message) => ({
+        id: message.id,
+        role: message.role,
+        text: message.text,
+        turnId: message.role === "assistant" ? null : (message.turnId ?? null),
+        streaming: message.streaming,
+        createdAt: message.createdAt,
+        updatedAt: message.completedAt ?? message.createdAt,
+      })),
+    });
+
+    let state = syncServerThreadDetail(makeEmptyState(), preRepairSnapshot, localEnvironmentId);
+    expectAccurateIncidentPacking(state, "after pre-repair null-turn snapshot");
+    const hydratedThread = selectThreadByRef(
+      state,
+      scopeThreadRef(localEnvironmentId, incidentThreadId),
+    );
+    expect(
+      hydratedThread?.messages
+        .filter((message) => message.role === "assistant")
+        .every((message) => message.turnId === activeTurnId),
+    ).toBe(true);
+
+    state = replayIncidentEvents(
+      incidentReplayEvents.filter((event) => event.sequence > snapshotThroughSequence),
+      state,
+    );
+    expectAccurateIncidentPacking(state, "after live replay following pre-repair snapshot");
+  });
+});
 
 describe("environment state removal", () => {
   it("drops local state for removed environments", () => {
@@ -1336,6 +1511,75 @@ describe("thread detail structural sharing", () => {
     expect(thread?.messages[0]?.turnId).toBe(turnId);
     expect(thread?.messages[0]?.streaming).toBe(false);
     expect(thread?.latestTurn?.assistantMessageId).toBe(messageId);
+  });
+
+  it("provisionally packs null-turn assistant messages into the active turn and accepts authoritative rebinding", () => {
+    const threadId = ThreadId.make("thread-provisional-null-turn");
+    const provisionalTurnId = TurnId.make("turn-provisional");
+    const authoritativeTurnId = TurnId.make("turn-authoritative");
+    const messageId = MessageId.make("assistant-provisional-null-turn");
+    const state = makeState(
+      makeThread({
+        id: threadId,
+        session: {
+          provider: ProviderDriverKind.make("codex"),
+          status: "running",
+          orchestrationStatus: "running",
+          activeTurnId: provisionalTurnId,
+          createdAt: "2026-02-13T00:01:00.000Z",
+          updatedAt: "2026-02-13T00:01:00.000Z",
+        },
+        latestTurn: {
+          turnId: provisionalTurnId,
+          state: "running",
+          requestedAt: "2026-02-13T00:01:00.000Z",
+          startedAt: "2026-02-13T00:01:00.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+      }),
+    );
+
+    const provisional = applyOrchestrationEvent(
+      state,
+      makeEvent("thread.message-sent", {
+        threadId,
+        messageId,
+        role: "assistant",
+        text: "Working",
+        turnId: null,
+        streaming: true,
+        createdAt: "2026-02-13T00:01:05.000Z",
+        updatedAt: "2026-02-13T00:01:05.000Z",
+      }),
+      localEnvironmentId,
+    );
+    expect(
+      selectThreadByRef(provisional, scopeThreadRef(localEnvironmentId, threadId))?.messages[0],
+    ).toEqual(expect.objectContaining({ turnId: provisionalTurnId }));
+
+    const rebound = applyOrchestrationEvent(
+      provisional,
+      makeEvent(
+        "thread.message-sent",
+        {
+          threadId,
+          messageId,
+          role: "assistant",
+          text: " on the actual turn",
+          turnId: authoritativeTurnId,
+          streaming: true,
+          createdAt: "2026-02-13T00:01:06.000Z",
+          updatedAt: "2026-02-13T00:01:06.000Z",
+        },
+        { sequence: 2 },
+      ),
+      localEnvironmentId,
+    );
+
+    const thread = selectThreadByRef(rebound, scopeThreadRef(localEnvironmentId, threadId));
+    expect(thread?.messages[0]?.text).toBe("Working on the actual turn");
+    expect(thread?.messages[0]?.turnId).toBe(authoritativeTurnId);
   });
 
   it("reuses unchanged activity payloads from fresh snapshot objects", () => {
@@ -2322,6 +2566,74 @@ describe("incremental orchestration updates", () => {
     expect(threadsOf(settled)[0]?.latestTurn?.completedAt).toBe("2026-02-27T00:00:04.000Z");
   });
 
+  it("ignores stale thread events after a newer sequence settled the turn", () => {
+    const turnId = TurnId.make("turn-sequence-guard");
+    const thread = makeThread({
+      latestTurn: {
+        turnId,
+        state: "running",
+        requestedAt: "2026-02-27T00:00:00.000Z",
+        startedAt: "2026-02-27T00:00:00.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+      session: {
+        provider: ProviderDriverKind.make("codex"),
+        status: "running",
+        orchestrationStatus: "running",
+        activeTurnId: turnId,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:00.000Z",
+      },
+    });
+    const state = makeState(thread);
+
+    const settled = applyOrchestrationEvent(
+      state,
+      makeEvent(
+        "thread.session-set",
+        {
+          threadId: thread.id,
+          session: {
+            threadId: thread.id,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-02-27T00:00:04.000Z",
+          },
+        },
+        { sequence: 4 },
+      ),
+      localEnvironmentId,
+    );
+    const stale = applyOrchestrationEvent(
+      settled,
+      makeEvent(
+        "thread.session-set",
+        {
+          threadId: thread.id,
+          session: {
+            threadId: thread.id,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: "2026-02-27T00:00:02.000Z",
+          },
+        },
+        { sequence: 2 },
+      ),
+      localEnvironmentId,
+    );
+
+    expect(threadsOf(stale)[0]?.session?.orchestrationStatus).toBe("ready");
+    expect(threadsOf(stale)[0]?.latestTurn?.state).toBe("completed");
+    expect(threadsOf(stale)[0]?.latestTurn?.completedAt).toBe("2026-02-27T00:00:04.000Z");
+  });
+
   it("keeps a running latest turn active when assistant completion arrives before running session state", () => {
     const turnId = TurnId.make("turn-racy-message");
     const thread = makeThread({
@@ -2612,6 +2924,43 @@ describe("incremental orchestration updates", () => {
     );
     expect(threadsOf(next)[0]?.latestTurn?.assistantMessageId).toBe(
       MessageId.make("assistant-real"),
+    );
+  });
+
+  it("does not rebind turn diffs across turn ids when an assistant message is repacked", () => {
+    const state = makeState(
+      makeThread({
+        turnDiffSummaries: [
+          {
+            turnId: TurnId.make("turn-1"),
+            completedAt: "2026-02-27T00:00:02.000Z",
+            status: "ready",
+            checkpointTurnCount: 1,
+            checkpointRef: CheckpointRef.make("checkpoint-1"),
+            assistantMessageId: MessageId.make("assistant-turn-1"),
+            files: [{ path: "src/app.ts", additions: 1, deletions: 0 }],
+          },
+        ],
+      }),
+    );
+
+    const next = applyOrchestrationEvent(
+      state,
+      makeEvent("thread.message-sent", {
+        threadId: ThreadId.make("thread-1"),
+        messageId: MessageId.make("assistant-turn-2"),
+        role: "assistant",
+        text: "different turn",
+        turnId: TurnId.make("turn-2"),
+        streaming: false,
+        createdAt: "2026-02-27T00:00:03.000Z",
+        updatedAt: "2026-02-27T00:00:03.000Z",
+      }),
+      localEnvironmentId,
+    );
+
+    expect(threadsOf(next)[0]?.turnDiffSummaries[0]?.assistantMessageId).toBe(
+      MessageId.make("assistant-turn-1"),
     );
   });
 

@@ -119,12 +119,30 @@ export function shouldShowChangedFilesReport(
   return summary.attribution === "edit-snapshots" || summary.attribution === "touched-paths";
 }
 
-function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<TimelineEntry>) {
+function fallbackTurnIdForNullTurnAssistant(input: {
+  latestTurn: TimelineLatestTurn | null;
+  activeTurnId: TurnId | null;
+}): TurnId | null {
+  if (input.activeTurnId !== null) {
+    return input.activeTurnId;
+  }
+  const latestTurn = input.latestTurn;
+  if (latestTurn?.state === "running" && latestTurn.completedAt === null) {
+    return latestTurn.turnId;
+  }
+  return null;
+}
+
+function deriveTerminalAssistantMessageIds(input: {
+  timelineEntries: ReadonlyArray<TimelineEntry>;
+  fallbackTurnId: TurnId | null;
+  isWorking: boolean;
+}) {
   const lastAssistantMessageIdByResponseKey = new Map<string, MessageId>();
   const terminalAssistantMessageIdByTurnId = new Map<TurnId, MessageId>();
   let nullTurnResponseIndex = 0;
 
-  for (const timelineEntry of timelineEntries) {
+  for (const timelineEntry of input.timelineEntries) {
     if (timelineEntry.kind !== "message") {
       continue;
     }
@@ -137,9 +155,16 @@ function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<Timeli
       continue;
     }
 
-    const responseKey = message.turnId
-      ? `turn:${message.turnId}`
-      : `unkeyed:${nullTurnResponseIndex}`;
+    if (!message.turnId && input.fallbackTurnId === null && input.isWorking) {
+      continue;
+    }
+
+    const responseKey =
+      message.turnId !== null && message.turnId !== undefined
+        ? `turn:${message.turnId}`
+        : input.fallbackTurnId !== null
+          ? `turn:${input.fallbackTurnId}`
+          : `legacy-null-turn:${nullTurnResponseIndex}`;
     lastAssistantMessageIdByResponseKey.set(responseKey, message.id);
     if (message.turnId) {
       terminalAssistantMessageIdByTurnId.set(message.turnId, message.id);
@@ -176,9 +201,12 @@ interface TurnFold {
   label: string;
 }
 
-function turnIdForTimelineEntry(entry: TimelineEntry): TurnId | null {
+function turnIdForTimelineEntry(
+  entry: TimelineEntry,
+  fallbackTurnId: TurnId | null,
+): TurnId | null {
   return entry.kind === "message" && entry.message.role === "assistant"
-    ? (entry.message.turnId ?? null)
+    ? (entry.message.turnId ?? fallbackTurnId)
     : entry.kind === "work"
       ? (entry.entry.turnId ?? null)
       : null;
@@ -193,6 +221,7 @@ function turnIdForTimelineEntry(entry: TimelineEntry): TurnId | null {
 function deriveUnsettledTurnIds(input: {
   latestTurn: TimelineLatestTurn | null;
   activeTurnId: TurnId | null;
+  fallbackTurnId: TurnId | null;
   timelineEntries: ReadonlyArray<TimelineEntry>;
   isWorking: boolean;
 }): ReadonlySet<TurnId> {
@@ -228,7 +257,7 @@ function deriveUnsettledTurnIds(input: {
       if (!entry) {
         continue;
       }
-      const turnId = turnIdForTimelineEntry(entry);
+      const turnId = turnIdForTimelineEntry(entry, input.fallbackTurnId);
       if (turnId !== null) {
         result.add(turnId);
       }
@@ -249,6 +278,7 @@ function deriveTurnFolds(input: {
   latestTurn: TimelineLatestTurn | null;
   unsettledTurnIds: ReadonlySet<TurnId>;
   isWorking: boolean;
+  fallbackTurnId: TurnId | null;
 }): ReadonlyMap<string, TurnFold> {
   interface TurnGroup {
     entries: Array<TimelineEntry>;
@@ -270,7 +300,7 @@ function deriveTurnFolds(input: {
       pendingUserBoundary = entry.message.createdAt;
       continue;
     }
-    const turnId = turnIdForTimelineEntry(entry);
+    const turnId = turnIdForTimelineEntry(entry, input.fallbackTurnId);
     if (!turnId) {
       continue;
     }
@@ -379,8 +409,16 @@ export function deriveMessagesTimelineRows(input: {
   const durationStartByMessageId = computeMessageDurationStart(
     input.timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
   );
+  const fallbackTurnId = fallbackTurnIdForNullTurnAssistant({
+    latestTurn: input.latestTurn ?? null,
+    activeTurnId: input.activeTurnId ?? null,
+  });
   const { terminalAssistantMessageIds, terminalAssistantMessageIdByTurnId } =
-    deriveTerminalAssistantMessageIds(input.timelineEntries);
+    deriveTerminalAssistantMessageIds({
+      timelineEntries: input.timelineEntries,
+      fallbackTurnId,
+      isWorking: input.isWorking,
+    });
   const turnDiffSummaryByAssistantMessageId = deriveTurnDiffSummaryByMessageId({
     turnDiffSummaries: input.turnDiffSummaries,
     terminalAssistantMessageIdByTurnId,
@@ -388,6 +426,7 @@ export function deriveMessagesTimelineRows(input: {
   const unsettledTurnIds = deriveUnsettledTurnIds({
     latestTurn: input.latestTurn ?? null,
     activeTurnId: input.activeTurnId ?? null,
+    fallbackTurnId,
     timelineEntries: input.timelineEntries,
     isWorking: input.isWorking,
   });
@@ -397,6 +436,7 @@ export function deriveMessagesTimelineRows(input: {
     latestTurn: input.latestTurn ?? null,
     unsettledTurnIds,
     isWorking: input.isWorking,
+    fallbackTurnId,
   });
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorEntryId.values()) {
@@ -467,10 +507,14 @@ export function deriveMessagesTimelineRows(input: {
     }
 
     const messageTurnId = timelineEntry.message.turnId ?? null;
+    const effectiveMessageTurnId =
+      timelineEntry.message.role === "assistant"
+        ? (messageTurnId ?? fallbackTurnId)
+        : messageTurnId;
     const assistantTurnStillInProgress =
       timelineEntry.message.role === "assistant" &&
-      messageTurnId !== null &&
-      unsettledTurnIds.has(messageTurnId);
+      ((effectiveMessageTurnId !== null && unsettledTurnIds.has(effectiveMessageTurnId)) ||
+        (messageTurnId === null && input.isWorking));
 
     const durationStart =
       durationStartByMessageId.get(timelineEntry.message.id) ?? timelineEntry.message.createdAt;
