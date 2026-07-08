@@ -555,7 +555,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     latestTurnId !== null && latestTurnId !== input.localDispatch.latestTurnTurnId;
 
   if (hasNewLatestTurn && latestTurn?.completedAt != null) {
-    return true;
+    return session === null || isTimestampAtOrAfter(session.updatedAt, latestTurn.completedAt);
   }
 
   if (input.phase === "running") {
@@ -590,4 +590,13 @@ function isLocalDispatchFollowUpTimestamp(
     return eventMs >= dispatchMs;
   }
   return timestamp >= localDispatchStartedAt;
+}
+
+function isTimestampAtOrAfter(timestamp: string, reference: string): boolean {
+  const timestampMs = Date.parse(timestamp);
+  const referenceMs = Date.parse(reference);
+  if (!Number.isNaN(timestampMs) && !Number.isNaN(referenceMs)) {
+    return timestampMs >= referenceMs;
+  }
+  return timestamp >= reference;
 }

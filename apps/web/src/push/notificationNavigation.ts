@@ -12,18 +12,29 @@ import {
 export const NOTIFICATION_CLICK_MESSAGE_TYPE = "t3.notification-click";
 // Mirrored in public/t3-push-service-worker.js. The service worker is a plain
 // public asset, so it cannot import this TypeScript helper directly.
+export const NOTIFICATION_CLICK_ACK_MESSAGE_TYPE = "t3.notification-click-ack";
+export const NOTIFICATION_CLICK_HANDLED_MESSAGE_TYPE = "t3.notification-click-handled";
+// Mirrored in public/t3-push-service-worker.js. The service worker is a plain
+// public asset, so it cannot import this TypeScript helper directly.
 export const NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME = "t3-notification-click";
 
 let lastNotificationNavigationTarget: NotificationNavigationTarget | null = null;
 let lastHandledClick: { readonly url: string; readonly openedAt: number } | null = null;
+let pendingBroadcastClick: { readonly url: string; readonly openedAt: number } | null = null;
 
 const PENDING_NOTIFICATION_CLICK_TTL_MS = 2 * 60 * 1000;
-const PENDING_NOTIFICATION_CLICK_RETRY_DELAYS_MS = [250, 500, 1000] as const;
+const PENDING_NOTIFICATION_CLICK_RETRY_DELAYS_MS = [250, 500, 1000, 2000] as const;
 
 interface NotificationClickClientMessage {
   readonly type: typeof NOTIFICATION_CLICK_MESSAGE_TYPE;
   readonly url: string;
   readonly openedAt?: number;
+}
+
+interface NotificationClickHandledMessage {
+  readonly type: typeof NOTIFICATION_CLICK_HANDLED_MESSAGE_TYPE;
+  readonly url: string;
+  readonly openedAt: number;
 }
 
 export type NotificationNavigationTarget =
@@ -68,6 +79,20 @@ export function isNotificationClickClientMessage(
     data.type === NOTIFICATION_CLICK_MESSAGE_TYPE &&
     "url" in data &&
     typeof data.url === "string"
+  );
+}
+
+function isNotificationClickHandledMessage(data: unknown): data is NotificationClickHandledMessage {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "type" in data &&
+    data.type === NOTIFICATION_CLICK_HANDLED_MESSAGE_TYPE &&
+    "url" in data &&
+    typeof data.url === "string" &&
+    "openedAt" in data &&
+    typeof data.openedAt === "number" &&
+    Number.isFinite(data.openedAt)
   );
 }
 
@@ -144,6 +169,7 @@ export function getLastNotificationNavigationTarget(): NotificationNavigationTar
 export function resetNotificationNavigationStateForTests(): void {
   lastNotificationNavigationTarget = null;
   lastHandledClick = null;
+  pendingBroadcastClick = null;
 }
 
 export function installServiceWorkerNotificationNavigation(router: AppRouter): () => void {
@@ -155,17 +181,36 @@ export function installServiceWorkerNotificationNavigation(router: AppRouter): (
   const cleanupCallbacks: Array<() => void> = [];
   const replayAbortController = new AbortController();
   let replayInFlight: Promise<void> | null = null;
+  let queuedReplayReason: string | null = null;
   const replayPendingClick = (reason: string) => {
-    if (replayAbortController.signal.aborted || replayInFlight !== null) {
+    if (replayAbortController.signal.aborted) {
       return;
     }
 
-    const replay = consumePendingNotificationClick(router, reason, {
-      retryDelaysMs: hasPendingNotificationClickCache()
-        ? PENDING_NOTIFICATION_CLICK_RETRY_DELAYS_MS
-        : [],
-      signal: replayAbortController.signal,
-    });
+    if (replayInFlight !== null) {
+      queuedReplayReason = reason;
+      return;
+    }
+
+    const replay = (async () => {
+      let currentReason: string | null = reason;
+      while (currentReason !== null && !replayAbortController.signal.aborted) {
+        const replayReason = currentReason;
+        currentReason = null;
+        consumePendingBroadcastClick(router, replayReason);
+        await consumePendingNotificationClick(router, replayReason, {
+          retryDelaysMs: hasPendingNotificationClickCache()
+            ? PENDING_NOTIFICATION_CLICK_RETRY_DELAYS_MS
+            : [],
+          signal: replayAbortController.signal,
+        });
+
+        if (queuedReplayReason !== null) {
+          currentReason = queuedReplayReason;
+          queuedReplayReason = null;
+        }
+      }
+    })();
     const replayWithCleanup = replay.finally(() => {
       if (replayInFlight === replayWithCleanup) {
         replayInFlight = null;
@@ -209,6 +254,11 @@ export function installServiceWorkerNotificationNavigation(router: AppRouter): (
     try {
       const channel = new BroadcastChannel(NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME);
       const handleBroadcastMessage = (event: MessageEvent<unknown>) => {
+        if (isNotificationClickHandledMessage(event.data)) {
+          clearMatchingPendingBroadcastClick(event.data);
+          return;
+        }
+
         if (!isNotificationClickClientMessage(event.data)) {
           return;
         }
@@ -218,11 +268,15 @@ export function installServiceWorkerNotificationNavigation(router: AppRouter): (
           typeof document.hasFocus === "function" &&
           !document.hasFocus()
         ) {
+          pendingBroadcastClick = {
+            url: event.data.url,
+            openedAt: resolveNotificationClickOpenedAt(event.data.openedAt),
+          };
           recordResumeDiagnostic("notification-navigation-message", {
-            reason: "broadcast-ignored-unfocused",
+            reason: "broadcast-deferred-unfocused",
             data: {
-              url: event.data.url,
-              openedAt: event.data.openedAt,
+              url: pendingBroadcastClick.url,
+              openedAt: pendingBroadcastClick.openedAt,
             },
           });
           return;
@@ -282,10 +336,71 @@ export function installServiceWorkerNotificationNavigation(router: AppRouter): (
   return () => {
     replayAbortController.abort();
     replayInFlight = null;
+    queuedReplayReason = null;
+    pendingBroadcastClick = null;
     for (const cleanup of cleanupCallbacks) {
       cleanup();
     }
   };
+}
+
+function consumePendingBroadcastClick(router: AppRouter, replayReason: string): boolean {
+  const pending = pendingBroadcastClick;
+  pendingBroadcastClick = null;
+  if (pending === null) {
+    return false;
+  }
+
+  const pendingAgeMs = Date.now() - pending.openedAt;
+  if (pendingAgeMs > PENDING_NOTIFICATION_CLICK_TTL_MS) {
+    recordResumeDiagnostic("notification-navigation-message", {
+      reason: "broadcast-deferred-stale",
+      data: {
+        replayReason,
+        url: pending.url,
+        openedAt: pending.openedAt,
+        ageMs: pendingAgeMs,
+        ttlMs: PENDING_NOTIFICATION_CLICK_TTL_MS,
+      },
+    });
+    return false;
+  }
+
+  recordResumeDiagnostic("notification-navigation-message", {
+    reason: "broadcast-deferred",
+    data: {
+      replayReason,
+      url: pending.url,
+      openedAt: pending.openedAt,
+    },
+  });
+  return handleNotificationClickNavigation(router, {
+    clearPending: true,
+    openedAt: pending.openedAt,
+    reason: "broadcast-deferred",
+    url: pending.url,
+  });
+}
+
+function clearMatchingPendingBroadcastClick(click: {
+  readonly url: string;
+  readonly openedAt: number;
+}): void {
+  if (
+    pendingBroadcastClick?.url !== click.url ||
+    pendingBroadcastClick.openedAt !== click.openedAt
+  ) {
+    return;
+  }
+
+  recordResumeDiagnostic("notification-navigation-message", {
+    reason: "broadcast-deferred-handled",
+    data: {
+      url: click.url,
+      openedAt: click.openedAt,
+    },
+  });
+  pendingBroadcastClick = null;
 }
 
 export async function consumePendingNotificationClick(
@@ -407,7 +522,8 @@ function handleNotificationClickNavigation(
     readonly url: string;
   },
 ): boolean {
-  const openedAt = Number.isFinite(input.openedAt) ? input.openedAt : undefined;
+  const openedAt =
+    input.openedAt !== undefined && Number.isFinite(input.openedAt) ? input.openedAt : undefined;
   if (
     openedAt !== undefined &&
     lastHandledClick?.url === input.url &&
@@ -424,6 +540,8 @@ function handleNotificationClickNavigation(
     if (input.clearPending) {
       void clearPendingNotificationClick();
     }
+    postNotificationClickAck(input.url, openedAt);
+    broadcastNotificationClickHandled(input.url, openedAt);
     return true;
   }
 
@@ -462,7 +580,61 @@ function handleNotificationClickNavigation(
   if (input.clearPending) {
     void clearPendingNotificationClick();
   }
+  postNotificationClickAck(input.url, openedAt);
+  broadcastNotificationClickHandled(input.url, openedAt);
   return true;
+}
+
+function resolveNotificationClickOpenedAt(openedAt: number | undefined): number {
+  return openedAt !== undefined && Number.isFinite(openedAt) ? openedAt : Date.now();
+}
+
+function postNotificationClickAck(url: string, openedAt: number | undefined): void {
+  if (
+    openedAt === undefined ||
+    typeof navigator === "undefined" ||
+    !("serviceWorker" in navigator)
+  ) {
+    return;
+  }
+
+  const controller = navigator.serviceWorker.controller;
+  if (!controller || typeof controller.postMessage !== "function") {
+    return;
+  }
+
+  const message = {
+    type: NOTIFICATION_CLICK_ACK_MESSAGE_TYPE,
+    url,
+    openedAt,
+  };
+  // ServiceWorker.postMessage does not accept a target origin.
+  // oxlint-disable-next-line require-post-message-target-origin
+  controller.postMessage(message);
+}
+
+function broadcastNotificationClickHandled(url: string, openedAt: number | undefined): void {
+  if (openedAt === undefined || typeof BroadcastChannel === "undefined") {
+    return;
+  }
+
+  let channel: BroadcastChannel | null = null;
+  try {
+    channel = new BroadcastChannel(NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME);
+    const message = {
+      type: NOTIFICATION_CLICK_HANDLED_MESSAGE_TYPE,
+      url,
+      openedAt,
+    };
+    // BroadcastChannel.postMessage does not accept a target origin.
+    // oxlint-disable-next-line require-post-message-target-origin
+    channel.postMessage(message);
+  } catch {
+    // Cross-tab handled notifications are best-effort; direct navigation and
+    // service worker ack delivery must not depend on BroadcastChannel.
+  } finally {
+    channel?.close();
+  }
 }
 
 function normalizePathname(pathname: string): string {

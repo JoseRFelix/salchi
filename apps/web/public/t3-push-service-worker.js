@@ -3,7 +3,11 @@ const DEFAULT_NOTIFICATION_URL = "/";
 const NOTIFICATION_CLICK_MESSAGE_TYPE = "t3.notification-click";
 // Mirrored in src/push/notificationNavigation.ts. The service worker is a
 // public plain JS asset, so it cannot import the TypeScript helper directly.
+const NOTIFICATION_CLICK_ACK_MESSAGE_TYPE = "t3.notification-click-ack";
+// Mirrored in src/push/notificationNavigation.ts. The service worker is a
+// public plain JS asset, so it cannot import the TypeScript helper directly.
 const NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME = "t3-notification-click";
+const NOTIFICATION_CLICK_ACK_TIMEOUT_MS = 2000;
 const NOTIFICATION_TITLE_SOURCE_SUFFIX = /(?:^|\s+)from\s+Salchi\s*$/i;
 // Mirrored in src/push/pendingNotificationClick.ts. The service worker is a
 // public plain JS asset, so it cannot import the TypeScript helper directly.
@@ -16,6 +20,7 @@ const TURN_NOTIFICATION_TAG_PATTERN = /^thread:(.+):turn:[^:]+$/;
 const THREAD_NOTIFICATION_TAG_PREFIX = /^thread:(.+?):/;
 const SYNC_BADGE_MESSAGE_TYPE = "t3.sync-displayed-notification-badge";
 const CLEAR_TURN_COMPLETION_NOTIFICATIONS_MESSAGE_TYPE = "t3.clear-turn-completion-notifications";
+const notificationClickAckWaiters = new Map();
 
 self.addEventListener("push", (event) => {
   const payload = readPushPayload(event);
@@ -66,6 +71,10 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("message", (event) => {
+  if (event.data?.type === NOTIFICATION_CLICK_ACK_MESSAGE_TYPE) {
+    resolveNotificationClickAck(event.data);
+    return;
+  }
   if (event.data?.type === SYNC_BADGE_MESSAGE_TYPE) {
     event.waitUntil(syncDisplayedNotificationBadge());
     return;
@@ -154,7 +163,7 @@ async function openNotificationClickTarget(click) {
 
   const targetClient = selectNotificationClient(sameOriginClients, click.url);
   if (isControlledNotificationClient(targetClient, controlledClients)) {
-    return focusClientAndPostNotificationClick(targetClient, click);
+    return focusPostAndFallbackNavigateOnMissingAck(targetClient, click);
   }
 
   return navigateFocusAndPostNotificationClick(targetClient, click);
@@ -273,19 +282,36 @@ async function navigateNotificationClient(client, url) {
 }
 
 async function focusClientAndPostNotificationClick(client, click) {
-  if ("focus" in client) {
-    let focusedClient = client;
-    try {
-      focusedClient = (await client.focus()) || client;
-    } catch {
-      focusedClient = client;
-    }
-    postNotificationClickMessage(focusedClient, click);
+  const focusedClient = await focusNotificationClient(client);
+  postNotificationClickMessage(focusedClient || client, click);
+  return focusedClient;
+}
+
+async function focusPostAndFallbackNavigateOnMissingAck(client, click) {
+  const ackPromise = waitForNotificationClickAck(click, NOTIFICATION_CLICK_ACK_TIMEOUT_MS);
+  const focusedClient = (await focusClientAndPostNotificationClick(client, click)) || client;
+  if (await ackPromise) {
     return focusedClient;
   }
 
-  postNotificationClickMessage(client, click);
-  return undefined;
+  if (clientMatchesNotificationUrl(focusedClient.url, click.url)) {
+    return focusedClient;
+  }
+
+  const navigatedClient = await navigateNotificationClient(focusedClient, click.url);
+  return focusNotificationClient(navigatedClient || focusedClient);
+}
+
+async function focusNotificationClient(client) {
+  if (!client || !("focus" in client)) {
+    return client;
+  }
+
+  try {
+    return (await client.focus()) || client;
+  } catch {
+    return client;
+  }
 }
 
 async function openWindowAndPostNotificationClick(click) {
@@ -316,6 +342,42 @@ function postNotificationClickMessage(client, click) {
   // Client.postMessage from a service worker does not accept a target origin.
   // oxlint-disable-next-line require-post-message-target-origin
   client.postMessage(message);
+}
+
+function waitForNotificationClickAck(click, timeoutMs) {
+  const key = notificationClickAckKey(click.url, click.openedAt);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      if (notificationClickAckWaiters.get(key) === handleAck) {
+        notificationClickAckWaiters.delete(key);
+      }
+      resolve(value);
+    };
+    const handleAck = () => finish(true);
+    const timeout = setTimeout(() => finish(false), timeoutMs);
+    notificationClickAckWaiters.set(key, handleAck);
+  });
+}
+
+function resolveNotificationClickAck(data) {
+  if (typeof data?.url !== "string" || !Number.isFinite(data.openedAt)) {
+    return;
+  }
+
+  const waiter = notificationClickAckWaiters.get(notificationClickAckKey(data.url, data.openedAt));
+  if (waiter) {
+    waiter();
+  }
+}
+
+function notificationClickAckKey(url, openedAt) {
+  return `${url}|${openedAt}`;
 }
 
 function broadcastNotificationClick(click) {

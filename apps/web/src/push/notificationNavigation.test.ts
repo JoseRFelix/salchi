@@ -10,7 +10,9 @@ import {
   getLastNotificationNavigationTarget,
   installServiceWorkerNotificationNavigation,
   isNotificationClickClientMessage,
+  NOTIFICATION_CLICK_ACK_MESSAGE_TYPE,
   NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME,
+  NOTIFICATION_CLICK_HANDLED_MESSAGE_TYPE,
   parseNotificationNavigationTarget,
   resetNotificationNavigationStateForTests,
   resolveNotificationUrl,
@@ -39,16 +41,35 @@ function createCacheStorageMock() {
 interface MockBroadcastChannelInstance extends EventTarget {
   readonly name: string;
   readonly close: ReturnType<typeof vi.fn>;
+  readonly postMessage: ReturnType<typeof vi.fn>;
   closed: boolean;
 }
 
 function stubBroadcastChannel() {
   const channels: MockBroadcastChannelInstance[] = [];
+  const postedMessages: Array<{
+    readonly name: string;
+    readonly data: unknown;
+  }> = [];
   class MockBroadcastChannel extends EventTarget implements MockBroadcastChannelInstance {
     readonly name: string;
     closed = false;
     readonly close = vi.fn(() => {
       this.closed = true;
+    });
+    readonly postMessage = vi.fn((data: unknown) => {
+      postedMessages.push({
+        name: this.name,
+        data,
+      });
+      for (const channel of channels) {
+        if (channel === this || channel.name !== this.name || channel.closed) {
+          continue;
+        }
+        const event = new Event("message") as MessageEvent;
+        Object.defineProperty(event, "data", { value: data });
+        channel.dispatchEvent(event);
+      }
     });
 
     constructor(name: string) {
@@ -62,6 +83,7 @@ function stubBroadcastChannel() {
 
   return {
     channels,
+    postedMessages,
     dispatch(name: string, data: unknown) {
       for (const channel of channels) {
         if (channel.name !== name || channel.closed) {
@@ -85,6 +107,7 @@ function stubServiceWorker(
   const windowTarget = new EventTarget();
   const documentTarget = new EventTarget();
   const startMessages = vi.fn();
+  const controllerPostMessage = vi.fn();
   const broadcastChannel = options.broadcastChannel === "none" ? undefined : stubBroadcastChannel();
   if (options.broadcastChannel === "none") {
     vi.stubGlobal("BroadcastChannel", undefined);
@@ -99,6 +122,9 @@ function stubServiceWorker(
   vi.stubGlobal("navigator", {
     serviceWorker: {
       addEventListener: serviceWorkerTarget.addEventListener.bind(serviceWorkerTarget),
+      controller: {
+        postMessage: controllerPostMessage,
+      },
       removeEventListener: serviceWorkerTarget.removeEventListener.bind(serviceWorkerTarget),
       startMessages,
     },
@@ -130,6 +156,7 @@ function stubServiceWorker(
     setDocumentHasFocus(value: boolean) {
       documentHasFocus = value;
     },
+    controllerPostMessage,
     startMessages,
   };
 }
@@ -154,7 +181,7 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 async function drainPendingReplayRetries(): Promise<void> {
-  for (const delayMs of [250, 500, 1000]) {
+  for (const delayMs of [250, 500, 1000, 2000]) {
     await vi.advanceTimersByTimeAsync(delayMs);
     await flushMicrotasks();
   }
@@ -413,21 +440,15 @@ describe("notificationNavigation", () => {
     cleanup();
   });
 
-  it("ignores broadcast click messages when the document is not focused", async () => {
+  it("defers broadcast click messages when the document is not focused", async () => {
     const resumeDiagnostics = await import("../environments/runtime/resumeDiagnostics");
     const diagnosticSpy = vi.spyOn(resumeDiagnostics, "recordResumeDiagnostic");
-    const { cacheStorage } = createCacheStorageMock();
     const serviceWorker = stubServiceWorker();
     const router = makeRouter();
     const openedAt = Date.now();
 
     const cleanup = installServiceWorkerNotificationNavigation(router);
-    serviceWorker.setCacheStorage(cacheStorage as unknown as CacheStorage);
     await flushMicrotasks();
-    await writePendingNotificationClick({
-      url: "/env-1/thread-1",
-      openedAt,
-    });
     serviceWorker.setDocumentHasFocus(false);
     serviceWorker.broadcastChannel?.dispatch(NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME, {
       type: "t3.notification-click",
@@ -437,16 +458,156 @@ describe("notificationNavigation", () => {
     await flushMicrotasks();
 
     expect(router.navigate).not.toHaveBeenCalled();
-    await expect(readPendingNotificationClick()).resolves.toEqual({
-      url: "/env-1/thread-1",
-      openedAt,
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      "notification-navigation-message",
+      expect.objectContaining({
+        reason: "broadcast-deferred-unfocused",
+      }),
+    );
+
+    serviceWorker.setDocumentHasFocus(true);
+    serviceWorker.dispatchWindowEvent("focus");
+    await flushMicrotasks();
+
+    expect(router.navigate).toHaveBeenCalledWith({
+      to: "/$environmentId/$threadId",
+      params: {
+        environmentId: "env-1",
+        threadId: "thread-1",
+      },
+      search: {},
     });
     expect(diagnosticSpy).toHaveBeenCalledWith(
       "notification-navigation-message",
       expect.objectContaining({
-        reason: "broadcast-ignored-unfocused",
+        reason: "broadcast-deferred",
+        data: expect.objectContaining({
+          replayReason: "window-focus",
+          url: "/env-1/thread-1",
+          openedAt,
+        }),
       }),
     );
+
+    cleanup();
+  });
+
+  it("drops a deferred broadcast click when another tab handles it", async () => {
+    const serviceWorker = stubServiceWorker();
+    const router = makeRouter();
+    const openedAt = Date.now();
+
+    const cleanup = installServiceWorkerNotificationNavigation(router);
+    await flushMicrotasks();
+    serviceWorker.setDocumentHasFocus(false);
+    serviceWorker.broadcastChannel?.dispatch(NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME, {
+      type: "t3.notification-click",
+      url: "/env-1/thread-1",
+      openedAt,
+    });
+    serviceWorker.broadcastChannel?.dispatch(NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME, {
+      type: NOTIFICATION_CLICK_HANDLED_MESSAGE_TYPE,
+      url: "/env-1/thread-1",
+      openedAt,
+    });
+
+    serviceWorker.setDocumentHasFocus(true);
+    serviceWorker.dispatchWindowEvent("focus");
+    await flushMicrotasks();
+
+    expect(router.navigate).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("discards stale deferred broadcast clicks without navigating", async () => {
+    const resumeDiagnostics = await import("../environments/runtime/resumeDiagnostics");
+    const diagnosticSpy = vi.spyOn(resumeDiagnostics, "recordResumeDiagnostic");
+    const serviceWorker = stubServiceWorker();
+    const router = makeRouter();
+    const openedAt = Date.now() - 2 * 60 * 1000 - 1;
+
+    const cleanup = installServiceWorkerNotificationNavigation(router);
+    await flushMicrotasks();
+    serviceWorker.setDocumentHasFocus(false);
+    serviceWorker.broadcastChannel?.dispatch(NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME, {
+      type: "t3.notification-click",
+      url: "/env-1/thread-1",
+      openedAt,
+    });
+
+    serviceWorker.setDocumentHasFocus(true);
+    serviceWorker.dispatchWindowEvent("focus");
+    await flushMicrotasks();
+
+    expect(router.navigate).not.toHaveBeenCalled();
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      "notification-navigation-message",
+      expect.objectContaining({
+        reason: "broadcast-deferred-stale",
+        data: expect.objectContaining({
+          url: "/env-1/thread-1",
+          openedAt,
+        }),
+      }),
+    );
+
+    cleanup();
+  });
+
+  it("posts a service worker ack after handling a notification click", async () => {
+    const serviceWorker = stubServiceWorker();
+    const router = makeRouter();
+    const openedAt = Date.now();
+
+    const cleanup = installServiceWorkerNotificationNavigation(router);
+    serviceWorker.dispatch({
+      type: "t3.notification-click",
+      url: "/env-1/thread-1",
+      openedAt,
+    });
+
+    expect(serviceWorker.controllerPostMessage).toHaveBeenCalledWith({
+      type: NOTIFICATION_CLICK_ACK_MESSAGE_TYPE,
+      url: "/env-1/thread-1",
+      openedAt,
+    });
+
+    cleanup();
+  });
+
+  it("runs a queued pending-click replay after an in-flight replay finishes", async () => {
+    vi.useFakeTimers();
+    const service = await import("../environments/runtime/service");
+    vi.spyOn(service, "reconcileAfterNotificationClick").mockImplementation(() => undefined);
+    const { cacheStorage } = createCacheStorageMock();
+    const serviceWorker = stubServiceWorker({
+      cacheStorage: cacheStorage as unknown as CacheStorage,
+    });
+    const router = makeRouter();
+
+    const cleanup = installServiceWorkerNotificationNavigation(router);
+    await flushMicrotasks();
+    serviceWorker.dispatchWindowEvent("focus");
+    await vi.advanceTimersByTimeAsync(250 + 500 + 1000 + 2000);
+    await flushMicrotasks();
+
+    await writePendingNotificationClick({
+      url: "/env-queued/thread-queued",
+      openedAt: Date.now(),
+    });
+    await vi.advanceTimersByTimeAsync(250);
+    await flushMicrotasks();
+
+    expect(router.navigate).toHaveBeenCalledWith({
+      to: "/$environmentId/$threadId",
+      params: {
+        environmentId: "env-queued",
+        threadId: "thread-queued",
+      },
+      search: {},
+    });
+    await expect(readPendingNotificationClick()).resolves.toBeNull();
 
     cleanup();
   });
