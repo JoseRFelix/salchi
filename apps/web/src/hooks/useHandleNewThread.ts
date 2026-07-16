@@ -43,7 +43,7 @@ function useNewThreadState() {
         getDraftSessionByLogicalProjectKey,
         getDraftSession,
         getDraftThread,
-        applyStickyState,
+        initializeFreshProjectDraftThread,
         setDraftThreadContext,
         setLogicalProjectDraftThreadId,
       } = useComposerDraftStore.getState();
@@ -119,7 +119,7 @@ function useNewThreadState() {
       const threadId = newThreadId();
       const createdAt = new Date().toISOString();
       return (async () => {
-        setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, draftId, {
+        initializeFreshProjectDraftThread(logicalProjectKey, projectRef, draftId, {
           threadId,
           createdAt,
           branch: options?.branch ?? null,
@@ -127,7 +127,6 @@ function useNewThreadState() {
           envMode: options?.envMode ?? "local",
           runtimeMode: DEFAULT_RUNTIME_MODE,
         });
-        applyStickyState(draftId);
 
         await router.navigate({
           to: "/draft/$draftId",

@@ -814,7 +814,9 @@ export default function ChatView(props: ChatViewProps) {
     (store) => store.setTerminalContexts,
   );
   const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
-  const applyComposerDraftStickyState = useComposerDraftStore((store) => store.applyStickyState);
+  const initializeFreshProjectDraftThread = useComposerDraftStore(
+    (store) => store.initializeFreshProjectDraftThread,
+  );
   const setComposerDraftRuntimeMode = useComposerDraftStore((store) => store.setRuntimeMode);
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
@@ -1452,7 +1454,7 @@ export default function ChatView(props: ChatViewProps) {
 
       const nextDraftId = newDraftId();
       const nextThreadId = newThreadId();
-      setLogicalProjectDraftThreadId(logicalProjectKey, activeProjectRef, nextDraftId, {
+      initializeFreshProjectDraftThread(logicalProjectKey, activeProjectRef, nextDraftId, {
         threadId: nextThreadId,
         createdAt: new Date().toISOString(),
         runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -1470,6 +1472,7 @@ export default function ChatView(props: ChatViewProps) {
       draftId,
       getDraftSession,
       getDraftSessionByLogicalProjectKey,
+      initializeFreshProjectDraftThread,
       isServerThread,
       navigate,
       projectGroupingSettings,
@@ -4409,7 +4412,7 @@ export default function ChatView(props: ChatViewProps) {
     const planMarkdown = activeProposedPlan.planMarkdown;
     const implementationPrompt = buildPlanImplementationPrompt(planMarkdown);
 
-    setLogicalProjectDraftThreadId(
+    initializeFreshProjectDraftThread(
       deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings),
       activeProjectRef,
       nextDraftId,
@@ -4423,7 +4426,6 @@ export default function ChatView(props: ChatViewProps) {
         interactionMode: "default",
       },
     );
-    applyComposerDraftStickyState(nextDraftId);
     setComposerDraftPrompt(nextDraftId, implementationPrompt);
     setComposerDraftModelSelection(nextDraftId, selectedModelSelection);
     setDraftThreadContext(nextDraftId, {
@@ -4448,8 +4450,8 @@ export default function ChatView(props: ChatViewProps) {
     activeProposedPlan,
     activeThreadBranch,
     activeThread,
-    applyComposerDraftStickyState,
     envMode,
+    initializeFreshProjectDraftThread,
     isServerThread,
     navigate,
     projectGroupingSettings,
@@ -4458,7 +4460,6 @@ export default function ChatView(props: ChatViewProps) {
     setComposerDraftModelSelection,
     setComposerDraftPrompt,
     setDraftThreadContext,
-    setLogicalProjectDraftThreadId,
   ]);
 
   const getModelDisabledReason = useCallback(
