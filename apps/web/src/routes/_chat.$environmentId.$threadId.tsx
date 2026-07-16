@@ -33,6 +33,10 @@ import {
 } from "../store";
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
+import {
+  clearPersistedStartupThreadTarget,
+  writePersistedStartupThreadTarget,
+} from "../startupNavigation";
 import { SidebarInset, useSidebar } from "~/components/ui/sidebar";
 import {
   closeWorkspaceFilePreview,
@@ -293,6 +297,7 @@ function ChatThreadRouteView() {
       const latestDraftExists =
         useComposerDraftStore.getState().getDraftThreadByRef(threadRef) !== null;
       if (!latestThreadExists && !latestDraftExists) {
+        clearPersistedStartupThreadTarget(threadRef);
         void navigate({ to: "/", replace: true });
       }
     }, MISSING_THREAD_ROUTE_RECOVERY_GRACE_MS);
@@ -377,6 +382,14 @@ export const Route = createFileRoute("/_chat/$environmentId/$threadId")({
   validateSearch: (search) => parseDiffRouteSearch(search),
   search: {
     middlewares: [retainSearchParams<DiffRouteSearch>(["diff"])],
+  },
+  beforeLoad: ({ params }) => {
+    const threadRef = resolveThreadRouteRef(params);
+    if (threadRef) {
+      // Route intent is available before cached/live thread detail. Remember it immediately so a
+      // backgrounded or killed PWA resumes the thread the user actually opened.
+      writePersistedStartupThreadTarget(threadRef);
+    }
   },
   component: ChatThreadRouteView,
 });

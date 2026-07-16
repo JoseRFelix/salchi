@@ -1,4 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { scopeThreadRef } from "@t3tools/client-runtime";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import { LinkIcon, PlusIcon } from "lucide-react";
 
 import { NoActiveThreadState } from "../components/NoActiveThreadState";
@@ -6,6 +7,9 @@ import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset, SidebarTrigger } from "../components/ui/sidebar";
 import { useSavedEnvironmentRegistryStore } from "../environments/runtime";
+import { getLastNotificationNavigationTarget } from "../push/notificationNavigation";
+import { consumeStartupThreadRestoreTarget } from "../startupNavigation";
+import { buildThreadRouteParams } from "../threadRoutes";
 import { APP_DISPLAY_NAME } from "~/branding";
 
 function ChatIndexRouteView() {
@@ -22,6 +26,20 @@ function ChatIndexRouteView() {
 }
 
 export const Route = createFileRoute("/_chat/")({
+  beforeLoad: () => {
+    const target = consumeStartupThreadRestoreTarget({
+      lastNotificationNavigationTarget: getLastNotificationNavigationTarget(),
+    });
+    if (target === null) {
+      return;
+    }
+
+    throw redirect({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(scopeThreadRef(target.environmentId, target.threadId)),
+      replace: true,
+    });
+  },
   component: ChatIndexRouteView,
 });
 

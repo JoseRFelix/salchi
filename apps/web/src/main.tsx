@@ -16,14 +16,42 @@ import { APP_BASE_NAME } from "./branding";
 import { syncDocumentWindowControlsOverlayClass } from "./lib/windowControlsOverlay";
 import { installPwaAppBadgeSync } from "./pwa/appBadge";
 import { registerPwaServiceWorker } from "./pwa/registerPwaServiceWorker";
-import { installServiceWorkerNotificationNavigation } from "./push/notificationNavigation";
+import {
+  getLastNotificationNavigationTarget,
+  installServiceWorkerNotificationNavigation,
+} from "./push/notificationNavigation";
+import {
+  buildStartupRestorePath,
+  consumeStartupThreadRestoreTarget,
+  primeStartupThreadRestore,
+  readPersistedStartupThreadTarget,
+} from "./startupNavigation";
+import { hydrateOrchestrationStartupCache } from "./orchestrationStartupBootstrap";
+import { installOrchestrationStartupCachePersistence } from "./orchestrationStartupCache";
+import { useUiStateStore } from "./uiStateStore";
 // Side-effect import: applies the selected color theme on boot to avoid a flash
 // before React mounts. Self-initializes; the call below is explicit for clarity.
 import { initColorTheme } from "./hooks/useColorTheme";
 
 // Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
+const startupThreadLastVisitedAtById = useUiStateStore.getState().threadLastVisitedAtById;
+installOrchestrationStartupCachePersistence();
+hydrateOrchestrationStartupCache();
 const history = isElectron ? createHashHistory() : createBrowserHistory();
-
+primeStartupThreadRestore({
+  pathname: history.location.pathname,
+  persistedTarget: readPersistedStartupThreadTarget(),
+  // Cache hydration seeds visit times for presentation state. Startup restoration must only use
+  // visits that were actually persisted before this launch, or it can open an arbitrary cached
+  // thread that the user never selected.
+  threadLastVisitedAtById: startupThreadLastVisitedAtById,
+});
+const startupRestoreTarget = consumeStartupThreadRestoreTarget({
+  lastNotificationNavigationTarget: getLastNotificationNavigationTarget(),
+});
+if (startupRestoreTarget !== null && history.location.pathname === "/") {
+  history.replace(buildStartupRestorePath(startupRestoreTarget));
+}
 const router = getRouter(history);
 installServiceWorkerNotificationNavigation(router);
 

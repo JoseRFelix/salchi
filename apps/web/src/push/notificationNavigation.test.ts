@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 
 import type { AppRouter } from "../router";
+import { readPersistedStartupThreadTarget } from "../startupNavigation";
 import {
   readPendingNotificationClick,
   writePendingNotificationClick,
@@ -113,9 +114,25 @@ function stubServiceWorker(
     vi.stubGlobal("BroadcastChannel", undefined);
   }
   let documentHasFocus = true;
+  const localStorageValues = new Map<string, string>();
+  const localStorage: Storage = {
+    clear: () => localStorageValues.clear(),
+    getItem: (key) => localStorageValues.get(key) ?? null,
+    key: (index) => [...localStorageValues.keys()][index] ?? null,
+    get length() {
+      return localStorageValues.size;
+    },
+    removeItem: (key) => {
+      localStorageValues.delete(key);
+    },
+    setItem: (key, value) => {
+      localStorageValues.set(key, value);
+    },
+  };
   const windowStub: Record<string, unknown> = {
     ...(options.cacheStorage ? { caches: options.cacheStorage } : {}),
     addEventListener: windowTarget.addEventListener.bind(windowTarget),
+    localStorage,
     location: { origin: ORIGIN },
     removeEventListener: windowTarget.removeEventListener.bind(windowTarget),
   };
@@ -157,6 +174,7 @@ function stubServiceWorker(
       documentHasFocus = value;
     },
     controllerPostMessage,
+    localStorage,
     startMessages,
   };
 }
@@ -283,6 +301,10 @@ describe("notificationNavigation", () => {
     });
     expect(getLastNotificationNavigationTarget()).toEqual({
       kind: "thread",
+      environmentId: "env-1",
+      threadId: "thread-1",
+    });
+    expect(readPersistedStartupThreadTarget()).toEqual({
       environmentId: "env-1",
       threadId: "thread-1",
     });

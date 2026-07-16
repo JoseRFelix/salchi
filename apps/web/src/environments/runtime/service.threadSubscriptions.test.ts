@@ -962,6 +962,103 @@ describe("retainThreadDetailSubscription", () => {
     await resetEnvironmentServiceForTests();
   });
 
+  it("persists a recovered tail snapshot before a reopened PWA can be suspended again", async () => {
+    const localStorage = createMemoryStorage();
+    stubBrowserVisibility("visible", { localStorage });
+
+    const {
+      retainActiveThreadDetailSubscription,
+      startEnvironmentConnectionService,
+      resetEnvironmentServiceForTests,
+    } = await import("./service");
+    const { flushPendingCachedEnvironmentStateWrites, readCachedEnvironmentState } =
+      await import("~/orchestrationStartupCache");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const environmentId = EnvironmentId.make("env-1");
+    const threadId = ThreadId.make("thread-recovered-tail-pwa-cache");
+    const userMessageId = MessageId.make("message-cached-user");
+    const assistantMessageId = MessageId.make("message-recovered-assistant");
+    const turnId = TurnId.make("turn-recovered-assistant");
+    const connectionInput = mockCreateEnvironmentConnection.mock.calls[0]?.[0];
+    expect(connectionInput).toBeDefined();
+
+    connectionInput.syncShellSnapshot(
+      makeThreadShellSnapshot({
+        threadId,
+        sessionStatus: "ready",
+      }),
+      environmentId,
+    );
+
+    const release = retainActiveThreadDetailSubscription(environmentId, threadId);
+    const detailListener = readThreadDetailSubscriptionListener(0);
+    detailListener({
+      kind: "snapshot",
+      snapshot: makeThreadDetailSnapshot({
+        snapshotSequence: 1,
+        threadId,
+        sessionStatus: "ready",
+        messages: [
+          {
+            id: userMessageId,
+            role: "user",
+            text: "Cached question",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-04-13T00:00:01.000Z",
+            updatedAt: "2026-04-13T00:00:01.000Z",
+          },
+        ],
+      }),
+    });
+    flushPendingCachedEnvironmentStateWrites();
+
+    const recoveredSnapshot = makeThreadDetailSnapshot({
+      snapshotSequence: 2,
+      threadId,
+      sessionStatus: "ready",
+      messages: [
+        {
+          id: userMessageId,
+          role: "user",
+          text: "Cached question",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-04-13T00:00:01.000Z",
+          updatedAt: "2026-04-13T00:00:01.000Z",
+        },
+        {
+          id: assistantMessageId,
+          role: "assistant",
+          text: "Recovered final answer",
+          turnId,
+          streaming: false,
+          createdAt: "2026-04-13T00:00:02.000Z",
+          updatedAt: "2026-04-13T00:00:02.000Z",
+        },
+      ],
+    });
+    detailListener({ kind: "snapshot", snapshot: recoveredSnapshot });
+
+    const cachedState = readCachedEnvironmentState(environmentId);
+    expect(cachedState?.messageIdsByThreadId[threadId]).toEqual([
+      userMessageId,
+      assistantMessageId,
+    ]);
+    expect(cachedState?.messageByThreadId[threadId]?.[assistantMessageId]?.text).toBe(
+      "Recovered final answer",
+    );
+
+    const persistedWriteCount = vi.mocked(localStorage.setItem).mock.calls.length;
+    detailListener({ kind: "snapshot", snapshot: recoveredSnapshot });
+    expect(localStorage.setItem).toHaveBeenCalledTimes(persistedWriteCount);
+
+    release();
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
   it("resyncs known threads that were not touched by a completed gap replay", async () => {
     const { startEnvironmentConnectionService, resetEnvironmentServiceForTests } =
       await import("./service");

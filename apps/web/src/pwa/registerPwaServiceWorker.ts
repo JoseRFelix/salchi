@@ -5,13 +5,11 @@ import { clearTurnCompletionAlerts } from "../push/notifications";
 import {
   setPwaServiceWorkerUpdateCheckPhase,
   showPwaServiceWorkerUpdateAvailable,
-  usePwaServiceWorkerUpdateStore,
 } from "./serviceWorkerUpdateState";
 
 // How often to ask the browser to re-fetch the service worker and look for a
 // newer build while the app is left open.
 const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
-const LAUNCH_AUTO_UPDATE_WINDOW_MS = 15_000;
 const UPDATE_INSTALL_WAIT_TIMEOUT_MS = 60_000;
 
 function waitForServiceWorkerInstalled(worker: ServiceWorker): Promise<void> {
@@ -60,27 +58,10 @@ export function registerPwaServiceWorker(): void {
     return;
   }
 
-  const registeredAt = performance.now();
-  let autoUpdateAttempted = false;
-  let userHasInteracted = false;
-
-  const markUserHasInteracted = () => {
-    userHasInteracted = true;
-  };
-  const isColdLaunchWindow = () =>
-    performance.now() - registeredAt < LAUNCH_AUTO_UPDATE_WINDOW_MS && !userHasInteracted;
-
-  window.addEventListener("pointerdown", markUserHasInteracted, { once: true, passive: true });
-  window.addEventListener("keydown", markUserHasInteracted, { once: true });
-
   const updateServiceWorker = registerSW({
     immediate: true,
     onNeedRefresh() {
       showPwaServiceWorkerUpdateAvailable(updateServiceWorker);
-      if (!autoUpdateAttempted && isColdLaunchWindow()) {
-        autoUpdateAttempted = true;
-        usePwaServiceWorkerUpdateStore.getState().reloadForUpdate();
-      }
     },
     onRegisterError(error) {
       console.warn("PWA service worker registration failed", error);

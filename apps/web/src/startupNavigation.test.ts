@@ -1,19 +1,43 @@
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { NotificationNavigationTarget } from "./push/notificationNavigation";
 import {
+  clearPersistedStartupThreadTarget,
+  clearPersistedStartupThreadTargetForEnvironment,
+  clearPersistedStartupThreadTargetForTests,
+  consumeStartupThreadRestoreTarget,
   isStartupBootstrapThreadStale,
+  primeStartupThreadRestore,
+  readPersistedStartupThreadTarget,
+  resetStartupThreadRestoreForTests,
+  resolveStartupRestoreTarget,
+  STARTUP_THREAD_TARGET_STORAGE_KEY,
   STARTUP_BOOTSTRAP_THREAD_STALE_AFTER_MS,
   shouldNavigateToStartupBootstrapThread,
+  writePersistedStartupThreadTarget,
 } from "./startupNavigation";
 
 const BOOTSTRAP_THREAD_ID = ThreadId.make("thread-startup");
+const ENVIRONMENT_ID = EnvironmentId.make("env-1");
+const OTHER_ENVIRONMENT_ID = EnvironmentId.make("env-2");
+const THREAD_ID = ThreadId.make("thread-1");
+const OTHER_THREAD_ID = ThreadId.make("thread-2");
+const NOW = Date.parse("2026-03-04T12:00:00.000Z");
 const NOTIFICATION_THREAD_TARGET: NotificationNavigationTarget = {
   kind: "thread",
-  environmentId: EnvironmentId.make("env-1"),
-  threadId: ThreadId.make("thread-1"),
+  environmentId: ENVIRONMENT_ID,
+  threadId: THREAD_ID,
 };
+
+function visitedAt(offsetMs: number): string {
+  return new Date(NOW + offsetMs).toISOString();
+}
+
+function threadKey(environmentId: EnvironmentId, threadId: ThreadId): string {
+  return scopedThreadKey(scopeThreadRef(environmentId, threadId));
+}
 
 describe("shouldNavigateToStartupBootstrapThread", () => {
   it("opens the bootstrap thread from the browser base route", () => {
@@ -23,21 +47,8 @@ describe("shouldNavigateToStartupBootstrapThread", () => {
         bootstrapThreadId: BOOTSTRAP_THREAD_ID,
         handledBootstrapThreadId: null,
         lastNotificationNavigationTarget: null,
-        isStandalonePwa: false,
       }),
     ).toBe(true);
-  });
-
-  it("keeps standalone PWA launches on the base route", () => {
-    expect(
-      shouldNavigateToStartupBootstrapThread({
-        pathname: "/",
-        bootstrapThreadId: BOOTSTRAP_THREAD_ID,
-        handledBootstrapThreadId: null,
-        lastNotificationNavigationTarget: null,
-        isStandalonePwa: true,
-      }),
-    ).toBe(false);
   });
 
   it("does not override a notification navigation target", () => {
@@ -47,7 +58,6 @@ describe("shouldNavigateToStartupBootstrapThread", () => {
         bootstrapThreadId: BOOTSTRAP_THREAD_ID,
         handledBootstrapThreadId: null,
         lastNotificationNavigationTarget: NOTIFICATION_THREAD_TARGET,
-        isStandalonePwa: false,
       }),
     ).toBe(false);
   });
@@ -59,7 +69,6 @@ describe("shouldNavigateToStartupBootstrapThread", () => {
         bootstrapThreadId: BOOTSTRAP_THREAD_ID,
         handledBootstrapThreadId: null,
         lastNotificationNavigationTarget: null,
-        isStandalonePwa: false,
       }),
     ).toBe(false);
   });
@@ -71,9 +80,257 @@ describe("shouldNavigateToStartupBootstrapThread", () => {
         bootstrapThreadId: BOOTSTRAP_THREAD_ID,
         handledBootstrapThreadId: BOOTSTRAP_THREAD_ID,
         lastNotificationNavigationTarget: null,
-        isStandalonePwa: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveStartupRestoreTarget", () => {
+  it("prefers the dedicated persisted target", () => {
+    expect(
+      resolveStartupRestoreTarget({
+        persistedTarget: {
+          environmentId: ENVIRONMENT_ID,
+          threadId: THREAD_ID,
+        },
+        threadLastVisitedAtById: {
+          [threadKey(OTHER_ENVIRONMENT_ID, OTHER_THREAD_ID)]: visitedAt(-60 * 1000),
+        },
+      }),
+    ).toEqual({
+      environmentId: ENVIRONMENT_ID,
+      threadId: THREAD_ID,
+    });
+  });
+
+  it("returns the most recently visited scoped thread", () => {
+    expect(
+      resolveStartupRestoreTarget({
+        threadLastVisitedAtById: {
+          [threadKey(ENVIRONMENT_ID, THREAD_ID)]: visitedAt(-10 * 60 * 1000),
+          [threadKey(OTHER_ENVIRONMENT_ID, OTHER_THREAD_ID)]: visitedAt(-60 * 1000),
+        },
+      }),
+    ).toEqual({
+      environmentId: OTHER_ENVIRONMENT_ID,
+      threadId: OTHER_THREAD_ID,
+    });
+  });
+
+  it("restores a real visit even when it is older than the server bootstrap stale window", () => {
+    expect(
+      resolveStartupRestoreTarget({
+        threadLastVisitedAtById: {
+          [threadKey(ENVIRONMENT_ID, THREAD_ID)]: visitedAt(
+            -STARTUP_BOOTSTRAP_THREAD_STALE_AFTER_MS - 1,
+          ),
+        },
+      }),
+    ).toEqual({
+      environmentId: ENVIRONMENT_ID,
+      threadId: THREAD_ID,
+    });
+  });
+
+  it("skips a malformed newest key and restores the newest valid target", () => {
+    expect(
+      resolveStartupRestoreTarget({
+        threadLastVisitedAtById: {
+          "not-scoped": visitedAt(-60 * 1000),
+          [threadKey(ENVIRONMENT_ID, THREAD_ID)]: "not-a-date",
+          [threadKey(OTHER_ENVIRONMENT_ID, OTHER_THREAD_ID)]: visitedAt(-2 * 60 * 1000),
+        },
+      }),
+    ).toEqual({
+      environmentId: OTHER_ENVIRONMENT_ID,
+      threadId: OTHER_THREAD_ID,
+    });
+  });
+
+  it("skips malformed timestamps", () => {
+    expect(
+      resolveStartupRestoreTarget({
+        threadLastVisitedAtById: {
+          [threadKey(ENVIRONMENT_ID, THREAD_ID)]: "not-a-date",
+          [threadKey(OTHER_ENVIRONMENT_ID, OTHER_THREAD_ID)]: visitedAt(-2 * 60 * 1000),
+        },
+      }),
+    ).toEqual({
+      environmentId: OTHER_ENVIRONMENT_ID,
+      threadId: OTHER_THREAD_ID,
+    });
+  });
+
+  it("returns null when all entries are malformed", () => {
+    expect(
+      resolveStartupRestoreTarget({
+        threadLastVisitedAtById: {
+          "not-scoped": visitedAt(-60 * 1000),
+          [threadKey(ENVIRONMENT_ID, THREAD_ID)]: "not-a-date",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for an empty visit map", () => {
+    expect(
+      resolveStartupRestoreTarget({
+        threadLastVisitedAtById: {},
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps an explicit target even when it has no cached visit entry", () => {
+    expect(
+      resolveStartupRestoreTarget({
+        persistedTarget: {
+          environmentId: ENVIRONMENT_ID,
+          threadId: THREAD_ID,
+        },
+        threadLastVisitedAtById: {
+          [threadKey(OTHER_ENVIRONMENT_ID, OTHER_THREAD_ID)]: visitedAt(-60 * 1000),
+        },
+      }),
+    ).toEqual({
+      environmentId: ENVIRONMENT_ID,
+      threadId: THREAD_ID,
+    });
+  });
+});
+
+describe("startup thread restore priming", () => {
+  afterEach(() => {
+    resetStartupThreadRestoreForTests();
+  });
+
+  it("consumes a primed base-route target once", () => {
+    primeStartupThreadRestore({
+      pathname: "/",
+      threadLastVisitedAtById: {
+        [threadKey(ENVIRONMENT_ID, THREAD_ID)]: visitedAt(-60 * 1000),
+      },
+    });
+
+    expect(consumeStartupThreadRestoreTarget({ lastNotificationNavigationTarget: null })).toEqual({
+      environmentId: ENVIRONMENT_ID,
+      threadId: THREAD_ID,
+    });
+    expect(
+      consumeStartupThreadRestoreTarget({ lastNotificationNavigationTarget: null }),
+    ).toBeNull();
+  });
+
+  it("does not prime non-base launches", () => {
+    primeStartupThreadRestore({
+      pathname: "/env-1/thread-1",
+      threadLastVisitedAtById: {
+        [threadKey(ENVIRONMENT_ID, THREAD_ID)]: visitedAt(-60 * 1000),
+      },
+    });
+
+    expect(
+      consumeStartupThreadRestoreTarget({ lastNotificationNavigationTarget: null }),
+    ).toBeNull();
+  });
+
+  it("suppresses and clears the target when a notification target exists", () => {
+    primeStartupThreadRestore({
+      pathname: "/",
+      threadLastVisitedAtById: {
+        [threadKey(ENVIRONMENT_ID, THREAD_ID)]: visitedAt(-60 * 1000),
+      },
+    });
+
+    expect(
+      consumeStartupThreadRestoreTarget({
+        lastNotificationNavigationTarget: NOTIFICATION_THREAD_TARGET,
+      }),
+    ).toBeNull();
+    expect(
+      consumeStartupThreadRestoreTarget({ lastNotificationNavigationTarget: null }),
+    ).toBeNull();
+  });
+});
+
+describe("persisted startup thread target", () => {
+  const values = new Map<string, string>();
+  const localStorageStub: Storage = {
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    get length() {
+      return values.size;
+    },
+    removeItem: (key) => {
+      values.delete(key);
+    },
+    setItem: (key, value) => {
+      values.set(key, value);
+    },
+  };
+
+  beforeEach(() => {
+    values.clear();
+    vi.stubGlobal("window", { localStorage: localStorageStub });
+  });
+
+  afterEach(() => {
+    clearPersistedStartupThreadTargetForTests();
+    vi.unstubAllGlobals();
+  });
+
+  it("roundtrips a dedicated startup thread target", () => {
+    const target = {
+      environmentId: ENVIRONMENT_ID,
+      threadId: THREAD_ID,
+    };
+
+    writePersistedStartupThreadTarget(target);
+
+    expect(readPersistedStartupThreadTarget()).toEqual(target);
+    expect(localStorageStub.getItem(STARTUP_THREAD_TARGET_STORAGE_KEY)).not.toBeNull();
+  });
+
+  it("ignores malformed persisted targets", () => {
+    localStorageStub.setItem(
+      STARTUP_THREAD_TARGET_STORAGE_KEY,
+      JSON.stringify({ version: 1, target: { environmentId: ENVIRONMENT_ID } }),
+    );
+
+    expect(readPersistedStartupThreadTarget()).toBeNull();
+  });
+
+  it("clears only the matching stale target", () => {
+    const target = {
+      environmentId: ENVIRONMENT_ID,
+      threadId: THREAD_ID,
+    };
+    writePersistedStartupThreadTarget(target);
+
+    clearPersistedStartupThreadTarget({
+      environmentId: OTHER_ENVIRONMENT_ID,
+      threadId: OTHER_THREAD_ID,
+    });
+    expect(readPersistedStartupThreadTarget()).toEqual(target);
+
+    clearPersistedStartupThreadTarget(target);
+    expect(readPersistedStartupThreadTarget()).toBeNull();
+  });
+
+  it("clears the target when its saved environment is removed", () => {
+    writePersistedStartupThreadTarget({
+      environmentId: ENVIRONMENT_ID,
+      threadId: THREAD_ID,
+    });
+
+    clearPersistedStartupThreadTargetForEnvironment(OTHER_ENVIRONMENT_ID);
+    expect(readPersistedStartupThreadTarget()).toEqual({
+      environmentId: ENVIRONMENT_ID,
+      threadId: THREAD_ID,
+    });
+
+    clearPersistedStartupThreadTargetForEnvironment(ENVIRONMENT_ID);
+    expect(readPersistedStartupThreadTarget()).toBeNull();
   });
 });
 
