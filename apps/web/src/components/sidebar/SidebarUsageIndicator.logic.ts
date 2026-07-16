@@ -2,6 +2,7 @@ import {
   ProviderDriverKind,
   type OrchestrationThreadActivity,
   type ProviderInstanceId,
+  type ServerProviderAuthStatus,
 } from "@t3tools/contracts";
 import {
   normalizeUsageWindowUsedPercent,
@@ -14,8 +15,10 @@ export type SidebarUsageWindowId = "fiveHour" | "weekly";
 export interface SidebarUsageProviderInstanceInput {
   readonly instanceId: ProviderInstanceId | string;
   readonly driverKind: ProviderDriverKind | string;
+  readonly enabled?: boolean;
   readonly installed?: boolean;
   readonly availability?: "available" | "unavailable" | undefined;
+  readonly authStatus?: ServerProviderAuthStatus | string;
 }
 
 export interface SidebarUsageThreadInput {
@@ -346,7 +349,27 @@ function isSidebarUsageDriverId(value: string | null | undefined): value is Side
 }
 
 function isUsageProviderIncluded(instance: SidebarUsageProviderInstanceInput): boolean {
-  return instance.installed !== false && instance.availability !== "unavailable";
+  return (
+    instance.installed !== false &&
+    instance.availability !== "unavailable" &&
+    (String(instance.driverKind) !== "claudeAgent" || instance.authStatus !== "unauthenticated")
+  );
+}
+
+export function getSidebarClaudeLoginPromptInstanceIds(
+  providerInstances: ReadonlyArray<SidebarUsageProviderInstanceInput>,
+): ReadonlyArray<string> {
+  return providerInstances
+    .filter(
+      (instance) =>
+        String(instance.driverKind) === "claudeAgent" &&
+        instance.enabled === true &&
+        instance.installed === true &&
+        instance.availability !== "unavailable" &&
+        instance.authStatus === "unauthenticated",
+    )
+    .map((instance) => String(instance.instanceId))
+    .toSorted();
 }
 
 function resolveThreadDriverId(
@@ -467,11 +490,19 @@ export function deriveSidebarUsageProviderRows(input: {
   >;
 }): ReadonlyArray<SidebarUsageProviderRow> {
   const driverIdByInstanceId = new Map<string, SidebarUsageDriverId>();
+  const knownProviderInstanceIds = new Set<string>();
+  const includedProviderInstanceIds = new Set<string>();
   const includedDriverIds = new Set<SidebarUsageDriverId>();
   for (const instance of input.providerInstances) {
     const driverId = String(instance.driverKind);
-    if (isSidebarUsageDriverId(driverId) && isUsageProviderIncluded(instance)) {
-      driverIdByInstanceId.set(String(instance.instanceId), driverId);
+    if (isSidebarUsageDriverId(driverId)) {
+      const instanceId = String(instance.instanceId);
+      knownProviderInstanceIds.add(instanceId);
+      if (!isUsageProviderIncluded(instance)) {
+        continue;
+      }
+      driverIdByInstanceId.set(instanceId, driverId);
+      includedProviderInstanceIds.add(instanceId);
       includedDriverIds.add(driverId);
     }
   }
@@ -530,12 +561,27 @@ export function deriveSidebarUsageProviderRows(input: {
         continue;
       }
 
+      const payload = asRecord(activity.payload);
+      const referencedInstanceId = [
+        asString(payload?.providerInstanceId),
+        thread.sessionProviderInstanceId ? String(thread.sessionProviderInstanceId) : null,
+        String(thread.modelSelectionInstanceId),
+      ].find(
+        (instanceId): instanceId is string =>
+          instanceId !== null && knownProviderInstanceIds.has(instanceId),
+      );
+      if (
+        referencedInstanceId !== undefined &&
+        !includedProviderInstanceIds.has(referencedInstanceId)
+      ) {
+        continue;
+      }
+
       const driverId = resolveActivityDriverId(activity, thread, driverIdByInstanceId);
       if (!driverId || !includedDriverIds.has(driverId)) {
         continue;
       }
 
-      const payload = asRecord(activity.payload);
       const windows = collectRateLimitWindows(
         payload?.rateLimits ?? activity.payload,
         activity.createdAt,

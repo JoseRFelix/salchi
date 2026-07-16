@@ -2053,18 +2053,44 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
         ),
       );
 
-      it.effect("returns warning when the Claude initialization result is unavailable", () =>
+      it.effect("falls back to CLI auth when the Claude initialization result is unavailable", () =>
         Effect.gen(function* () {
           const status = yield* checkClaudeProviderStatus(
             defaultClaudeSettings,
             noClaudeCapabilities,
           );
-          assert.strictEqual(status.status, "warning");
+          assert.strictEqual(status.status, "ready");
           assert.strictEqual(status.installed, true);
-          assert.strictEqual(status.auth.status, "unknown");
+          assert.strictEqual(status.auth.status, "authenticated");
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "auth status")
+                return {
+                  stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
+                  stderr: "",
+                  code: 0,
+                };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect("returns unauthenticated when the CLI auth fallback reports logged out", () =>
+        Effect.gen(function* () {
+          const status = yield* checkClaudeProviderStatus(
+            defaultClaudeSettings,
+            noClaudeCapabilities,
+          );
+          assert.strictEqual(status.status, "error");
+          assert.strictEqual(status.installed, true);
+          assert.strictEqual(status.auth.status, "unauthenticated");
           assert.strictEqual(
             status.message,
-            "Could not verify Claude authentication status from initialization result.",
+            "Claude is not authenticated. Run `claude auth login` and try again.",
           );
         }).pipe(
           Effect.provide(

@@ -1,3 +1,4 @@
+import { useNavigate } from "@tanstack/react-router";
 import { ChevronDownIcon, GaugeIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import * as Schema from "effect/Schema";
@@ -11,8 +12,10 @@ import { cn } from "../../lib/utils";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible";
 import { useSidebar } from "../ui/sidebar";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   deriveSidebarUsageProviderRows,
+  getSidebarClaudeLoginPromptInstanceIds,
   getSidebarUsageBarPercent,
   getSidebarUsageDisplayPercent,
   getSidebarUsagePrimaryWindow,
@@ -25,6 +28,7 @@ import {
 
 const SIDEBAR_USAGE_EXPANDED_STORAGE_KEY = "t3code:sidebar-usage-expanded:v1";
 const SIDEBAR_USAGE_POLL_INTERVAL_MS = 30_000;
+const promptedClaudeLoginInstanceIds = new Set<string>();
 
 function collectSidebarUsageThreads(
   environmentStateById: AppState["environmentStateById"],
@@ -232,6 +236,7 @@ function accountRateLimitsToStoreRecord(
 }
 
 export function SidebarUsageIndicator() {
+  const navigate = useNavigate();
   const [expanded, setExpanded] = useLocalStorage(
     SIDEBAR_USAGE_EXPANDED_STORAGE_KEY,
     false,
@@ -243,6 +248,18 @@ export function SidebarUsageIndicator() {
     (state) => state.setAccountRateLimitsByInstanceId,
   );
   const providers = useServerProviders();
+  const usageProviderInstances = useMemo(
+    () =>
+      providers.map((provider) => ({
+        instanceId: provider.instanceId,
+        driverKind: provider.driver,
+        enabled: provider.enabled,
+        installed: provider.installed,
+        availability: provider.availability,
+        authStatus: provider.auth.status,
+      })),
+    [providers],
+  );
   const { isMobile, open, openMobile } = useSidebar();
   const sidebarVisible = isMobile ? openMobile : open;
   const previousSidebarVisibleRef = useRef(false);
@@ -255,19 +272,56 @@ export function SidebarUsageIndicator() {
   const rows = useMemo(
     () =>
       deriveSidebarUsageProviderRows({
-        providerInstances: providers.map((provider) => ({
-          instanceId: provider.instanceId,
-          driverKind: provider.driver,
-          installed: provider.installed,
-          availability: provider.availability,
-        })),
+        providerInstances: usageProviderInstances,
         threads,
         accountRateLimitsByInstanceId,
       }),
-    [accountRateLimitsByInstanceId, providers, threads],
+    [accountRateLimitsByInstanceId, threads, usageProviderInstances],
   );
   const hasUsageProviders = rows.length > 0;
   const summary = useMemo(() => getSidebarUsageSummary(rows), [rows]);
+  const claudeLoginPromptInstanceIds = useMemo(
+    () => getSidebarClaudeLoginPromptInstanceIds(usageProviderInstances),
+    [usageProviderInstances],
+  );
+
+  useEffect(() => {
+    const unauthenticatedIds = new Set(claudeLoginPromptInstanceIds);
+    for (const promptedInstanceId of promptedClaudeLoginInstanceIds) {
+      if (!unauthenticatedIds.has(promptedInstanceId)) {
+        promptedClaudeLoginInstanceIds.delete(promptedInstanceId);
+      }
+    }
+
+    const unpromptedInstanceIds = claudeLoginPromptInstanceIds.filter(
+      (instanceId) => !promptedClaudeLoginInstanceIds.has(instanceId),
+    );
+    if (unpromptedInstanceIds.length === 0) {
+      return;
+    }
+    for (const instanceId of unpromptedInstanceIds) {
+      promptedClaudeLoginInstanceIds.add(instanceId);
+    }
+
+    let toastId!: ReturnType<typeof toastManager.add>;
+    toastId = toastManager.add(
+      stackedThreadToast({
+        type: "warning",
+        title: "Claude login required",
+        description:
+          "Claude usage is hidden because the Anthropic provider is not authenticated. Run `claude auth login`, then refresh the provider.",
+        actionVariant: "outline",
+        actionProps: {
+          children: "Provider settings",
+          onClick: () => {
+            toastManager.close(toastId);
+            void navigate({ to: "/settings/providers" });
+          },
+        },
+      }),
+    );
+  }, [claudeLoginPromptInstanceIds, navigate]);
+
   const refreshUsageLimits = useCallback(() => {
     if (refreshInFlightRef.current) {
       return refreshInFlightRef.current;
