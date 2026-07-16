@@ -14,6 +14,16 @@ import { hasUnseenCompletion as hasUnseenThreadCompletion } from "../threadCompl
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
+
+export function shouldEnableSidebarListAnimations(
+  environmentStates: ReadonlyArray<{ readonly bootstrapComplete: boolean }>,
+): boolean {
+  return (
+    environmentStates.length > 0 &&
+    environmentStates.every((environmentState) => environmentState.bootstrapComplete)
+  );
+}
+
 // Sidebar rows are backed by shell snapshots. Keep detail prewarm disabled so
 // reloads do not hydrate conversation pages for threads the user has not opened.
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 0;

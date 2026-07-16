@@ -11,6 +11,17 @@ import {
 
 export type SidebarUsageDriverId = "codex" | "claudeAgent";
 export type SidebarUsageWindowId = "fiveHour" | "weekly";
+export type SidebarUsageIndicatorRenderState = "loading" | "ready" | "hidden";
+
+export function resolveSidebarUsageIndicatorRenderState(input: {
+  readonly hasServerConfig: boolean;
+  readonly hasUsageProviders: boolean;
+}): SidebarUsageIndicatorRenderState {
+  if (input.hasUsageProviders) {
+    return "ready";
+  }
+  return input.hasServerConfig ? "hidden" : "loading";
+}
 
 export interface SidebarUsageProviderInstanceInput {
   readonly instanceId: ProviderInstanceId | string;

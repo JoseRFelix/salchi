@@ -10,6 +10,7 @@ import {
 import {
   deriveSidebarUsageProviderRows,
   getSidebarClaudeLoginPromptInstanceIds,
+  resolveSidebarUsageIndicatorRenderState,
   getSidebarUsageBarPercent,
   getSidebarUsageDisplayPercent,
   getSidebarUsageSummary,
@@ -52,6 +53,27 @@ function makeContextWindowActivity(input: {
 }
 
 describe("SidebarUsageIndicator.logic", () => {
+  it("reserves the usage row until server configuration resolves", () => {
+    expect(
+      resolveSidebarUsageIndicatorRenderState({
+        hasServerConfig: false,
+        hasUsageProviders: false,
+      }),
+    ).toBe("loading");
+    expect(
+      resolveSidebarUsageIndicatorRenderState({
+        hasServerConfig: true,
+        hasUsageProviders: true,
+      }),
+    ).toBe("ready");
+    expect(
+      resolveSidebarUsageIndicatorRenderState({
+        hasServerConfig: true,
+        hasUsageProviders: false,
+      }),
+    ).toBe("hidden");
+  });
+
   it("groups latest 5h and weekly rate-limit usage by Codex and Claude driver", () => {
     const rows = deriveSidebarUsageProviderRows({
       providerInstances: [
