@@ -12,7 +12,7 @@ import {
   type SourceControlRepositoryInfo,
 } from "@t3tools/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowDownIcon,
@@ -32,7 +32,6 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
-  useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
@@ -72,7 +71,6 @@ import {
   isUnsupportedWindowsProjectPath,
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
-import { isTerminalFocused } from "../lib/terminalFocus";
 import { getLatestThreadForProject } from "../lib/threadSort";
 import { cn, isMacPlatform, isWindowsPlatform, newCommandId, newProjectId } from "../lib/utils";
 import {
@@ -81,8 +79,7 @@ import {
   useStore,
 } from "../store";
 import type { Project, SidebarThreadSummary } from "../types";
-import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
-import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
+import { buildThreadRouteParams } from "../threadRoutes";
 import {
   ADDON_ICON_CLASS,
   buildBrowseGroups,
@@ -105,10 +102,8 @@ import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "./Icons"
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
 import { useServerKeybindings } from "../rpc/serverState";
-import { resolveShortcutCommand } from "../keybindings";
 import {
   Command,
-  CommandDialog,
   CommandDialogPopup,
   CommandFooter,
   CommandInput,
@@ -118,8 +113,7 @@ import { Button } from "./ui/button";
 import { Kbd, KbdGroup } from "./ui/kbd";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
-import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
-import type { ChatComposerHandle } from "./chat/ChatComposer";
+import { useComposerHandleContext } from "../composerHandleContext";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 const BROWSE_STALE_TIME_MS = 30_000;
@@ -346,54 +340,7 @@ function renderThreadTrailingStatus(thread: SidebarThreadSummary): ReactNode {
   return <ThreadRowTrailingStatus thread={thread} />;
 }
 
-export function CommandPalette({ children }: { children: ReactNode }) {
-  const open = useCommandPaletteStore((store) => store.open);
-  const setOpen = useCommandPaletteStore((store) => store.setOpen);
-  const toggleOpen = useCommandPaletteStore((store) => store.toggleOpen);
-  const keybindings = useServerKeybindings();
-  const composerHandleRef = useRef<ChatComposerHandle | null>(null);
-  const routeTarget = useParams({
-    strict: false,
-    select: (params) => resolveThreadRouteTarget(params),
-  });
-  const routeThreadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
-  const terminalOpen = useTerminalStateStore((state) =>
-    routeThreadRef
-      ? selectThreadTerminalState(state.terminalStateByThreadKey, routeThreadRef).terminalOpen
-      : false,
-  );
-
-  useEffect(() => {
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      const command = resolveShortcutCommand(event, keybindings, {
-        context: {
-          terminalFocus: isTerminalFocused(),
-          terminalOpen,
-        },
-      });
-      if (command !== "commandPalette.toggle") {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      toggleOpen();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [keybindings, terminalOpen, toggleOpen]);
-
-  return (
-    <ComposerHandleContext value={composerHandleRef}>
-      <CommandDialog open={open} onOpenChange={setOpen}>
-        {children}
-        <CommandPaletteDialog />
-      </CommandDialog>
-    </ComposerHandleContext>
-  );
-}
-
-function CommandPaletteDialog() {
+export function CommandPaletteDialog() {
   const open = useCommandPaletteStore((store) => store.open);
   const setOpen = useCommandPaletteStore((store) => store.setOpen);
 
