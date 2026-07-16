@@ -9,6 +9,7 @@ import {
 
 import {
   deriveSidebarUsageProviderRows,
+  getSidebarClaudeLoginPromptInstanceIds,
   getSidebarUsageBarPercent,
   getSidebarUsageDisplayPercent,
   getSidebarUsageSummary,
@@ -255,6 +256,122 @@ describe("SidebarUsageIndicator.logic", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.driverId).toBe("codex");
     expect(rows[0]?.windows.fiveHour?.usedPercent).toBe(12);
+  });
+
+  it("omits stale Claude usage when the provider is unauthenticated", () => {
+    const rows = deriveSidebarUsageProviderRows({
+      providerInstances: [
+        {
+          instanceId: ProviderInstanceId.make("codex"),
+          driverKind: ProviderDriverKind.make("codex"),
+          installed: true,
+          authStatus: "authenticated",
+        },
+        {
+          instanceId: ProviderInstanceId.make("claude_work"),
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+          installed: true,
+          authStatus: "authenticated",
+        },
+        {
+          instanceId: ProviderInstanceId.make("claude_personal"),
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+          installed: true,
+          authStatus: "unauthenticated",
+        },
+      ],
+      threads: [
+        {
+          id: "thread-claude-personal",
+          title: "Stale Claude session",
+          modelSelectionInstanceId: ProviderInstanceId.make("claude_personal"),
+          activities: [
+            makeRateLimitActivity({
+              id: "activity-claude-personal",
+              createdAt: "2026-05-04T00:00:00.000Z",
+              payload: {
+                provider: "claudeAgent",
+                providerInstanceId: "claude_personal",
+                rateLimits: {
+                  primary: {
+                    usedPercent: 91,
+                    windowDurationMins: 300,
+                    resetsAt: FUTURE_RESET_SECONDS,
+                  },
+                },
+              },
+            }),
+          ],
+        },
+      ],
+      accountRateLimitsByInstanceId: {
+        codex: {
+          updatedAt: "2026-05-03T00:00:00.000Z",
+          rateLimits: {
+            primary: {
+              usedPercent: 12,
+              windowDurationMins: 300,
+              resetsAt: FUTURE_RESET_SECONDS,
+            },
+          },
+        },
+        claude_work: {
+          updatedAt: "2026-05-03T00:00:00.000Z",
+          rateLimits: {
+            source: "claude.oauth.usage",
+            primary: {
+              usedPercent: 20,
+              windowDurationMins: 300,
+              resetsAt: FUTURE_RESET_SECONDS,
+            },
+          },
+        },
+        claude_personal: {
+          updatedAt: "2026-05-03T00:00:00.000Z",
+          rateLimits: {
+            source: "claude.oauth.usage",
+            primary: {
+              usedPercent: 91,
+              windowDurationMins: 300,
+              resetsAt: FUTURE_RESET_SECONDS,
+            },
+          },
+        },
+      },
+    });
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.driverId).toBe("codex");
+    expect(rows[1]?.driverId).toBe("claudeAgent");
+    expect(rows[1]?.windows.fiveHour?.usedPercent).toBe(20);
+  });
+
+  it("prompts for login only when an enabled installed Claude provider is unauthenticated", () => {
+    expect(
+      getSidebarClaudeLoginPromptInstanceIds([
+        {
+          instanceId: ProviderInstanceId.make("claude_work"),
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+          enabled: true,
+          installed: true,
+          authStatus: "unauthenticated",
+        },
+        {
+          instanceId: ProviderInstanceId.make("claude_disabled"),
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+          enabled: false,
+          installed: true,
+          authStatus: "unauthenticated",
+        },
+        {
+          instanceId: ProviderInstanceId.make("claude_missing"),
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+          enabled: true,
+          installed: false,
+          authStatus: "unauthenticated",
+        },
+      ]),
+    ).toEqual(["claude_work"]);
   });
 
   it("ignores thread cost and context usage when no account limit data is available", () => {
