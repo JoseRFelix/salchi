@@ -2569,10 +2569,20 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => document.querySelector<HTMLElement>('[data-testid="provider-status-banner"]'),
         "Unable to find reconciled provider status banner.",
       );
+      const messagesRegion = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-testid="chat-messages-region"]'),
+        "Unable to find chat messages region after provider status reconciliation.",
+      );
       await waitForLayout();
       const after = timeline.getBoundingClientRect();
+      const chatColumn = messagesRegion.parentElement;
+      if (!chatColumn) {
+        throw new Error("Expected the chat messages region to have a containing column.");
+      }
 
       expect(getComputedStyle(banner).position).toBe("absolute");
+      expect(banner.parentElement).toBe(chatColumn);
+      expect(getComputedStyle(chatColumn).position).toBe("relative");
       expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(0.5);
       expect(Math.abs(after.height - before.height)).toBeLessThanOrEqual(0.5);
     } finally {
