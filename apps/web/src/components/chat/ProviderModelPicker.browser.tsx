@@ -721,6 +721,34 @@ describe("ProviderModelPicker", () => {
     }
   });
 
+  it("shows the selected 5.6-sol model as 5.6 Sol", async () => {
+    const mounted = await mountPicker({
+      activeInstanceId: CODEX_INSTANCE_ID,
+      model: "5.6-sol",
+      lockedProvider: null,
+      providers: [
+        buildCodexProvider([
+          {
+            slug: "5.6-sol",
+            name: "5.6-sol",
+            isCustom: false,
+            capabilities: null,
+          },
+        ]),
+      ],
+    });
+
+    try {
+      const trigger = document.querySelector<HTMLElement>(
+        '[data-chat-provider-model-picker="true"]',
+      );
+      expect(trigger?.textContent).toContain("5.6 Sol");
+      expect(trigger?.textContent).not.toContain("5.6-sol");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("shows the selected reasoning level after the trigger model name", async () => {
     const mounted = await mountPicker({
       activeInstanceId: CODEX_INSTANCE_ID,
