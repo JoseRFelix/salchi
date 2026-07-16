@@ -33,6 +33,10 @@ import {
 } from "../store";
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
+import {
+  clearPersistedStartupThreadTarget,
+  writePersistedStartupThreadTarget,
+} from "../startupNavigation";
 import { SidebarInset, useSidebar } from "~/components/ui/sidebar";
 import {
   closeWorkspaceFilePreview,
@@ -60,27 +64,17 @@ function ChatThreadRouteView() {
   );
   const serverThread = useStore(useMemo(() => createThreadSelectorByRef(threadRef), [threadRef]));
   const threadExists = useStore((store) => selectThreadExistsByRef(store, threadRef));
-  const environmentHasServerThreads = useStore(
-    (store) => selectEnvironmentState(store, threadRef?.environmentId ?? null).threadIds.length > 0,
-  );
   const draftThreadExists = useComposerDraftStore((store) =>
     threadRef ? store.getDraftThreadByRef(threadRef) !== null : false,
   );
   const draftThread = useComposerDraftStore((store) =>
     threadRef ? store.getDraftThreadByRef(threadRef) : null,
   );
-  const environmentHasDraftThreads = useComposerDraftStore((store) => {
-    if (!threadRef) {
-      return false;
-    }
-    return store.hasDraftThreadsInEnvironment(threadRef.environmentId);
-  });
   const routeThreadExists = threadExists || draftThreadExists;
   const serverThreadStarted = threadHasStarted(serverThread);
   const serverSidebarSummaryExists = useStore(
     (store) => selectSidebarThreadSummaryByRef(store, threadRef) !== undefined,
   );
-  const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
   const diffOpen = search.diff === "1";
   const filePanel = useWorkspaceFilePanelState();
   const filePanelOpen = filePanel.open;
@@ -273,8 +267,7 @@ function ChatThreadRouteView() {
     startSurface: "panel",
   });
 
-  const isRecoveringMissingThread =
-    bootstrapComplete && threadRef !== null && !routeThreadExists && environmentHasAnyThreads;
+  const isRecoveringMissingThread = bootstrapComplete && threadRef !== null && !routeThreadExists;
 
   useEffect(() => {
     if (!threadRef || draftThreadExists) {
@@ -293,6 +286,7 @@ function ChatThreadRouteView() {
       const latestDraftExists =
         useComposerDraftStore.getState().getDraftThreadByRef(threadRef) !== null;
       if (!latestThreadExists && !latestDraftExists) {
+        clearPersistedStartupThreadTarget(threadRef);
         void navigate({ to: "/", replace: true });
       }
     }, MISSING_THREAD_ROUTE_RECOVERY_GRACE_MS);
@@ -377,6 +371,14 @@ export const Route = createFileRoute("/_chat/$environmentId/$threadId")({
   validateSearch: (search) => parseDiffRouteSearch(search),
   search: {
     middlewares: [retainSearchParams<DiffRouteSearch>(["diff"])],
+  },
+  beforeLoad: ({ params }) => {
+    const threadRef = resolveThreadRouteRef(params);
+    if (threadRef) {
+      // Route intent is available before cached/live thread detail. Remember it immediately so a
+      // backgrounded or killed PWA resumes the thread the user actually opened.
+      writePersistedStartupThreadTarget(threadRef);
+    }
   },
   component: ChatThreadRouteView,
 });

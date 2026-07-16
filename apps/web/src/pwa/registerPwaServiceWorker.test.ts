@@ -14,7 +14,6 @@ type RegisterSWOptions = {
 
 type BrowserEnvironment = {
   dispatchVisibilityChange: () => void;
-  dispatchWindowEvent: (type: string) => void;
   intervalHandlers: Array<() => void>;
 };
 
@@ -50,26 +49,8 @@ function createDeferred(): {
 function installBrowserEnvironment(options: { online?: boolean } = {}): BrowserEnvironment {
   const intervalHandlers: Array<() => void> = [];
   const visibilityChangeListeners: EventListener[] = [];
-  const windowListeners = new Map<
-    string,
-    Array<{ listener: EventListenerOrEventListenerObject; once: boolean }>
-  >();
 
   vi.stubGlobal("window", {
-    addEventListener: vi.fn(
-      (
-        type: string,
-        listener: EventListenerOrEventListenerObject,
-        addOptions?: AddEventListenerOptions | boolean,
-      ) => {
-        const listeners = windowListeners.get(type) ?? [];
-        listeners.push({
-          listener,
-          once: typeof addOptions === "object" && addOptions.once === true,
-        });
-        windowListeners.set(type, listeners);
-      },
-    ),
     isSecureContext: true,
     setInterval: vi.fn((handler: TimerHandler) => {
       if (typeof handler === "function") {
@@ -102,24 +83,6 @@ function installBrowserEnvironment(options: { online?: boolean } = {}): BrowserE
   });
 
   return {
-    dispatchWindowEvent: (type: string) => {
-      const listeners = [...(windowListeners.get(type) ?? [])];
-      const event = { type } as Event;
-      for (const listenerEntry of listeners) {
-        const { listener } = listenerEntry;
-        if (typeof listener === "function") {
-          listener(event);
-        } else {
-          listener.handleEvent(event);
-        }
-        if (listenerEntry.once) {
-          windowListeners.set(
-            type,
-            (windowListeners.get(type) ?? []).filter((entry) => entry !== listenerEntry),
-          );
-        }
-      }
-    },
     dispatchVisibilityChange: () => {
       for (const listener of visibilityChangeListeners) {
         listener({ type: "visibilitychange" } as Event);
@@ -276,7 +239,7 @@ describe("registerPwaServiceWorker", () => {
     expect(registration.update).toHaveBeenCalledTimes(2);
   });
 
-  it("auto-applies a launch-time waiting update before user interaction", () => {
+  it("marks a waiting update as ready even when an update check is visible", () => {
     installBrowserEnvironment();
     const startupUpdate = createDeferred();
     const updateServiceWorker = vi.fn(async () => {});
@@ -293,50 +256,13 @@ describe("registerPwaServiceWorker", () => {
 
     expect(usePwaServiceWorkerUpdateStore.getState()).toMatchObject({
       checkPhase: "checking",
-      status: "updating",
-      updateServiceWorker,
-    });
-    expect(updateServiceWorker).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps a launch-time update as a prompt after user interaction", () => {
-    const browserEnvironment = installBrowserEnvironment();
-    const updateServiceWorker = vi.fn(async () => {});
-    registerSWMock.mockReturnValue(updateServiceWorker);
-
-    registerPwaServiceWorker();
-    const registerOptions = readRegisterSWOptions();
-
-    browserEnvironment.dispatchWindowEvent("pointerdown");
-    registerOptions.onNeedRefresh?.();
-
-    expect(usePwaServiceWorkerUpdateStore.getState()).toMatchObject({
       status: "ready",
       updateServiceWorker,
     });
     expect(updateServiceWorker).not.toHaveBeenCalled();
   });
 
-  it("keeps a launch-time update as a prompt after the auto-update window closes", () => {
-    installBrowserEnvironment();
-    const nowSpy = vi.spyOn(performance, "now").mockReturnValue(0);
-    const updateServiceWorker = vi.fn(async () => {});
-    registerSWMock.mockReturnValue(updateServiceWorker);
-
-    registerPwaServiceWorker();
-    const registerOptions = readRegisterSWOptions();
-
-    nowSpy.mockReturnValue(15_001);
-    registerOptions.onNeedRefresh?.();
-
-    expect(usePwaServiceWorkerUpdateStore.getState()).toMatchObject({
-      status: "ready",
-      updateServiceWorker,
-    });
-    expect(updateServiceWorker).not.toHaveBeenCalled();
-  });
-
-  it("does not auto-apply more than once in one page load", async () => {
+  it("keeps repeated refresh notifications as a ready update prompt", () => {
     installBrowserEnvironment();
     const updateServiceWorker = vi.fn(async () => {});
     registerSWMock.mockReturnValue(updateServiceWorker);
@@ -346,22 +272,16 @@ describe("registerPwaServiceWorker", () => {
 
     registerOptions.onNeedRefresh?.();
 
-    expect(usePwaServiceWorkerUpdateStore.getState().status).toBe("updating");
-    expect(updateServiceWorker).toHaveBeenCalledTimes(1);
-
-    await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(5_000);
-
     expect(usePwaServiceWorkerUpdateStore.getState().status).toBe("ready");
 
     registerOptions.onNeedRefresh?.();
 
     expect(usePwaServiceWorkerUpdateStore.getState().status).toBe("ready");
-    expect(updateServiceWorker).toHaveBeenCalledTimes(1);
+    expect(updateServiceWorker).not.toHaveBeenCalled();
   });
 
   it("keeps the update indicator visible while a found update installs", async () => {
-    const browserEnvironment = installBrowserEnvironment();
+    installBrowserEnvironment();
     const startupUpdate = createDeferred();
     const installingWorker = createInstallingServiceWorker();
     const updateServiceWorker = vi.fn(async () => {});
@@ -387,7 +307,6 @@ describe("registerPwaServiceWorker", () => {
     expect(installingWorker.getStateChangeListenerCount()).toBe(1);
 
     installingWorker.setState("installed");
-    browserEnvironment.dispatchWindowEvent("pointerdown");
     registerOptions.onNeedRefresh?.();
     await flushMicrotasks();
 

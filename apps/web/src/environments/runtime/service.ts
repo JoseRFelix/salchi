@@ -6,6 +6,7 @@ import {
   type EnvironmentId,
   type OrchestrationEvent,
   type OrchestrationThreadDetailFingerprint,
+  type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadShell,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
@@ -93,12 +94,12 @@ import {
 import { flushResumeDiagnostics, recordResumeDiagnostic } from "./resumeDiagnostics";
 import { getClientSettings } from "~/hooks/useSettings";
 import {
+  type CachedEnvironmentStateWriteOptions,
+  flushPendingCachedEnvironmentStateWrite,
   readCachedEnvironmentState,
-  readCachedThreadDetail,
   removeCachedEnvironmentState,
   scheduleCachedEnvironmentStateWrite,
 } from "~/orchestrationStartupCache";
-import { hasEnvironmentThreadDetailContent } from "~/threadDetailContent";
 import type { Thread } from "~/types";
 
 type BearerSessionLike =
@@ -241,6 +242,7 @@ type BrowserResumeShellBootstrapTimeoutClearReason =
 
 interface RecoveredEventBatchOptions {
   readonly preserveShellFields?: boolean;
+  readonly preserveCachedShell?: boolean;
   readonly syncSidebarSummaries?: boolean;
 }
 
@@ -1761,6 +1763,32 @@ function shouldActivelyReconcileThreadDetailSubscription(
   return entry.activeRefCount > 0 && isNonIdleThreadDetailSubscription(entry);
 }
 
+function mergeVerifiedThreadDetailTailSnapshot(
+  environmentId: EnvironmentId,
+  snapshot: OrchestrationThreadDetailSnapshot,
+): void {
+  const previousState = useStore.getState();
+  const previousEnvironmentState = previousState.environmentStateById[environmentId];
+
+  previousState.mergeServerThreadDetailTailSnapshot(snapshot.thread, environmentId, {
+    pageInfo: snapshot.pageInfo,
+    preserveShellFields: shouldPreserveThreadDetailShellFields(
+      environmentId,
+      snapshot.snapshotSequence,
+    ),
+  });
+
+  const nextState = useStore.getState();
+  if (nextState.environmentStateById[environmentId] !== previousEnvironmentState) {
+    // A verified tail can be the only copy of a response that completed while an installed PWA
+    // was suspended. Persist it before the app can be backgrounded again instead of leaving that
+    // authoritative recovery behind the normal streaming-detail debounce.
+    persistEnvironmentStartupCacheWriteImmediately(environmentId, [snapshot.thread.id], {
+      preserveCachedShell: true,
+    });
+  }
+}
+
 function hasRetainedThreadDetailSubscription(): boolean {
   for (const entry of threadDetailSubscriptions.values()) {
     if (entry.refCount > 0) {
@@ -1804,16 +1832,7 @@ function attachThreadDetailSubscription(entry: ThreadDetailSubscriptionEntry): b
           markThreadDetailSequence(entry, item.snapshot.snapshotSequence);
         }
         markThreadDetailVerified(entry, item.snapshot.snapshotSequence, fingerprint);
-        useStore
-          .getState()
-          .mergeServerThreadDetailTailSnapshot(item.snapshot.thread, entry.environmentId, {
-            pageInfo: item.snapshot.pageInfo,
-            preserveShellFields: shouldPreserveThreadDetailShellFields(
-              entry.environmentId,
-              item.snapshot.snapshotSequence,
-            ),
-          });
-        scheduleEnvironmentStartupCacheWrite(entry.environmentId, [entry.threadId]);
+        mergeVerifiedThreadDetailTailSnapshot(entry.environmentId, item.snapshot);
         reconcileThreadDetailSubscriptionEvictionState(entry);
         return;
       }
@@ -1937,21 +1956,14 @@ function applyThreadDetailReconcileResult(
         }
       }
       markThreadDetailVerified(entry, result.serverSequence, result.serverFingerprint);
-      scheduleEnvironmentStartupCacheWrite(entry.environmentId, [entry.threadId]);
+      scheduleEnvironmentStartupCacheWrite(entry.environmentId, [entry.threadId], {
+        preserveCachedShell: true,
+      });
       reconcileThreadDetailSubscriptionEvictionState(entry);
       return;
     case "snapshot":
       markThreadDetailVerified(entry, result.serverSequence, result.serverFingerprint);
-      useStore
-        .getState()
-        .mergeServerThreadDetailTailSnapshot(result.snapshot.thread, entry.environmentId, {
-          pageInfo: result.snapshot.pageInfo,
-          preserveShellFields: shouldPreserveThreadDetailShellFields(
-            entry.environmentId,
-            result.snapshot.snapshotSequence,
-          ),
-        });
-      scheduleEnvironmentStartupCacheWrite(entry.environmentId, [entry.threadId]);
+      mergeVerifiedThreadDetailTailSnapshot(entry.environmentId, result.snapshot);
       reconcileThreadDetailSubscriptionEvictionState(entry);
       return;
   }
@@ -2243,8 +2255,6 @@ function retainThreadDetailSubscriptionInternal(
   threadId: ThreadId,
   options: { readonly active: boolean },
 ): () => void {
-  hydrateThreadDetailFromStartupCacheIfMissing(environmentId, threadId);
-
   const key = getThreadDetailSubscriptionKey(environmentId, threadId);
   const existing = threadDetailSubscriptions.get(key);
   if (existing) {
@@ -2727,29 +2737,13 @@ function hydrateEnvironmentFromStartupCache(environmentId: EnvironmentId): void 
   reconcileSnapshotDerivedState();
 }
 
-function hydrateThreadDetailFromStartupCacheIfMissing(
-  environmentId: EnvironmentId,
-  threadId: ThreadId,
-): void {
-  const environmentState = useStore.getState().environmentStateById[environmentId];
-  if (
-    !environmentState?.threadShellById[threadId] ||
-    hasEnvironmentThreadDetailContent(environmentState, threadId)
-  ) {
-    return;
-  }
-
-  const cachedDetail = readCachedThreadDetail(environmentId, threadId);
-  if (!cachedDetail) {
-    return;
-  }
-
-  useStore.getState().hydrateCachedThreadDetail(environmentId, threadId, cachedDetail);
-}
-
 function scheduleEnvironmentStartupCacheWrite(
   environmentId: EnvironmentId,
   preferredThreadIds: readonly ThreadId[] = [],
+  options: Pick<
+    CachedEnvironmentStateWriteOptions,
+    "preserveCachedShell" | "removedProjectIds" | "removedThreadIds"
+  > = {},
 ): void {
   const environmentState = useStore.getState().environmentStateById[environmentId];
   if (!environmentState) {
@@ -2758,7 +2752,20 @@ function scheduleEnvironmentStartupCacheWrite(
 
   scheduleCachedEnvironmentStateWrite(environmentId, environmentState, {
     preferredThreadIds,
+    ...options,
   });
+}
+
+function persistEnvironmentStartupCacheWriteImmediately(
+  environmentId: EnvironmentId,
+  preferredThreadIds: readonly ThreadId[] = [],
+  options: Pick<
+    CachedEnvironmentStateWriteOptions,
+    "preserveCachedShell" | "removedProjectIds" | "removedThreadIds"
+  > = {},
+): void {
+  scheduleEnvironmentStartupCacheWrite(environmentId, preferredThreadIds, options);
+  flushPendingCachedEnvironmentStateWrite(environmentId);
 }
 
 function collectThreadIdsFromEvents(events: ReadonlyArray<OrchestrationEvent>): ThreadId[] {
@@ -2855,7 +2862,21 @@ function applyRecoveredEventBatch(
   }
 
   reconcileThreadDetailSubscriptionEvictionForEnvironment(environmentId);
-  scheduleEnvironmentStartupCacheWrite(environmentId, collectThreadIdsFromEvents(events));
+  const removedProjectIds = events.flatMap((event) =>
+    event.type === "project.deleted" ? [event.payload.projectId] : [],
+  );
+  scheduleEnvironmentStartupCacheWrite(environmentId, collectThreadIdsFromEvents(events), {
+    preserveCachedShell: options.preserveCachedShell ?? false,
+    removedProjectIds,
+    removedThreadIds: batchEffects.clearDeletedThreadIds,
+  });
+  if (
+    needsProjectUiSync ||
+    batchEffects.clearDeletedThreadIds.length > 0 ||
+    events.some(isSettlingThreadDetailEvent)
+  ) {
+    flushPendingCachedEnvironmentStateWrite(environmentId);
+  }
 }
 
 export function applyEnvironmentThreadDetailEvent(
@@ -2870,6 +2891,7 @@ export function applyEnvironmentThreadDetailEvent(
       : selectThreadByRef(useStore.getState(), scopeThreadRef(environmentId, threadId));
 
   applyRecoveredEventBatch([event], environmentId, {
+    preserveCachedShell: true,
     preserveShellFields: shouldPreserveThreadDetailShellFields(environmentId, event.sequence),
     syncSidebarSummaries: true,
   });
@@ -2915,6 +2937,14 @@ function applyShellEvent(event: OrchestrationShellStreamEvent, environmentId: En
   useStore.getState().applyShellEvent(event, environmentId);
   markAppliedProjectionEvent(environmentId, event.sequence);
   scheduleEnvironmentStartupCacheWrite(environmentId, threadId ? [threadId] : []);
+  if (
+    event.kind === "project-upserted" ||
+    event.kind === "project-removed" ||
+    event.kind === "thread-removed" ||
+    (event.kind === "thread-upserted" && isSettlingShellThread(event.thread))
+  ) {
+    flushPendingCachedEnvironmentStateWrite(environmentId);
+  }
 
   switch (event.kind) {
     case "project-upserted":
@@ -2970,7 +3000,7 @@ function createEnvironmentConnectionHandlers() {
       );
       reconcileThreadDetailSubscriptionEvictionForEnvironment(environmentId);
       reconcileSnapshotDerivedState();
-      scheduleEnvironmentStartupCacheWrite(environmentId);
+      persistEnvironmentStartupCacheWriteImmediately(environmentId);
     },
     applyTerminalEvent: (event: TerminalEvent, environmentId: EnvironmentId) => {
       const threadRef = scopeThreadRef(environmentId, ThreadId.make(event.threadId));

@@ -1,6 +1,7 @@
 import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 
 import type { EnvironmentState } from "./store";
+import { clearPersistedStartupThreadTargetForEnvironment } from "./startupNavigation";
 import { hasEnvironmentThreadDetailContent } from "./threadDetailContent";
 
 const STORAGE_KEY = "t3code:orchestration-startup-cache:v1";
@@ -13,8 +14,9 @@ const MAX_CACHED_THREAD_MESSAGES = 800;
 const MAX_CACHED_THREAD_ACTIVITIES = 400;
 const MAX_CACHED_THREAD_PROPOSED_PLANS = 100;
 const MAX_CACHED_THREAD_DIFFS = 250;
-const MAX_CACHE_DOCUMENT_CHARS = 4_500_000;
+const MAX_CACHE_DOCUMENT_CHARS = 2_000_000;
 const WRITE_DEBOUNCE_MS = 500;
+const DETAIL_THREAD_CACHE_CAP_LADDER = [MAX_CACHED_DETAIL_THREADS, 6, 3, 1, 0] as const;
 
 interface CachedEnvironmentEntry {
   readonly updatedAt: string;
@@ -26,24 +28,38 @@ interface CachedOrchestrationDocument {
   readonly environments: Record<string, CachedEnvironmentEntry>;
 }
 
+export interface CachedEnvironmentStateEntry {
+  readonly environmentId: EnvironmentId;
+  readonly updatedAt: string;
+  readonly state: EnvironmentState;
+}
+
 interface PendingEnvironmentWrite {
   state: EnvironmentState;
   readonly preferredThreadIds: Set<ThreadId>;
+  preserveCachedShell: boolean;
+  readonly removedProjectIds: Set<ProjectId>;
+  readonly removedThreadIds: Set<ThreadId>;
   timeoutId: ReturnType<typeof setTimeout> | null;
 }
 
-export interface CachedThreadDetail {
-  readonly messageIds: EnvironmentState["messageIdsByThreadId"][ThreadId];
-  readonly messageById: EnvironmentState["messageByThreadId"][ThreadId];
-  readonly queuedTurnIds: EnvironmentState["queuedTurnIdsByThreadId"][ThreadId];
-  readonly queuedTurnById: EnvironmentState["queuedTurnByThreadId"][ThreadId];
-  readonly activityIds: EnvironmentState["activityIdsByThreadId"][ThreadId];
-  readonly activityById: EnvironmentState["activityByThreadId"][ThreadId];
-  readonly proposedPlanIds: EnvironmentState["proposedPlanIdsByThreadId"][ThreadId];
-  readonly proposedPlanById: EnvironmentState["proposedPlanByThreadId"][ThreadId];
-  readonly turnDiffIds: EnvironmentState["turnDiffIdsByThreadId"][ThreadId];
-  readonly turnDiffSummaryById: EnvironmentState["turnDiffSummaryByThreadId"][ThreadId];
-  readonly pageInfo: EnvironmentState["threadDetailPageInfoByThreadId"][ThreadId] | null;
+export interface CachedEnvironmentStateWriteOptions {
+  readonly preferredThreadIds?: readonly ThreadId[];
+  /**
+   * Detail can arrive before the authoritative shell. In that case, retain cached shell entities
+   * that are absent from the detail-only state unless an accompanying tombstone removes them.
+   */
+  readonly preserveCachedShell?: boolean;
+  readonly removedProjectIds?: readonly ProjectId[];
+  readonly removedThreadIds?: readonly ThreadId[];
+}
+
+interface StartupCachePersistenceTargets {
+  readonly documentTarget?: Pick<
+    Document,
+    "addEventListener" | "removeEventListener" | "visibilityState"
+  > | null;
+  readonly windowTarget?: Pick<Window, "addEventListener" | "removeEventListener"> | null;
 }
 
 const pendingWrites = new Map<EnvironmentId, PendingEnvironmentWrite>();
@@ -188,8 +204,11 @@ function readDocument(): CachedOrchestrationDocument {
 
 function removeOldestEnvironment(
   document: CachedOrchestrationDocument,
+  options: { readonly excludeEnvironmentId?: EnvironmentId } = {},
 ): CachedOrchestrationDocument | null {
-  const entries = Object.entries(document.environments);
+  const entries = Object.entries(document.environments).filter(
+    ([environmentId]) => environmentId !== options.excludeEnvironmentId,
+  );
   if (entries.length === 0) {
     return null;
   }
@@ -204,28 +223,28 @@ function removeOldestEnvironment(
   };
 }
 
-function writeDocument(document: CachedOrchestrationDocument): void {
+function tryPersistDocument(document: CachedOrchestrationDocument): boolean {
   const resolvedStorage = storage();
   if (!resolvedStorage) {
-    return;
+    return false;
   }
 
-  let nextDocument: CachedOrchestrationDocument | null = document;
-  while (nextDocument) {
-    const encoded = JSON.stringify(nextDocument);
-    if (encoded.length > MAX_CACHE_DOCUMENT_CHARS) {
-      nextDocument = removeOldestEnvironment(nextDocument);
-      continue;
-    }
-
-    try {
-      resolvedStorage.setItem(STORAGE_KEY, encoded);
-      invalidateDocumentMemo();
-      return;
-    } catch {
-      nextDocument = removeOldestEnvironment(nextDocument);
-    }
+  const encoded = JSON.stringify(document);
+  if (encoded.length > MAX_CACHE_DOCUMENT_CHARS) {
+    return false;
   }
+
+  try {
+    resolvedStorage.setItem(STORAGE_KEY, encoded);
+    invalidateDocumentMemo();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function writeDocument(document: CachedOrchestrationDocument): void {
+  tryPersistDocument(document);
 }
 
 function hasOwn<T extends object>(record: T, key: PropertyKey): key is keyof T {
@@ -277,7 +296,12 @@ function retainDetailThreadIds(
   state: EnvironmentState,
   retainedThreadIds: readonly ThreadId[],
   preferredThreadIds: readonly ThreadId[],
+  maxDetailThreads: number,
 ): Set<ThreadId> {
+  if (maxDetailThreads <= 0) {
+    return new Set();
+  }
+
   const retainedThreadIdSet = new Set(retainedThreadIds);
   const detailThreadIds = retainedThreadIds.filter((threadId) =>
     hasEnvironmentThreadDetailContent(state, threadId),
@@ -285,6 +309,9 @@ function retainDetailThreadIds(
   const retained = new Set<ThreadId>();
 
   for (const threadId of preferredThreadIds) {
+    if (retained.size >= maxDetailThreads) {
+      break;
+    }
     if (retainedThreadIdSet.has(threadId) && hasEnvironmentThreadDetailContent(state, threadId)) {
       retained.add(threadId);
     }
@@ -293,7 +320,7 @@ function retainDetailThreadIds(
   for (const threadId of [...detailThreadIds].toSorted((left, right) =>
     compareThreadUpdatedAt(state, left, right),
   )) {
-    if (retained.size >= MAX_CACHED_DETAIL_THREADS) {
+    if (retained.size >= maxDetailThreads) {
       break;
     }
     retained.add(threadId);
@@ -353,6 +380,222 @@ function rebuildThreadIdsByProjectId(
     threadIdsByProjectId[projectId] = [...(threadIdsByProjectId[projectId] ?? []), threadId];
   }
   return threadIdsByProjectId as Record<ProjectId, ThreadId[]>;
+}
+
+function appendMissingIds<Id extends string>(
+  existingIds: readonly Id[],
+  incomingIds: readonly Id[],
+): Id[] {
+  const mergedIds = [...existingIds];
+  const seen = new Set<Id>(existingIds);
+  for (const id of incomingIds) {
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    mergedIds.push(id);
+  }
+  return mergedIds;
+}
+
+/**
+ * Detail subscriptions can update the active conversation before the shell snapshot has
+ * populated projects and inactive threads. An explicitly detail-only write must enrich the
+ * existing cache, not replace its complete sidebar shell with the partial store state.
+ */
+function mergeDetailStateWithCachedShell(
+  state: EnvironmentState,
+  cachedState: EnvironmentState | null,
+  options: Pick<
+    CachedEnvironmentStateWriteOptions,
+    "preserveCachedShell" | "removedProjectIds" | "removedThreadIds"
+  >,
+): EnvironmentState {
+  if (!options.preserveCachedShell || cachedState === null) {
+    return state;
+  }
+
+  const removedProjectIds = new Set(options.removedProjectIds ?? []);
+  const removedThreadIds = new Set(options.removedThreadIds ?? []);
+  const cachedProjectIds = cachedState.projectIds.filter(
+    (projectId) => !removedProjectIds.has(projectId),
+  );
+  const cachedThreadIds = cachedState.threadIds.filter((threadId) => {
+    if (removedThreadIds.has(threadId)) {
+      return false;
+    }
+    const projectId = cachedState.threadShellById[threadId]?.projectId;
+    return projectId === undefined || !removedProjectIds.has(projectId);
+  });
+  const projectIds = appendMissingIds(
+    cachedProjectIds,
+    state.projectIds.filter((projectId) => !removedProjectIds.has(projectId)),
+  );
+  const threadIds = appendMissingIds(
+    cachedThreadIds,
+    state.threadIds.filter((threadId) => {
+      if (removedThreadIds.has(threadId)) {
+        return false;
+      }
+      const projectId = state.threadShellById[threadId]?.projectId;
+      return projectId === undefined || !removedProjectIds.has(projectId);
+    }),
+  );
+  const mergedState: EnvironmentState = {
+    ...cachedState,
+    ...state,
+    projectIds,
+    projectById: {
+      ...cachedState.projectById,
+      ...state.projectById,
+    },
+    threadIds,
+    threadShellById: {
+      ...cachedState.threadShellById,
+      ...state.threadShellById,
+    },
+    threadSessionById: {
+      ...cachedState.threadSessionById,
+      ...state.threadSessionById,
+    },
+    threadTurnStateById: {
+      ...cachedState.threadTurnStateById,
+      ...state.threadTurnStateById,
+    },
+    messageIdsByThreadId: {
+      ...cachedState.messageIdsByThreadId,
+      ...state.messageIdsByThreadId,
+    },
+    messageByThreadId: {
+      ...cachedState.messageByThreadId,
+      ...state.messageByThreadId,
+    },
+    queuedTurnIdsByThreadId: {
+      ...cachedState.queuedTurnIdsByThreadId,
+      ...state.queuedTurnIdsByThreadId,
+    },
+    queuedTurnByThreadId: {
+      ...cachedState.queuedTurnByThreadId,
+      ...state.queuedTurnByThreadId,
+    },
+    activityIdsByThreadId: {
+      ...cachedState.activityIdsByThreadId,
+      ...state.activityIdsByThreadId,
+    },
+    activityByThreadId: {
+      ...cachedState.activityByThreadId,
+      ...state.activityByThreadId,
+    },
+    proposedPlanIdsByThreadId: {
+      ...cachedState.proposedPlanIdsByThreadId,
+      ...state.proposedPlanIdsByThreadId,
+    },
+    proposedPlanByThreadId: {
+      ...cachedState.proposedPlanByThreadId,
+      ...state.proposedPlanByThreadId,
+    },
+    turnDiffIdsByThreadId: {
+      ...cachedState.turnDiffIdsByThreadId,
+      ...state.turnDiffIdsByThreadId,
+    },
+    turnDiffSummaryByThreadId: {
+      ...cachedState.turnDiffSummaryByThreadId,
+      ...state.turnDiffSummaryByThreadId,
+    },
+    threadDetailPageInfoByThreadId: {
+      ...cachedState.threadDetailPageInfoByThreadId,
+      ...state.threadDetailPageInfoByThreadId,
+    },
+    lastAppliedEventSequenceByThreadId: {
+      ...cachedState.lastAppliedEventSequenceByThreadId,
+      ...state.lastAppliedEventSequenceByThreadId,
+    },
+    lastAppliedEventIdByThreadId: {
+      ...cachedState.lastAppliedEventIdByThreadId,
+      ...state.lastAppliedEventIdByThreadId,
+    },
+    sidebarThreadSummaryById: {
+      ...cachedState.sidebarThreadSummaryById,
+      ...state.sidebarThreadSummaryById,
+    },
+    bootstrapComplete: false,
+  };
+
+  return {
+    ...mergedState,
+    threadIdsByProjectId: rebuildThreadIdsByProjectId(mergedState, threadIds),
+  };
+}
+
+function isTransientCachedSession(
+  session: EnvironmentState["threadSessionById"][ThreadId] | null | undefined,
+): boolean {
+  return (
+    session?.status === "connecting" ||
+    session?.status === "running" ||
+    session?.orchestrationStatus === "starting" ||
+    session?.orchestrationStatus === "running" ||
+    (session?.activeTurnId !== undefined && session.activeTurnId !== null)
+  );
+}
+
+function isTransientCachedTurn(
+  turnState: EnvironmentState["threadTurnStateById"][ThreadId] | undefined,
+): boolean {
+  return turnState?.latestTurn?.state === "running" && turnState.latestTurn.completedAt === null;
+}
+
+/**
+ * A runtime can finish while an installed PWA is suspended or terminated. Persisting a running
+ * session as durable startup truth makes that thread appear to work forever until the socket has
+ * reconciled it. Cached conversations remain useful, but active runtime state must be confirmed by
+ * the server after every process start.
+ */
+function stripTransientRuntimeState(state: EnvironmentState): EnvironmentState {
+  const threadSessionById = { ...state.threadSessionById };
+  const threadTurnStateById = { ...state.threadTurnStateById };
+  const sidebarThreadSummaryById = { ...state.sidebarThreadSummaryById };
+  let changed = false;
+
+  for (const threadId of state.threadIds) {
+    if (isTransientCachedSession(threadSessionById[threadId])) {
+      threadSessionById[threadId] = null;
+      changed = true;
+    }
+    if (isTransientCachedTurn(threadTurnStateById[threadId])) {
+      threadTurnStateById[threadId] = {
+        ...threadTurnStateById[threadId],
+        latestTurn: null,
+      };
+      changed = true;
+    }
+
+    const summary = sidebarThreadSummaryById[threadId];
+    if (!summary) {
+      continue;
+    }
+    const stripSession = isTransientCachedSession(summary.session);
+    const stripTurn =
+      summary.latestTurn?.state === "running" && summary.latestTurn.completedAt === null;
+    if (!stripSession && !stripTurn) {
+      continue;
+    }
+    sidebarThreadSummaryById[threadId] = {
+      ...summary,
+      ...(stripSession ? { session: null } : {}),
+      ...(stripTurn ? { latestTurn: null } : {}),
+    };
+    changed = true;
+  }
+
+  return changed
+    ? {
+        ...state,
+        threadSessionById,
+        threadTurnStateById,
+        sidebarThreadSummaryById,
+      }
+    : state;
 }
 
 function retainThreadItemRecord<T>(
@@ -422,10 +665,16 @@ function retainTurnDiffRecords(
 function createCachedEnvironmentState(
   state: EnvironmentState,
   preferredThreadIds: readonly ThreadId[],
+  maxDetailThreads = MAX_CACHED_DETAIL_THREADS,
 ): EnvironmentState {
   const retainedThreadIds = retainOrderedThreadIds(state, preferredThreadIds);
   const retainedThreadIdSet = new Set(retainedThreadIds);
-  const detailThreadIds = retainDetailThreadIds(state, retainedThreadIds, preferredThreadIds);
+  const detailThreadIds = retainDetailThreadIds(
+    state,
+    retainedThreadIds,
+    preferredThreadIds,
+    maxDetailThreads,
+  );
   const projectState = retainProjectState(state, retainedThreadIds);
   const messageState = retainThreadItemRecord(
     state.messageIdsByThreadId,
@@ -453,7 +702,7 @@ function createCachedEnvironmentState(
   );
   const turnDiffState = retainTurnDiffRecords(state, detailThreadIds);
 
-  return {
+  return stripTransientRuntimeState({
     ...projectState,
     threadIds: retainedThreadIds,
     threadIdsByProjectId: rebuildThreadIdsByProjectId(state, retainedThreadIds),
@@ -486,7 +735,7 @@ function createCachedEnvironmentState(
     ),
     sidebarThreadSummaryById: pickThreadRecord(state.sidebarThreadSummaryById, retainedThreadIdSet),
     bootstrapComplete: false,
-  };
+  });
 }
 
 function retainNewestEnvironments(
@@ -499,70 +748,83 @@ function retainNewestEnvironments(
   );
 }
 
-export function readCachedEnvironmentState(environmentId: EnvironmentId): EnvironmentState | null {
-  const cached = readDocument().environments[environmentId];
-  return cached
-    ? {
-        ...cached.state,
-        queuedTurnIdsByThreadId: cached.state.queuedTurnIdsByThreadId ?? {},
-        queuedTurnByThreadId: cached.state.queuedTurnByThreadId ?? {},
-        lastAppliedEventSequenceByThreadId: cached.state.lastAppliedEventSequenceByThreadId ?? {},
-        lastAppliedEventIdByThreadId: cached.state.lastAppliedEventIdByThreadId ?? {},
-        bootstrapComplete: false,
-      }
-    : null;
+function prepareCachedEnvironmentStateForHydration(state: EnvironmentState): EnvironmentState {
+  return stripTransientRuntimeState({
+    ...state,
+    queuedTurnIdsByThreadId: state.queuedTurnIdsByThreadId ?? {},
+    queuedTurnByThreadId: state.queuedTurnByThreadId ?? {},
+    lastAppliedEventSequenceByThreadId: state.lastAppliedEventSequenceByThreadId ?? {},
+    lastAppliedEventIdByThreadId: state.lastAppliedEventIdByThreadId ?? {},
+    bootstrapComplete: false,
+  });
 }
 
-export function readCachedThreadDetail(
-  environmentId: EnvironmentId,
-  threadId: ThreadId,
-): CachedThreadDetail | null {
+export function readCachedEnvironmentState(environmentId: EnvironmentId): EnvironmentState | null {
   const cached = readDocument().environments[environmentId];
-  if (!cached || !hasEnvironmentThreadDetailContent(cached.state, threadId)) {
-    return null;
-  }
+  return cached ? prepareCachedEnvironmentStateForHydration(cached.state) : null;
+}
 
-  return {
-    messageIds: [...(cached.state.messageIdsByThreadId[threadId] ?? [])],
-    messageById: { ...cached.state.messageByThreadId[threadId] },
-    queuedTurnIds: [...(cached.state.queuedTurnIdsByThreadId[threadId] ?? [])],
-    queuedTurnById: { ...cached.state.queuedTurnByThreadId[threadId] },
-    activityIds: [...(cached.state.activityIdsByThreadId[threadId] ?? [])],
-    activityById: { ...cached.state.activityByThreadId[threadId] },
-    proposedPlanIds: [...(cached.state.proposedPlanIdsByThreadId[threadId] ?? [])],
-    proposedPlanById: { ...cached.state.proposedPlanByThreadId[threadId] },
-    turnDiffIds: [...(cached.state.turnDiffIdsByThreadId[threadId] ?? [])],
-    turnDiffSummaryById: { ...cached.state.turnDiffSummaryByThreadId[threadId] },
-    pageInfo: cached.state.threadDetailPageInfoByThreadId[threadId] ?? null,
-  };
+export function readCachedEnvironmentStateEntries(): readonly CachedEnvironmentStateEntry[] {
+  return Object.entries(readDocument().environments)
+    .toSorted(([, left], [, right]) => right.updatedAt.localeCompare(left.updatedAt))
+    .map(([environmentId, cached]) => ({
+      environmentId: environmentId as EnvironmentId,
+      updatedAt: cached.updatedAt,
+      state: prepareCachedEnvironmentStateForHydration(cached.state),
+    }));
 }
 
 export function writeCachedEnvironmentState(
   environmentId: EnvironmentId,
   state: EnvironmentState,
-  options?: {
-    readonly preferredThreadIds?: readonly ThreadId[];
-  },
+  options: CachedEnvironmentStateWriteOptions = {},
 ): void {
   const document = readDocument();
-  writeDocument({
+  const updatedAt = new Date().toISOString();
+  const preferredThreadIds = options.preferredThreadIds ?? [];
+  const stateForWrite = mergeDetailStateWithCachedShell(
+    state,
+    document.environments[environmentId]?.state ?? null,
+    options,
+  );
+  const createDocument = (maxDetailThreads: number): CachedOrchestrationDocument => ({
     version: DOCUMENT_VERSION,
     environments: retainNewestEnvironments({
       ...document.environments,
       [environmentId]: {
-        updatedAt: new Date().toISOString(),
-        state: createCachedEnvironmentState(state, options?.preferredThreadIds ?? []),
+        updatedAt,
+        state: createCachedEnvironmentState(stateForWrite, preferredThreadIds, maxDetailThreads),
       },
     }),
   });
+
+  let shellOnlyDocument: CachedOrchestrationDocument | null = null;
+  for (const maxDetailThreads of DETAIL_THREAD_CACHE_CAP_LADDER) {
+    const nextDocument = createDocument(maxDetailThreads);
+    if (maxDetailThreads === 0) {
+      shellOnlyDocument = nextDocument;
+    }
+    if (tryPersistDocument(nextDocument)) {
+      return;
+    }
+  }
+
+  let nextDocument: CachedOrchestrationDocument | null = shellOnlyDocument ?? createDocument(0);
+  while (nextDocument !== null) {
+    nextDocument = removeOldestEnvironment(nextDocument, { excludeEnvironmentId: environmentId });
+    if (nextDocument === null) {
+      return;
+    }
+    if (tryPersistDocument(nextDocument)) {
+      return;
+    }
+  }
 }
 
 export function scheduleCachedEnvironmentStateWrite(
   environmentId: EnvironmentId,
   state: EnvironmentState,
-  options?: {
-    readonly preferredThreadIds?: readonly ThreadId[];
-  },
+  options: CachedEnvironmentStateWriteOptions = {},
 ): void {
   if (!storage()) {
     return;
@@ -571,10 +833,22 @@ export function scheduleCachedEnvironmentStateWrite(
   const pending = pendingWrites.get(environmentId) ?? {
     state,
     preferredThreadIds: new Set<ThreadId>(),
+    preserveCachedShell: false,
+    removedProjectIds: new Set<ProjectId>(),
+    removedThreadIds: new Set<ThreadId>(),
     timeoutId: null,
   };
   pending.state = state;
-  for (const threadId of options?.preferredThreadIds ?? []) {
+  pending.preserveCachedShell = options.preserveCachedShell ?? false;
+  pending.removedProjectIds.clear();
+  for (const projectId of options.removedProjectIds ?? []) {
+    pending.removedProjectIds.add(projectId);
+  }
+  pending.removedThreadIds.clear();
+  for (const threadId of options.removedThreadIds ?? []) {
+    pending.removedThreadIds.add(threadId);
+  }
+  for (const threadId of options.preferredThreadIds ?? []) {
     pending.preferredThreadIds.add(threadId);
   }
   if (pending.timeoutId !== null) {
@@ -584,12 +858,66 @@ export function scheduleCachedEnvironmentStateWrite(
     pendingWrites.delete(environmentId);
     writeCachedEnvironmentState(environmentId, pending.state, {
       preferredThreadIds: [...pending.preferredThreadIds],
+      preserveCachedShell: pending.preserveCachedShell,
+      removedProjectIds: [...pending.removedProjectIds],
+      removedThreadIds: [...pending.removedThreadIds],
     });
   }, WRITE_DEBOUNCE_MS);
   pendingWrites.set(environmentId, pending);
 }
 
+export function flushPendingCachedEnvironmentStateWrite(environmentId: EnvironmentId): void {
+  const pending = pendingWrites.get(environmentId);
+  if (!pending) {
+    return;
+  }
+  pendingWrites.delete(environmentId);
+  if (pending.timeoutId !== null) {
+    clearTimeout(pending.timeoutId);
+    pending.timeoutId = null;
+  }
+  writeCachedEnvironmentState(environmentId, pending.state, {
+    preferredThreadIds: [...pending.preferredThreadIds],
+    preserveCachedShell: pending.preserveCachedShell,
+    removedProjectIds: [...pending.removedProjectIds],
+    removedThreadIds: [...pending.removedThreadIds],
+  });
+}
+
+export function flushPendingCachedEnvironmentStateWrites(): void {
+  for (const environmentId of pendingWrites.keys()) {
+    flushPendingCachedEnvironmentStateWrite(environmentId);
+  }
+}
+
+export function installOrchestrationStartupCachePersistence(
+  targets: StartupCachePersistenceTargets = {},
+): () => void {
+  const documentTarget =
+    targets.documentTarget ?? (typeof document === "undefined" ? null : document);
+  const windowTarget = targets.windowTarget ?? (typeof window === "undefined" ? null : window);
+  const handleVisibilityChange = () => {
+    // On mobile, hidden is the last lifecycle transition reliably delivered before the OS can
+    // suspend or kill an installed PWA. Persist synchronously while the current detail is intact.
+    if (documentTarget?.visibilityState === "hidden") {
+      flushPendingCachedEnvironmentStateWrites();
+    }
+  };
+  const handlePageHide = () => {
+    flushPendingCachedEnvironmentStateWrites();
+  };
+
+  documentTarget?.addEventListener("visibilitychange", handleVisibilityChange);
+  windowTarget?.addEventListener("pagehide", handlePageHide);
+
+  return () => {
+    documentTarget?.removeEventListener("visibilitychange", handleVisibilityChange);
+    windowTarget?.removeEventListener("pagehide", handlePageHide);
+  };
+}
+
 export function removeCachedEnvironmentState(environmentId: EnvironmentId): void {
+  clearPersistedStartupThreadTargetForEnvironment(environmentId);
   const pending = pendingWrites.get(environmentId);
   if (pending?.timeoutId) {
     clearTimeout(pending.timeoutId);

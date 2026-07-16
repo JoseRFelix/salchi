@@ -77,6 +77,7 @@ import { getRouter } from "../router";
 import { deriveLogicalProjectKeyFromSettings } from "../logicalProject";
 import {
   selectBootstrapCompleteForActiveEnvironment,
+  selectSidebarThreadsAcrossEnvironments,
   selectThreadByRef,
   useStore,
   type EnvironmentState,
@@ -85,9 +86,25 @@ import { useTerminalStateStore } from "../terminalStateStore";
 import { useUiStateStore } from "../uiStateStore";
 import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers";
 import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test/wsRpcHarness";
-import { writeCachedEnvironmentState } from "../orchestrationStartupCache";
+import {
+  clearOrchestrationStartupCacheForTests,
+  flushPendingCachedEnvironmentStateWrites,
+  installOrchestrationStartupCachePersistence,
+  readCachedEnvironmentState,
+  scheduleCachedEnvironmentStateWrite,
+  writeCachedEnvironmentState,
+} from "../orchestrationStartupCache";
+import { hydrateOrchestrationStartupCache } from "../orchestrationStartupBootstrap";
+import {
+  consumeStartupThreadRestoreTarget,
+  primeStartupThreadRestore,
+  readPersistedStartupThreadTarget,
+  resetStartupThreadRestoreForTests,
+  writePersistedStartupThreadTarget,
+} from "../startupNavigation";
 
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
+import { isStandalonePwa } from "../env";
 
 const { repositoryGitStatusState, useGitStatusMock } = vi.hoisted(() => {
   const repositoryState = {
@@ -817,26 +834,6 @@ function createStartupCacheEnvironmentState(
         }
       : {},
     bootstrapComplete: false,
-  };
-}
-
-function createShellOnlyStartupEnvironmentState(
-  snapshot: OrchestrationReadModel,
-  threadId: ThreadId,
-): EnvironmentState {
-  return {
-    ...createStartupCacheEnvironmentState(snapshot, threadId),
-    messageIdsByThreadId: {},
-    messageByThreadId: {},
-    queuedTurnIdsByThreadId: {},
-    queuedTurnByThreadId: {},
-    activityIdsByThreadId: {},
-    activityByThreadId: {},
-    proposedPlanIdsByThreadId: {},
-    proposedPlanByThreadId: {},
-    turnDiffIdsByThreadId: {},
-    turnDiffSummaryByThreadId: {},
-    threadDetailPageInfoByThreadId: {},
   };
 }
 
@@ -1681,6 +1678,27 @@ async function setViewport(viewport: ViewportSpec): Promise<void> {
   await waitForLayout();
 }
 
+function emulateStandalonePwa(): void {
+  const nativeMatchMedia = window.matchMedia.bind(window);
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => {
+    const result = nativeMatchMedia(query);
+    if (query !== "(display-mode: standalone)") {
+      return result;
+    }
+    return {
+      matches: true,
+      media: result.media,
+      onchange: result.onchange,
+      addListener: result.addListener.bind(result),
+      removeListener: result.removeListener.bind(result),
+      addEventListener: result.addEventListener.bind(result),
+      removeEventListener: result.removeEventListener.bind(result),
+      dispatchEvent: result.dispatchEvent.bind(result),
+    };
+  });
+  expect(isStandalonePwa()).toBe(true);
+}
+
 async function waitForProductionStyles(): Promise<void> {
   await vi.waitFor(
     () => {
@@ -2278,6 +2296,7 @@ async function mountChatView(options: {
     request: NormalizedWsRpcRequestBody,
   ) => ReadonlyArray<unknown> | undefined;
   initialPath?: string;
+  waitForBootstrap?: boolean;
 }): Promise<MountedChatView> {
   fixture = buildFixture(options.snapshot);
   options.configureFixture?.(fixture);
@@ -2324,8 +2343,10 @@ async function mountChatView(options: {
     },
   );
 
-  await waitForWsClient();
-  await waitForAppBootstrap();
+  if (options.waitForBootstrap !== false) {
+    await waitForWsClient();
+    await waitForAppBootstrap();
+  }
   await waitForLayout();
 
   const cleanup = async () => {
@@ -2387,10 +2408,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
     await setViewport(DEFAULT_VIEWPORT);
     await clearPendingNotificationClick();
     localStorage.clear();
+    clearOrchestrationStartupCacheForTests();
     document.body.innerHTML = "";
     wsRequests.length = 0;
     customWsRpcResolver = null;
     resetNotificationNavigationStateForTests();
+    resetStartupThreadRestoreForTests();
     __resetEnvironmentApiOverridesForTests();
     __resetWorkspaceFilePanelStateForTests();
     vi.spyOn(WsTransport.prototype, "isHeartbeatFresh").mockReturnValue(true);
@@ -2436,6 +2459,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     customWsRpcResolver = null;
+    resetStartupThreadRestoreForTests();
+    clearOrchestrationStartupCacheForTests();
     document.body.innerHTML = "";
   });
 
@@ -5242,7 +5267,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("opens a fresh startup bootstrap thread from the base route", async () => {
+  it("opens a fresh startup bootstrap thread from a standalone PWA base route", async () => {
+    emulateStandalonePwa();
     vi.spyOn(Date, "now").mockReturnValue(BASE_TIME_MS + 60 * 60 * 1000);
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -5305,29 +5331,43 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("paints cached thread detail before the live thread snapshot arrives", async () => {
+  it("restores the locally last-visited thread from startup cache before live detail arrives", async () => {
     const cachedMessageId = "msg-user-cached-thread-open-test" as MessageId;
-    const freshMessageId = "msg-user-cached-thread-open-fresh" as MessageId;
     const snapshot = createSnapshotForTargetUser({
       targetMessageId: cachedMessageId,
       targetText: "cached startup paint target",
     });
+    const cachedState = createStartupCacheEnvironmentState(snapshot, THREAD_ID, {
+      sidebarThreadSummary: {},
+    });
     writeCachedEnvironmentState(
       LOCAL_ENVIRONMENT_ID,
-      createStartupCacheEnvironmentState(snapshot, THREAD_ID),
+      {
+        ...cachedState,
+        // Reproduce detail-first cache writes before the shell stream owns sidebar summaries.
+        sidebarThreadSummaryById: {},
+      },
       { preferredThreadIds: [THREAD_ID] },
     );
-    useStore.setState({
-      activeEnvironmentId: LOCAL_ENVIRONMENT_ID,
-      environmentStateById: {
-        [LOCAL_ENVIRONMENT_ID]: createShellOnlyStartupEnvironmentState(snapshot, THREAD_ID),
-      },
+    useUiStateStore.getState().markThreadVisited(THREAD_KEY, NOW_ISO);
+    hydrateOrchestrationStartupCache();
+    primeStartupThreadRestore({
+      pathname: "/",
+      threadLastVisitedAtById: useUiStateStore.getState().threadLastVisitedAtById,
     });
+    const startupRestoreTarget = consumeStartupThreadRestoreTarget({
+      lastNotificationNavigationTarget: null,
+    });
+    if (!startupRestoreTarget) {
+      throw new Error("Expected a cached startup restore target.");
+    }
+    expect(startupRestoreTarget).toEqual(THREAD_REF);
 
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot,
-      initialPath: "/",
+      initialPath: serverThreadPath(startupRestoreTarget.threadId),
+      waitForBootstrap: false,
       configureFixture: (fixture) => {
         const { bootstrapThreadId: _bootstrapThreadId, ...welcome } = fixture.welcome;
         fixture.welcome = welcome;
@@ -5344,39 +5384,414 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      expect(mounted.router.state.location.pathname).toBe("/");
-      await mounted.router.navigate({
-        to: "/$environmentId/$threadId",
-        params: {
-          environmentId: LOCAL_ENVIRONMENT_ID,
-          threadId: THREAD_ID,
-        },
-      });
       await waitForURL(
         mounted.router,
         (path) => path === serverThreadPath(THREAD_ID),
-        "Thread route should open before the live detail snapshot arrives.",
+        "Local startup restore should open the last visited thread from the base route.",
       );
       await expect.element(page.getByText("cached startup paint target")).toBeInTheDocument();
       await expect.element(page.getByText("Loading conversation...")).not.toBeInTheDocument();
+      expect(
+        selectThreadByRef(useStore.getState(), THREAD_REF)?.messages.some(
+          (message) => message.id === cachedMessageId,
+        ),
+      ).toBe(true);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
 
-      fixture.snapshot = appendUserMessageToThreadSnapshot(fixture.snapshot, THREAD_ID, {
-        id: freshMessageId,
-        text: "fresh startup snapshot target",
+  it("clears a missing startup target after an environment bootstraps with no threads", async () => {
+    const snapshotWithThread = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-empty-startup-target-test" as MessageId,
+      targetText: "missing empty-environment startup target",
+    });
+    const emptySnapshot: OrchestrationReadModel = {
+      ...snapshotWithThread,
+      threads: [],
+    };
+    writePersistedStartupThreadTarget(THREAD_REF);
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: emptySnapshot,
+      initialPath: serverThreadPath(THREAD_ID),
+      configureFixture: (fixture) => {
+        const { bootstrapThreadId: _bootstrapThreadId, ...welcome } = fixture.welcome;
+        fixture.welcome = welcome;
+      },
+    });
+
+    try {
+      await expect.element(page.getByTestId("thread-route-recovery")).toBeInTheDocument();
+      await waitForURL(
+        mounted.router,
+        (path) => path === "/",
+        "An empty environment should leave a missing startup thread route after the grace period.",
+      );
+      expect(readPersistedStartupThreadTarget()).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("renders the cached sidebar and conversation in a standalone PWA before a live shell snapshot arrives", async () => {
+    emulateStandalonePwa();
+
+    const cachedMessageId = "msg-user-cache-first-shell-test" as MessageId;
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: cachedMessageId,
+      targetText: "cache-first conversation target",
+    });
+    const cachedState = createStartupCacheEnvironmentState(snapshot, THREAD_ID, {
+      sidebarThreadSummary: {},
+    });
+    writeCachedEnvironmentState(
+      LOCAL_ENVIRONMENT_ID,
+      {
+        ...cachedState,
+        sidebarThreadSummaryById: {},
+      },
+      { preferredThreadIds: [THREAD_ID] },
+    );
+    useUiStateStore.getState().markThreadVisited(THREAD_KEY, NOW_ISO);
+    hydrateOrchestrationStartupCache();
+    primeStartupThreadRestore({
+      pathname: "/",
+      threadLastVisitedAtById: useUiStateStore.getState().threadLastVisitedAtById,
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot,
+      initialPath: "/",
+      waitForBootstrap: false,
+      configureFixture: (fixture) => {
+        const { bootstrapThreadId: _bootstrapThreadId, ...welcome } = fixture.welcome;
+        fixture.welcome = welcome;
+      },
+      getInitialStreamValues: (request) => {
+        if (
+          request._tag === ORCHESTRATION_WS_METHODS.subscribeShell ||
+          request._tag === ORCHESTRATION_WS_METHODS.subscribeThread
+        ) {
+          return [];
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      expect(mounted.router.state.location.pathname).toBe(serverThreadPath(THREAD_ID));
+      expect(
+        selectSidebarThreadsAcrossEnvironments(useStore.getState()).map((thread) => thread.id),
+      ).toContain(THREAD_ID);
+      await expect.element(page.getByTestId(`thread-title-${THREAD_ID}`)).toBeInTheDocument();
+      await expect.element(page.getByText("cache-first conversation target")).toBeInTheDocument();
+      expect(
+        useStore.getState().environmentStateById[LOCAL_ENVIRONMENT_ID]?.bootstrapComplete,
+      ).toBe(false);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("cold-starts an offline mobile PWA with every cached project and sidebar thread", async () => {
+    emulateStandalonePwa();
+
+    const secondThreadId = "thread-secondary-project" as ThreadId;
+    const thirdThreadId = "thread-browser-offline-sidebar-third" as ThreadId;
+    const snapshotWithThreads = addThreadToSnapshot(
+      createSnapshotWithSecondaryProject({ includeArchivedSecondaryThread: false }),
+      thirdThreadId,
+    );
+    const snapshot = {
+      ...snapshotWithThreads,
+      threads: snapshotWithThreads.threads.map((thread) => ({
+        ...thread,
+        title:
+          thread.id === THREAD_ID
+            ? "Offline active thread"
+            : thread.id === secondThreadId
+              ? "Offline cached thread two"
+              : "Offline cached thread three",
+      })),
+    };
+
+    const onlineMount = await mountChatView({
+      viewport: COMPACT_FOOTER_VIEWPORT,
+      snapshot,
+      initialPath: serverThreadPath(THREAD_ID),
+    });
+
+    try {
+      flushPendingCachedEnvironmentStateWrites();
+      const cachedState = readCachedEnvironmentState(LOCAL_ENVIRONMENT_ID);
+      expect(cachedState?.projectIds).toEqual([PROJECT_ID, SECOND_PROJECT_ID]);
+      expect(cachedState?.threadIds).toEqual([THREAD_ID, secondThreadId, thirdThreadId]);
+    } finally {
+      await onlineMount.cleanup();
+    }
+
+    await resetEnvironmentServiceForTests();
+    useStore.setState({
+      activeEnvironmentId: null,
+      environmentStateById: {},
+    });
+    hydrateOrchestrationStartupCache();
+
+    const originalOnlineDescriptor = Object.getOwnPropertyDescriptor(navigator, "onLine");
+    Object.defineProperty(navigator, "onLine", {
+      configurable: true,
+      get: () => false,
+    });
+    window.dispatchEvent(new Event("offline"));
+
+    let offlineMount: MountedChatView | null = null;
+    try {
+      offlineMount = await mountChatView({
+        viewport: COMPACT_FOOTER_VIEWPORT,
+        snapshot,
+        initialPath: serverThreadPath(THREAD_ID),
+        waitForBootstrap: false,
+        getInitialStreamValues: (request) => {
+          if (
+            request._tag === ORCHESTRATION_WS_METHODS.subscribeShell ||
+            request._tag === ORCHESTRATION_WS_METHODS.subscribeThread
+          ) {
+            return [];
+          }
+          return undefined;
+        },
       });
-      emitThreadDetailSnapshot(THREAD_ID);
 
-      await expect.element(page.getByText("fresh startup snapshot target")).toBeInTheDocument();
+      await expect.element(page.getByText("secondary project")).toBeInTheDocument();
+      const sidebarTrigger = document.querySelector<HTMLButtonElement>('[data-sidebar="trigger"]');
+      expect(sidebarTrigger).not.toBeNull();
+      sidebarTrigger?.click();
       await vi.waitFor(
         () => {
-          const thread = selectThreadByRef(useStore.getState(), THREAD_REF);
-          expect(thread?.messages.filter((message) => message.id === cachedMessageId)).toHaveLength(
-            1,
-          );
-          expect(thread?.messages.some((message) => message.id === freshMessageId)).toBe(true);
+          expect(document.body.textContent).toContain("Project");
+          expect(document.body.textContent).toContain("Docs Portal");
+          expect(document.body.textContent).toContain("Offline active thread");
+          expect(document.body.textContent).toContain("Offline cached thread two");
+          expect(document.body.textContent).toContain("Offline cached thread three");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: 3_000, interval: 16 },
       );
+    } finally {
+      await offlineMount?.cleanup();
+      if (originalOnlineDescriptor) {
+        Object.defineProperty(navigator, "onLine", originalOnlineDescriptor);
+      } else {
+        Reflect.deleteProperty(navigator, "onLine");
+      }
+      window.dispatchEvent(new Event("online"));
+    }
+  });
+
+  it("does not trust a cached working state after an offline mobile PWA restart", async () => {
+    emulateStandalonePwa();
+
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-stale-working-cache-test" as MessageId,
+      targetText: "stale working cached conversation",
+      sessionStatus: "running",
+    });
+    const thread = snapshot.threads.find((entry) => entry.id === THREAD_ID);
+    expect(thread?.latestTurn).not.toBeNull();
+    const cachedSession: NonNullable<EnvironmentState["threadSessionById"][ThreadId]> = {
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      status: "running",
+      orchestrationStatus: "running",
+      activeTurnId: thread?.latestTurn?.turnId,
+      createdAt: NOW_ISO,
+      updatedAt: NOW_ISO,
+    };
+    const runningState = createStartupCacheEnvironmentState(snapshot, THREAD_ID, {
+      sidebarThreadSummary: {},
+    });
+    writeCachedEnvironmentState(
+      LOCAL_ENVIRONMENT_ID,
+      {
+        ...runningState,
+        threadSessionById: { [THREAD_ID]: cachedSession },
+        sidebarThreadSummaryById: {
+          [THREAD_ID]: {
+            ...runningState.sidebarThreadSummaryById[THREAD_ID]!,
+            session: cachedSession,
+            latestTurn: thread?.latestTurn ?? null,
+          },
+        },
+      },
+      { preferredThreadIds: [THREAD_ID] },
+    );
+    hydrateOrchestrationStartupCache();
+
+    const originalOnlineDescriptor = Object.getOwnPropertyDescriptor(navigator, "onLine");
+    Object.defineProperty(navigator, "onLine", {
+      configurable: true,
+      get: () => false,
+    });
+    window.dispatchEvent(new Event("offline"));
+
+    let mounted: MountedChatView | null = null;
+    try {
+      mounted = await mountChatView({
+        viewport: COMPACT_FOOTER_VIEWPORT,
+        snapshot,
+        initialPath: serverThreadPath(THREAD_ID),
+        waitForBootstrap: false,
+        getInitialStreamValues: (request) => {
+          if (
+            request._tag === ORCHESTRATION_WS_METHODS.subscribeShell ||
+            request._tag === ORCHESTRATION_WS_METHODS.subscribeThread
+          ) {
+            return [];
+          }
+          return undefined;
+        },
+      });
+
+      await expect.element(page.getByText("stale working cached conversation")).toBeInTheDocument();
+      expect(document.body.textContent).not.toContain("Working for");
+      const sidebarTrigger = document.querySelector<HTMLButtonElement>('[data-sidebar="trigger"]');
+      expect(sidebarTrigger).not.toBeNull();
+      sidebarTrigger?.click();
+      await expect.element(page.getByTestId(`thread-title-${THREAD_ID}`)).toBeInTheDocument();
+      await expect.element(page.getByLabelText("Working")).not.toBeInTheDocument();
+    } finally {
+      await mounted?.cleanup();
+      if (originalOnlineDescriptor) {
+        Object.defineProperty(navigator, "onLine", originalOnlineDescriptor);
+      } else {
+        Reflect.deleteProperty(navigator, "onLine");
+      }
+      window.dispatchEvent(new Event("online"));
+    }
+  });
+
+  it("cold-starts a standalone PWA with detail flushed when the previous load was backgrounded", async () => {
+    emulateStandalonePwa();
+
+    const previousSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-pwa-previous-cache-test" as MessageId,
+      targetText: "previous PWA cache tail",
+    });
+    const latestMessageId = "msg-user-pwa-flushed-cache-test" as MessageId;
+    const latestSnapshot = appendUserMessageToThreadSnapshot(previousSnapshot, THREAD_ID, {
+      id: latestMessageId,
+      text: "latest message before PWA background",
+    });
+    writeCachedEnvironmentState(
+      LOCAL_ENVIRONMENT_ID,
+      createStartupCacheEnvironmentState(previousSnapshot, THREAD_ID, {
+        sidebarThreadSummary: {},
+      }),
+      { preferredThreadIds: [THREAD_ID] },
+    );
+    scheduleCachedEnvironmentStateWrite(
+      LOCAL_ENVIRONMENT_ID,
+      createStartupCacheEnvironmentState(latestSnapshot, THREAD_ID, {
+        sidebarThreadSummary: {},
+      }),
+      { preferredThreadIds: [THREAD_ID] },
+    );
+
+    const cleanupPersistence = installOrchestrationStartupCachePersistence();
+    const originalVisibilityState = Object.getOwnPropertyDescriptor(document, "visibilityState");
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "hidden" as const,
+    });
+    try {
+      document.dispatchEvent(new Event("visibilitychange"));
+    } finally {
+      if (originalVisibilityState) {
+        Object.defineProperty(document, "visibilityState", originalVisibilityState);
+      } else {
+        Reflect.deleteProperty(document, "visibilityState");
+      }
+      cleanupPersistence();
+    }
+
+    useUiStateStore.getState().markThreadVisited(THREAD_KEY, NOW_ISO);
+    hydrateOrchestrationStartupCache();
+    primeStartupThreadRestore({
+      pathname: "/",
+      threadLastVisitedAtById: useUiStateStore.getState().threadLastVisitedAtById,
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: latestSnapshot,
+      initialPath: "/",
+      waitForBootstrap: false,
+      configureFixture: (fixture) => {
+        const { bootstrapThreadId: _bootstrapThreadId, ...welcome } = fixture.welcome;
+        fixture.welcome = welcome;
+      },
+      getInitialStreamValues: (request) => {
+        if (
+          request._tag === ORCHESTRATION_WS_METHODS.subscribeShell ||
+          request._tag === ORCHESTRATION_WS_METHODS.subscribeThread
+        ) {
+          return [];
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      expect(mounted.router.state.location.pathname).toBe(serverThreadPath(THREAD_ID));
+      expect(
+        selectThreadByRef(useStore.getState(), THREAD_REF)?.messages.some(
+          (message) => message.id === latestMessageId,
+        ),
+      ).toBe(true);
+      await expect
+        .element(page.getByText("latest message before PWA background"))
+        .toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("restores old real visits instead of defaulting startup to Home", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(BASE_TIME_MS + 9 * 60 * 60 * 1000);
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-stale-local-restore-test" as MessageId,
+      targetText: "stale local restore target",
+    });
+    writeCachedEnvironmentState(
+      LOCAL_ENVIRONMENT_ID,
+      createStartupCacheEnvironmentState(snapshot, THREAD_ID),
+      { preferredThreadIds: [THREAD_ID] },
+    );
+    useUiStateStore.getState().markThreadVisited(THREAD_KEY, NOW_ISO);
+    primeStartupThreadRestore({
+      pathname: "/",
+      threadLastVisitedAtById: useUiStateStore.getState().threadLastVisitedAtById,
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot,
+      initialPath: "/",
+      configureFixture: (fixture) => {
+        const { bootstrapThreadId: _bootstrapThreadId, ...welcome } = fixture.welcome;
+        fixture.welcome = welcome;
+      },
+    });
+
+    try {
+      await waitForURL(
+        mounted.router,
+        (path) => path === serverThreadPath(THREAD_ID),
+        "A real older visit should still restore its thread from the base route.",
+      );
+      await expect.element(page.getByText("stale local restore target")).toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }
@@ -5417,6 +5832,87 @@ describe("ChatView timeline estimator parity (full app)", () => {
           (request) => request._tag === ORCHESTRATION_WS_METHODS.reconcileThreadDetail,
         ),
       ).toBe(false);
+    } finally {
+      cleanupNotificationNavigation();
+      await mounted.cleanup();
+    }
+  });
+
+  it("remembers a standalone PWA notification target before thread detail arrives", async () => {
+    emulateStandalonePwa();
+    const notificationThreadId = NOTIFICATION_RECOVERY_OTHER_THREAD_ID;
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-notification-startup-target-test" as MessageId,
+        targetText: "notification startup target test",
+      }),
+      initialPath: "/",
+      getInitialStreamValues: (request) => {
+        if (
+          request._tag === ORCHESTRATION_WS_METHODS.subscribeThread &&
+          request.threadId === notificationThreadId
+        ) {
+          return [];
+        }
+        return undefined;
+      },
+    });
+    const cleanupNotificationNavigation = installServiceWorkerNotificationNavigation(
+      mounted.router,
+    );
+
+    try {
+      // Model a previously remembered thread. The notification target is intentionally absent
+      // from cached/live detail so only the click boundary can replace this before an app kill.
+      writePersistedStartupThreadTarget({
+        environmentId: LOCAL_ENVIRONMENT_ID,
+        threadId: THREAD_ID,
+      });
+      expect(readPersistedStartupThreadTarget()).toEqual({
+        environmentId: LOCAL_ENVIRONMENT_ID,
+        threadId: THREAD_ID,
+      });
+
+      navigator.serviceWorker.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            type: "salchi.notification-click",
+            url: `/${LOCAL_ENVIRONMENT_ID}/${notificationThreadId}`,
+            openedAt: Date.now(),
+          },
+        }),
+      );
+
+      await waitForURL(
+        mounted.router,
+        (path) => path === serverThreadPath(notificationThreadId),
+        "The PWA notification should route before target thread detail arrives.",
+      );
+      expect(selectThreadByRef(useStore.getState(), threadRefFor(notificationThreadId))).toBe(
+        undefined,
+      );
+      const persistedNotificationTarget = readPersistedStartupThreadTarget();
+      expect(persistedNotificationTarget).toEqual({
+        environmentId: LOCAL_ENVIRONMENT_ID,
+        threadId: notificationThreadId,
+      });
+
+      // Model an immediate close and cold relaunch from the manifest start_url. The old thread is
+      // still the newest visit and the notification target has no cached/live detail yet.
+      primeStartupThreadRestore({
+        pathname: "/",
+        persistedTarget: persistedNotificationTarget,
+        threadLastVisitedAtById: {
+          [THREAD_KEY]: NOW_ISO,
+        },
+      });
+      expect(consumeStartupThreadRestoreTarget({ lastNotificationNavigationTarget: null })).toEqual(
+        {
+          environmentId: LOCAL_ENVIRONMENT_ID,
+          threadId: notificationThreadId,
+        },
+      );
     } finally {
       cleanupNotificationNavigation();
       await mounted.cleanup();

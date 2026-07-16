@@ -32,7 +32,6 @@ import {
   toastManager,
 } from "../components/ui/toast";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
-import { isStandalonePwa } from "../env";
 import { readLocalApi } from "../localApi";
 import { useSettings } from "../hooks/useSettings";
 import {
@@ -385,7 +384,6 @@ function EventRouter() {
           bootstrapThreadId,
           handledBootstrapThreadId: handledBootstrapThreadIdRef.current,
           lastNotificationNavigationTarget: getLastNotificationNavigationTarget(),
-          isStandalonePwa: isStandalonePwa(),
         })
       ) {
         return;

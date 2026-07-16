@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 
 import type { AppRouter } from "../router";
+import { readPersistedStartupThreadTarget } from "../startupNavigation";
 import {
   readPendingNotificationClick,
   writePendingNotificationClick,
@@ -17,6 +18,7 @@ import {
   resetNotificationNavigationStateForTests,
   resolveNotificationUrl,
 } from "./notificationNavigation";
+import { createMemoryStorage } from "../testUtils/memoryStorage";
 
 const ORIGIN = "https://example.test";
 
@@ -113,9 +115,11 @@ function stubServiceWorker(
     vi.stubGlobal("BroadcastChannel", undefined);
   }
   let documentHasFocus = true;
+  const localStorage = createMemoryStorage();
   const windowStub: Record<string, unknown> = {
     ...(options.cacheStorage ? { caches: options.cacheStorage } : {}),
     addEventListener: windowTarget.addEventListener.bind(windowTarget),
+    localStorage,
     location: { origin: ORIGIN },
     removeEventListener: windowTarget.removeEventListener.bind(windowTarget),
   };
@@ -157,6 +161,7 @@ function stubServiceWorker(
       documentHasFocus = value;
     },
     controllerPostMessage,
+    localStorage,
     startMessages,
   };
 }
@@ -283,6 +288,10 @@ describe("notificationNavigation", () => {
     });
     expect(getLastNotificationNavigationTarget()).toEqual({
       kind: "thread",
+      environmentId: "env-1",
+      threadId: "thread-1",
+    });
+    expect(readPersistedStartupThreadTarget()).toEqual({
       environmentId: "env-1",
       threadId: "thread-1",
     });

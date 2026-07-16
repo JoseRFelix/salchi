@@ -4,6 +4,7 @@ import { reconcileAfterNotificationClick } from "../environments/runtime/service
 import { recordResumeDiagnostic } from "../environments/runtime/resumeDiagnostics";
 import type { AppRouter } from "../router";
 import type { DraftId } from "../composerDraftStore";
+import { writePersistedStartupThreadTarget } from "../startupNavigation";
 import {
   clearPendingNotificationClick,
   readPendingNotificationClick,
@@ -561,6 +562,11 @@ function handleNotificationClickNavigation(
   }
 
   lastNotificationNavigationTarget = target;
+  if (target.kind === "thread") {
+    // Persist synchronously before navigation or provider state. Mobile PWAs can be killed as soon
+    // as the notification opens, before ChatView receives cached/live thread detail.
+    writePersistedStartupThreadTarget(target);
+  }
   recordResumeDiagnostic("notification-navigation-target", {
     reason: "parsed",
     ...(target.kind === "thread" ? { env: target.environmentId } : {}),
