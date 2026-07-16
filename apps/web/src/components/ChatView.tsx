@@ -86,6 +86,7 @@ import { viewedThreadVisitedAt } from "../threadCompletion";
 import { resolveThreadDisplayTitle } from "../threadTitle";
 import {
   type AppState,
+  selectEnvironmentState,
   selectProjectsAcrossEnvironments,
   selectSidebarThreadSummaryByRef,
   selectThreadsAcrossEnvironments,
@@ -120,7 +121,7 @@ import {
   setActiveWorkspaceFileExplorerContext,
   useWorkspaceFilePanelState,
 } from "../workspaceFilePreview";
-import { BranchToolbar } from "./BranchToolbar";
+import { BranchToolbar, BranchToolbarSkeleton } from "./BranchToolbar";
 import { resolveLiveThreadBranchUpdate } from "./GitActionsControl.logic";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
@@ -189,7 +190,11 @@ import { deriveOlderThreadDetailPageIntegrity } from "./chat/olderThreadDetailPa
 import { ChatHeader } from "./chat/ChatHeader";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
-import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
+import {
+  resolveBranchToolbarRenderState,
+  resolveEffectiveEnvMode,
+  resolveEnvironmentOptionLabel,
+} from "./BranchToolbar.logic";
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
@@ -1245,6 +1250,9 @@ export default function ChatView(props: ChatViewProps) {
   const activeProject = useStore(
     useMemo(() => createProjectSelectorByRef(activeProjectRef), [activeProjectRef]),
   );
+  const activeEnvironmentBootstrapComplete = useStore(
+    (store) => selectEnvironmentState(store, activeThread?.environmentId).bootstrapComplete,
+  );
 
   useEffect(() => {
     if (routeKind !== "server") {
@@ -2133,8 +2141,14 @@ export default function ChatView(props: ChatViewProps) {
     terminalLaunchContext?.threadId === activeThreadId
       ? terminalLaunchContext
       : (storeServerTerminalLaunchContext ?? null);
-  // Default true while loading to avoid toolbar flicker.
+  // Keep git capabilities optimistic until the first status arrives. The toolbar preserves the
+  // unknown state separately so it can render a stable loading footprint.
   const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
+  const branchToolbarRenderState = resolveBranchToolbarRenderState({
+    ...gitStatusQuery,
+    isContextPending: activeProject === undefined && !activeEnvironmentBootstrapComplete,
+  });
+  const shouldReserveBranchToolbar = branchToolbarRenderState !== "hidden";
   const isSelectingWorktreeBase =
     !serverThread && draftThread?.envMode === "worktree" && draftThread.worktreePath === null;
   useEffect(() => {
@@ -4728,7 +4742,7 @@ export default function ChatView(props: ChatViewProps) {
           <div
             className={cn(
               "pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] pt-0.5 sm:pl-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)] sm:pt-2",
-              isGitRepo
+              shouldReserveBranchToolbar
                 ? "pb-[max(calc(env(safe-area-inset-bottom)-0.75rem),0px)]"
                 : "pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:pb-[calc(env(safe-area-inset-bottom)+1rem)]",
             )}
@@ -4814,7 +4828,9 @@ export default function ChatView(props: ChatViewProps) {
                 />
               </div>
             </div>
-            {isGitRepo && (
+            {branchToolbarRenderState === "loading" ? (
+              <BranchToolbarSkeleton />
+            ) : branchToolbarRenderState === "visible" ? (
               <BranchToolbar
                 environmentId={activeThread.environmentId}
                 threadId={activeThread.id}
@@ -4835,7 +4851,7 @@ export default function ChatView(props: ChatViewProps) {
                 {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
                 availableEnvironments={logicalProjectEnvironments}
               />
-            )}
+            ) : null}
           </div>
 
           {pullRequestDialogState ? (

@@ -15,6 +15,20 @@ export interface EnvironmentOption {
 export const EnvMode = Schema.Literals(["local", "worktree"]);
 export type EnvMode = typeof EnvMode.Type;
 
+export type BranchToolbarRenderState = "loading" | "visible" | "hidden";
+
+export function resolveBranchToolbarRenderState(input: {
+  readonly data: { readonly isRepo: boolean } | null;
+  readonly isContextPending?: boolean;
+  readonly isPending: boolean;
+}): BranchToolbarRenderState {
+  if (input.data !== null) {
+    return input.data.isRepo ? "visible" : "hidden";
+  }
+
+  return input.isPending || input.isContextPending ? "loading" : "hidden";
+}
+
 const GENERIC_LOCAL_ENVIRONMENT_LABELS = new Set(["local", "local environment"]);
 
 function normalizeDisplayLabel(value: string | null | undefined): string | null {

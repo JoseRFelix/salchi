@@ -89,9 +89,41 @@ import { writeCachedEnvironmentState } from "../orchestrationStartupCache";
 
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 
+const { repositoryGitStatusState, useGitStatusMock } = vi.hoisted(() => {
+  const repositoryState = {
+    data: {
+      aheadCount: 0,
+      behindCount: 0,
+      hasPrimaryRemote: true,
+      hasUpstream: true,
+      hasWorkingTreeChanges: false,
+      isDefaultRef: true,
+      isRepo: true,
+      pr: null,
+      refName: null,
+      workingTree: {
+        deletions: 0,
+        files: [],
+        insertions: 0,
+        staged: { files: [], insertions: 0, deletions: 0 },
+        unstaged: { files: [], insertions: 0, deletions: 0 },
+      },
+    },
+    error: null,
+    cause: null,
+    isPending: false,
+  } satisfies ReturnType<typeof import("../lib/gitStatusState").useGitStatus>;
+  return {
+    repositoryGitStatusState: repositoryState,
+    useGitStatusMock: vi.fn<typeof import("../lib/gitStatusState").useGitStatus>(
+      () => repositoryState,
+    ),
+  };
+});
+
 vi.mock("../lib/gitStatusState", () => ({
   applyGitStatusLocalUpdate: () => undefined,
-  useGitStatus: () => ({ data: null, error: null, cause: null, isPending: false }),
+  useGitStatus: useGitStatusMock,
   useGitStatuses: () => new Map(),
   refreshGitStatus: () => Promise.resolve(null),
   resetGitStatusStateForTests: () => undefined,
@@ -2345,6 +2377,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
   beforeEach(async () => {
     vi.useRealTimers();
+    useGitStatusMock.mockReturnValue(repositoryGitStatusState);
     await resetEnvironmentServiceForTests();
     await rpcHarness.reset({
       resolveUnary: resolveWsRpc,
@@ -2492,6 +2525,101 @@ describe("ChatView timeline estimator parity (full app)", () => {
         "Unable to find static mobile workspace label.",
       );
 
+      expect(findButtonByText("Local checkout")).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the loading skeleton compact while reserving the live branch toolbar height", async () => {
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-git-toolbar-loading" as MessageId,
+      targetText: "loading git toolbar",
+    });
+    const mounted = await mountChatView({
+      viewport: COMPACT_FOOTER_VIEWPORT,
+      snapshot,
+    });
+
+    try {
+      const toolbar = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-testid="branch-toolbar"]'),
+        "Unable to find branch toolbar before git status refresh.",
+      );
+      const toolbarHeight = toolbar.getBoundingClientRect().height;
+
+      useGitStatusMock.mockReturnValue({
+        data: null,
+        error: null,
+        cause: null,
+        isPending: true,
+      });
+      const currentEnvironmentState =
+        useStore.getState().environmentStateById[LOCAL_ENVIRONMENT_ID];
+      expect(currentEnvironmentState).toBeDefined();
+      const project = currentEnvironmentState?.projectById[PROJECT_ID];
+      expect(project).toBeDefined();
+      useStore.setState({
+        environmentStateById: {
+          ...useStore.getState().environmentStateById,
+          [LOCAL_ENVIRONMENT_ID]: {
+            ...currentEnvironmentState!,
+            projectById: {
+              ...currentEnvironmentState?.projectById,
+              [PROJECT_ID]: { ...project! },
+            },
+          },
+        },
+      });
+
+      const skeleton = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-testid="branch-toolbar-skeleton"]'),
+        "Unable to find branch toolbar loading skeleton.",
+      );
+      const skeletonPieces = Array.from(
+        skeleton.querySelectorAll<HTMLElement>('[data-slot="skeleton"]'),
+      );
+
+      expect(skeleton.getBoundingClientRect().height).toBe(toolbarHeight);
+      expect(skeletonPieces).toHaveLength(4);
+      expect(Math.max(...skeletonPieces.map((piece) => piece.getBoundingClientRect().width))).toBe(
+        64,
+      );
+      expect(
+        skeletonPieces.every((piece) => {
+          const { height } = piece.getBoundingClientRect();
+          return Number.parseFloat(getComputedStyle(piece).borderRadius) >= height / 2;
+        }),
+      ).toBe(true);
+      expect(document.querySelector('[data-testid="branch-toolbar"]')).toBeNull();
+      expect(findButtonByText("Local checkout")).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("hides the branch toolbar after git status confirms the checkout is unavailable", async () => {
+    useGitStatusMock.mockReturnValue({
+      ...repositoryGitStatusState,
+      data: {
+        ...repositoryGitStatusState.data,
+        hasPrimaryRemote: false,
+        hasUpstream: false,
+        isDefaultRef: false,
+        isRepo: false,
+      },
+    });
+    const mounted = await mountChatView({
+      viewport: COMPACT_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-git-toolbar-unavailable" as MessageId,
+        targetText: "unavailable git toolbar",
+      }),
+    });
+
+    try {
+      expect(document.querySelector('[data-testid="branch-toolbar-skeleton"]')).toBeNull();
+      expect(document.querySelector('[data-testid="branch-toolbar"]')).toBeNull();
       expect(findButtonByText("Local checkout")).toBeNull();
     } finally {
       await mounted.cleanup();
