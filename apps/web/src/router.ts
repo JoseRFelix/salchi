@@ -18,6 +18,10 @@ export const PRODUCTION_ROUTE_PENDING_OPTIONS = {
   defaultPendingMinMs: 0,
 } as const;
 
+export function resolveRoutePendingOptions(isProduction: boolean) {
+  return isProduction ? PRODUCTION_ROUTE_PENDING_OPTIONS : {};
+}
+
 export function getRouter(history: RouterHistory) {
   const queryClient = new QueryClient();
 
@@ -32,7 +36,7 @@ export function getRouter(history: RouterHistory) {
     // Browser tests render deliberately unresolved matches without the load promise
     // that TanStack's production route loader supplies. Keep this production-only
     // so that test harness state cannot be mistaken for a rejected suspension.
-    ...(import.meta.env.PROD ? PRODUCTION_ROUTE_PENDING_OPTIONS : {}),
+    ...resolveRoutePendingOptions(import.meta.env.PROD),
     Wrap: ({ children }) =>
       createElement(
         QueryClientProvider,

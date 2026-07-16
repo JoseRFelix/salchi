@@ -1,5 +1,4 @@
 import { ProviderUpdateLaunchNotification } from "./ProviderUpdateLaunchNotification";
-import { SshPasswordPromptDialog } from "./desktop/SshPasswordPromptDialog";
 import { PwaPushNotificationPrompt } from "./pwa-push-notification-prompt";
 
 export function RootDeferredOverlays({
@@ -9,7 +8,6 @@ export function RootDeferredOverlays({
 }) {
   return (
     <>
-      <SshPasswordPromptDialog />
       {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
       {primaryEnvironmentAuthenticated ? <PwaPushNotificationPrompt /> : null}
     </>

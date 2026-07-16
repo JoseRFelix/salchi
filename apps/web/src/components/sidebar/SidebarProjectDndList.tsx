@@ -1,6 +1,7 @@
 import {
   closestCorners,
   DndContext,
+  KeyboardSensor,
   PointerSensor,
   pointerWithin,
   useSensor,
@@ -11,7 +12,12 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
-import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import {
+  sortableKeyboardCoordinates,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useCallback, type ReactNode } from "react";
 
@@ -81,6 +87,9 @@ export function SidebarProjectDndList({
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 6 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
     }),
   );
   const collisionDetection = useCallback<CollisionDetection>((args) => {

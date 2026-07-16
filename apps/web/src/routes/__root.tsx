@@ -16,6 +16,7 @@ import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { BackNavigationBlocker } from "../components/BackNavigationBlocker";
 import { CommandPaletteBoundary } from "../components/CommandPaletteBoundary";
 import { OfflineBanner } from "../components/OfflineBanner";
+import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import {
   SlowRpcAckToastCoordinator,
   WebSocketConnectionCoordinator,
@@ -177,6 +178,7 @@ function RootRouteView() {
         {authGateRevalidationRequired ? <BackgroundAuthRevalidator /> : null}
         {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
         {primaryEnvironmentAuthenticated ? <ServerStateBootstrap /> : null}
+        <SshPasswordPromptDialog />
         <EnvironmentConnectionManagerBootstrap />
         {mountDeferredOverlays ? (
           <Suspense fallback={null}>
