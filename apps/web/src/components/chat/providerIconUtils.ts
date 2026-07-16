@@ -67,6 +67,12 @@ export function stripCompanyPrefix(name: string): string {
   return stripped.length > 0 ? stripped : name;
 }
 
+const SOL_MODEL_LABEL_PATTERN = /^(\d+(?:\.\d+)*)-sol$/iu;
+
+export function formatSelectedModelName(name: string): string {
+  return stripCompanyPrefix(name).replace(SOL_MODEL_LABEL_PATTERN, "$1 Sol");
+}
+
 export function getTriggerDisplayModelLabel(model: ModelEsque): string {
   return getTriggerDisplayModelName(model);
 }
