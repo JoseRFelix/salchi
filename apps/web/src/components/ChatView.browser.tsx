@@ -3218,6 +3218,120 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("snapshots sticky model state into a fresh pull request draft", async () => {
+    const stickySelection = createModelSelection(
+      ProviderInstanceId.make("claudeAgent"),
+      "claude-opus-4-6",
+      [{ id: "effort", value: "max" }],
+    );
+    useComposerDraftStore.setState({
+      draftThreadsByThreadKey: {
+        [THREAD_KEY]: {
+          threadId: THREAD_ID,
+          environmentId: LOCAL_ENVIRONMENT_ID,
+          projectId: PROJECT_ID,
+          logicalProjectKey: PROJECT_DRAFT_KEY,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+        },
+      },
+      stickyModelSelectionByProvider: {
+        [ProviderInstanceId.make("claudeAgent")]: stickySelection,
+      },
+      stickyActiveProvider: ProviderInstanceId.make("claudeAgent"),
+    });
+
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.gitResolvePullRequest) {
+          return {
+            pullRequest: {
+              number: 1359,
+              title: "Add thread archiving and settings navigation",
+              url: "https://github.com/pingdotgg/t3code/pull/1359",
+              baseBranch: "main",
+              headBranch: "archive-settings-overhaul",
+              state: "open",
+            },
+          };
+        }
+        if (body._tag === WS_METHODS.gitPreparePullRequestThread) {
+          return {
+            pullRequest: {
+              number: 1359,
+              title: "Add thread archiving and settings navigation",
+              url: "https://github.com/pingdotgg/t3code/pull/1359",
+              baseBranch: "main",
+              headBranch: "archive-settings-overhaul",
+              state: "open",
+            },
+            branch: "archive-settings-overhaul",
+            worktreePath: "/repo/worktrees/pr-1359",
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const branchButton = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "Select ref",
+          ) as HTMLButtonElement | null,
+        'Unable to find branch selector button with "Select ref".',
+      );
+      branchButton.click();
+
+      const branchInput = await waitForElement(
+        () => document.querySelector<HTMLInputElement>('input[placeholder="Search refs..."]'),
+        "Unable to find ref search input.",
+      );
+      branchInput.focus();
+      await page.getByPlaceholder("Search refs...").fill("1359");
+
+      const checkoutItem = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll("span")).find(
+            (element) => element.textContent?.trim() === "Checkout pull request",
+          ) as HTMLSpanElement | null,
+        "Unable to find checkout pull request option.",
+      );
+      checkoutItem.click();
+
+      const worktreeButton = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "Worktree",
+          ) as HTMLButtonElement | null,
+        "Unable to find Worktree button.",
+      );
+      worktreeButton.click();
+
+      const newDraftPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should change to a fresh pull request draft.",
+      );
+      const newDraftId = draftIdFromPath(newDraftPath);
+
+      expect(composerDraftFor(newDraftId)).toMatchObject({
+        activeProvider: ProviderInstanceId.make("claudeAgent"),
+        modelSelectionByProvider: {
+          [ProviderInstanceId.make("claudeAgent")]: stickySelection,
+        },
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("sends bootstrap turn-starts and waits for server setup on first-send worktree drafts", async () => {
     useTerminalStateStore.setState({
       terminalStateByThreadKey: {},

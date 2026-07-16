@@ -16,6 +16,7 @@ import {
   type ModelSelection,
   type OrchestrationProposedPlanId,
   type ProviderOptionSelection,
+  type RuntimeMode,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 
@@ -739,6 +740,105 @@ describe("composerDraftStore project draft thread mapping", () => {
       runtimeMode: "full-access",
       interactionMode: "default",
       createdAt: "2026-01-01T00:00:00.000Z",
+    });
+  });
+
+  it("creates a fresh session before applying sticky state to a reused draft id", () => {
+    const store = useComposerDraftStore.getState();
+    const staleSelection = modelSelection(CODEX_DRIVER, "stale-draft-model");
+    const stickySelection = modelSelection(CLAUDE_AGENT_DRIVER, "claude-opus-4-6", {
+      effort: "max",
+    });
+
+    store.setLogicalProjectDraftThreadId(
+      scopedProjectKey(otherProjectRef),
+      otherProjectRef,
+      draftId,
+      { threadId: otherThreadId },
+    );
+    useComposerDraftStore.setState({
+      logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+    });
+    store.setModelSelection(draftId, staleSelection);
+    store.setStickyModelSelection(stickySelection);
+    const observedTransitions: Array<{
+      hasDraftSession: boolean;
+      runtimeMode: RuntimeMode | undefined;
+      activeProvider: ProviderInstanceId | null | undefined;
+    }> = [];
+    const unsubscribe = useComposerDraftStore.subscribe((state) => {
+      const draftSession = state.getDraftSession(draftId);
+      observedTransitions.push({
+        hasDraftSession: draftSession !== null,
+        runtimeMode: draftSession?.runtimeMode,
+        activeProvider: state.getComposerDraft(draftId)?.activeProvider,
+      });
+    });
+
+    try {
+      store.initializeFreshProjectDraftThread(scopedProjectKey(projectRef), projectRef, draftId, {
+        threadId,
+        branch: "feature/sticky-model",
+        runtimeMode: "approval-required",
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)).toMatchObject({
+      threadId,
+      environmentId: TEST_ENVIRONMENT_ID,
+      projectId,
+      logicalProjectKey: scopedProjectKey(projectRef),
+      branch: "feature/sticky-model",
+      runtimeMode: "approval-required",
+    });
+    expect(useComposerDraftStore.getState().getComposerDraft(draftId)).toMatchObject({
+      activeProvider: CLAUDE_AGENT_INSTANCE,
+      modelSelectionByProvider: {
+        [CLAUDE_AGENT_INSTANCE]: stickySelection,
+      },
+    });
+    expect(observedTransitions).toEqual([
+      {
+        hasDraftSession: true,
+        runtimeMode: "approval-required",
+        activeProvider: CODEX_INSTANCE,
+      },
+      {
+        hasDraftSession: true,
+        runtimeMode: "approval-required",
+        activeProvider: CLAUDE_AGENT_INSTANCE,
+      },
+    ]);
+  });
+
+  it("does not apply sticky state when a reused draft id is not initialized", () => {
+    const store = useComposerDraftStore.getState();
+    const staleSelection = modelSelection(CODEX_DRIVER, "stale-draft-model");
+    const stickySelection = modelSelection(CLAUDE_AGENT_DRIVER, "claude-opus-4-6");
+
+    store.setLogicalProjectDraftThreadId(
+      scopedProjectKey(otherProjectRef),
+      otherProjectRef,
+      draftId,
+      { threadId: otherThreadId },
+    );
+    store.setModelSelection(draftId, staleSelection);
+    store.setStickyModelSelection(stickySelection);
+
+    store.initializeFreshProjectDraftThread("  ", projectRef, draftId, { threadId });
+
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)).toMatchObject({
+      threadId: otherThreadId,
+      projectId: otherProjectId,
+      logicalProjectKey: scopedProjectKey(otherProjectRef),
+    });
+    expect(useComposerDraftStore.getState().getComposerDraft(draftId)).toMatchObject({
+      activeProvider: CODEX_INSTANCE,
+      modelSelectionByProvider: {
+        [CODEX_INSTANCE]: staleSelection,
+      },
     });
   });
 

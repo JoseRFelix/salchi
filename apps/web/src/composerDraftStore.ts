@@ -300,6 +300,17 @@ interface ProjectDraftSession extends DraftSessionState {
  */
 type ComposerThreadTarget = ScopedThreadRef | DraftId;
 
+interface DraftThreadInitializationOptions {
+  threadId?: ThreadId;
+  branch?: string | null;
+  worktreePath?: string | null;
+  createdAt?: string;
+  envMode?: DraftThreadEnvMode;
+  runtimeMode?: RuntimeMode;
+  interactionMode?: ProviderInteractionMode;
+  sourceProposedPlan?: DraftSourceProposedPlan | null;
+}
+
 /**
  * Persisted store for composer content plus draft-session metadata.
  *
@@ -333,31 +344,20 @@ interface ComposerDraftStoreState {
     logicalProjectKey: string,
     projectRef: ScopedProjectRef,
     draftId: DraftId,
-    options?: {
-      threadId?: ThreadId;
-      branch?: string | null;
-      worktreePath?: string | null;
-      createdAt?: string;
-      envMode?: DraftThreadEnvMode;
-      runtimeMode?: RuntimeMode;
-      interactionMode?: ProviderInteractionMode;
-      sourceProposedPlan?: DraftSourceProposedPlan | null;
-    },
+    options?: DraftThreadInitializationOptions,
+  ) => void;
+  /** Creates a fresh draft session and snapshots the current sticky model state into it. */
+  initializeFreshProjectDraftThread: (
+    logicalProjectKey: string,
+    projectRef: ScopedProjectRef,
+    draftId: DraftId,
+    options?: DraftThreadInitializationOptions,
   ) => void;
   /** Creates or updates the draft session tracked for a concrete project ref. */
   setProjectDraftThreadId: (
     projectRef: ScopedProjectRef,
     draftId: DraftId,
-    options?: {
-      threadId?: ThreadId;
-      branch?: string | null;
-      worktreePath?: string | null;
-      createdAt?: string;
-      envMode?: DraftThreadEnvMode;
-      runtimeMode?: RuntimeMode;
-      interactionMode?: ProviderInteractionMode;
-      sourceProposedPlan?: DraftSourceProposedPlan | null;
-    },
+    options?: DraftThreadInitializationOptions,
   ) => void;
   /** Updates mutable draft-session metadata without touching composer content. */
   setDraftThreadContext: (
@@ -1228,16 +1228,7 @@ function createDraftThreadState(
   threadId: ThreadId,
   logicalProjectKey: string,
   existingThread: DraftThreadState | undefined,
-  options?: {
-    threadId?: ThreadId;
-    branch?: string | null;
-    worktreePath?: string | null;
-    createdAt?: string;
-    envMode?: DraftThreadEnvMode;
-    runtimeMode?: RuntimeMode;
-    interactionMode?: ProviderInteractionMode;
-    sourceProposedPlan?: DraftSourceProposedPlan | null;
-  },
+  options?: DraftThreadInitializationOptions,
 ): DraftThreadState {
   const projectChanged =
     existingThread !== undefined &&
@@ -2178,6 +2169,14 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 nextLogicalProjectDraftThreadKeyByLogicalProjectKey,
             };
           });
+        },
+        initializeFreshProjectDraftThread: (logicalProjectKey, projectRef, draftId, options) => {
+          get().setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, draftId, options);
+          const initializedDraftSession =
+            get().getDraftSessionByLogicalProjectKey(logicalProjectKey);
+          if (initializedDraftSession?.draftId === draftId) {
+            get().applyStickyState(draftId);
+          }
         },
         setProjectDraftThreadId: (projectRef, draftId, options) => {
           get().setLogicalProjectDraftThreadId(
