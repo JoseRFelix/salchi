@@ -8,17 +8,14 @@ import {
   useNavigate,
   useRouter,
 } from "@tanstack/react-router";
-import { useEffect, useEffectEvent, useRef } from "react";
+import { lazy, Suspense, useEffect, useEffectEvent, useRef, useState } from "react";
 import { QueryClient, useQueryClient } from "@tanstack/react-query";
 
 import { APP_BASE_NAME, APP_DISPLAY_NAME } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { BackNavigationBlocker } from "../components/BackNavigationBlocker";
-import { CommandPalette } from "../components/CommandPalette";
-import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
+import { CommandPaletteBoundary } from "../components/CommandPaletteBoundary";
 import { OfflineBanner } from "../components/OfflineBanner";
-import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
-import { PwaPushNotificationPrompt } from "../components/pwa-push-notification-prompt";
 import {
   SlowRpcAckToastCoordinator,
   WebSocketConnectionCoordinator,
@@ -77,6 +74,11 @@ import {
 } from "../startupNavigation";
 import { getThreadActivityTimestamp } from "../lib/threadSort";
 
+const LazyRootDeferredOverlays = lazy(async () => {
+  const module = await import("../components/RootDeferredOverlays");
+  return { default: module.RootDeferredOverlays };
+});
+
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
 }>()({
@@ -129,6 +131,7 @@ function RootRouteView() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const { authGateState, authGateRevalidationRequired } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
+  const [mountDeferredOverlays, setMountDeferredOverlays] = useState(false);
 
   useColorThemeSync();
 
@@ -141,6 +144,15 @@ function RootRouteView() {
     };
   }, [pathname]);
 
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      setMountDeferredOverlays(true);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, []);
+
   if (pathname === "/pair") {
     return <Outlet />;
   }
@@ -150,11 +162,11 @@ function RootRouteView() {
   }
 
   const appShell = (
-    <CommandPalette>
+    <CommandPaletteBoundary>
       <AppSidebarLayout>
         <Outlet />
       </AppSidebarLayout>
-    </CommandPalette>
+    </CommandPaletteBoundary>
   );
 
   return (
@@ -166,11 +178,15 @@ function RootRouteView() {
         {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
         {primaryEnvironmentAuthenticated ? <ServerStateBootstrap /> : null}
         <EnvironmentConnectionManagerBootstrap />
-        <SshPasswordPromptDialog />
+        {mountDeferredOverlays ? (
+          <Suspense fallback={null}>
+            <LazyRootDeferredOverlays
+              primaryEnvironmentAuthenticated={primaryEnvironmentAuthenticated}
+            />
+          </Suspense>
+        ) : null}
         <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
-        {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
-        {primaryEnvironmentAuthenticated ? <PwaPushNotificationPrompt /> : null}
         {primaryEnvironmentAuthenticated ? <WebSocketConnectionCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <SlowRpcAckToastCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? (

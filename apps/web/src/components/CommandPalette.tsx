@@ -393,7 +393,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   );
 }
 
-function CommandPaletteDialog() {
+export function CommandPaletteDialog() {
   const open = useCommandPaletteStore((store) => store.open);
   const setOpen = useCommandPaletteStore((store) => store.setOpen);
 
