@@ -71,7 +71,7 @@ import {
 } from "../push/pendingNotificationClick";
 import { buildPlanImplementationPrompt } from "../proposedPlan";
 import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
-import { getServerConfig } from "../rpc/serverState";
+import { applyProvidersUpdated, getServerConfig } from "../rpc/serverState";
 import { WsTransport } from "../rpc/wsTransport";
 import { getRouter } from "../router";
 import { deriveLogicalProjectKeyFromSettings } from "../logicalProject";
@@ -2527,6 +2527,54 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await waitForLayout();
       await expect.poll(() => distanceFromTimelineBottom()).toBeGreaterThan(80);
       await expect.element(page.getByRole("button", { name: "Scroll to bottom" })).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps cached timeline geometry stable when provider status reconciles", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-provider-status-reconciliation" as MessageId,
+        targetText: "provider status reconciliation",
+      }),
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      const timeline = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-testid="messages-timeline-list"]'),
+        "Unable to find timeline before provider status reconciliation.",
+      );
+      await waitForLayout();
+      const before = timeline.getBoundingClientRect();
+      const provider = fixture.serverConfig.providers[0];
+      if (!provider) {
+        throw new Error("Expected the default provider fixture.");
+      }
+
+      applyProvidersUpdated({
+        providers: [
+          {
+            ...provider,
+            status: "error",
+            auth: { status: "unauthenticated" },
+            message: "Sign in again.",
+          },
+        ],
+      });
+
+      const banner = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-testid="provider-status-banner"]'),
+        "Unable to find reconciled provider status banner.",
+      );
+      await waitForLayout();
+      const after = timeline.getBoundingClientRect();
+
+      expect(getComputedStyle(banner).position).toBe("absolute");
+      expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(after.height - before.height)).toBeLessThanOrEqual(0.5);
     } finally {
       await mounted.cleanup();
     }
