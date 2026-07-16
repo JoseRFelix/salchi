@@ -94,6 +94,7 @@ import {
 import { flushResumeDiagnostics, recordResumeDiagnostic } from "./resumeDiagnostics";
 import { getClientSettings } from "~/hooks/useSettings";
 import {
+  type CachedEnvironmentStateWriteOptions,
   flushPendingCachedEnvironmentStateWrite,
   readCachedEnvironmentState,
   removeCachedEnvironmentState,
@@ -241,6 +242,7 @@ type BrowserResumeShellBootstrapTimeoutClearReason =
 
 interface RecoveredEventBatchOptions {
   readonly preserveShellFields?: boolean;
+  readonly preserveCachedShell?: boolean;
   readonly syncSidebarSummaries?: boolean;
 }
 
@@ -1781,7 +1783,9 @@ function mergeVerifiedThreadDetailTailSnapshot(
     // A verified tail can be the only copy of a response that completed while an installed PWA
     // was suspended. Persist it before the app can be backgrounded again instead of leaving that
     // authoritative recovery behind the normal streaming-detail debounce.
-    persistEnvironmentStartupCacheWriteImmediately(environmentId, [snapshot.thread.id]);
+    persistEnvironmentStartupCacheWriteImmediately(environmentId, [snapshot.thread.id], {
+      preserveCachedShell: true,
+    });
   }
 }
 
@@ -1952,7 +1956,9 @@ function applyThreadDetailReconcileResult(
         }
       }
       markThreadDetailVerified(entry, result.serverSequence, result.serverFingerprint);
-      scheduleEnvironmentStartupCacheWrite(entry.environmentId, [entry.threadId]);
+      scheduleEnvironmentStartupCacheWrite(entry.environmentId, [entry.threadId], {
+        preserveCachedShell: true,
+      });
       reconcileThreadDetailSubscriptionEvictionState(entry);
       return;
     case "snapshot":
@@ -2734,6 +2740,10 @@ function hydrateEnvironmentFromStartupCache(environmentId: EnvironmentId): void 
 function scheduleEnvironmentStartupCacheWrite(
   environmentId: EnvironmentId,
   preferredThreadIds: readonly ThreadId[] = [],
+  options: Pick<
+    CachedEnvironmentStateWriteOptions,
+    "preserveCachedShell" | "removedProjectIds" | "removedThreadIds"
+  > = {},
 ): void {
   const environmentState = useStore.getState().environmentStateById[environmentId];
   if (!environmentState) {
@@ -2742,14 +2752,19 @@ function scheduleEnvironmentStartupCacheWrite(
 
   scheduleCachedEnvironmentStateWrite(environmentId, environmentState, {
     preferredThreadIds,
+    ...options,
   });
 }
 
 function persistEnvironmentStartupCacheWriteImmediately(
   environmentId: EnvironmentId,
   preferredThreadIds: readonly ThreadId[] = [],
+  options: Pick<
+    CachedEnvironmentStateWriteOptions,
+    "preserveCachedShell" | "removedProjectIds" | "removedThreadIds"
+  > = {},
 ): void {
-  scheduleEnvironmentStartupCacheWrite(environmentId, preferredThreadIds);
+  scheduleEnvironmentStartupCacheWrite(environmentId, preferredThreadIds, options);
   flushPendingCachedEnvironmentStateWrite(environmentId);
 }
 
@@ -2847,8 +2862,19 @@ function applyRecoveredEventBatch(
   }
 
   reconcileThreadDetailSubscriptionEvictionForEnvironment(environmentId);
-  scheduleEnvironmentStartupCacheWrite(environmentId, collectThreadIdsFromEvents(events));
-  if (needsProjectUiSync || events.some(isSettlingThreadDetailEvent)) {
+  const removedProjectIds = events.flatMap((event) =>
+    event.type === "project.deleted" ? [event.payload.projectId] : [],
+  );
+  scheduleEnvironmentStartupCacheWrite(environmentId, collectThreadIdsFromEvents(events), {
+    preserveCachedShell: options.preserveCachedShell ?? false,
+    removedProjectIds,
+    removedThreadIds: batchEffects.clearDeletedThreadIds,
+  });
+  if (
+    needsProjectUiSync ||
+    batchEffects.clearDeletedThreadIds.length > 0 ||
+    events.some(isSettlingThreadDetailEvent)
+  ) {
     flushPendingCachedEnvironmentStateWrite(environmentId);
   }
 }
@@ -2865,6 +2891,7 @@ export function applyEnvironmentThreadDetailEvent(
       : selectThreadByRef(useStore.getState(), scopeThreadRef(environmentId, threadId));
 
   applyRecoveredEventBatch([event], environmentId, {
+    preserveCachedShell: true,
     preserveShellFields: shouldPreserveThreadDetailShellFields(environmentId, event.sequence),
     syncSidebarSummaries: true,
   });
@@ -2913,6 +2940,7 @@ function applyShellEvent(event: OrchestrationShellStreamEvent, environmentId: En
   if (
     event.kind === "project-upserted" ||
     event.kind === "project-removed" ||
+    event.kind === "thread-removed" ||
     (event.kind === "thread-upserted" && isSettlingShellThread(event.thread))
   ) {
     flushPendingCachedEnvironmentStateWrite(environmentId);

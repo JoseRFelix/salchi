@@ -1059,6 +1059,51 @@ describe("retainThreadDetailSubscription", () => {
     await resetEnvironmentServiceForTests();
   });
 
+  it("flushes a shell thread removal to the startup cache without waiting for debounce", async () => {
+    const localStorage = createMemoryStorage();
+    stubBrowserVisibility("visible", { localStorage });
+
+    const { startEnvironmentConnectionService, resetEnvironmentServiceForTests } =
+      await import("./service");
+    const { ORCHESTRATION_STARTUP_CACHE_STORAGE_KEY, readCachedEnvironmentState } =
+      await import("~/orchestrationStartupCache");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const environmentId = EnvironmentId.make("env-1");
+    const threadId = ThreadId.make("thread-removed-from-pwa-cache");
+    const connectionInput = mockCreateEnvironmentConnection.mock.calls[0]?.[0];
+    expect(connectionInput).toBeDefined();
+
+    connectionInput.syncShellSnapshot(
+      makeThreadShellSnapshot({
+        threadId,
+        sessionStatus: "ready",
+      }),
+      environmentId,
+    );
+    expect(readCachedEnvironmentState(environmentId)?.threadIds).toEqual([threadId]);
+    const countStartupCacheWrites = () =>
+      vi
+        .mocked(localStorage.setItem)
+        .mock.calls.filter(([key]) => key === ORCHESTRATION_STARTUP_CACHE_STORAGE_KEY).length;
+    const persistedWriteCount = countStartupCacheWrites();
+
+    connectionInput.applyShellEvent(
+      {
+        kind: "thread-removed",
+        sequence: 2,
+        threadId,
+      },
+      environmentId,
+    );
+
+    expect(readCachedEnvironmentState(environmentId)?.threadIds).toEqual([]);
+    expect(countStartupCacheWrites()).toBe(persistedWriteCount + 1);
+
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
   it("resyncs known threads that were not touched by a completed gap replay", async () => {
     const { startEnvironmentConnectionService, resetEnvironmentServiceForTests } =
       await import("./service");

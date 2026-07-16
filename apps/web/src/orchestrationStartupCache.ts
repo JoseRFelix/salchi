@@ -37,7 +37,21 @@ export interface CachedEnvironmentStateEntry {
 interface PendingEnvironmentWrite {
   state: EnvironmentState;
   readonly preferredThreadIds: Set<ThreadId>;
+  preserveCachedShell: boolean;
+  readonly removedProjectIds: Set<ProjectId>;
+  readonly removedThreadIds: Set<ThreadId>;
   timeoutId: ReturnType<typeof setTimeout> | null;
+}
+
+export interface CachedEnvironmentStateWriteOptions {
+  readonly preferredThreadIds?: readonly ThreadId[];
+  /**
+   * Detail can arrive before the authoritative shell. In that case, retain cached shell entities
+   * that are absent from the detail-only state unless an accompanying tombstone removes them.
+   */
+  readonly preserveCachedShell?: boolean;
+  readonly removedProjectIds?: readonly ProjectId[];
+  readonly removedThreadIds?: readonly ThreadId[];
 }
 
 interface StartupCachePersistenceTargets {
@@ -386,19 +400,47 @@ function appendMissingIds<Id extends string>(
 
 /**
  * Detail subscriptions can update the active conversation before the shell snapshot has
- * populated projects and inactive threads. An incomplete write must enrich the existing cache,
- * not replace its complete sidebar shell with the detail-only store state.
+ * populated projects and inactive threads. An explicitly detail-only write must enrich the
+ * existing cache, not replace its complete sidebar shell with the partial store state.
  */
-function mergeIncompleteStateWithCachedShell(
+function mergeDetailStateWithCachedShell(
   state: EnvironmentState,
   cachedState: EnvironmentState | null,
+  options: Pick<
+    CachedEnvironmentStateWriteOptions,
+    "preserveCachedShell" | "removedProjectIds" | "removedThreadIds"
+  >,
 ): EnvironmentState {
-  if (state.bootstrapComplete || cachedState === null) {
+  if (!options.preserveCachedShell || cachedState === null) {
     return state;
   }
 
-  const projectIds = appendMissingIds(cachedState.projectIds, state.projectIds);
-  const threadIds = appendMissingIds(cachedState.threadIds, state.threadIds);
+  const removedProjectIds = new Set(options.removedProjectIds ?? []);
+  const removedThreadIds = new Set(options.removedThreadIds ?? []);
+  const cachedProjectIds = cachedState.projectIds.filter(
+    (projectId) => !removedProjectIds.has(projectId),
+  );
+  const cachedThreadIds = cachedState.threadIds.filter((threadId) => {
+    if (removedThreadIds.has(threadId)) {
+      return false;
+    }
+    const projectId = cachedState.threadShellById[threadId]?.projectId;
+    return projectId === undefined || !removedProjectIds.has(projectId);
+  });
+  const projectIds = appendMissingIds(
+    cachedProjectIds,
+    state.projectIds.filter((projectId) => !removedProjectIds.has(projectId)),
+  );
+  const threadIds = appendMissingIds(
+    cachedThreadIds,
+    state.threadIds.filter((threadId) => {
+      if (removedThreadIds.has(threadId)) {
+        return false;
+      }
+      const projectId = state.threadShellById[threadId]?.projectId;
+      return projectId === undefined || !removedProjectIds.has(projectId);
+    }),
+  );
   const mergedState: EnvironmentState = {
     ...cachedState,
     ...state,
@@ -735,16 +777,15 @@ export function readCachedEnvironmentStateEntries(): readonly CachedEnvironmentS
 export function writeCachedEnvironmentState(
   environmentId: EnvironmentId,
   state: EnvironmentState,
-  options?: {
-    readonly preferredThreadIds?: readonly ThreadId[];
-  },
+  options: CachedEnvironmentStateWriteOptions = {},
 ): void {
   const document = readDocument();
   const updatedAt = new Date().toISOString();
-  const preferredThreadIds = options?.preferredThreadIds ?? [];
-  const stateForWrite = mergeIncompleteStateWithCachedShell(
+  const preferredThreadIds = options.preferredThreadIds ?? [];
+  const stateForWrite = mergeDetailStateWithCachedShell(
     state,
     document.environments[environmentId]?.state ?? null,
+    options,
   );
   const createDocument = (maxDetailThreads: number): CachedOrchestrationDocument => ({
     version: DOCUMENT_VERSION,
@@ -783,9 +824,7 @@ export function writeCachedEnvironmentState(
 export function scheduleCachedEnvironmentStateWrite(
   environmentId: EnvironmentId,
   state: EnvironmentState,
-  options?: {
-    readonly preferredThreadIds?: readonly ThreadId[];
-  },
+  options: CachedEnvironmentStateWriteOptions = {},
 ): void {
   if (!storage()) {
     return;
@@ -794,10 +833,22 @@ export function scheduleCachedEnvironmentStateWrite(
   const pending = pendingWrites.get(environmentId) ?? {
     state,
     preferredThreadIds: new Set<ThreadId>(),
+    preserveCachedShell: false,
+    removedProjectIds: new Set<ProjectId>(),
+    removedThreadIds: new Set<ThreadId>(),
     timeoutId: null,
   };
   pending.state = state;
-  for (const threadId of options?.preferredThreadIds ?? []) {
+  pending.preserveCachedShell = options.preserveCachedShell ?? false;
+  pending.removedProjectIds.clear();
+  for (const projectId of options.removedProjectIds ?? []) {
+    pending.removedProjectIds.add(projectId);
+  }
+  pending.removedThreadIds.clear();
+  for (const threadId of options.removedThreadIds ?? []) {
+    pending.removedThreadIds.add(threadId);
+  }
+  for (const threadId of options.preferredThreadIds ?? []) {
     pending.preferredThreadIds.add(threadId);
   }
   if (pending.timeoutId !== null) {
@@ -807,6 +858,9 @@ export function scheduleCachedEnvironmentStateWrite(
     pendingWrites.delete(environmentId);
     writeCachedEnvironmentState(environmentId, pending.state, {
       preferredThreadIds: [...pending.preferredThreadIds],
+      preserveCachedShell: pending.preserveCachedShell,
+      removedProjectIds: [...pending.removedProjectIds],
+      removedThreadIds: [...pending.removedThreadIds],
     });
   }, WRITE_DEBOUNCE_MS);
   pendingWrites.set(environmentId, pending);
@@ -824,6 +878,9 @@ export function flushPendingCachedEnvironmentStateWrite(environmentId: Environme
   }
   writeCachedEnvironmentState(environmentId, pending.state, {
     preferredThreadIds: [...pending.preferredThreadIds],
+    preserveCachedShell: pending.preserveCachedShell,
+    removedProjectIds: [...pending.removedProjectIds],
+    removedThreadIds: [...pending.removedThreadIds],
   });
 }
 

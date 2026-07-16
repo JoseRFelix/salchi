@@ -64,27 +64,17 @@ function ChatThreadRouteView() {
   );
   const serverThread = useStore(useMemo(() => createThreadSelectorByRef(threadRef), [threadRef]));
   const threadExists = useStore((store) => selectThreadExistsByRef(store, threadRef));
-  const environmentHasServerThreads = useStore(
-    (store) => selectEnvironmentState(store, threadRef?.environmentId ?? null).threadIds.length > 0,
-  );
   const draftThreadExists = useComposerDraftStore((store) =>
     threadRef ? store.getDraftThreadByRef(threadRef) !== null : false,
   );
   const draftThread = useComposerDraftStore((store) =>
     threadRef ? store.getDraftThreadByRef(threadRef) : null,
   );
-  const environmentHasDraftThreads = useComposerDraftStore((store) => {
-    if (!threadRef) {
-      return false;
-    }
-    return store.hasDraftThreadsInEnvironment(threadRef.environmentId);
-  });
   const routeThreadExists = threadExists || draftThreadExists;
   const serverThreadStarted = threadHasStarted(serverThread);
   const serverSidebarSummaryExists = useStore(
     (store) => selectSidebarThreadSummaryByRef(store, threadRef) !== undefined,
   );
-  const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
   const diffOpen = search.diff === "1";
   const filePanel = useWorkspaceFilePanelState();
   const filePanelOpen = filePanel.open;
@@ -277,8 +267,7 @@ function ChatThreadRouteView() {
     startSurface: "panel",
   });
 
-  const isRecoveringMissingThread =
-    bootstrapComplete && threadRef !== null && !routeThreadExists && environmentHasAnyThreads;
+  const isRecoveringMissingThread = bootstrapComplete && threadRef !== null && !routeThreadExists;
 
   useEffect(() => {
     if (!threadRef || draftThreadExists) {

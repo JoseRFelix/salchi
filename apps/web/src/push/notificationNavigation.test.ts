@@ -18,6 +18,7 @@ import {
   resetNotificationNavigationStateForTests,
   resolveNotificationUrl,
 } from "./notificationNavigation";
+import { createMemoryStorage } from "../testUtils/memoryStorage";
 
 const ORIGIN = "https://example.test";
 
@@ -114,21 +115,7 @@ function stubServiceWorker(
     vi.stubGlobal("BroadcastChannel", undefined);
   }
   let documentHasFocus = true;
-  const localStorageValues = new Map<string, string>();
-  const localStorage: Storage = {
-    clear: () => localStorageValues.clear(),
-    getItem: (key) => localStorageValues.get(key) ?? null,
-    key: (index) => [...localStorageValues.keys()][index] ?? null,
-    get length() {
-      return localStorageValues.size;
-    },
-    removeItem: (key) => {
-      localStorageValues.delete(key);
-    },
-    setItem: (key, value) => {
-      localStorageValues.set(key, value);
-    },
-  };
+  const localStorage = createMemoryStorage();
   const windowStub: Record<string, unknown> = {
     ...(options.cacheStorage ? { caches: options.cacheStorage } : {}),
     addEventListener: windowTarget.addEventListener.bind(windowTarget),

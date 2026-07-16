@@ -5159,6 +5159,40 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("clears a missing startup target after an environment bootstraps with no threads", async () => {
+    const snapshotWithThread = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-empty-startup-target-test" as MessageId,
+      targetText: "missing empty-environment startup target",
+    });
+    const emptySnapshot: OrchestrationReadModel = {
+      ...snapshotWithThread,
+      threads: [],
+    };
+    writePersistedStartupThreadTarget(THREAD_REF);
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: emptySnapshot,
+      initialPath: serverThreadPath(THREAD_ID),
+      configureFixture: (fixture) => {
+        const { bootstrapThreadId: _bootstrapThreadId, ...welcome } = fixture.welcome;
+        fixture.welcome = welcome;
+      },
+    });
+
+    try {
+      await expect.element(page.getByTestId("thread-route-recovery")).toBeInTheDocument();
+      await waitForURL(
+        mounted.router,
+        (path) => path === "/",
+        "An empty environment should leave a missing startup thread route after the grace period.",
+      );
+      expect(readPersistedStartupThreadTarget()).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("renders the cached sidebar and conversation in a standalone PWA before a live shell snapshot arrives", async () => {
     emulateStandalonePwa();
 
@@ -5271,23 +5305,24 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
     window.dispatchEvent(new Event("offline"));
 
-    const offlineMount = await mountChatView({
-      viewport: COMPACT_FOOTER_VIEWPORT,
-      snapshot,
-      initialPath: serverThreadPath(THREAD_ID),
-      waitForBootstrap: false,
-      getInitialStreamValues: (request) => {
-        if (
-          request._tag === ORCHESTRATION_WS_METHODS.subscribeShell ||
-          request._tag === ORCHESTRATION_WS_METHODS.subscribeThread
-        ) {
-          return [];
-        }
-        return undefined;
-      },
-    });
-
+    let offlineMount: MountedChatView | null = null;
     try {
+      offlineMount = await mountChatView({
+        viewport: COMPACT_FOOTER_VIEWPORT,
+        snapshot,
+        initialPath: serverThreadPath(THREAD_ID),
+        waitForBootstrap: false,
+        getInitialStreamValues: (request) => {
+          if (
+            request._tag === ORCHESTRATION_WS_METHODS.subscribeShell ||
+            request._tag === ORCHESTRATION_WS_METHODS.subscribeThread
+          ) {
+            return [];
+          }
+          return undefined;
+        },
+      });
+
       await expect.element(page.getByText("secondary project")).toBeInTheDocument();
       const sidebarTrigger = document.querySelector<HTMLButtonElement>('[data-sidebar="trigger"]');
       expect(sidebarTrigger).not.toBeNull();
@@ -5303,7 +5338,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 3_000, interval: 16 },
       );
     } finally {
-      await offlineMount.cleanup();
+      await offlineMount?.cleanup();
       if (originalOnlineDescriptor) {
         Object.defineProperty(navigator, "onLine", originalOnlineDescriptor);
       } else {
@@ -5359,23 +5394,24 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
     window.dispatchEvent(new Event("offline"));
 
-    const mounted = await mountChatView({
-      viewport: COMPACT_FOOTER_VIEWPORT,
-      snapshot,
-      initialPath: serverThreadPath(THREAD_ID),
-      waitForBootstrap: false,
-      getInitialStreamValues: (request) => {
-        if (
-          request._tag === ORCHESTRATION_WS_METHODS.subscribeShell ||
-          request._tag === ORCHESTRATION_WS_METHODS.subscribeThread
-        ) {
-          return [];
-        }
-        return undefined;
-      },
-    });
-
+    let mounted: MountedChatView | null = null;
     try {
+      mounted = await mountChatView({
+        viewport: COMPACT_FOOTER_VIEWPORT,
+        snapshot,
+        initialPath: serverThreadPath(THREAD_ID),
+        waitForBootstrap: false,
+        getInitialStreamValues: (request) => {
+          if (
+            request._tag === ORCHESTRATION_WS_METHODS.subscribeShell ||
+            request._tag === ORCHESTRATION_WS_METHODS.subscribeThread
+          ) {
+            return [];
+          }
+          return undefined;
+        },
+      });
+
       await expect.element(page.getByText("stale working cached conversation")).toBeInTheDocument();
       expect(document.body.textContent).not.toContain("Working for");
       const sidebarTrigger = document.querySelector<HTMLButtonElement>('[data-sidebar="trigger"]');
@@ -5384,7 +5420,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await expect.element(page.getByTestId(`thread-title-${THREAD_ID}`)).toBeInTheDocument();
       await expect.element(page.getByLabelText("Working")).not.toBeInTheDocument();
     } finally {
-      await mounted.cleanup();
+      await mounted?.cleanup();
       if (originalOnlineDescriptor) {
         Object.defineProperty(navigator, "onLine", originalOnlineDescriptor);
       } else {

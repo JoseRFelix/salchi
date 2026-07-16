@@ -18,6 +18,7 @@ import {
   shouldNavigateToStartupBootstrapThread,
   writePersistedStartupThreadTarget,
 } from "./startupNavigation";
+import { createMemoryStorage } from "./testUtils/memoryStorage";
 
 const BOOTSTRAP_THREAD_ID = ThreadId.make("thread-startup");
 const ENVIRONMENT_ID = EnvironmentId.make("env-1");
@@ -253,24 +254,10 @@ describe("startup thread restore priming", () => {
 });
 
 describe("persisted startup thread target", () => {
-  const values = new Map<string, string>();
-  const localStorageStub: Storage = {
-    clear: () => values.clear(),
-    getItem: (key) => values.get(key) ?? null,
-    key: (index) => [...values.keys()][index] ?? null,
-    get length() {
-      return values.size;
-    },
-    removeItem: (key) => {
-      values.delete(key);
-    },
-    setItem: (key, value) => {
-      values.set(key, value);
-    },
-  };
+  const localStorageStub = createMemoryStorage();
 
   beforeEach(() => {
-    values.clear();
+    localStorageStub.clear();
     vi.stubGlobal("window", { localStorage: localStorageStub });
   });
 

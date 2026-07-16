@@ -479,7 +479,7 @@ describe("orchestration startup cache", () => {
         projectById: {},
         sidebarThreadSummaryById: {},
       },
-      { preferredThreadIds: [THREAD_ID] },
+      { preferredThreadIds: [THREAD_ID], preserveCachedShell: true },
     );
 
     const cached = readCachedEnvironmentState(ENVIRONMENT_ID);
@@ -492,6 +492,62 @@ describe("orchestration startup cache", () => {
       "Previously cached inactive thread",
     );
     expect(threadMessageTexts(cached, THREAD_ID)).toEqual(["fresh detail-first conversation"]);
+  });
+
+  it("does not reintroduce authoritative pre-bootstrap project or thread removals", () => {
+    const completeState = makeEnvironmentState();
+    writeCachedEnvironmentState(
+      ENVIRONMENT_ID,
+      {
+        ...completeState,
+        projectIds: [PROJECT_ID, SECOND_PROJECT_ID],
+        projectById: {
+          ...completeState.projectById,
+          [SECOND_PROJECT_ID]: {
+            ...completeState.projectById[PROJECT_ID]!,
+            id: SECOND_PROJECT_ID,
+            name: "Removed Cache Project",
+            cwd: "/tmp/cache-project-removed",
+          },
+        },
+      },
+      { preferredThreadIds: [THREAD_ID] },
+    );
+
+    const authoritativeState = makeEnvironmentState({
+      threads: [{ id: THREAD_ID, title: "Authoritative remaining thread" }],
+    });
+    expect(authoritativeState.bootstrapComplete).toBe(false);
+    writeCachedEnvironmentState(ENVIRONMENT_ID, authoritativeState, {
+      preferredThreadIds: [THREAD_ID],
+    });
+
+    const cached = readCachedEnvironmentState(ENVIRONMENT_ID);
+    expect(cached?.projectIds).toEqual([PROJECT_ID]);
+    expect(cached?.projectById[SECOND_PROJECT_ID]).toBeUndefined();
+    expect(cached?.threadIds).toEqual([THREAD_ID]);
+    expect(cached?.threadShellById[SHELL_ONLY_THREAD_ID]).toBeUndefined();
+  });
+
+  it("honors deletion tombstones while preserving a detail-only cached shell", () => {
+    const completeState = makeEnvironmentState();
+    writeCachedEnvironmentState(ENVIRONMENT_ID, completeState, {
+      preferredThreadIds: [THREAD_ID],
+    });
+
+    const detailOnlyState = makeEnvironmentState({
+      threads: [{ id: THREAD_ID, title: "Fresh detail after deletion" }],
+    });
+    writeCachedEnvironmentState(ENVIRONMENT_ID, detailOnlyState, {
+      preferredThreadIds: [THREAD_ID],
+      preserveCachedShell: true,
+      removedThreadIds: [SHELL_ONLY_THREAD_ID],
+    });
+
+    const cached = readCachedEnvironmentState(ENVIRONMENT_ID);
+    expect(cached?.projectIds).toEqual([PROJECT_ID]);
+    expect(cached?.threadIds).toEqual([THREAD_ID]);
+    expect(cached?.threadShellById[SHELL_ONLY_THREAD_ID]).toBeUndefined();
   });
 
   it("does not revive unverified running state after a process restart", () => {
