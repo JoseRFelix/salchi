@@ -4,6 +4,7 @@ import {
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
   resolveEnvironmentOptionLabel,
+  resolveBranchToolbarRenderState,
   resolveBranchSelectionTarget,
   resolveBranchSelectorDisabled,
   resolveCurrentWorkspaceLabel,
@@ -18,6 +19,35 @@ import {
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
 const remoteEnvironmentId = EnvironmentId.make("environment-remote");
+
+describe("resolveBranchToolbarRenderState", () => {
+  it("reserves the toolbar with a skeleton while repository status is unknown", () => {
+    expect(resolveBranchToolbarRenderState({ data: null, isPending: true })).toBe("loading");
+  });
+
+  it("reserves the toolbar before enough cached project context exists to request status", () => {
+    expect(
+      resolveBranchToolbarRenderState({
+        data: null,
+        isContextPending: true,
+        isPending: false,
+      }),
+    ).toBe("loading");
+  });
+
+  it("keeps cached repository controls visible while status refreshes", () => {
+    expect(resolveBranchToolbarRenderState({ data: { isRepo: true }, isPending: true })).toBe(
+      "visible",
+    );
+  });
+
+  it("hides the toolbar only after status confirms it is unavailable", () => {
+    expect(resolveBranchToolbarRenderState({ data: { isRepo: false }, isPending: false })).toBe(
+      "hidden",
+    );
+    expect(resolveBranchToolbarRenderState({ data: null, isPending: false })).toBe("hidden");
+  });
+});
 
 describe("resolveDraftEnvModeAfterBranchChange", () => {
   it("switches to local mode when returning from an existing worktree to the main worktree", () => {

@@ -37,6 +37,29 @@ import {
   MenuTrigger,
 } from "./ui/menu";
 import { Separator } from "./ui/separator";
+import { Skeleton } from "./ui/skeleton";
+
+const BRANCH_TOOLBAR_LAYOUT_CLASS_NAME =
+  "mx-auto flex w-full max-w-208 items-center gap-2 px-2.5 pb-0.5 pt-0.5 sm:px-3 sm:pb-3 sm:pt-1";
+
+export const BranchToolbarSkeleton = memo(function BranchToolbarSkeleton() {
+  return (
+    <div
+      aria-hidden="true"
+      className={BRANCH_TOOLBAR_LAYOUT_CLASS_NAME}
+      data-testid="branch-toolbar-skeleton"
+    >
+      <div className="flex h-7 shrink-0 items-center gap-1.5 sm:h-6">
+        <Skeleton className="size-3.5 rounded-full sm:size-3" />
+        <Skeleton className="h-3 w-16 rounded-full sm:w-14" />
+      </div>
+      <div className="ml-auto flex h-7 shrink-0 items-center gap-1.5 sm:h-6">
+        <Skeleton className="size-3.5 rounded-full sm:size-3" />
+        <Skeleton className="h-3 w-14 rounded-full sm:w-12" />
+      </div>
+    </div>
+  );
+});
 
 interface BranchToolbarProps {
   environmentId: EnvironmentId;
@@ -241,7 +264,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   if (!hasActiveThread || !activeProject) return null;
 
   return (
-    <div className="mx-auto flex w-full max-w-208 items-center gap-2 px-2.5 pb-0.5 pt-0.5 sm:px-3 sm:pb-3 sm:pt-1">
+    <div className={BRANCH_TOOLBAR_LAYOUT_CLASS_NAME} data-testid="branch-toolbar">
       {isMobile ? (
         <MobileRunContextSelector
           envLocked={envLocked}
