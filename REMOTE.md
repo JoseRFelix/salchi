@@ -64,7 +64,7 @@ Use this when you want to run the server without a GUI, for example on a remote 
 Run the server with `salchi serve`.
 
 ```bash
-npx salchi serve --host "$(tailscale ip -4)"
+npx salchi@latest serve --host "$(tailscale ip -4)"
 ```
 
 `salchi serve` starts the server without opening a browser and prints:
@@ -86,14 +86,14 @@ Use `salchi serve --help` for the full flag reference. It supports the same gene
 For hosted web pairing over Tailscale HTTPS, opt in to Tailscale Serve:
 
 ```bash
-npx salchi serve --tailscale-serve
+npx salchi@latest serve --tailscale-serve
 ```
 
 By default this configures Tailscale Serve on HTTPS port 443 and advertises
 `https://machine.tailnet.ts.net/`. Advanced users can choose a different HTTPS port:
 
 ```bash
-npx salchi serve --tailscale-serve --tailscale-serve-port 8443
+npx salchi@latest serve --tailscale-serve --tailscale-serve-port 8443
 ```
 
 > Note

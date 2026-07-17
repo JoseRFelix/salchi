@@ -298,7 +298,7 @@ export const resolveServerConfig = (
         Option.fromUndefinedOr(env.noBrowser),
         Option.fromUndefinedOr(bootstrap?.noBrowser),
       ),
-      () => mode === "desktop",
+      () => true,
     );
     const desktopBootstrapToken = bootstrap?.desktopBootstrapToken;
     const autoBootstrapProjectFromCwd = Option.getOrElse(
