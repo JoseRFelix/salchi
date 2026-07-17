@@ -1,5 +1,8 @@
 export const BRAND_ASSET_PATHS = {
   salchiIconPng: "assets/salchi/salchi-icon-1024.png",
+  salchiIcon512Png: "assets/salchi/salchi-icon-512.png",
+  salchiIcon192Png: "assets/salchi/salchi-icon-192.png",
+  salchiAppleTouchIconPng: "assets/salchi/salchi-icon-180.png",
   salchiIconIco: "assets/salchi/salchi-icon.ico",
   salchiReadmeLogoPng: "assets/salchi/salchi-logo-transparent.png",
   salchiWebLogoPng: "assets/salchi/salchi-logo.png",
@@ -31,12 +34,14 @@ const WEB_ICON_TARGET_FILENAMES = {
   salchiLogoPng: "salchi-logo.png",
   salchiPwa192Png: "salchi-pwa-192.png",
   salchiPwa512Png: "salchi-pwa-512.png",
+  salchiAppleTouchIconPng: "apple-touch-icon.png",
 } as const;
 
 const SALCHI_WEB_ICON_SOURCE_PATHS = {
   salchiLogoPng: BRAND_ASSET_PATHS.salchiWebLogoPng,
-  salchiPwa192Png: BRAND_ASSET_PATHS.salchiIconPng,
-  salchiPwa512Png: BRAND_ASSET_PATHS.salchiIconPng,
+  salchiPwa192Png: BRAND_ASSET_PATHS.salchiIcon192Png,
+  salchiPwa512Png: BRAND_ASSET_PATHS.salchiIcon512Png,
+  salchiAppleTouchIconPng: BRAND_ASSET_PATHS.salchiAppleTouchIconPng,
 } as const satisfies Record<keyof typeof WEB_ICON_TARGET_FILENAMES, string>;
 
 const WEB_ICON_SOURCE_PATHS_BY_BRAND = {
@@ -62,6 +67,10 @@ export function resolveWebIconOverrides(
     {
       sourceRelativePath: sourcePaths.salchiPwa512Png,
       targetRelativePath: `${targetDirectory}/${WEB_ICON_TARGET_FILENAMES.salchiPwa512Png}`,
+    },
+    {
+      sourceRelativePath: sourcePaths.salchiAppleTouchIconPng,
+      targetRelativePath: `${targetDirectory}/${WEB_ICON_TARGET_FILENAMES.salchiAppleTouchIconPng}`,
     },
   ];
 }

@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off - The regression test reads PNG headers from repository assets.
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -9,6 +12,14 @@ import {
   resolveWebIconOverrides,
 } from "./brand-assets.ts";
 
+function readPngSize(filePath: string): { readonly width: number; readonly height: number } {
+  const png = readFileSync(new URL(`../../${filePath}`, import.meta.url));
+  return {
+    width: png.readUInt32BE(16),
+    height: png.readUInt32BE(20),
+  };
+}
+
 describe("brand-assets", () => {
   it("maps server publish web assets to production icons", () => {
     expect(PUBLISH_ICON_OVERRIDES).toEqual([
@@ -17,12 +28,16 @@ describe("brand-assets", () => {
         targetRelativePath: "dist/client/salchi-logo.png",
       },
       {
-        sourceRelativePath: BRAND_ASSET_PATHS.salchiIconPng,
+        sourceRelativePath: BRAND_ASSET_PATHS.salchiIcon192Png,
         targetRelativePath: "dist/client/salchi-pwa-192.png",
       },
       {
-        sourceRelativePath: BRAND_ASSET_PATHS.salchiIconPng,
+        sourceRelativePath: BRAND_ASSET_PATHS.salchiIcon512Png,
         targetRelativePath: "dist/client/salchi-pwa-512.png",
+      },
+      {
+        sourceRelativePath: BRAND_ASSET_PATHS.salchiAppleTouchIconPng,
+        targetRelativePath: "dist/client/apple-touch-icon.png",
       },
     ]);
   });
@@ -40,15 +55,34 @@ describe("brand-assets", () => {
       targetRelativePath: "apps/web/dist/salchi-logo.png",
     });
     expect(resolveWebIconOverrides("production", "apps/web/dist")).toContainEqual({
-      sourceRelativePath: BRAND_ASSET_PATHS.salchiIconPng,
+      sourceRelativePath: BRAND_ASSET_PATHS.salchiIcon512Png,
       targetRelativePath: "apps/web/dist/salchi-pwa-512.png",
     });
   });
 
   it("maps hosted nightly web assets to nightly icons", () => {
     expect(resolveWebIconOverrides("nightly", "apps/web/dist")).toContainEqual({
-      sourceRelativePath: BRAND_ASSET_PATHS.salchiIconPng,
+      sourceRelativePath: BRAND_ASSET_PATHS.salchiIcon192Png,
       targetRelativePath: "apps/web/dist/salchi-pwa-192.png",
+    });
+  });
+
+  it("ships Salchi icon sources at their declared pixel sizes", () => {
+    expect(readPngSize(BRAND_ASSET_PATHS.salchiIconPng)).toEqual({
+      width: 1024,
+      height: 1024,
+    });
+    expect(readPngSize(BRAND_ASSET_PATHS.salchiIcon512Png)).toEqual({
+      width: 512,
+      height: 512,
+    });
+    expect(readPngSize(BRAND_ASSET_PATHS.salchiIcon192Png)).toEqual({
+      width: 192,
+      height: 192,
+    });
+    expect(readPngSize(BRAND_ASSET_PATHS.salchiAppleTouchIconPng)).toEqual({
+      width: 180,
+      height: 180,
     });
   });
 
