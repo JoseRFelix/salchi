@@ -161,6 +161,7 @@ import {
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   orderItemsByPreferredIds,
+  shouldEnableSidebarListAnimations,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
   useThreadJumpHintVisibility,
@@ -190,24 +191,18 @@ import {
   type SidebarProjectGroupMember,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
-import type {
-  SidebarProjectDragCancelEvent,
-  SidebarProjectDragEndEvent,
-  SidebarProjectDragStartEvent,
-  SidebarSortableProjectHandleProps,
+import {
+  SidebarProjectDndList,
+  type SidebarProjectDragCancelEvent,
+  type SidebarProjectDragEndEvent,
+  type SidebarProjectDragStartEvent,
+  type SidebarSortableProjectHandleProps,
 } from "./sidebar/SidebarProjectDndList";
+import { SidebarFooterItems } from "./sidebar/SidebarFooterItems";
 
 const LazySettingsSidebarNav = React.lazy(async () => {
   const module = await import("./settings/SettingsSidebarNav");
   return { default: module.SettingsSidebarNav };
-});
-const LazySidebarDeferredFooterItems = React.lazy(async () => {
-  const module = await import("./sidebar/SidebarDeferredFooterItems");
-  return { default: module.SidebarDeferredFooterItems };
-});
-const LazySidebarProjectDndList = React.lazy(async () => {
-  const module = await import("./sidebar/SidebarProjectDndList");
-  return { default: module.SidebarProjectDndList };
 });
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
@@ -2788,15 +2783,6 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
 const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
-  const [mountDeferredItems, setMountDeferredItems] = useState(false);
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      setMountDeferredItems(true);
-    });
-    return () => {
-      window.cancelAnimationFrame(frame);
-    };
-  }, []);
   const handleSettingsClick = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
@@ -2806,11 +2792,7 @@ const SidebarChromeFooter = memo(function SidebarChromeFooter() {
 
   return (
     <SidebarFooter className="p-2">
-      {mountDeferredItems ? (
-        <React.Suspense fallback={null}>
-          <LazySidebarDeferredFooterItems />
-        </React.Suspense>
-      ) : null}
+      <SidebarFooterItems />
       <SidebarMenu>
         <SidebarMenuItem>
           <SidebarMenuButton
@@ -3062,21 +3044,13 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         </div>
 
         {isManualProjectSorting ? (
-          <React.Suspense
-            fallback={
-              <SidebarMenu ref={attachProjectListAutoAnimateRef}>
-                {sortedProjects.map(renderProjectListRow)}
-              </SidebarMenu>
-            }
-          >
-            <LazySidebarProjectDndList
-              projects={sortedProjects}
-              onDragStart={handleProjectDragStart}
-              onDragEnd={handleProjectDragEnd}
-              onDragCancel={handleProjectDragCancel}
-              renderProject={renderSortableProject}
-            />
-          </React.Suspense>
+          <SidebarProjectDndList
+            projects={sortedProjects}
+            onDragStart={handleProjectDragStart}
+            onDragEnd={handleProjectDragEnd}
+            onDragCancel={handleProjectDragCancel}
+            renderProject={renderSortableProject}
+          />
         ) : (
           <SidebarMenu ref={attachProjectListAutoAnimateRef}>
             {sortedProjects.map(renderProjectListRow)}
@@ -3347,15 +3321,28 @@ export default function Sidebar() {
     dragInProgressRef.current = false;
   }, []);
 
+  const enableListAnimations = useStore((state) =>
+    shouldEnableSidebarListAnimations(Object.values(state.environmentStateById)),
+  );
   const animatedProjectListsRef = useRef(new WeakSet<HTMLElement>());
-  const attachProjectListAutoAnimateRef = useCallback((node: HTMLElement | null) => {
-    attachDeferredAutoAnimate(node, animatedProjectListsRef.current);
-  }, []);
+  const attachProjectListAutoAnimateRef = useCallback(
+    (node: HTMLElement | null) => {
+      if (enableListAnimations) {
+        attachDeferredAutoAnimate(node, animatedProjectListsRef.current);
+      }
+    },
+    [enableListAnimations],
+  );
 
   const animatedThreadListsRef = useRef(new WeakSet<HTMLElement>());
-  const attachThreadListAutoAnimateRef = useCallback((node: HTMLElement | null) => {
-    attachDeferredAutoAnimate(node, animatedThreadListsRef.current);
-  }, []);
+  const attachThreadListAutoAnimateRef = useCallback(
+    (node: HTMLElement | null) => {
+      if (enableListAnimations) {
+        attachDeferredAutoAnimate(node, animatedThreadListsRef.current);
+      }
+    },
+    [enableListAnimations],
+  );
 
   const visibleThreads = useMemo(
     () => sidebarThreads.filter((thread) => thread.archivedAt === null),

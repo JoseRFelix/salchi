@@ -4,7 +4,7 @@ import { SidebarPwaUpdateButton } from "./SidebarPwaUpdateButton";
 import { SidebarUpdatePill } from "./SidebarUpdatePill";
 import { SidebarUsageIndicator } from "./SidebarUsageIndicator";
 
-export function SidebarDeferredFooterItems() {
+export function SidebarFooterItems() {
   return (
     <>
       <SidebarPwaUpdateButton />

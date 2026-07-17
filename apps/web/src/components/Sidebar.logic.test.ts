@@ -21,6 +21,7 @@ import {
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
+  shouldEnableSidebarListAnimations,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
@@ -40,6 +41,25 @@ import {
 } from "../types";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
+
+describe("shouldEnableSidebarListAnimations", () => {
+  it("keeps animations disabled while cached environments are reconciling", () => {
+    expect(shouldEnableSidebarListAnimations([{ bootstrapComplete: false }])).toBe(false);
+    expect(
+      shouldEnableSidebarListAnimations([
+        { bootstrapComplete: true },
+        { bootstrapComplete: false },
+      ]),
+    ).toBe(false);
+  });
+
+  it("enables animations only after every environment has bootstrapped", () => {
+    expect(shouldEnableSidebarListAnimations([])).toBe(false);
+    expect(
+      shouldEnableSidebarListAnimations([{ bootstrapComplete: true }, { bootstrapComplete: true }]),
+    ).toBe(true);
+  });
+});
 
 function makeLatestTurn(overrides?: {
   completedAt?: string | null;

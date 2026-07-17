@@ -7,11 +7,12 @@ import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { ensureLocalApi } from "../../localApi";
 import type { AppState } from "../../store";
 import { useStore } from "../../store";
-import { useServerProviders } from "../../rpc/serverState";
+import { useServerConfig, useServerProviders } from "../../rpc/serverState";
 import { cn } from "../../lib/utils";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible";
 import { useSidebar } from "../ui/sidebar";
+import { Skeleton } from "../ui/skeleton";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   deriveSidebarUsageProviderRows,
@@ -19,6 +20,7 @@ import {
   getSidebarUsageBarPercent,
   getSidebarUsageDisplayPercent,
   getSidebarUsagePrimaryWindow,
+  resolveSidebarUsageIndicatorRenderState,
   getSidebarUsageSummary,
   type SidebarUsageSummary,
   type SidebarUsageProviderRow,
@@ -247,6 +249,7 @@ export function SidebarUsageIndicator() {
   const setAccountRateLimitsByInstanceId = useStore(
     (state) => state.setAccountRateLimitsByInstanceId,
   );
+  const serverConfig = useServerConfig();
   const providers = useServerProviders();
   const usageProviderInstances = useMemo(
     () =>
@@ -279,6 +282,10 @@ export function SidebarUsageIndicator() {
     [accountRateLimitsByInstanceId, threads, usageProviderInstances],
   );
   const hasUsageProviders = rows.length > 0;
+  const renderState = resolveSidebarUsageIndicatorRenderState({
+    hasServerConfig: serverConfig !== null,
+    hasUsageProviders,
+  });
   const summary = useMemo(() => getSidebarUsageSummary(rows), [rows]);
   const claudeLoginPromptInstanceIds = useMemo(
     () => getSidebarClaudeLoginPromptInstanceIds(usageProviderInstances),
@@ -374,7 +381,21 @@ export function SidebarUsageIndicator() {
     return () => window.clearInterval(intervalId);
   }, [expanded, hasUsageProviders, refreshUsageLimits, sidebarVisible]);
 
-  if (!hasUsageProviders) {
+  if (renderState === "loading") {
+    return (
+      <div
+        aria-hidden
+        className="flex h-7 w-full items-center gap-2 rounded-lg px-2 py-1.5"
+        data-testid="sidebar-usage-skeleton"
+      >
+        <Skeleton className="size-3.5 shrink-0 rounded-md" />
+        <Skeleton className="h-3 w-10 rounded-full" />
+        <Skeleton className="ml-auto h-2.5 w-14 rounded-full" />
+      </div>
+    );
+  }
+
+  if (renderState === "hidden") {
     return null;
   }
 
