@@ -4681,8 +4681,7 @@ export default function ChatView(props: ChatViewProps) {
         />
       </header>
 
-      {/* Error banner */}
-      <ProviderStatusBanner status={activeProviderStatus} />
+      {/* Thread error banner */}
       <ThreadErrorBanner
         error={activeThread.error}
         onDismiss={() => setThreadError(activeThread.id, null)}
@@ -4690,9 +4689,11 @@ export default function ChatView(props: ChatViewProps) {
       {/* Main content area with optional plan sidebar */}
       <div className="flex min-h-0 min-w-0 flex-1">
         {/* Chat column */}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          {/* Live provider status overlays cached content without changing its geometry. */}
+          <ProviderStatusBanner status={activeProviderStatus} />
           {/* Messages Wrapper */}
-          <div className="relative flex min-h-0 flex-1 flex-col">
+          <div className="relative flex min-h-0 flex-1 flex-col" data-testid="chat-messages-region">
             {/* Messages — VirtualizedList handles virtualization and scrolling internally */}
             <MessagesTimeline
               key={activeThread.id}
