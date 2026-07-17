@@ -17,6 +17,16 @@ const MAX_CACHED_THREAD_DIFFS = 250;
 const MAX_CACHE_DOCUMENT_CHARS = 2_000_000;
 const WRITE_DEBOUNCE_MS = 500;
 const DETAIL_THREAD_CACHE_CAP_LADDER = [MAX_CACHED_DETAIL_THREADS, 6, 3, 1, 0] as const;
+const SHELL_THREAD_CACHE_CAP_LADDER = [
+  MAX_CACHED_SHELL_THREADS,
+  750,
+  500,
+  250,
+  100,
+  50,
+  20,
+  0,
+] as const;
 
 interface CachedEnvironmentEntry {
   readonly updatedAt: string;
@@ -270,7 +280,11 @@ function compareThreadUpdatedAt(state: EnvironmentState, left: ThreadId, right: 
   return rightUpdatedAt.localeCompare(leftUpdatedAt) || right.localeCompare(left);
 }
 
-function retainOrderedThreadIds(state: EnvironmentState, preferredThreadIds: readonly ThreadId[]) {
+function retainOrderedThreadIds(
+  state: EnvironmentState,
+  preferredThreadIds: readonly ThreadId[],
+  maxShellThreads: number,
+) {
   const shellThreadIds = state.threadIds.filter((threadId) => state.threadShellById[threadId]);
   const retained = new Set<ThreadId>();
 
@@ -283,7 +297,7 @@ function retainOrderedThreadIds(state: EnvironmentState, preferredThreadIds: rea
   for (const threadId of [...shellThreadIds].toSorted((left, right) =>
     compareThreadUpdatedAt(state, left, right),
   )) {
-    if (retained.size >= MAX_CACHED_SHELL_THREADS) {
+    if (retained.size >= maxShellThreads) {
       break;
     }
     retained.add(threadId);
@@ -666,8 +680,9 @@ function createCachedEnvironmentState(
   state: EnvironmentState,
   preferredThreadIds: readonly ThreadId[],
   maxDetailThreads = MAX_CACHED_DETAIL_THREADS,
+  maxShellThreads = MAX_CACHED_SHELL_THREADS,
 ): EnvironmentState {
-  const retainedThreadIds = retainOrderedThreadIds(state, preferredThreadIds);
+  const retainedThreadIds = retainOrderedThreadIds(state, preferredThreadIds, maxShellThreads);
   const retainedThreadIdSet = new Set(retainedThreadIds);
   const detailThreadIds = retainDetailThreadIds(
     state,
@@ -781,21 +796,42 @@ export function writeCachedEnvironmentState(
 ): void {
   const document = readDocument();
   const updatedAt = new Date().toISOString();
-  const preferredThreadIds = options.preferredThreadIds ?? [];
-  const stateForWrite = mergeDetailStateWithCachedShell(
-    state,
-    document.environments[environmentId]?.state ?? null,
-    options,
+  const cachedState = document.environments[environmentId]?.state ?? null;
+  const cachedDetailThreadIds = cachedState
+    ? cachedState.threadIds
+        .filter((threadId) => hasEnvironmentThreadDetailContent(cachedState, threadId))
+        .toSorted((left, right) => compareThreadUpdatedAt(cachedState, left, right))
+    : [];
+  const preferredThreadIds = appendMissingIds(
+    options.preferredThreadIds ?? [],
+    cachedDetailThreadIds,
   );
-  const createDocument = (maxDetailThreads: number): CachedOrchestrationDocument => ({
+  const stateForWrite = mergeDetailStateWithCachedShell(state, cachedState, options);
+  const createDocument = (
+    maxDetailThreads: number,
+    maxShellThreads = MAX_CACHED_SHELL_THREADS,
+  ): CachedOrchestrationDocument => ({
     version: DOCUMENT_VERSION,
     environments: retainNewestEnvironments({
       ...document.environments,
       [environmentId]: {
         updatedAt,
-        state: createCachedEnvironmentState(stateForWrite, preferredThreadIds, maxDetailThreads),
+        state: createCachedEnvironmentState(
+          stateForWrite,
+          preferredThreadIds,
+          maxDetailThreads,
+          maxShellThreads,
+        ),
       },
     }),
+  });
+  const retainOnlyCurrentEnvironment = (
+    nextDocument: CachedOrchestrationDocument,
+  ): CachedOrchestrationDocument => ({
+    version: DOCUMENT_VERSION,
+    environments: {
+      [environmentId]: nextDocument.environments[environmentId]!,
+    },
   });
 
   let shellOnlyDocument: CachedOrchestrationDocument | null = null;
@@ -813,10 +849,24 @@ export function writeCachedEnvironmentState(
   while (nextDocument !== null) {
     nextDocument = removeOldestEnvironment(nextDocument, { excludeEnvironmentId: environmentId });
     if (nextDocument === null) {
-      return;
+      break;
     }
     if (tryPersistDocument(nextDocument)) {
       return;
+    }
+  }
+
+  // A large shell can still exceed the document or browser quota after detail and older
+  // environments have been removed. Keep every project plus progressively fewer recent thread
+  // rows, instead of silently leaving a previous detail-only document with no sidebar projects.
+  for (const maxShellThreads of SHELL_THREAD_CACHE_CAP_LADDER.slice(1)) {
+    for (const maxDetailThreads of [1, 0] as const) {
+      const compactCurrentEnvironment = retainOnlyCurrentEnvironment(
+        createDocument(maxDetailThreads, maxShellThreads),
+      );
+      if (tryPersistDocument(compactCurrentEnvironment)) {
+        return;
+      }
     }
   }
 }

@@ -812,4 +812,52 @@ describe("orchestration startup cache", () => {
     expect(readCachedEnvironmentState(OTHER_ENVIRONMENT_ID)).toBeNull();
     expect(localStorageStub.getStoredBytes()).toBeLessThanOrEqual(currentShellBytes + 200);
   });
+
+  it("repairs a detail-only cache with every project when the complete shell exceeds the document budget", () => {
+    const activeThreadId = ThreadId.make("thread-oversized-shell-active");
+    const oversizedThreads = Array.from({ length: 1_000 }, (_, index) => ({
+      id: index === 0 ? activeThreadId : ThreadId.make(`thread-oversized-shell-${index}`),
+      title: `Oversized shell thread ${index} ${"x".repeat(1_000)}`,
+      updatedAt: new Date(Date.UTC(2026, 3, 1, 0, 0, index)).toISOString(),
+      ...(index === 0 ? { messageText: "cached active conversation" } : {}),
+    }));
+    const detailOnlyState = makeEnvironmentState({
+      threads: [oversizedThreads[0]!],
+    });
+    writeCachedEnvironmentState(
+      ENVIRONMENT_ID,
+      {
+        ...detailOnlyState,
+        projectIds: [],
+        projectById: {},
+        threadIdsByProjectId: {},
+      },
+      { preferredThreadIds: [activeThreadId], preserveCachedShell: true },
+    );
+    expect(readCachedEnvironmentState(ENVIRONMENT_ID)?.projectIds).toEqual([]);
+
+    const completeState = makeEnvironmentState({ threads: oversizedThreads });
+    writeCachedEnvironmentState(ENVIRONMENT_ID, {
+      ...completeState,
+      projectIds: [PROJECT_ID, SECOND_PROJECT_ID],
+      projectById: {
+        ...completeState.projectById,
+        [SECOND_PROJECT_ID]: {
+          ...completeState.projectById[PROJECT_ID]!,
+          id: SECOND_PROJECT_ID,
+          name: "Second oversized-shell project",
+          cwd: "/tmp/cache-project-second",
+        },
+      },
+    });
+
+    const repaired = readCachedEnvironmentState(ENVIRONMENT_ID);
+    expect(repaired?.projectIds).toEqual([PROJECT_ID, SECOND_PROJECT_ID]);
+    expect(repaired?.threadIds).toContain(activeThreadId);
+    expect(repaired?.threadIds.length).toBeLessThan(oversizedThreads.length);
+    expect(threadMessageTexts(repaired, activeThreadId)).toEqual(["cached active conversation"]);
+    expect(localStorageStub.getItem(ORCHESTRATION_STARTUP_CACHE_STORAGE_KEY)?.length).toBeLessThan(
+      2_000_000,
+    );
+  });
 });
