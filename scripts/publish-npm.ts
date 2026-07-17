@@ -221,10 +221,15 @@ function redactArgs(args: ReadonlyArray<string>): ReadonlyArray<string> {
   });
 }
 
+interface RunCommandOptions {
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly redact?: boolean;
+}
+
 const runCommand = Effect.fn("runCommand")(function* (
   command: string,
   args: ReadonlyArray<string>,
-  options?: { readonly redact?: boolean },
+  options?: RunCommandOptions,
 ) {
   const displayArgs = options?.redact ? redactArgs(args) : args;
   process.stdout.write(`\n$ ${[command, ...displayArgs].map(shellQuote).join(" ")}\n`);
@@ -233,6 +238,7 @@ const runCommand = Effect.fn("runCommand")(function* (
   const child = yield* spawner.spawn(
     ChildProcess.make(spawnCommand.command, spawnCommand.args, {
       cwd: process.cwd(),
+      ...(options?.env ? { env: { ...process.env, ...options.env } } : {}),
       stderr: "inherit",
       stdout: "inherit",
       shell: spawnCommand.shell,
@@ -384,11 +390,7 @@ async function createNpmVersionPublishedLookup(
   return async (version) => publishedVersions.has(version);
 }
 
-async function run(
-  command: string,
-  args: ReadonlyArray<string>,
-  options?: { readonly redact?: boolean },
-) {
+async function run(command: string, args: ReadonlyArray<string>, options?: RunCommandOptions) {
   await Effect.runPromise(
     runCommand(command, args, options).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
@@ -481,8 +483,10 @@ async function main() {
   await run("pnpm", ["fmt"]);
   await run("pnpm", ["lint"]);
   await run("pnpm", ["typecheck"]);
-  await run("pnpm", ["--filter", "@t3tools/web", "build"]);
-  await run("pnpm", ["--filter", "salchi", "build"]);
+  await run("pnpm", ["--filter", "@t3tools/web", "build"], {
+    env: { APP_VERSION: targetVersion },
+  });
+  await run("node", ["apps/server/scripts/cli.ts", "build", "--verbose"]);
 
   const otp = options.otp ?? (options.dryRun ? null : await promptHidden("npm OTP: "));
   const publishArgs = [

@@ -450,10 +450,13 @@ jobs:
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
 
       - name: Build web package
-        run: vp run --filter @t3tools/web build
+        working-directory: apps/web
+        env:
+          APP_VERSION: ${{ needs.preflight.outputs.version }}
+        run: vp build
 
       - name: Build CLI package
-        run: vp run --filter salchi build
+        run: node apps/server/scripts/cli.ts build --verbose
 
       - name: Publish CLI package
         run: node apps/server/scripts/cli.ts publish --tag "${{ needs.preflight.outputs.cli_dist_tag }}" --app-version "${{ needs.preflight.outputs.version }}" --verbose

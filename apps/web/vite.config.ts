@@ -18,6 +18,10 @@ import {
   resolveWebAssetBrandForConfiguredChannel,
   resolveWebIconOverrides,
 } from "../../scripts/lib/brand-assets.ts";
+import {
+  CLIENT_BUILD_METADATA_FILENAME,
+  encodeClientBuildMetadata,
+} from "../../scripts/lib/client-build-metadata.ts";
 import pkg from "./package.json" with { type: "json" };
 
 const port = Number(process.env.PORT ?? 5733);
@@ -160,6 +164,19 @@ function webBrandAssetsPlugin(): Plugin {
   };
 }
 
+function clientBuildMetadataPlugin(): Plugin {
+  return {
+    name: "salchi-client-build-metadata",
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: CLIENT_BUILD_METADATA_FILENAME,
+        source: encodeClientBuildMetadata(configuredAppVersion),
+      });
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     tanstackRouter({
@@ -176,6 +193,7 @@ export default defineConfig({
     }),
     tailwindcss(),
     webBrandAssetsPlugin(),
+    clientBuildMetadataPlugin(),
     VitePWA({
       filename: serviceWorkerFilename,
       injectRegister: false,
