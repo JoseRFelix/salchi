@@ -12,6 +12,7 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { BRAND_ASSET_PATHS, PUBLISH_ICON_OVERRIDES } from "../../../scripts/lib/brand-assets.ts";
+import { verifyClientBuildVersion } from "../../../scripts/lib/client-build-metadata.ts";
 import { resolveCatalogDependencies } from "../../../scripts/lib/resolve-catalog.ts";
 import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
@@ -294,6 +295,7 @@ const publishCmd = Command.make(
       const serverDir = path.join(repoRoot, "apps/server");
       const packageJsonPath = path.join(serverDir, "package.json");
       const backupPath = `${packageJsonPath}.bak`;
+      const version = Option.getOrElse(config.appVersion, () => serverPackageJson.version);
 
       // Assert build assets exist
       for (const relPath of ["dist/bin.mjs", "dist/client/index.html"]) {
@@ -305,10 +307,19 @@ const publishCmd = Command.make(
         }
       }
 
+      yield* Effect.tryPromise({
+        try: () => verifyClientBuildVersion(path.join(serverDir, "dist/client"), version),
+        catch: (cause) =>
+          new CliError({
+            message: cause instanceof Error ? cause.message : String(cause),
+            cause,
+          }),
+      });
+      yield* Effect.log(`[cli] Verified bundled client version ${version}`);
+
       yield* Effect.acquireUseRelease(
         // Acquire: backup package.json, resolve catalog dependencies, and strip devDependencies/scripts
         Effect.gen(function* () {
-          const version = Option.getOrElse(config.appVersion, () => serverPackageJson.version);
           const workspaceConfig = yield* readWorkspaceConfig();
           const workspaceCatalog = workspaceConfig.catalog ?? {};
           const workspaceOverrides = workspaceConfig.overrides ?? {};

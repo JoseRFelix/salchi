@@ -26,5 +26,12 @@
       }
     ]
   },
-  "include": ["src", "vite.config.ts", "vercel.ts", "test", "../../scripts/lib/brand-assets.ts"]
+  "include": [
+    "src",
+    "vite.config.ts",
+    "vercel.ts",
+    "test",
+    "../../scripts/lib/brand-assets.ts",
+    "../../scripts/lib/client-build-metadata.ts"
+  ]
 }
