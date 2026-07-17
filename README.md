@@ -28,7 +28,7 @@ That makes Salchi useful when you want:
 
 - Use your existing AI subscriptions for Codex, Claude, Cursor, or OpenCode
   instead of paying for a separate token bundle.
-- Private remote access through `npx salchi`, the desktop app, or Tailscale Serve
+- Private remote access through `npx salchi@latest`, the desktop app, or Tailscale Serve
   without exposing your editor to the public internet.
 - One web surface for many providers, including Claude, OpenAI/Codex, Cursor,
   and OpenCode.
@@ -60,7 +60,7 @@ That makes Salchi useful when you want:
 ### Run without installing
 
 ```bash
-npx salchi
+npx salchi@latest
 ```
 
 ### Tailscale quick start on macOS
@@ -89,7 +89,7 @@ tailscale status
 6. Start a headless Salchi server and keep macOS awake while it is running:
 
 ```bash
-caffeinate -ims npx salchi serve --tailscale-serve --port 4888
+caffeinate -ims npx salchi@latest serve --tailscale-serve --port 4888
 ```
 
 Salchi prints a pairing URL like:
@@ -106,7 +106,7 @@ Open that URL from another device signed into the same tailnet.
 Use a non-default Tailscale HTTPS port with:
 
 ```bash
-caffeinate -ims npx salchi serve \
+caffeinate -ims npx salchi@latest serve \
   --tailscale-serve \
   --tailscale-serve-port 8443 \
   --port 4888
