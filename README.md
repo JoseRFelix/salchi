@@ -10,9 +10,25 @@ Cursor, and OpenCode, with more providers coming soon. Bring the AI
 subscriptions you already use; Salchi connects to your authenticated provider
 CLIs instead of reselling tokens.
 
+<p align="center">
+  <img src="./assets/screenshots/salchi-device-showcase.png" alt="Salchi running on a modern MacBook and iPhone" width="1200" />
+</p>
+
 ## Demo
 
 https://github.com/user-attachments/assets/f1198b94-858d-4600-b3ad-d9ea40f568bd
+
+## Screenshots
+
+<p align="center">
+  <img src="./assets/screenshots/salchi-jobs-sidebar.png" alt="Salchi sidebar with pending and completed jobs" width="480" />
+  <img src="./assets/screenshots/salchi-theme-selection.png" alt="Selecting a theme in Salchi" width="480" />
+</p>
+
+<p align="center">
+  <img src="./assets/screenshots/salchi-mobile-app.png" alt="Salchi mobile app" width="260" />
+  <img src="./assets/screenshots/salchi-mobile-push-notifications.png" alt="Salchi mobile push notification prompt" width="260" />
+</p>
 
 ## Why Salchi?
 
