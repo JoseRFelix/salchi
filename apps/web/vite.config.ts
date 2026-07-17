@@ -167,11 +167,12 @@ function webBrandAssetsPlugin(): Plugin {
 function clientBuildMetadataPlugin(): Plugin {
   return {
     name: "salchi-client-build-metadata",
-    async closeBundle() {
-      await fs.writeFile(
-        path.join(repoRoot, "apps/web/dist", CLIENT_BUILD_METADATA_FILENAME),
-        encodeClientBuildMetadata(configuredAppVersion),
-      );
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: CLIENT_BUILD_METADATA_FILENAME,
+        source: encodeClientBuildMetadata(configuredAppVersion),
+      });
     },
   };
 }
