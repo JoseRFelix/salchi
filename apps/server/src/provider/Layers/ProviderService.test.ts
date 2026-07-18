@@ -780,6 +780,99 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("persists remembered approvals and auto-approves later provider requests", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const rememberedThreadId = asThreadId("thread-remembered-approval");
+      const oneTimeThreadId = asThreadId("thread-one-time-approval");
+
+      yield* provider.startSession(rememberedThreadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId: rememberedThreadId,
+        runtimeMode: "approval-required",
+      });
+      yield* provider.startSession(oneTimeThreadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId: oneTimeThreadId,
+        runtimeMode: "approval-required",
+      });
+
+      yield* provider.respondToRequest({
+        threadId: rememberedThreadId,
+        requestId: asRequestId("req-remember-choice"),
+        decision: "acceptForSession",
+      });
+      yield* provider.respondToRequest({
+        threadId: oneTimeThreadId,
+        requestId: asRequestId("req-once-choice"),
+        decision: "accept",
+      });
+
+      const rememberedBinding = Option.getOrUndefined(
+        yield* directory.getBinding(rememberedThreadId),
+      );
+      assert.deepInclude(rememberedBinding?.runtimePayload as Record<string, unknown>, {
+        approvalGranted: true,
+      });
+
+      // Simulate the provider process being reaped and recovered. The grant
+      // belongs to the durable Salchi thread binding, not the old process.
+      yield* routing.codex.stopSession(rememberedThreadId);
+      yield* provider.sendTurn({
+        threadId: rememberedThreadId,
+        input: "continue after reconnect",
+        attachments: [],
+      });
+      const recoveredBinding = Option.getOrUndefined(
+        yield* directory.getBinding(rememberedThreadId),
+      );
+      assert.deepInclude(recoveredBinding?.runtimePayload as Record<string, unknown>, {
+        approvalGranted: true,
+      });
+
+      routing.codex.respondToRequest.mockClear();
+      yield* advanceTestClock(10);
+      routing.codex.emit({
+        type: "request.opened",
+        eventId: asEventId("evt-remembered-approval-next"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        threadId: rememberedThreadId,
+        requestId: asRequestId("req-remembered-next"),
+        payload: {
+          requestType: "command_execution_approval",
+          detail: "bun run typecheck",
+        },
+      });
+      routing.codex.emit({
+        type: "request.opened",
+        eventId: asEventId("evt-one-time-approval-next"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        threadId: oneTimeThreadId,
+        requestId: asRequestId("req-one-time-next"),
+        payload: {
+          requestType: "command_execution_approval",
+          detail: "bun run lint",
+        },
+      });
+      yield* advanceTestClock(20);
+
+      assert.deepEqual(routing.codex.respondToRequest.mock.calls, [
+        [rememberedThreadId, asRequestId("req-remembered-next"), "acceptForSession"],
+      ]);
+      routing.codex.respondToRequest.mockClear();
+      yield* provider.stopSession({ threadId: rememberedThreadId });
+      yield* provider.stopSession({ threadId: oneTimeThreadId });
+      routing.codex.startSession.mockClear();
+      routing.codex.sendTurn.mockClear();
+      routing.codex.stopSession.mockClear();
+    }),
+  );
+
   it.effect("routes provider operations and rollback conversation", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
