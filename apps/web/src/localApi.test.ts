@@ -1,5 +1,6 @@
 import {
   CommandId,
+  CURRENT_CLIENT_SETTINGS_VERSION,
   DEFAULT_SERVER_SETTINGS,
   type DesktopBridge,
   EnvironmentId,
@@ -671,6 +672,7 @@ describe("wsApi", () => {
 
   it("reads and writes persistence through the desktop bridge when available", async () => {
     const clientSettings = {
+      clientSettingsVersion: CURRENT_CLIENT_SETTINGS_VERSION,
       autoOpenPlanSidebar: false,
       confirmThreadArchive: true,
       confirmThreadDelete: false,
@@ -737,6 +739,7 @@ describe("wsApi", () => {
     const { createLocalApi } = await import("./localApi");
     const api = createLocalApi(rpcClientMock as never);
     const clientSettings = {
+      clientSettingsVersion: CURRENT_CLIENT_SETTINGS_VERSION,
       autoOpenPlanSidebar: false,
       confirmThreadArchive: true,
       confirmThreadDelete: false,

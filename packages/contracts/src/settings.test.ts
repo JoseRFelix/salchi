@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   ClientSettingsSchema,
+  CURRENT_CLIENT_SETTINGS_VERSION,
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_SERVER_SETTINGS,
   ServerSettings,
@@ -17,8 +18,11 @@ const encodeServerSettings = Schema.encodeSync(ServerSettings);
 
 describe("ClientSettings defaults", () => {
   it("keeps the task and plan sidebar closed until the user opens it", () => {
+    expect(DEFAULT_CLIENT_SETTINGS.clientSettingsVersion).toBe(CURRENT_CLIENT_SETTINGS_VERSION);
     expect(DEFAULT_CLIENT_SETTINGS.autoOpenPlanSidebar).toBe(false);
-    expect(decodeClientSettings({}).autoOpenPlanSidebar).toBe(false);
+    const legacySettings = decodeClientSettings({});
+    expect(legacySettings.clientSettingsVersion).toBe(0);
+    expect(legacySettings.autoOpenPlanSidebar).toBe(false);
   });
 });
 

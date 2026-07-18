@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
+import { NonNegativeInt, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL, ProviderOptionSelections } from "./model.ts";
 import { ModelSelection } from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
@@ -49,7 +49,10 @@ export const ImportedColorThemeReference = Schema.Struct({
 });
 export type ImportedColorThemeReference = typeof ImportedColorThemeReference.Type;
 
+export const CURRENT_CLIENT_SETTINGS_VERSION = 1;
+
 export const ClientSettingsSchema = Schema.Struct({
+  clientSettingsVersion: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -112,7 +115,10 @@ export const ClientSettingsSchema = Schema.Struct({
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
-export const DEFAULT_CLIENT_SETTINGS: ClientSettings = Schema.decodeSync(ClientSettingsSchema)({});
+export const DEFAULT_CLIENT_SETTINGS: ClientSettings = {
+  ...Schema.decodeSync(ClientSettingsSchema)({}),
+  clientSettingsVersion: CURRENT_CLIENT_SETTINGS_VERSION,
+};
 
 // ── Server Settings (server-authoritative) ────────────────────
 
@@ -549,6 +555,7 @@ export const ServerSettingsPatch = Schema.Struct({
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
+  clientSettingsVersion: Schema.optionalKey(NonNegativeInt),
   autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
