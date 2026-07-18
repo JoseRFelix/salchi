@@ -235,7 +235,10 @@ import {
   useServerConfig,
   useServerKeybindings,
 } from "~/rpc/serverState";
-import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
+import {
+  isTransportConnectionErrorMessage,
+  sanitizeThreadErrorMessage,
+} from "~/rpc/transportError";
 import { retainActiveThreadDetailSubscription } from "../environments/runtime/service";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { Button } from "./ui/button";
@@ -295,6 +298,22 @@ type EnvironmentUnavailableState = {
 };
 
 type ThreadPlanCatalogEntry = Pick<Thread, "id" | "proposedPlans">;
+
+function showMessageConnectionFailureToast(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!isTransportConnectionErrorMessage(message)) {
+    return;
+  }
+
+  toastManager.add(
+    stackedThreadToast({
+      type: "error",
+      title: "Couldn’t confirm message delivery",
+      description:
+        "The connection failed after several retries. Your message is back in the composer; check the thread before resending.",
+    }),
+  );
+}
 
 function eventPathContainsSelector(event: Event, selector: string): boolean {
   const path = event.composedPath();
@@ -3855,6 +3874,7 @@ export default function ChatView(props: ChatViewProps) {
           threadIdForSend,
           err instanceof Error ? err.message : "Failed to queue message.",
         );
+        showMessageConnectionFailureToast(err);
       } finally {
         sendInFlightRef.current = false;
       }
@@ -4009,6 +4029,7 @@ export default function ChatView(props: ChatViewProps) {
         threadIdForSend,
         err instanceof Error ? err.message : "Failed to send message.",
       );
+      showMessageConnectionFailureToast(err);
     });
     sendInFlightRef.current = false;
     if (!turnStartSucceeded) {

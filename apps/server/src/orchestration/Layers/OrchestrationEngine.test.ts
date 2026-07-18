@@ -302,6 +302,81 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("deduplicates concurrent retries of an accepted turn-start command", async () => {
+    const createdAt = now();
+    const projectId = asProjectId("project-turn-retry-dedup");
+    const threadId = ThreadId.make("thread-turn-retry-dedup");
+    const messageId = asMessageId("message-turn-retry-dedup");
+    const commandId = CommandId.make("cmd-turn-retry-dedup");
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-turn-retry-dedup"),
+        projectId,
+        title: "Retry dedup project",
+        workspaceRoot: "/tmp/project-turn-retry-dedup",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-turn-retry-dedup"),
+        threadId,
+        projectId,
+        title: "Retry dedup thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    const turnStartCommand = {
+      type: "thread.turn.start" as const,
+      commandId,
+      threadId,
+      message: {
+        messageId,
+        role: "user" as const,
+        text: "Send exactly once",
+        attachments: [],
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required" as const,
+      createdAt,
+    };
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () => system.run(engine.dispatch(turnStartCommand))),
+    );
+
+    expect(new Set(results.map((result) => result.sequence))).toEqual(new Set([4]));
+    const retryEvents = (await system.readEvents()).filter(
+      (event) => event.commandId === commandId,
+    );
+    expect(retryEvents.map((event) => event.type)).toEqual([
+      "thread.message-sent",
+      "thread.turn-start-requested",
+    ]);
+    const readModel = await system.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    expect(thread?.messages.filter((message) => message.id === messageId)).toHaveLength(1);
+
+    await system.dispose();
+  });
+
   it("projects queued turns separately from messages through cancel and dispatch", async () => {
     const createdAt = now();
     const threadId = ThreadId.make("thread-queue");

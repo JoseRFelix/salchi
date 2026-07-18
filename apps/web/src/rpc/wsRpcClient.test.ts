@@ -27,8 +27,9 @@ vi.mock("./wsTransport", () => ({
 
 import {
   createWsRpcClient,
+  DISPATCH_COMMAND_MAX_RETRY_COUNT,
   DISPATCH_COMMAND_REQUEST_TIMEOUT_MS,
-  DISPATCH_COMMAND_RECONNECT_TIMEOUT_MS,
+  DISPATCH_COMMAND_RETRY_BASE_DELAY_MS,
 } from "./wsRpcClient";
 import { type WsTransport } from "./wsTransport";
 
@@ -185,13 +186,26 @@ describe("wsRpcClient", () => {
     expect(protocolGetThreadDetailPage).toHaveBeenCalledWith(input);
   });
 
-  it("rejects dispatchCommand when the request and retry both time out", async () => {
+  it("rejects dispatchCommand after every request retry times out", async () => {
     vi.useFakeTimers();
+    const protocolDispatch = vi.fn(() => Effect.void);
+    const protocolClient = {
+      [ORCHESTRATION_WS_METHODS.dispatchCommand]: protocolDispatch,
+    } as unknown as WsRpcProtocolClient;
+    const request = vi.fn(
+      <TSuccess>(
+        execute: (client: WsRpcProtocolClient) => Effect.Effect<TSuccess, Error, never>,
+        _options?: { readonly signal?: AbortSignal },
+      ) => {
+        void Effect.runPromise(execute(protocolClient));
+        return new Promise<TSuccess>(() => undefined);
+      },
+    );
     const transport = {
       dispose: vi.fn(async () => undefined),
       reconnect: vi.fn(async () => undefined),
       isHeartbeatFresh: vi.fn(() => true),
-      request: vi.fn(() => new Promise(() => undefined)) as unknown as WsTransport["request"],
+      request: request as WsTransport["request"],
       requestStream: vi.fn(),
       subscribe: vi.fn(() => () => undefined),
     } satisfies Pick<
@@ -199,19 +213,25 @@ describe("wsRpcClient", () => {
       "dispose" | "reconnect" | "isHeartbeatFresh" | "request" | "requestStream" | "subscribe"
     >;
     const client = createWsRpcClient(transport as unknown as WsTransport);
+    const input = makeDispatchInput();
 
-    const promise = client.orchestration.dispatchCommand(makeDispatchInput());
+    const promise = client.orchestration.dispatchCommand(input);
     const expectation = expect(promise).rejects.toSatisfy(
       (error: unknown) =>
         error instanceof Error && isTransportConnectionErrorMessage(error.message),
     );
-    await vi.advanceTimersByTimeAsync(DISPATCH_COMMAND_REQUEST_TIMEOUT_MS);
-    await vi.advanceTimersByTimeAsync(DISPATCH_COMMAND_RECONNECT_TIMEOUT_MS);
-    await vi.advanceTimersByTimeAsync(DISPATCH_COMMAND_REQUEST_TIMEOUT_MS);
+    await vi.runAllTimersAsync();
 
     await expectation;
-    expect(transport.reconnect).toHaveBeenCalledTimes(1);
-    expect(transport.request).toHaveBeenCalledTimes(2);
+    expect(transport.reconnect).toHaveBeenCalledTimes(DISPATCH_COMMAND_MAX_RETRY_COUNT);
+    expect(transport.request).toHaveBeenCalledTimes(DISPATCH_COMMAND_MAX_RETRY_COUNT + 1);
+    expect(protocolDispatch).toHaveBeenCalledTimes(DISPATCH_COMMAND_MAX_RETRY_COUNT + 1);
+    for (let callIndex = 1; callIndex <= DISPATCH_COMMAND_MAX_RETRY_COUNT + 1; callIndex += 1) {
+      expect(protocolDispatch).toHaveBeenNthCalledWith(callIndex, input);
+    }
+    for (const [, options] of request.mock.calls) {
+      expect(options?.signal?.aborted).toBe(true);
+    }
   });
 
   it("reconnects before dispatchCommand when the heartbeat is stale", async () => {
@@ -248,7 +268,7 @@ describe("wsRpcClient", () => {
     expect(protocolDispatch).toHaveBeenCalledWith(input);
   });
 
-  it("retries a timed out dispatchCommand once after reconnecting with the same commandId", async () => {
+  it("retries a timed out dispatchCommand after reconnecting with the same commandId", async () => {
     vi.useFakeTimers();
     const protocolDispatch = vi.fn(() => Effect.void);
     const protocolClient = {
@@ -280,7 +300,9 @@ describe("wsRpcClient", () => {
     const input = makeDispatchInput();
     const promise = client.orchestration.dispatchCommand(input);
 
-    await vi.advanceTimersByTimeAsync(DISPATCH_COMMAND_REQUEST_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(
+      DISPATCH_COMMAND_REQUEST_TIMEOUT_MS + DISPATCH_COMMAND_RETRY_BASE_DELAY_MS,
+    );
 
     await expect(promise).resolves.toBeUndefined();
     expect(transport.reconnect).toHaveBeenCalledTimes(1);
@@ -288,6 +310,108 @@ describe("wsRpcClient", () => {
     expect(protocolDispatch).toHaveBeenCalledTimes(2);
     expect(protocolDispatch).toHaveBeenNthCalledWith(1, input);
     expect(protocolDispatch).toHaveBeenNthCalledWith(2, input);
+  });
+
+  it("retries an immediate connection failure and sends after reconnecting", async () => {
+    vi.useFakeTimers();
+    const protocolDispatch = vi.fn(() => Effect.void);
+    const protocolClient = {
+      [ORCHESTRATION_WS_METHODS.dispatchCommand]: protocolDispatch,
+    } as unknown as WsRpcProtocolClient;
+    const request = vi.fn(
+      async <TSuccess>(
+        execute: (client: WsRpcProtocolClient) => Effect.Effect<TSuccess, Error, never>,
+      ) => {
+        if (request.mock.calls.length === 1) {
+          throw new Error("SocketCloseError: WebSocket closed");
+        }
+        return Effect.runPromise(execute(protocolClient));
+      },
+    );
+    const transport = {
+      dispose: vi.fn(async () => undefined),
+      reconnect: vi.fn(async () => undefined),
+      isHeartbeatFresh: vi.fn(() => true),
+      request: request as WsTransport["request"],
+      requestStream: vi.fn(),
+      subscribe: vi.fn(() => () => undefined),
+    } satisfies Pick<
+      WsTransport,
+      "dispose" | "reconnect" | "isHeartbeatFresh" | "request" | "requestStream" | "subscribe"
+    >;
+    const client = createWsRpcClient(transport as unknown as WsTransport);
+    const input = makeDispatchInput();
+    const promise = client.orchestration.dispatchCommand(input);
+
+    await vi.advanceTimersByTimeAsync(DISPATCH_COMMAND_RETRY_BASE_DELAY_MS);
+
+    await expect(promise).resolves.toBeUndefined();
+    expect(transport.reconnect).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(protocolDispatch).toHaveBeenCalledWith(input);
+  });
+
+  it("keeps retrying failed reconnects until the command can be sent", async () => {
+    vi.useFakeTimers();
+    const protocolDispatch = vi.fn(() => Effect.void);
+    const protocolClient = {
+      [ORCHESTRATION_WS_METHODS.dispatchCommand]: protocolDispatch,
+    } as unknown as WsRpcProtocolClient;
+    const request = vi.fn(
+      async <TSuccess>(
+        execute: (client: WsRpcProtocolClient) => Effect.Effect<TSuccess, Error, never>,
+      ) => Effect.runPromise(execute(protocolClient)),
+    );
+    const reconnect = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("SocketOpenError: offline"))
+      .mockRejectedValueOnce(new Error("SocketOpenError: still offline"))
+      .mockResolvedValue(undefined);
+    const transport = {
+      dispose: vi.fn(async () => undefined),
+      reconnect,
+      isHeartbeatFresh: vi.fn(() => false),
+      request: request as WsTransport["request"],
+      requestStream: vi.fn(),
+      subscribe: vi.fn(() => () => undefined),
+    } satisfies Pick<
+      WsTransport,
+      "dispose" | "reconnect" | "isHeartbeatFresh" | "request" | "requestStream" | "subscribe"
+    >;
+    const client = createWsRpcClient(transport as unknown as WsTransport);
+    const input = makeDispatchInput();
+    const promise = client.orchestration.dispatchCommand(input);
+
+    await vi.advanceTimersByTimeAsync(
+      DISPATCH_COMMAND_RETRY_BASE_DELAY_MS + DISPATCH_COMMAND_RETRY_BASE_DELAY_MS * 2,
+    );
+
+    await expect(promise).resolves.toBeUndefined();
+    expect(reconnect).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(protocolDispatch).toHaveBeenCalledWith(input);
+  });
+
+  it("does not retry non-connection command failures", async () => {
+    const commandError = new Error("Project not found");
+    const transport = {
+      dispose: vi.fn(async () => undefined),
+      reconnect: vi.fn(async () => undefined),
+      isHeartbeatFresh: vi.fn(() => true),
+      request: vi.fn(async () => Promise.reject(commandError)) as unknown as WsTransport["request"],
+      requestStream: vi.fn(),
+      subscribe: vi.fn(() => () => undefined),
+    } satisfies Pick<
+      WsTransport,
+      "dispose" | "reconnect" | "isHeartbeatFresh" | "request" | "requestStream" | "subscribe"
+    >;
+    const client = createWsRpcClient(transport as unknown as WsTransport);
+
+    await expect(client.orchestration.dispatchCommand(makeDispatchInput())).rejects.toBe(
+      commandError,
+    );
+    expect(transport.reconnect).not.toHaveBeenCalled();
+    expect(transport.request).toHaveBeenCalledTimes(1);
   });
 
   it("reduces vcs status stream events into flat status snapshots", () => {

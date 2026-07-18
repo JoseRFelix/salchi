@@ -1481,4 +1481,75 @@ describe("WsTransport", () => {
     await expect(requestPromise).resolves.toEqual(DEFAULT_SERVER_SETTINGS);
     await transport.dispose();
   });
+
+  it("interrupts an in-flight RPC when its request signal is aborted", async () => {
+    const transport = createTransport("ws://localhost:3020");
+    const controller = new AbortController();
+    const requestPromise = transport.request((client) => client[WS_METHODS.serverGetSettings]({}), {
+      signal: controller.signal,
+    });
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+    });
+
+    const socket = getSocket();
+    socket.open();
+
+    await waitFor(() => {
+      expect(socket.sent).toHaveLength(1);
+    });
+    const request = JSON.parse(socket.sent[0] ?? "{}") as { id?: string };
+
+    controller.abort();
+
+    const requestError = await requestPromise.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(requestError).toSatisfy(
+      (error: unknown) => error instanceof Error && /interrupted/i.test(error.message),
+    );
+    await waitFor(() => {
+      const interrupt = socket.sent
+        .map((message) => JSON.parse(message) as { _tag?: string; requestId?: string })
+        .find((message) => message._tag === "Interrupt");
+      expect(interrupt?.requestId).toBe(request.id);
+    });
+
+    await transport.dispose();
+  });
+
+  it("does not flush an aborted request when the socket connects later", async () => {
+    const transport = createTransport("ws://localhost:3020");
+    const controller = new AbortController();
+    const requestPromise = transport.request((client) => client[WS_METHODS.serverGetSettings]({}), {
+      signal: controller.signal,
+    });
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+    });
+
+    const socket = getSocket();
+    controller.abort();
+    const requestError = await requestPromise.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(requestError).toSatisfy(
+      (error: unknown) => error instanceof Error && /interrupted/i.test(error.message),
+    );
+
+    socket.open();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(
+      socket.sent
+        .map((message) => JSON.parse(message) as { _tag?: string })
+        .some((message) => message._tag === "Request"),
+    ).toBe(false);
+
+    await transport.dispose();
+  });
 });

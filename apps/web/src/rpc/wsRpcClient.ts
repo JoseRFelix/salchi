@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
 import { type WsRpcProtocolClient } from "./protocol";
+import { isTransportConnectionErrorMessage } from "./transportError";
 import { resetWsReconnectBackoff } from "./wsConnectionState";
 import { WsTransport, type SubscriptionErrorInfo } from "./wsTransport";
 
@@ -59,6 +60,8 @@ interface GitRunStackedActionOptions {
 
 export const DISPATCH_COMMAND_REQUEST_TIMEOUT_MS = 8_000;
 export const DISPATCH_COMMAND_RECONNECT_TIMEOUT_MS = 8_000;
+export const DISPATCH_COMMAND_MAX_RETRY_COUNT = 3;
+export const DISPATCH_COMMAND_RETRY_BASE_DELAY_MS = 500;
 
 class DispatchCommandTimeoutError extends Error {
   constructor(timeoutMs: number) {
@@ -82,6 +85,7 @@ function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
   createError: () => Error,
+  onTimeout?: () => void,
 ): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
@@ -96,6 +100,7 @@ function withTimeout<T>(
     timeoutId = setTimeout(() => {
       timeoutId = null;
       reject(createError());
+      onTimeout?.();
     }, timeoutMs);
 
     promise.then(
@@ -109,6 +114,16 @@ function withTimeout<T>(
       },
     );
   });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function getDispatchCommandRetryDelayMs(retryCount: number): number {
+  return DISPATCH_COMMAND_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, retryCount - 1);
 }
 
 function toDispatchCommandTransportError(context: string, error: unknown): Error {
@@ -134,36 +149,56 @@ async function dispatchCommandWithConnectionRecovery(
   transport: WsTransport,
   input: RpcInput<typeof ORCHESTRATION_WS_METHODS.dispatchCommand>,
 ): ReturnType<RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.dispatchCommand>> {
-  const dispatch = () =>
-    transport.request((client) => client[ORCHESTRATION_WS_METHODS.dispatchCommand](input));
-
-  if (!transport.isHeartbeatFresh()) {
-    await reconnectForDispatchCommand(transport, "dispatchCommand pre-flight reconnect failed");
-  }
-
-  try {
-    return await withTimeout(
-      dispatch(),
+  const dispatch = () => {
+    const controller = new AbortController();
+    return withTimeout(
+      transport.request((client) => client[ORCHESTRATION_WS_METHODS.dispatchCommand](input), {
+        signal: controller.signal,
+      }),
       DISPATCH_COMMAND_REQUEST_TIMEOUT_MS,
       () => new DispatchCommandTimeoutError(DISPATCH_COMMAND_REQUEST_TIMEOUT_MS),
+      () => controller.abort(),
     );
-  } catch (error) {
-    if (!isDispatchCommandTimeoutError(error)) {
-      throw error;
+  };
+
+  let lastConnectionError: unknown = new Error("WebSocket connection unavailable.");
+
+  for (let attempt = 0; attempt <= DISPATCH_COMMAND_MAX_RETRY_COUNT; attempt += 1) {
+    if (attempt > 0) {
+      await sleep(getDispatchCommandRetryDelayMs(attempt));
+    }
+
+    if (attempt > 0 || !transport.isHeartbeatFresh()) {
+      try {
+        await reconnectForDispatchCommand(
+          transport,
+          attempt === 0
+            ? "dispatchCommand pre-flight reconnect failed"
+            : `dispatchCommand reconnect ${attempt} failed`,
+        );
+      } catch (error) {
+        lastConnectionError = error;
+        continue;
+      }
+    }
+
+    try {
+      return await dispatch();
+    } catch (error) {
+      if (
+        !isDispatchCommandTimeoutError(error) &&
+        !isTransportConnectionErrorMessage(formatErrorMessage(error))
+      ) {
+        throw error;
+      }
+      lastConnectionError = error;
     }
   }
 
-  await reconnectForDispatchCommand(transport, "dispatchCommand reconnect after timeout failed");
-
-  try {
-    return await withTimeout(
-      dispatch(),
-      DISPATCH_COMMAND_REQUEST_TIMEOUT_MS,
-      () => new DispatchCommandTimeoutError(DISPATCH_COMMAND_REQUEST_TIMEOUT_MS),
-    );
-  } catch (error) {
-    throw toDispatchCommandTransportError("dispatchCommand retry failed", error);
-  }
+  throw toDispatchCommandTransportError(
+    `dispatchCommand failed after ${DISPATCH_COMMAND_MAX_RETRY_COUNT} retries`,
+    lastConnectionError,
+  );
 }
 
 export interface WsRpcClient {
