@@ -38,17 +38,17 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         size="sm"
         variant="outline"
         disabled={isResponding}
-        onClick={() => void onRespondToApproval(requestId, "acceptForSession")}
+        onClick={() => void onRespondToApproval(requestId, "accept")}
       >
-        Always allow this session
+        Allow once
       </Button>
       <Button
         size="sm"
         variant="default"
         disabled={isResponding}
-        onClick={() => void onRespondToApproval(requestId, "accept")}
+        onClick={() => void onRespondToApproval(requestId, "acceptForSession")}
       >
-        Approve once
+        Approve and remember
       </Button>
     </>
   );

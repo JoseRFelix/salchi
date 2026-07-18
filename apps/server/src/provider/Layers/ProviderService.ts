@@ -10,6 +10,7 @@
  * @module ProviderServiceLive
  */
 import {
+  ApprovalRequestId,
   ModelSelection,
   NonNegativeInt,
   ThreadId,
@@ -161,6 +162,18 @@ function readPersistedCwd(
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function readPersistedApprovalGrant(
+  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
+): boolean {
+  return (
+    runtimePayload !== null &&
+    typeof runtimePayload === "object" &&
+    !Array.isArray(runtimePayload) &&
+    "approvalGranted" in runtimePayload &&
+    runtimePayload.approvalGranted === true
+  );
+}
+
 const dieOnMissingBindingInstanceId = (
   operation: string,
   payload: {
@@ -272,16 +285,53 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     source: {
       readonly instanceId: ProviderInstanceId;
       readonly provider: ProviderDriverKind;
+      readonly adapter: ProviderAdapterShape<ProviderAdapterError>;
     },
     event: ProviderRuntimeEvent,
   ): Effect.Effect<void> =>
     Effect.sync(() => correlateRuntimeEventWithInstance(source, event)).pipe(
-      Effect.flatMap((canonicalEvent) =>
-        increment(providerRuntimeEventsTotal, {
+      Effect.flatMap((canonicalEvent) => {
+        const approvalRequestId =
+          canonicalEvent.type === "request.opened" &&
+          canonicalEvent.requestId !== undefined &&
+          canonicalEvent.payload.requestType !== "tool_user_input"
+            ? ApprovalRequestId.make(canonicalEvent.requestId)
+            : null;
+        return increment(providerRuntimeEventsTotal, {
           provider: canonicalEvent.provider,
           eventType: canonicalEvent.type,
-        }).pipe(Effect.andThen(publishRuntimeEvent(canonicalEvent))),
-      ),
+        }).pipe(
+          Effect.andThen(publishRuntimeEvent(canonicalEvent)),
+          Effect.andThen(
+            approvalRequestId !== null
+              ? directory.getBinding(canonicalEvent.threadId).pipe(
+                  Effect.flatMap((binding) =>
+                    Option.match(binding, {
+                      onNone: () => Effect.void,
+                      onSome: (value) =>
+                        value.providerInstanceId === source.instanceId &&
+                        readPersistedApprovalGrant(value.runtimePayload)
+                          ? source.adapter.respondToRequest(
+                              canonicalEvent.threadId,
+                              approvalRequestId,
+                              "acceptForSession",
+                            )
+                          : Effect.void,
+                    }),
+                  ),
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("provider.request.auto-approval-failed", {
+                      threadId: canonicalEvent.threadId,
+                      requestId: canonicalEvent.requestId,
+                      provider: canonicalEvent.provider,
+                      cause,
+                    }),
+                  ),
+                )
+              : Effect.void,
+          ),
+        );
+      }),
     );
 
   // `subscribedAdapters` is our source-of-truth for "which instance adapters
@@ -323,6 +373,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             {
               instanceId: id,
               provider: adapter.provider,
+              adapter,
             },
             event,
           ),
@@ -826,6 +877,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.thread_id": input.threadId,
           "provider.request_id": input.requestId,
         });
+        if (input.decision === "acceptForSession") {
+          yield* directory.upsert({
+            threadId: input.threadId,
+            provider: routed.adapter.provider,
+            providerInstanceId: routed.instanceId,
+            runtimePayload: {
+              approvalGranted: true,
+            },
+          });
+        }
         yield* routed.adapter.respondToRequest(routed.threadId, input.requestId, input.decision);
         yield* analytics.record("provider.request.responded", {
           provider: routed.adapter.provider,
