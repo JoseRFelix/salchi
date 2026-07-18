@@ -4739,7 +4739,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     },
   );
 
-  const sendTurn: ClaudeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
+  const sendTurnInternal = Effect.fn("sendTurnInternal")(function* (
+    input: ProviderSendTurnInput,
+    expectedTurnId?: TurnId,
+  ) {
     const context = yield* requireSession(input.threadId);
     const modelSelection =
       input.modelSelection !== undefined && input.modelSelection.instanceId === boundInstanceId
@@ -4753,6 +4756,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     // instead, so they don't block the user's next turn.
     const steeringTurnState =
       context.turnState && context.turnState.synthetic !== true ? context.turnState : null;
+    if (expectedTurnId !== undefined && steeringTurnState?.turnId !== expectedTurnId) {
+      return yield* new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "turn/steer",
+        detail: `Expected active turn '${expectedTurnId}', received '${steeringTurnState?.turnId ?? "none"}'.`,
+      });
+    }
     if (context.turnState && steeringTurnState === null) {
       yield* completeTurn(context, "completed");
     }
@@ -4831,7 +4841,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     yield* Queue.offer(context.promptQueue, {
       type: "message",
       message,
-    }).pipe(Effect.mapError((cause) => toRequestError(input.threadId, "turn/start", cause)));
+    }).pipe(
+      Effect.mapError((cause) =>
+        toRequestError(input.threadId, expectedTurnId ? "turn/steer" : "turn/start", cause),
+      ),
+    );
 
     return {
       threadId: context.session.threadId,
@@ -4841,6 +4855,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         : {}),
     };
   });
+
+  const sendTurn: ClaudeAdapterShape["sendTurn"] = (input) => sendTurnInternal(input);
+  const steerTurn: ClaudeAdapterShape["steerTurn"] = (input) =>
+    sendTurnInternal(
+      {
+        threadId: input.threadId,
+        ...(input.input !== undefined ? { input: input.input } : {}),
+        ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
+      },
+      input.expectedTurnId,
+    );
 
   const interruptTurn: ClaudeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
     function* (threadId, _turnId) {
@@ -4974,9 +4999,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     capabilities: {
       sessionModelSwitch: "in-session",
       childThreadMode: "activity-only",
+      activeTurnSteering: "streaming-input",
     },
     startSession,
     sendTurn,
+    steerTurn,
     interruptTurn,
     readThread,
     rollbackThread,

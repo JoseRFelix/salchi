@@ -7,6 +7,7 @@ import {
   ApprovalRequestId,
   CodexSettings,
   EventId,
+  MessageId,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderItemId,
@@ -46,6 +47,7 @@ import {
   type CodexSpawnedChildThreadListOptions,
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeSendTurnInput,
+  type CodexSessionRuntimeSteerTurnInput,
   type CodexSessionRuntimeShape,
   type CodexThreadSnapshot,
 } from "./CodexSessionRuntime.ts";
@@ -341,6 +343,27 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
         resumeCursor: { threadId: providerThreadId },
       }),
   );
+  public readonly steerTurnImpl = vi.fn(
+    (input: CodexSessionRuntimeSteerTurnInput): Promise<ProviderTurnStartResult> =>
+      Promise.resolve({
+        threadId: this.options.threadId,
+        turnId: input.expectedTurnId,
+      }),
+  );
+  public readonly steerTurnToProviderThreadImpl = vi.fn(
+    (
+      providerThreadId: string,
+      input: CodexSessionRuntimeSteerTurnInput,
+    ): Promise<ProviderTurnStartResult> =>
+      Promise.resolve({
+        threadId:
+          providerThreadId === this.options.resumeCursor?.threadId
+            ? this.options.threadId
+            : asThreadId(`child:${providerThreadId}`),
+        turnId: input.expectedTurnId,
+        resumeCursor: { threadId: providerThreadId },
+      }),
+  );
 
   public readonly interruptTurnImpl = vi.fn(
     (_turnId?: TurnId): Promise<void> => Promise.resolve(undefined),
@@ -432,6 +455,14 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
 
   sendTurnToProviderThread(providerThreadId: string, input: CodexSessionRuntimeSendTurnInput) {
     return Effect.promise(() => this.sendTurnToProviderThreadImpl(providerThreadId, input));
+  }
+
+  steerTurn(input: CodexSessionRuntimeSteerTurnInput) {
+    return Effect.promise(() => this.steerTurnImpl(input));
+  }
+
+  steerTurnToProviderThread(providerThreadId: string, input: CodexSessionRuntimeSteerTurnInput) {
+    return Effect.promise(() => this.steerTurnToProviderThreadImpl(providerThreadId, input));
   }
 
   interruptTurn(turnId?: TurnId) {
@@ -685,6 +716,38 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         effort: "high",
         serviceTier: "priority",
         approvalsReviewer: "user",
+      });
+    }),
+  );
+
+  it.effect("routes steering through Codex turn/steer with the expected turn id", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("sess-steer");
+      const expectedTurnId = asTurnId("turn-active");
+      const messageId = MessageId.make("message-steer");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const runtime = sessionRuntimeFactory.lastRuntime;
+      assert.ok(runtime);
+      runtime.steerTurnImpl.mockClear();
+
+      const result = yield* adapter.steerTurn({
+        threadId,
+        expectedTurnId,
+        messageId,
+        input: "Change course",
+        attachments: [],
+      });
+
+      assert.equal(result.turnId, expectedTurnId);
+      assert.deepStrictEqual(runtime.steerTurnImpl.mock.calls[0]?.[0], {
+        expectedTurnId,
+        messageId,
+        input: "Change course",
       });
     }),
   );

@@ -864,6 +864,15 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         );
       });
 
+    const steerTurn: GrokAdapterShape["steerTurn"] = (input) =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "turn/steer",
+          detail: `Grok ACP does not expose active-turn steering for turn '${input.expectedTurnId}'.`,
+        }),
+      );
+
     const respondToRequest: GrokAdapterShape["respondToRequest"] = (
       threadId,
       requestId,
@@ -957,9 +966,14 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
 
     return {
       provider: PROVIDER,
-      capabilities: { sessionModelSwitch: "in-session", childThreadMode: "none" },
+      capabilities: {
+        sessionModelSwitch: "in-session",
+        childThreadMode: "none",
+        activeTurnSteering: "unsupported",
+      },
       startSession,
       sendTurn,
+      steerTurn,
       interruptTurn,
       readThread,
       rollbackThread,

@@ -1204,6 +1204,15 @@ export function makeCursorAdapter(
         );
       });
 
+    const steerTurn: CursorAdapterShape["steerTurn"] = (input) =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "turn/steer",
+          detail: `Cursor ACP does not guarantee active-turn steering for turn '${input.expectedTurnId}'.`,
+        }),
+      );
+
     const respondToRequest: CursorAdapterShape["respondToRequest"] = (
       threadId,
       requestId,
@@ -1296,9 +1305,14 @@ export function makeCursorAdapter(
 
     return {
       provider: PROVIDER,
-      capabilities: { sessionModelSwitch: "in-session", childThreadMode: "none" },
+      capabilities: {
+        sessionModelSwitch: "in-session",
+        childThreadMode: "none",
+        activeTurnSteering: "unsupported",
+      },
       startSession,
       sendTurn,
+      steerTurn,
       interruptTurn,
       readThread,
       rollbackThread,

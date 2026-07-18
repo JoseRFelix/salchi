@@ -24,6 +24,7 @@ import {
   ThreadProposedPlanUpsertedPayload,
   ThreadQueuedTurnCancelledPayload,
   ThreadQueuedTurnDispatchedPayload,
+  ThreadQueuedTurnSteeredPayload,
   ThreadRuntimeModeSetPayload,
   ThreadTurnQueuedPayload,
   ThreadUnarchivedPayload,
@@ -516,6 +517,30 @@ export function projectEvent(
     case "thread.queued-turn-dispatched":
       return decodeForEvent(
         ThreadQueuedTurnDispatchedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              queuedTurns: thread.queuedTurns.filter(
+                (entry) => entry.messageId !== payload.messageId,
+              ),
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.queued-turn-steered":
+      return decodeForEvent(
+        ThreadQueuedTurnSteeredPayload,
         event.payload,
         event.type,
         "payload",

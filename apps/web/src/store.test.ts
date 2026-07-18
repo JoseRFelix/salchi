@@ -2345,6 +2345,37 @@ describe("incremental orchestration updates", () => {
     });
   });
 
+  it("moves a steered queued message into the active turn", () => {
+    const queuedTurn = makeQueuedTurn(1);
+    const turnId = TurnId.make("turn-active");
+    const thread = makeThread({ queuedTurns: [queuedTurn] });
+    const state = makeState(thread);
+
+    const steered = applyOrchestrationEvent(
+      state,
+      makeEvent("thread.queued-turn-steered", {
+        threadId: thread.id,
+        messageId: queuedTurn.messageId,
+        turnId,
+        steeredAt: "2026-02-13T00:03:00.000Z",
+      }),
+      localEnvironmentId,
+    );
+
+    expect(threadsOf(steered)[0]?.queuedTurns).toEqual([]);
+    expect(threadsOf(steered)[0]?.messages).toEqual([
+      {
+        id: queuedTurn.messageId,
+        role: "user",
+        text: queuedTurn.text,
+        turnId,
+        createdAt: "2026-02-13T00:03:00.000Z",
+        completedAt: "2026-02-13T00:03:00.000Z",
+        streaming: false,
+      },
+    ]);
+  });
+
   it("does not synthesize a queued message when the dispatched turn is not known locally", () => {
     const thread = makeThread({
       queuedTurns: [makeQueuedTurn(1)],

@@ -208,9 +208,11 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     capabilities: {
       sessionModelSwitch: "in-session",
       childThreadMode: "none",
+      activeTurnSteering: "unsupported",
     },
     startSession,
     sendTurn,
+    steerTurn: vi.fn(),
     interruptTurn,
     respondToRequest,
     respondToUserInput,

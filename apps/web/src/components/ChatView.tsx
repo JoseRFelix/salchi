@@ -112,6 +112,7 @@ import { useCommandPaletteStore } from "../commandPaletteStore";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useMobileEdgeSwipe } from "../hooks/useMobileEdgeSwipe";
+import { providerSupportsActiveTurnSteering } from "../providerTurnCapabilities";
 import { markRightPanelUsed, openRightPanel, useRegisterRightPanel } from "../rightPanelGesture";
 import { closeSourceControlPanel, useSourceControlPanelState } from "../sourceControlPanelState";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
@@ -851,6 +852,7 @@ export default function ChatView(props: ChatViewProps) {
   const optimisticQueuedTurnsRef = useRef(optimisticQueuedTurns);
   optimisticQueuedTurnsRef.current = optimisticQueuedTurns;
   const [cancelingQueuedMessageIds, setCancelingQueuedMessageIds] = useState<MessageId[]>([]);
+  const [steeringQueuedMessageIds, setSteeringQueuedMessageIds] = useState<MessageId[]>([]);
   const [interruptingTurnId, setInterruptingTurnId] = useState<TurnId | null>(null);
   const [localDraftErrorsByDraftId, setLocalDraftErrorsByDraftId] = useState<
     Record<string, string | null>
@@ -2025,6 +2027,14 @@ export default function ChatView(props: ChatViewProps) {
     () => new Set(cancelingQueuedMessageIds),
     [cancelingQueuedMessageIds],
   );
+  const steeringQueuedMessageIdSet = useMemo(
+    () => new Set(steeringQueuedMessageIds),
+    [steeringQueuedMessageIds],
+  );
+  const steerableQueuedMessageIdSet = useMemo(
+    () => new Set(activeThread?.queuedTurns.map((queuedTurn) => queuedTurn.messageId) ?? []),
+    [activeThread?.queuedTurns],
+  );
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const turnDiffSummaryByTurnId = useMemo(() => {
@@ -2126,6 +2136,11 @@ export default function ChatView(props: ChatViewProps) {
     const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
     return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
+  const canSteerQueuedTurns =
+    phase === "running" &&
+    activeThread?.session?.status === "running" &&
+    activeThread.session.activeTurnId !== null &&
+    providerSupportsActiveTurnSteering(activeProviderStatus?.driver);
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
@@ -4054,6 +4069,37 @@ export default function ChatView(props: ChatViewProps) {
     [activeThread, environmentId, setThreadError],
   );
 
+  const onSteerQueuedTurn = useCallback(
+    async (messageId: MessageId) => {
+      const api = readEnvironmentApi(environmentId);
+      const expectedTurnId =
+        activeThread?.session?.status === "running" ? activeThread.session.activeTurnId : null;
+      if (!api || !activeThread || expectedTurnId === null || expectedTurnId === undefined) return;
+
+      setSteeringQueuedMessageIds((existing) =>
+        existing.includes(messageId) ? existing : [...existing, messageId],
+      );
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.queued-turn.steer",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          messageId,
+          expectedTurnId,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        setThreadError(
+          activeThread.id,
+          err instanceof Error ? err.message : "Failed to steer queued message.",
+        );
+      } finally {
+        setSteeringQueuedMessageIds((existing) => existing.filter((id) => id !== messageId));
+      }
+    },
+    [activeThread, environmentId, setThreadError],
+  );
+
   const onInterrupt = async () => {
     const api = readEnvironmentApi(environmentId);
     if (!api || !activeThread) return;
@@ -4771,7 +4817,11 @@ export default function ChatView(props: ChatViewProps) {
                   environmentUnavailable={activeEnvironmentUnavailableState}
                   queuedTurns={queuedTurnsForComposer}
                   cancelingQueuedMessageIds={cancelingQueuedMessageIdSet}
+                  steeringQueuedMessageIds={steeringQueuedMessageIdSet}
+                  steerableQueuedMessageIds={steerableQueuedMessageIdSet}
+                  canSteerQueuedTurns={canSteerQueuedTurns}
                   onCancelQueuedTurn={onCancelQueuedTurn}
+                  onSteerQueuedTurn={onSteerQueuedTurn}
                   activePendingApproval={activePendingApproval}
                   pendingApprovals={pendingApprovals}
                   pendingUserInputs={pendingUserInputs}

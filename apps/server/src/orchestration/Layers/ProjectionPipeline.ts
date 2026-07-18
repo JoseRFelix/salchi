@@ -769,6 +769,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         case "thread.turn-queued":
         case "thread.queued-turn-cancelled":
         case "thread.queued-turn-dispatched":
+        case "thread.queued-turn-steer-requested":
+        case "thread.queued-turn-steered":
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended":
         case "thread.approval-response-requested":
@@ -919,6 +921,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.queued-turn-dispatched":
+        case "thread.queued-turn-steered":
           yield* projectionThreadQueuedTurnRepository.deleteByMessageId({
             messageId: event.payload.messageId,
           });

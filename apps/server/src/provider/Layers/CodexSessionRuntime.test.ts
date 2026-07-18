@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { describe, it } from "vitest";
-import { ThreadId } from "@t3tools/contracts";
+import { MessageId, ThreadId, TurnId } from "@t3tools/contracts";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
 
@@ -17,6 +17,7 @@ import {
 } from "../IndependentThreadTool.ts";
 import {
   buildTurnStartParams,
+  buildTurnSteerParams,
   isRecoverableThreadResumeError,
   openCodexThread,
 } from "./CodexSessionRuntime.ts";
@@ -224,6 +225,35 @@ describe("buildTurnStartParams", () => {
           type: "text",
           text: "Review",
         },
+      ],
+    });
+  });
+});
+
+describe("buildTurnSteerParams", () => {
+  it("includes the active-turn precondition and client message id", () => {
+    const params = Effect.runSync(
+      buildTurnSteerParams({
+        threadId: "provider-thread-1",
+        expectedTurnId: TurnId.make("turn-1"),
+        messageId: MessageId.make("message-2"),
+        prompt: "Change course",
+        attachments: [
+          {
+            type: "image",
+            url: "data:image/png;base64,abc",
+          },
+        ],
+      }),
+    );
+
+    assert.deepStrictEqual(params, {
+      threadId: "provider-thread-1",
+      expectedTurnId: "turn-1",
+      clientUserMessageId: "message-2",
+      input: [
+        { type: "text", text: "Change course" },
+        { type: "image", url: "data:image/png;base64,abc" },
       ],
     });
   });

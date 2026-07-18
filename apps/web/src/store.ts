@@ -946,6 +946,23 @@ function mapDispatchedQueuedTurnMessage(queuedTurn: QueuedTurn, dispatchedAt: st
   };
 }
 
+function mapSteeredQueuedTurnMessage(
+  queuedTurn: QueuedTurn,
+  turnId: TurnId,
+  steeredAt: string,
+): ChatMessage {
+  return {
+    id: queuedTurn.messageId,
+    role: queuedTurn.role,
+    text: queuedTurn.text,
+    turnId,
+    createdAt: steeredAt,
+    completedAt: steeredAt,
+    streaming: false,
+    ...(queuedTurn.attachments.length > 0 ? { attachments: [...queuedTurn.attachments] } : {}),
+  };
+}
+
 function compareQueuedTurnsByOrder(left: QueuedTurn, right: QueuedTurn): number {
   return (
     left.createdAt.localeCompare(right.createdAt) || left.messageId.localeCompare(right.messageId)
@@ -2618,6 +2635,46 @@ function applyEnvironmentOrchestrationEventUnchecked(
               ? [
                   ...thread.messages,
                   mapDispatchedQueuedTurnMessage(queuedTurn, event.payload.dispatchedAt),
+                ]
+                  .toSorted(compareMessagesByOrder)
+                  .slice(-MAX_THREAD_MESSAGES)
+              : thread.messages;
+
+          return {
+            ...thread,
+            queuedTurns,
+            messages,
+            updatedAt: event.occurredAt,
+          };
+        },
+        options,
+      );
+
+    case "thread.queued-turn-steered":
+      return updateThreadState(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const queuedTurn = thread.queuedTurns.find(
+            (entry) => entry.messageId === event.payload.messageId,
+          );
+          const queuedTurns = thread.queuedTurns.filter(
+            (entry) => entry.messageId !== event.payload.messageId,
+          );
+          if (queuedTurns.length === thread.queuedTurns.length) {
+            return thread;
+          }
+
+          const messages =
+            queuedTurn !== undefined &&
+            !thread.messages.some((message) => message.id === queuedTurn.messageId)
+              ? [
+                  ...thread.messages,
+                  mapSteeredQueuedTurnMessage(
+                    queuedTurn,
+                    event.payload.turnId,
+                    event.payload.steeredAt,
+                  ),
                 ]
                   .toSorted(compareMessagesByOrder)
                   .slice(-MAX_THREAD_MESSAGES)

@@ -15,6 +15,7 @@ import type {
 import {
   ApprovalRequestId,
   ClaudeSettings,
+  MessageId,
   ProviderDriverKind,
   ProviderItemId,
   ProviderRuntimeEvent,
@@ -363,6 +364,7 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(adapter.capabilities, {
         sessionModelSwitch: "in-session",
         childThreadMode: "activity-only",
+        activeTurnSteering: "streaming-input",
       });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -1544,7 +1546,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("steers a running turn instead of opening a new one on mid-turn sendTurn", () => {
+  it.effect("steers a running turn through the streaming input queue", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -1566,10 +1568,10 @@ describe("ClaudeAdapterLive", () => {
         attachments: [],
       });
 
-      // Steer: a second sendTurn while the turn is still running continues
-      // the same turn — the message is queued into the live agent loop.
-      const steeredTurn = yield* adapter.sendTurn({
+      const steeredTurn = yield* adapter.steerTurn({
         threadId: session.threadId,
+        expectedTurnId: turn.turnId,
+        messageId: MessageId.make("message-steer"),
         input: "actually run 15",
         attachments: [],
       });

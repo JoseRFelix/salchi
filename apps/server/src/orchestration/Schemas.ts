@@ -13,6 +13,7 @@ import {
   ThreadTurnQueuedPayload as ContractsThreadTurnQueuedPayloadSchema,
   ThreadQueuedTurnCancelledPayload as ContractsThreadQueuedTurnCancelledPayloadSchema,
   ThreadQueuedTurnDispatchedPayload as ContractsThreadQueuedTurnDispatchedPayloadSchema,
+  ThreadQueuedTurnSteeredPayload as ContractsThreadQueuedTurnSteeredPayloadSchema,
   ThreadProposedPlanUpsertedPayload as ContractsThreadProposedPlanUpsertedPayloadSchema,
   ThreadSessionSetPayload as ContractsThreadSessionSetPayloadSchema,
   ThreadTurnDiffCompletedPayload as ContractsThreadTurnDiffCompletedPayloadSchema,
@@ -42,6 +43,7 @@ export const MessageSentPayloadSchema = ContractsThreadMessageSentPayloadSchema;
 export const ThreadTurnQueuedPayload = ContractsThreadTurnQueuedPayloadSchema;
 export const ThreadQueuedTurnCancelledPayload = ContractsThreadQueuedTurnCancelledPayloadSchema;
 export const ThreadQueuedTurnDispatchedPayload = ContractsThreadQueuedTurnDispatchedPayloadSchema;
+export const ThreadQueuedTurnSteeredPayload = ContractsThreadQueuedTurnSteeredPayloadSchema;
 export const ThreadProposedPlanUpsertedPayload = ContractsThreadProposedPlanUpsertedPayloadSchema;
 export const ThreadSessionSetPayload = ContractsThreadSessionSetPayloadSchema;
 export const ThreadTurnDiffCompletedPayload = ContractsThreadTurnDiffCompletedPayloadSchema;

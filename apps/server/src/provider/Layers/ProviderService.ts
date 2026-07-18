@@ -17,6 +17,7 @@ import {
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderSendTurnInput,
+  ProviderSteerTurnInput,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   type ProviderInstanceId,
@@ -715,6 +716,52 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
+  const steerTurn: ProviderServiceShape["steerTurn"] = Effect.fn("steerTurn")(function* (rawInput) {
+    const parsed = yield* decodeInputOrValidationError({
+      operation: "ProviderService.steerTurn",
+      schema: ProviderSteerTurnInput,
+      payload: rawInput,
+    });
+    const input = {
+      ...parsed,
+      attachments: parsed.attachments ?? [],
+    };
+    if (!input.input && input.attachments.length === 0) {
+      return yield* toValidationError(
+        "ProviderService.steerTurn",
+        "Either input text or at least one attachment is required",
+      );
+    }
+
+    const routed = yield* resolveRoutableSession({
+      threadId: input.threadId,
+      operation: "ProviderService.steerTurn",
+      allowRecovery: false,
+    });
+    if (routed.adapter.capabilities.activeTurnSteering === "unsupported") {
+      return yield* toValidationError(
+        "ProviderService.steerTurn",
+        `Provider '${routed.adapter.provider}' does not support active-turn steering`,
+      );
+    }
+
+    yield* Effect.annotateCurrentSpan({
+      "provider.operation": "steer-turn",
+      "provider.kind": routed.adapter.provider,
+      "provider.thread_id": input.threadId,
+      "provider.turn_id": input.expectedTurnId,
+      "provider.attachment_count": input.attachments.length,
+    });
+    const turn = yield* routed.adapter.steerTurn(input);
+    if (turn.turnId !== input.expectedTurnId) {
+      return yield* toValidationError(
+        "ProviderService.steerTurn",
+        `Provider returned turn '${turn.turnId}' while steering expected turn '${input.expectedTurnId}'`,
+      );
+    }
+    return turn;
+  });
+
   const interruptTurn: ProviderServiceShape["interruptTurn"] = Effect.fn("interruptTurn")(
     function* (rawInput) {
       const input = yield* decodeInputOrValidationError({
@@ -1114,6 +1161,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     startSession,
     registerMaterializedSessionBinding,
     sendTurn,
+    steerTurn,
     interruptTurn,
     respondToRequest,
     respondToUserInput,

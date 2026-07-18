@@ -14,6 +14,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { beforeEach } from "vitest";
 
 import {
+  MessageId,
   OpenCodeSettings,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -42,6 +43,7 @@ class OpenCodeAdapter extends Context.Service<OpenCodeAdapter, OpenCodeAdapterSh
 ) {}
 
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
+const asMessageId = (value: string): MessageId => MessageId.make(value);
 
 it.effect("maps PDF attachments to OpenCode file parts", () =>
   Effect.sync(() => {
@@ -422,7 +424,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
-  it.effect("steers a running turn instead of opening a new one on mid-turn sendTurn", () =>
+  it.effect("steers a running turn through promptAsync", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
       const threadId = asThreadId("thread-steer");
@@ -441,15 +443,11 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         },
       });
 
-      // Steer: OpenCode queues the prompt into the busy session, so the
-      // active turn id is reused instead of opening a new turn.
-      const steeredTurn = yield* adapter.sendTurn({
+      const steeredTurn = yield* adapter.steerTurn({
         threadId,
+        expectedTurnId: turn.turnId,
+        messageId: asMessageId("message-steer"),
         input: "actually run 15",
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("opencode"),
-          model: "openai/gpt-5",
-        },
       });
       assert.equal(String(steeredTurn.turnId), String(turn.turnId));
 
@@ -482,13 +480,11 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
 
       runtimeMock.state.promptAsyncError = new Error("steer failed");
       const error = yield* adapter
-        .sendTurn({
+        .steerTurn({
           threadId,
+          expectedTurnId: turn.turnId,
+          messageId: asMessageId("message-steer-failure"),
           input: "actually run 15",
-          modelSelection: {
-            instanceId: ProviderInstanceId.make("opencode"),
-            model: "openai/gpt-5",
-          },
         })
         .pipe(Effect.flip);
 
