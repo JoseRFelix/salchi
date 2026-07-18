@@ -5,20 +5,38 @@ import {
   EventId,
   MessageId,
   type OrchestrationMessage,
+  type OrchestrationQueuedTurn,
   type OrchestrationThreadShell,
   ProviderDriverKind,
   RuntimeItemId,
+  type ServerPushNotificationPayload,
   type ProviderRuntimeEvent,
   ThreadId,
   TurnId,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import { describe, expect, it } from "vitest";
 
+import { ServerEnvironment } from "../../environment/Services/ServerEnvironment.ts";
+import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectionThreadQueuedTurnRepository } from "../../persistence/Services/ProjectionThreadQueuedTurns.ts";
+import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { WebPushNotificationReactor } from "../Services/WebPushNotificationReactor.ts";
+import { WebPushService } from "../Services/WebPushService.ts";
 import {
+  createQueuedTurnNotificationTracker,
   createRuntimeNotificationContentTrackerForTest,
   deriveWebPushPayloadForEvent,
+  makeWebPushNotificationReactor,
   selectLatestThreadContentForTurnCompletion,
   selectProjectedThreadContentForTurnCompletion,
   shouldNotifyRuntimeTurnCompletion,
@@ -138,6 +156,156 @@ function makeActivityAppendedEvent(
         turnId: null,
         createdAt: now,
       },
+    },
+  };
+}
+
+function makeQueuedTurn(messageId: string): OrchestrationQueuedTurn {
+  return {
+    threadId: ThreadId.make("thread-1"),
+    messageId: MessageId.make(messageId),
+    role: "user",
+    text: "Queued follow-up",
+    attachments: [],
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function makeQueuedTurnDispatchedEvent(
+  messageId: string,
+): Extract<OrchestrationEvent, { type: "thread.queued-turn-dispatched" }> {
+  const threadId = ThreadId.make("thread-1");
+  return {
+    sequence: 2,
+    eventId: EventId.make(`event-queued-turn-dispatched-${messageId}`),
+    type: "thread.queued-turn-dispatched",
+    aggregateKind: "thread",
+    aggregateId: threadId,
+    occurredAt: now,
+    commandId: CommandId.make(`cmd-queued-turn-dispatched-${messageId}`),
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    payload: {
+      threadId,
+      messageId: MessageId.make(messageId),
+      dispatchedAt: now,
+    },
+  };
+}
+
+function makeTurnStartedEvent(
+  turnId: string,
+): Extract<ProviderRuntimeEvent, { type: "turn.started" }> {
+  return {
+    eventId: EventId.make(`event-turn-started-${turnId}`),
+    type: "turn.started",
+    provider: ProviderDriverKind.make("codex"),
+    threadId: ThreadId.make("thread-1"),
+    turnId: TurnId.make(turnId),
+    createdAt: now,
+    payload: {},
+  };
+}
+
+async function waitForCondition(predicate: () => boolean, description: string): Promise<void> {
+  for (let attempt = 0; attempt < 2_000; attempt += 1) {
+    if (predicate()) {
+      return;
+    }
+    await Effect.runPromise(Effect.yieldNow);
+  }
+  throw new Error(`Timed out waiting for ${description}.`);
+}
+
+async function createNotificationReactorHarness(
+  durableQueuedTurns: Map<string, OrchestrationQueuedTurn> = new Map(),
+) {
+  const domainEvents = await Effect.runPromise(PubSub.unbounded<OrchestrationEvent>());
+  const runtimeEvents = await Effect.runPromise(PubSub.unbounded<ProviderRuntimeEvent>());
+  const sentPayloads: ServerPushNotificationPayload[] = [];
+  let queuedTurnLookupCount = 0;
+
+  const layer = Layer.effect(WebPushNotificationReactor, makeWebPushNotificationReactor).pipe(
+    Layer.provideMerge(
+      Layer.mock(OrchestrationEngineService)({
+        streamDomainEvents: Stream.fromPubSub(domainEvents),
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.mock(ProviderService)({
+        streamEvents: Stream.fromPubSub(runtimeEvents),
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.mock(ProjectionSnapshotQuery)({
+        getThreadShellById: (threadId) =>
+          Effect.succeed(
+            Option.some(
+              makeThreadShell({
+                id: threadId,
+                status: "ready",
+              }),
+            ),
+          ),
+        getThreadDetailSnapshotById: () => Effect.succeed(Option.none()),
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.mock(ProjectionThreadQueuedTurnRepository)({
+        getOldestByThreadId: ({ threadId }) =>
+          Effect.sync(() => {
+            queuedTurnLookupCount += 1;
+            return Option.fromNullishOr(
+              Array.from(durableQueuedTurns.values()).find(
+                (queuedTurn) => queuedTurn.threadId === threadId,
+              ),
+            );
+          }),
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.mock(ServerEnvironment)({
+        getDescriptor: Effect.succeed({
+          environmentId: EnvironmentId.make("environment-local"),
+          label: "Local",
+          platform: { os: "linux", arch: "x64" },
+          serverVersion: "test",
+          capabilities: { repositoryIdentity: false },
+        }),
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.mock(WebPushService)({
+        sendToActiveSubscriptions: ({ payload }) =>
+          Effect.sync(() => {
+            sentPayloads.push(payload);
+            return { sentCount: 1, failedCount: 0 };
+          }),
+      }),
+    ),
+  );
+
+  const runtime = ManagedRuntime.make(layer);
+  const reactor = await runtime.runPromise(Effect.service(WebPushNotificationReactor));
+  const scope = await Effect.runPromise(Scope.make("sequential"));
+  await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
+  await Effect.runPromise(Effect.yieldNow);
+
+  return {
+    sentPayloads,
+    queuedTurnLookupCount: () => queuedTurnLookupCount,
+    publishDomain: (event: OrchestrationEvent) =>
+      Effect.runPromise(PubSub.publish(domainEvents, event)),
+    publishRuntime: (event: ProviderRuntimeEvent) =>
+      Effect.runPromise(PubSub.publish(runtimeEvents, event)),
+    drain: () => runtime.runPromise(reactor.drain),
+    close: async () => {
+      await Effect.runPromise(Scope.close(scope, Exit.void));
+      await runtime.dispose();
     },
   };
 }
@@ -495,6 +663,53 @@ describe("deriveWebPushPayloadForEvent", () => {
     ).toBe(false);
   });
 
+  it("suppresses intermediate completions until promoted queued work starts", () => {
+    const threadId = ThreadId.make("thread-1");
+    const tracker = createQueuedTurnNotificationTracker();
+    const completion = makeTurnCompletedEvent();
+    const thread = Option.some(makeThreadShell({ status: "ready" }));
+
+    tracker.trackQueued(threadId, "message-queued");
+    expect(
+      shouldNotifyRuntimeTurnCompletion(completion, thread, {
+        hasPendingQueuedWork: tracker.hasPendingQueuedWork(threadId),
+      }),
+    ).toBe(false);
+
+    // Promotion removes the durable queue row, but the previous turn's
+    // completion must remain suppressed while that queued turn is starting.
+    tracker.trackPromoted(threadId, "message-queued");
+    expect(
+      shouldNotifyRuntimeTurnCompletion(completion, thread, {
+        hasPendingQueuedWork: tracker.hasPendingQueuedWork(threadId),
+      }),
+    ).toBe(false);
+
+    tracker.trackTurnStarted(threadId);
+    expect(
+      shouldNotifyRuntimeTurnCompletion(completion, thread, {
+        hasPendingQueuedWork: tracker.hasPendingQueuedWork(threadId),
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps suppressing completions while another message remains queued", () => {
+    const threadId = ThreadId.make("thread-1");
+    const tracker = createQueuedTurnNotificationTracker();
+
+    tracker.trackQueued(threadId, "message-1");
+    tracker.trackQueued(threadId, "message-2");
+    tracker.trackPromoted(threadId, "message-1");
+    tracker.trackTurnStarted(threadId);
+
+    expect(tracker.hasPendingQueuedWork(threadId)).toBe(true);
+
+    tracker.trackPromoted(threadId, "message-2");
+    tracker.trackTurnStarted(threadId);
+
+    expect(tracker.hasPendingQueuedWork(threadId)).toBe(false);
+  });
+
   it("suppresses successful completion notifications for unengaged materialized subagents", () => {
     expect(
       shouldNotifyRuntimeTurnCompletion(
@@ -591,5 +806,102 @@ describe("deriveWebPushPayloadForEvent", () => {
         ),
       ),
     ).toBe(true);
+  });
+});
+
+describe("WebPushNotificationReactor queue delivery", () => {
+  it("reads durable queued state when the live queue event predates reactor startup", async () => {
+    const durableQueuedTurns = new Map<string, OrchestrationQueuedTurn>([
+      ["message-queued", makeQueuedTurn("message-queued")],
+    ]);
+    const harness = await createNotificationReactorHarness(durableQueuedTurns);
+
+    try {
+      await harness.publishRuntime(makeTurnCompletedEvent());
+      await waitForCondition(
+        () => harness.queuedTurnLookupCount() === 1,
+        "the persisted queue lookup for the intermediate completion",
+      );
+      await harness.drain();
+
+      expect(harness.sentPayloads).toEqual([]);
+
+      durableQueuedTurns.clear();
+      await harness.publishRuntime({
+        ...makeTurnCompletedEvent(),
+        eventId: EventId.make("event-turn-completed-final"),
+        turnId: TurnId.make("turn-final"),
+      });
+      await waitForCondition(
+        () => harness.sentPayloads.length === 1,
+        "the final queue-drained notification",
+      );
+      await harness.drain();
+
+      expect(harness.sentPayloads).toEqual([
+        {
+          title: "Finished thread",
+          body: "Agent turn completed",
+          url: "/environment-local/thread-1",
+          tag: "thread:thread-1:turn:turn-final",
+        },
+      ]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("does not notify in the durable-row deletion race before the promoted turn starts", async () => {
+    const harness = await createNotificationReactorHarness();
+
+    try {
+      await harness.publishDomain(makeQueuedTurnDispatchedEvent("message-promoted"));
+      await harness.publishDomain(makeActivityAppendedEvent());
+      await waitForCondition(
+        () => harness.sentPayloads.length === 1,
+        "the domain-stream synchronization notification",
+      );
+
+      await harness.publishRuntime(makeTurnCompletedEvent());
+      await waitForCondition(
+        () => harness.queuedTurnLookupCount() === 1,
+        "the empty durable queue lookup during promotion",
+      );
+      await harness.drain();
+
+      expect(harness.sentPayloads.map((payload) => payload.tag)).toEqual([
+        "thread:thread-1:approval:event-activity-approval.requested",
+      ]);
+
+      await harness.publishRuntime(makeTurnStartedEvent("turn-promoted"));
+      await harness.publishRuntime({
+        ...makeTurnCompletedEvent(),
+        eventId: EventId.make("event-turn-completed-promoted"),
+        turnId: TurnId.make("turn-promoted"),
+      });
+      await waitForCondition(
+        () => harness.sentPayloads.length === 2,
+        "the promoted turn's final notification",
+      );
+      await harness.drain();
+
+      expect(harness.sentPayloads.map((payload) => payload.tag)).toEqual([
+        "thread:thread-1:approval:event-activity-approval.requested",
+        "thread:thread-1:turn:turn-promoted",
+      ]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("stops consuming completion events when the reactor scope closes", async () => {
+    const harness = await createNotificationReactorHarness();
+
+    await harness.close();
+    await harness.publishRuntime(makeTurnCompletedEvent());
+    await Effect.runPromise(Effect.yieldNow);
+
+    expect(harness.queuedTurnLookupCount()).toBe(0);
+    expect(harness.sentPayloads).toEqual([]);
   });
 });

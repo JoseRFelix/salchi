@@ -19,6 +19,8 @@ import * as Stream from "effect/Stream";
 import { ServerEnvironment } from "../../environment/Services/ServerEnvironment.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectionThreadQueuedTurnRepositoryLive } from "../../persistence/Layers/ProjectionThreadQueuedTurns.ts";
+import { ProjectionThreadQueuedTurnRepository } from "../../persistence/Services/ProjectionThreadQueuedTurns.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import {
   WebPushNotificationReactor,
@@ -42,6 +44,21 @@ interface RuntimeTurnNotificationContent {
   activeBaseKey: string | null;
 }
 
+interface NotificationWorkItem {
+  readonly event: NotificationEvent;
+  readonly hasPendingQueuedWorkAtCompletion: boolean;
+}
+
+export interface QueuedTurnNotificationTracker {
+  readonly trackQueued: (threadId: ThreadId, messageId: string) => void;
+  readonly trackRemoved: (threadId: ThreadId, messageId: string) => void;
+  readonly trackPromoted: (threadId: ThreadId, messageId: string) => void;
+  readonly trackTurnStarted: (threadId: ThreadId) => void;
+  readonly trackTurnStartFailed: (threadId: ThreadId) => void;
+  readonly clearThread: (threadId: ThreadId) => void;
+  readonly hasPendingQueuedWork: (threadId: ThreadId) => boolean;
+}
+
 export interface LatestProjectedThreadContent {
   readonly content: string | null;
   readonly turnId: TurnId | null;
@@ -59,6 +76,54 @@ const THREAD_NOTIFICATION_DETAIL_PAGE = {
     checkpoints: 1,
   },
 } as const;
+
+export function createQueuedTurnNotificationTracker(): QueuedTurnNotificationTracker {
+  const queuedMessageIdsByThreadId = new Map<ThreadId, Set<string>>();
+  const promotedQueuedTurnThreadIds = new Set<ThreadId>();
+
+  const trackQueued = (threadId: ThreadId, messageId: string): void => {
+    const queuedMessageIds = queuedMessageIdsByThreadId.get(threadId) ?? new Set<string>();
+    queuedMessageIds.add(messageId);
+    queuedMessageIdsByThreadId.set(threadId, queuedMessageIds);
+  };
+
+  const trackRemoved = (threadId: ThreadId, messageId: string): void => {
+    const queuedMessageIds = queuedMessageIdsByThreadId.get(threadId);
+    if (queuedMessageIds === undefined) {
+      return;
+    }
+    queuedMessageIds.delete(messageId);
+    if (queuedMessageIds.size === 0) {
+      queuedMessageIdsByThreadId.delete(threadId);
+    }
+  };
+
+  const trackPromoted = (threadId: ThreadId, messageId: string): void => {
+    trackRemoved(threadId, messageId);
+    promotedQueuedTurnThreadIds.add(threadId);
+  };
+
+  const trackTurnStarted = (threadId: ThreadId): void => {
+    promotedQueuedTurnThreadIds.delete(threadId);
+  };
+
+  const clearThread = (threadId: ThreadId): void => {
+    queuedMessageIdsByThreadId.delete(threadId);
+    promotedQueuedTurnThreadIds.delete(threadId);
+  };
+
+  return {
+    trackQueued,
+    trackRemoved,
+    trackPromoted,
+    trackTurnStarted,
+    trackTurnStartFailed: trackTurnStarted,
+    clearThread,
+    hasPendingQueuedWork: (threadId) =>
+      (queuedMessageIdsByThreadId.get(threadId)?.size ?? 0) > 0 ||
+      promotedQueuedTurnThreadIds.has(threadId),
+  };
+}
 
 function threadUrl(environmentId: EnvironmentId, threadId: ThreadId): string {
   return `/${encodeURIComponent(environmentId)}/${encodeURIComponent(threadId)}`;
@@ -389,9 +454,13 @@ export function shouldNotifyRuntimeTurnCompletion(
   thread: Option.Option<OrchestrationThreadShell>,
   options?: {
     readonly engagedThreadIds?: ReadonlySet<ThreadId>;
+    readonly hasPendingQueuedWork?: boolean;
   },
 ): boolean {
   if (isManualStopTurnCompletion(event, thread)) {
+    return false;
+  }
+  if (options?.hasPendingQueuedWork === true) {
     return false;
   }
   const engagedThreadIds = options?.engagedThreadIds ?? EMPTY_ENGAGED_THREAD_IDS;
@@ -462,14 +531,16 @@ export function deriveWebPushPayloadForEvent(input: {
   }
 }
 
-const make = Effect.gen(function* () {
+export const makeWebPushNotificationReactor = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const push = yield* WebPushService;
   const serverEnvironment = yield* ServerEnvironment;
+  const queuedTurnRepository = yield* ProjectionThreadQueuedTurnRepository;
   const runtimeContentByTurn = new Map<string, RuntimeTurnNotificationContent>();
   const userEngagedThreadIds = new Set<ThreadId>();
+  const queuedTurnNotificationTracker = createQueuedTurnNotificationTracker();
 
   const resolveThread = (threadId: ThreadId) =>
     projectionSnapshotQuery
@@ -526,8 +597,9 @@ const make = Effect.gen(function* () {
   };
 
   const processEvent = Effect.fn("processWebPushNotificationEvent")(function* (
-    event: NotificationEvent,
+    workItem: NotificationWorkItem,
   ) {
+    const { event } = workItem;
     const threadId = notificationThreadId(event);
     const [environment, thread] = yield* Effect.all([
       serverEnvironment.getDescriptor,
@@ -537,6 +609,7 @@ const make = Effect.gen(function* () {
       event.type === "turn.completed" &&
       !shouldNotifyRuntimeTurnCompletion(event, thread, {
         engagedThreadIds: userEngagedThreadIds,
+        hasPendingQueuedWork: workItem.hasPendingQueuedWorkAtCompletion,
       })
     ) {
       yield* takeRuntimeThreadContent(event).pipe(Effect.asVoid);
@@ -582,24 +655,85 @@ const make = Effect.gen(function* () {
 
   const worker = yield* makeDrainableWorker(processEvent);
 
+  const trackQueuedTurnDomainEvent = (event: OrchestrationEvent): void => {
+    switch (event.type) {
+      case "thread.turn-queued":
+        queuedTurnNotificationTracker.trackQueued(event.payload.threadId, event.payload.messageId);
+        return;
+      case "thread.queued-turn-cancelled":
+      case "thread.queued-turn-steered":
+        queuedTurnNotificationTracker.trackRemoved(event.payload.threadId, event.payload.messageId);
+        return;
+      case "thread.queued-turn-dispatched":
+        queuedTurnNotificationTracker.trackPromoted(
+          event.payload.threadId,
+          event.payload.messageId,
+        );
+        return;
+      case "thread.activity-appended":
+        if (event.payload.activity.kind === "provider.turn.start.failed") {
+          queuedTurnNotificationTracker.trackTurnStartFailed(event.payload.threadId);
+        }
+        return;
+      case "thread.archived":
+      case "thread.deleted":
+        queuedTurnNotificationTracker.clearThread(event.payload.threadId);
+        return;
+      default:
+        return;
+    }
+  };
+
+  const hasPendingQueuedWork = (threadId: ThreadId): Effect.Effect<boolean> =>
+    queuedTurnRepository.getOldestByThreadId({ threadId }).pipe(
+      Effect.map(
+        (queuedTurn) =>
+          Option.isSome(queuedTurn) || queuedTurnNotificationTracker.hasPendingQueuedWork(threadId),
+      ),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("failed to resolve queued turns for web push notification", {
+          threadId,
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as(queuedTurnNotificationTracker.hasPendingQueuedWork(threadId))),
+      ),
+    );
+
   return {
     start: Effect.fn("startWebPushNotificationReactor")(function* () {
       yield* Effect.forkScoped(
         Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+          const trackQueuedTurns = Effect.sync(() => {
+            trackQueuedTurnDomainEvent(event);
+          });
           if (event.type === "thread.message-sent" && event.payload.role === "user") {
-            return Effect.sync(() => {
-              userEngagedThreadIds.add(event.payload.threadId);
-            });
+            return trackQueuedTurns.pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  userEngagedThreadIds.add(event.payload.threadId);
+                }),
+              ),
+            );
           }
           if (event.type === "thread.turn-queued") {
-            return Effect.sync(() => {
-              userEngagedThreadIds.add(event.payload.threadId);
-            });
+            return trackQueuedTurns.pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  userEngagedThreadIds.add(event.payload.threadId);
+                }),
+              ),
+            );
           }
           if (event.type !== "thread.activity-appended") {
-            return Effect.void;
+            return trackQueuedTurns;
           }
-          return worker.enqueue(event);
+          return trackQueuedTurns.pipe(
+            Effect.andThen(
+              worker.enqueue({
+                event,
+                hasPendingQueuedWorkAtCompletion: false,
+              }),
+            ),
+          );
         }),
       );
       yield* Effect.forkScoped(
@@ -624,21 +758,33 @@ const make = Effect.gen(function* () {
           }
           if (event.type === "turn.started" || event.type === "turn.aborted") {
             return Effect.sync(() => {
+              if (event.type === "turn.started") {
+                queuedTurnNotificationTracker.trackTurnStarted(event.threadId);
+              }
               runtimeContentByTurn.delete(threadTurnKey(event.threadId, event.turnId));
             });
           }
           if (event.type !== "turn.completed") {
             return Effect.void;
           }
-          return worker.enqueue(event);
+          return hasPendingQueuedWork(event.threadId).pipe(
+            Effect.flatMap((hasPendingQueuedWorkAtCompletion) =>
+              worker.enqueue({ event, hasPendingQueuedWorkAtCompletion }),
+            ),
+          );
         }),
       );
     }),
+    drain: worker.drain,
   };
 });
 
-export const WebPushNotificationReactorLive = Layer.effect(WebPushNotificationReactor, make);
+export const WebPushNotificationReactorLive = Layer.effect(
+  WebPushNotificationReactor,
+  makeWebPushNotificationReactor,
+).pipe(Layer.provideMerge(ProjectionThreadQueuedTurnRepositoryLive));
 
 export const WebPushNotificationReactorNoop = Layer.succeed(WebPushNotificationReactor, {
   start: () => Effect.void,
+  drain: Effect.void,
 } satisfies WebPushNotificationReactorShape);
