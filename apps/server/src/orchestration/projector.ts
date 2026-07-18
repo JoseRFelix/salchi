@@ -24,6 +24,8 @@ import {
   ThreadProposedPlanUpsertedPayload,
   ThreadQueuedTurnCancelledPayload,
   ThreadQueuedTurnDispatchedPayload,
+  ThreadQueuedTurnSteerFailedPayload,
+  ThreadQueuedTurnSteerRequestedPayload,
   ThreadQueuedTurnSteeredPayload,
   ThreadRuntimeModeSetPayload,
   ThreadTurnQueuedPayload,
@@ -532,6 +534,70 @@ export function projectEvent(
               queuedTurns: thread.queuedTurns.filter(
                 (entry) => entry.messageId !== payload.messageId,
               ),
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.queued-turn-steer-requested":
+      return decodeForEvent(
+        ThreadQueuedTurnSteerRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              queuedTurns: thread.queuedTurns.map((entry) =>
+                entry.messageId === payload.messageId
+                  ? {
+                      ...entry,
+                      steering: {
+                        expectedTurnId: payload.expectedTurnId,
+                        requestedAt: payload.createdAt,
+                      },
+                      updatedAt: event.occurredAt,
+                    }
+                  : entry,
+              ),
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.queued-turn-steer-failed":
+      return decodeForEvent(
+        ThreadQueuedTurnSteerFailedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              queuedTurns: thread.queuedTurns.map((entry) => {
+                if (entry.messageId !== payload.messageId) {
+                  return entry;
+                }
+                const { steering: _steering, ...queuedTurn } = entry;
+                return {
+                  ...queuedTurn,
+                  updatedAt: event.occurredAt,
+                };
+              }),
               updatedAt: event.occurredAt,
             }),
           };

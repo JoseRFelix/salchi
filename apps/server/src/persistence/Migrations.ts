@@ -51,6 +51,7 @@ import Migration0035 from "./Migrations/035_CheckpointTurnFileSnapshots.ts";
 import Migration0036 from "./Migrations/036_ProjectionThreadSubagents.ts";
 import Migration0037 from "./Migrations/037_ProjectionThreadCreatedBy.ts";
 import Migration0038 from "./Migrations/038_RestoreAssistantMessageTurnIds.ts";
+import Migration0039 from "./Migrations/039_ProjectionQueuedTurnSteering.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -101,6 +102,7 @@ export const migrationEntries = [
   [36, "ProjectionThreadSubagents", Migration0036],
   [37, "ProjectionThreadCreatedBy", Migration0037],
   [38, "RestoreAssistantMessageTurnIds", Migration0038],
+  [39, "ProjectionQueuedTurnSteering", Migration0039],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

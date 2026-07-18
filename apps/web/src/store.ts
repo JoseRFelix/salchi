@@ -292,6 +292,7 @@ function mapQueuedTurn(
     ...(queuedTurn.sourceProposedPlan !== undefined
       ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
       : {}),
+    ...(queuedTurn.steering !== undefined ? { steering: queuedTurn.steering } : {}),
     createdAt: queuedTurn.createdAt,
     updatedAt: queuedTurn.updatedAt,
   };
@@ -706,6 +707,8 @@ function queuedTurnsEqual(left: QueuedTurn, right: QueuedTurn): boolean {
     left.titleSeed === right.titleSeed &&
     left.runtimeMode === right.runtimeMode &&
     left.interactionMode === right.interactionMode &&
+    left.steering?.expectedTurnId === right.steering?.expectedTurnId &&
+    left.steering?.requestedAt === right.steering?.requestedAt &&
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
     chatAttachmentsEqual(left.attachments, right.attachments) &&
@@ -2603,6 +2606,67 @@ function applyEnvironmentOrchestrationEventUnchecked(
             (entry) => entry.messageId !== event.payload.messageId,
           );
           if (queuedTurns.length === thread.queuedTurns.length) {
+            return thread;
+          }
+          return {
+            ...thread,
+            queuedTurns,
+            updatedAt: event.occurredAt,
+          };
+        },
+        options,
+      );
+
+    case "thread.queued-turn-steer-requested":
+      return updateThreadState(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          let changed = false;
+          const queuedTurns = thread.queuedTurns.map((entry) => {
+            if (entry.messageId !== event.payload.messageId) {
+              return entry;
+            }
+            changed = true;
+            return {
+              ...entry,
+              steering: {
+                expectedTurnId: event.payload.expectedTurnId,
+                requestedAt: event.payload.createdAt,
+              },
+              updatedAt: event.occurredAt,
+            };
+          });
+          if (!changed) {
+            return thread;
+          }
+          return {
+            ...thread,
+            queuedTurns,
+            updatedAt: event.occurredAt,
+          };
+        },
+        options,
+      );
+
+    case "thread.queued-turn-steer-failed":
+      return updateThreadState(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          let changed = false;
+          const queuedTurns = thread.queuedTurns.map((entry) => {
+            if (entry.messageId !== event.payload.messageId || entry.steering === undefined) {
+              return entry;
+            }
+            changed = true;
+            const { steering: _steering, ...queuedTurn } = entry;
+            return {
+              ...queuedTurn,
+              updatedAt: event.occurredAt,
+            };
+          });
+          if (!changed) {
             return thread;
           }
           return {

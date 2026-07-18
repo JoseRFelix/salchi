@@ -7,12 +7,14 @@ import type {
   ProviderApprovalDecision,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
+  ProviderSteerTurnInput,
   ProviderSession,
   ProviderTurnStartResult,
 } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
   EventId,
+  MessageId,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionStartInput,
@@ -140,6 +142,14 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
       Effect.void,
   );
 
+  const steerTurn = vi.fn(
+    (input: ProviderSteerTurnInput): Effect.Effect<ProviderTurnStartResult, ProviderAdapterError> =>
+      Effect.succeed({
+        threadId: input.threadId,
+        turnId: input.expectedTurnId,
+      }),
+  );
+
   const respondToRequest = vi.fn(
     (
       _threadId: ThreadId,
@@ -212,7 +222,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     },
     startSession,
     sendTurn,
-    steerTurn: vi.fn(),
+    steerTurn,
     interruptTurn,
     respondToRequest,
     respondToUserInput,
@@ -248,6 +258,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     updateSession,
     startSession,
     sendTurn,
+    steerTurn,
     interruptTurn,
     respondToRequest,
     respondToUserInput,
@@ -356,6 +367,36 @@ it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
     assert.equal(codex.stopAll.mock.calls.length, 1);
   }),
 );
+
+const inactiveSteering = makeProviderServiceLayer();
+inactiveSteering.layer("ProviderServiceLive inactive steering", (it) => {
+  it.effect("rejects steering when the persisted route is inactive", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-inactive-steer");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* inactiveSteering.codex.stopSession(threadId);
+
+      const failure = yield* Effect.flip(
+        provider.steerTurn({
+          threadId,
+          expectedTurnId: asTurnId("turn-inactive-steer"),
+          messageId: MessageId.make("message-inactive-steer"),
+          input: "steer this",
+        }),
+      );
+
+      assert.instanceOf(failure, ProviderValidationError);
+      assert.include(failure.issue, "no active provider session exists");
+      assert.equal(inactiveSteering.codex.steerTurn.mock.calls.length, 0);
+    }),
+  );
+});
 
 it.effect("ProviderServiceLive rejects new sessions for disabled providers", () =>
   Effect.gen(function* () {

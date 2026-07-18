@@ -738,6 +738,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       operation: "ProviderService.steerTurn",
       allowRecovery: false,
     });
+    if (!routed.isActive) {
+      return yield* toValidationError(
+        "ProviderService.steerTurn",
+        `Cannot steer thread '${input.threadId}' because no active provider session exists`,
+      );
+    }
     if (routed.adapter.capabilities.activeTurnSteering === "unsupported") {
       return yield* toValidationError(
         "ProviderService.steerTurn",

@@ -289,6 +289,12 @@ export const OrchestrationQueuedTurn = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  steering: Schema.optional(
+    Schema.Struct({
+      expectedTurnId: TurnId,
+      requestedAt: IsoDateTime,
+    }),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1020,6 +1026,16 @@ const ThreadQueuedTurnSteerCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadQueuedTurnSteerFailCommand = Schema.Struct({
+  type: Schema.Literal("thread.queued-turn.steer.fail"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  expectedTurnId: TurnId,
+  detail: Schema.String,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -1031,6 +1047,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadRevertCompleteCommand,
   ThreadQueuedTurnDispatchCommand,
   ThreadQueuedTurnSteerCompleteCommand,
+  ThreadQueuedTurnSteerFailCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1056,6 +1073,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.queued-turn-cancelled",
   "thread.queued-turn-dispatched",
   "thread.queued-turn-steer-requested",
+  "thread.queued-turn-steer-failed",
   "thread.queued-turn-steered",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
@@ -1220,6 +1238,14 @@ export const ThreadQueuedTurnSteeredPayload = Schema.Struct({
 });
 export type ThreadQueuedTurnSteeredPayload = typeof ThreadQueuedTurnSteeredPayload.Type;
 
+export const ThreadQueuedTurnSteerFailedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  expectedTurnId: TurnId,
+  failedAt: IsoDateTime,
+});
+export type ThreadQueuedTurnSteerFailedPayload = typeof ThreadQueuedTurnSteerFailedPayload.Type;
+
 export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   turnId: Schema.optional(TurnId),
@@ -1381,6 +1407,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.queued-turn-steer-requested"),
     payload: ThreadQueuedTurnSteerRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.queued-turn-steer-failed"),
+    payload: ThreadQueuedTurnSteerFailedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

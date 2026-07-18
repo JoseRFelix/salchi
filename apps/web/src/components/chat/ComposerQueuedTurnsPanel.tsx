@@ -80,6 +80,9 @@ export const ComposerQueuedTurnsPanel = memo(function ComposerQueuedTurnsPanel(
             {queuedTurns.map((queuedTurn) => {
               const attachmentCount = queuedTurn.attachments.length;
               const timestamp = formatQueuedTurnTimestamp(queuedTurn.createdAt);
+              const isSteering =
+                queuedTurn.steering !== undefined ||
+                steeringQueuedMessageIds.has(queuedTurn.messageId);
               return (
                 <div
                   key={queuedTurn.messageId}
@@ -140,7 +143,7 @@ export const ComposerQueuedTurnsPanel = memo(function ComposerQueuedTurnsPanel(
                         className="h-7 gap-1.5 px-2 text-muted-foreground hover:text-foreground"
                         disabled={
                           !steerableQueuedMessageIds.has(queuedTurn.messageId) ||
-                          steeringQueuedMessageIds.has(queuedTurn.messageId) ||
+                          isSteering ||
                           cancelingQueuedMessageIds.has(queuedTurn.messageId)
                         }
                         aria-label="Steer queued message into the current turn"
@@ -151,7 +154,7 @@ export const ComposerQueuedTurnsPanel = memo(function ComposerQueuedTurnsPanel(
                         }
                         onClick={() => onSteerQueuedTurn(queuedTurn.messageId)}
                       >
-                        {steeringQueuedMessageIds.has(queuedTurn.messageId) ? (
+                        {isSteering ? (
                           <LoaderCircleIcon className="animate-spin" />
                         ) : (
                           <CornerDownLeftIcon />
@@ -164,10 +167,7 @@ export const ComposerQueuedTurnsPanel = memo(function ComposerQueuedTurnsPanel(
                       variant="ghost"
                       size="icon-sm"
                       className="shrink-0 text-muted-foreground hover:text-destructive"
-                      disabled={
-                        cancelingQueuedMessageIds.has(queuedTurn.messageId) ||
-                        steeringQueuedMessageIds.has(queuedTurn.messageId)
-                      }
+                      disabled={cancelingQueuedMessageIds.has(queuedTurn.messageId) || isSteering}
                       aria-label="Cancel queued message"
                       title="Cancel queued message"
                       onClick={() => onCancelQueuedTurn(queuedTurn.messageId)}

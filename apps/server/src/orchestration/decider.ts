@@ -561,6 +561,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Queued turn '${command.messageId}' does not exist on thread '${command.threadId}'.`,
         });
       }
+      if (queuedTurn.steering !== undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued turn '${command.messageId}' is already being steered into turn '${queuedTurn.steering.expectedTurnId}'.`,
+        });
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -590,6 +596,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Queued turn '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      if (queuedTurn.steering !== undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued turn '${command.messageId}' is already being steered into turn '${queuedTurn.steering.expectedTurnId}'.`,
         });
       }
       if (
@@ -631,6 +643,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Queued turn '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      if (queuedTurn.steering !== undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued turn '${command.messageId}' is being steered into turn '${queuedTurn.steering.expectedTurnId}' and cannot be dispatched.`,
         });
       }
       const dispatchedEvent: Omit<OrchestrationEvent, "sequence"> = {
@@ -710,6 +728,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Queued turn '${command.messageId}' does not exist on thread '${command.threadId}'.`,
         });
       }
+      if (
+        queuedTurn.steering === undefined ||
+        queuedTurn.steering.expectedTurnId !== command.turnId
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued turn '${command.messageId}' is not reserved for steering into turn '${command.turnId}'.`,
+        });
+      }
       const steeredEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -747,6 +774,66 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
       return [steeredEvent, userMessageEvent];
+    }
+
+    case "thread.queued-turn.steer.fail": {
+      const targetThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const queuedTurn = targetThread.queuedTurns.find(
+        (entry) => entry.messageId === command.messageId,
+      );
+      if (!queuedTurn || queuedTurn.steering?.expectedTurnId !== command.expectedTurnId) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued turn '${command.messageId}' is not reserved for steering into turn '${command.expectedTurnId}'.`,
+        });
+      }
+      const failedEventBase = yield* withEventBase({
+        aggregateKind: "thread",
+        aggregateId: command.threadId,
+        occurredAt: command.createdAt,
+        commandId: command.commandId,
+      });
+      const failedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...failedEventBase,
+        type: "thread.queued-turn-steer-failed",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          expectedTurnId: command.expectedTurnId,
+          failedAt: command.createdAt,
+        },
+      };
+      const activityEventBase = yield* withEventBase({
+        aggregateKind: "thread",
+        aggregateId: command.threadId,
+        occurredAt: command.createdAt,
+        commandId: command.commandId,
+      });
+      const activityEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...activityEventBase,
+        causationEventId: failedEvent.eventId,
+        type: "thread.activity-appended",
+        payload: {
+          threadId: command.threadId,
+          activity: {
+            id: activityEventBase.eventId,
+            tone: "error",
+            kind: "provider.turn.steer.failed",
+            summary: "Provider turn steering failed",
+            payload: {
+              detail: command.detail,
+              messageId: command.messageId,
+            },
+            turnId: command.expectedTurnId,
+            createdAt: command.createdAt,
+          },
+        },
+      };
+      return [failedEvent, activityEvent];
     }
 
     case "thread.turn.interrupt": {

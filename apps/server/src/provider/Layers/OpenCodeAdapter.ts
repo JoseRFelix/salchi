@@ -1162,7 +1162,7 @@ export function makeOpenCodeAdapter(
       if (expectedTurnId !== undefined && steeringTurnId !== expectedTurnId) {
         return yield* new ProviderAdapterRequestError({
           provider: PROVIDER,
-          method: "session.promptAsync",
+          method: "turn/steer",
           detail: `Expected active turn '${expectedTurnId}', received '${steeringTurnId ?? "none"}'.`,
         });
       }
