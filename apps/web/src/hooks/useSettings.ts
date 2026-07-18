@@ -22,6 +22,7 @@ import { ensureLocalApi } from "~/localApi";
 import * as Struct from "effect/Struct";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import { applySettingsUpdated, getServerConfig, useServerSettings } from "~/rpc/serverState";
+import { migrateClientSettings } from "~/clientSettingsMigration";
 
 const CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE = "[CLIENT_SETTINGS]";
 
@@ -99,9 +100,15 @@ async function hydrateClientSettings(): Promise<void> {
 
   const nextHydration = (async () => {
     try {
-      const persistedSettings = await ensureLocalApi().persistence.getClientSettings();
+      const persistence = ensureLocalApi().persistence;
+      const persistedSettings = await persistence.getClientSettings();
       if (persistedSettings) {
-        replaceClientSettingsSnapshot({ ...DEFAULT_CLIENT_SETTINGS, ...persistedSettings });
+        const hydratedSettings = { ...DEFAULT_CLIENT_SETTINGS, ...persistedSettings };
+        const migratedSettings = migrateClientSettings(hydratedSettings);
+        replaceClientSettingsSnapshot(migratedSettings);
+        if (migratedSettings !== hydratedSettings) {
+          await persistence.setClientSettings(migratedSettings);
+        }
       }
     } catch (error) {
       console.error(`${CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE} hydrate failed`, error);
