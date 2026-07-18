@@ -90,6 +90,8 @@ import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import { WebPushSubscriptionRepositoryLive } from "./persistence/Layers/WebPushSubscriptions.ts";
 import { WebPushNotificationReactorLive } from "./push/Layers/WebPushNotificationReactor.ts";
 import { WebPushServiceLive } from "./push/Layers/WebPushService.ts";
+import { LocalTranscriptionLive } from "./transcription/LocalTranscription.ts";
+import { transcriptionHttpRouteLayer } from "./transcription/http.ts";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -304,6 +306,10 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // no longer transitively provides it. Exposing it at the runtime level
   // keeps a single Live for all opencode consumers.
   Layer.provideMerge(OpenCodeRuntimeLive),
+  // Managed dictation reads and watches the server-authoritative model
+  // selection. ServerSettingsLive follows it so Effect supplies that
+  // dependency to the transcription layer while exposing both services.
+  Layer.provideMerge(LocalTranscriptionLive),
   Layer.provideMerge(ServerSettingsLive),
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(ProjectFaviconResolverLive),
@@ -343,6 +349,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   authWebSocketTicketRouteLayer,
   authWebSocketTokenRouteLayer,
   attachmentsRouteLayer,
+  transcriptionHttpRouteLayer,
   orchestrationDispatchRouteLayer,
   orchestrationSnapshotRouteLayer,
   otlpTracesProxyRouteLayer,

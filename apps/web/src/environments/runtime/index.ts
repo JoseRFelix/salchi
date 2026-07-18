@@ -1,5 +1,6 @@
 export {
   getEnvironmentHttpBaseUrl,
+  fetchEnvironmentHttp,
   getSavedEnvironmentRecord,
   getSavedEnvironmentRuntimeState,
   hasSavedEnvironmentRegistryHydrated,

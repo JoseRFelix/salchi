@@ -227,6 +227,33 @@ export function resolveEnvironmentHttpUrl(input: {
   return url.toString();
 }
 
+export async function fetchEnvironmentHttp(
+  input: {
+    readonly environmentId: EnvironmentId;
+    readonly pathname: string;
+    readonly searchParams?: Record<string, string>;
+  },
+  init?: RequestInit,
+): Promise<Response> {
+  const url = resolveEnvironmentHttpUrl(input);
+  const savedEnvironment = getSavedEnvironmentRecord(input.environmentId);
+  const headers = new Headers(init?.headers);
+
+  if (savedEnvironment) {
+    const bearerToken = await readSavedEnvironmentBearerToken(input.environmentId);
+    if (!bearerToken) {
+      throw new Error(`Authentication is required for ${savedEnvironment.label}.`);
+    }
+    headers.set("authorization", `Bearer ${bearerToken}`);
+  }
+
+  return fetch(url, {
+    ...init,
+    headers,
+    credentials: savedEnvironment ? "omit" : (init?.credentials ?? "include"),
+  });
+}
+
 export function resetSavedEnvironmentRegistryStoreForTests() {
   savedEnvironmentRegistryHydrated = false;
   savedEnvironmentRegistryHydrationPromise = null;

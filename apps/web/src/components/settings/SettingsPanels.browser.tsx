@@ -773,6 +773,29 @@ describe("GeneralSettingsPanel observability", () => {
       .toBeInTheDocument();
   });
 
+  it("shows local dictation model sizes and supported choices", async () => {
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <GeneralSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect.element(page.getByLabelText("Dictation model")).toHaveTextContent("Base · 142 MB");
+    await expect
+      .element(
+        page.getByText(
+          "Runs locally on this server. Base downloads 142 MB and uses ~388 MB RAM. Larger models improve accuracy but transcribe more slowly.",
+        ),
+      )
+      .toBeInTheDocument();
+
+    await page.getByLabelText("Dictation model").click();
+    await expect.element(page.getByText("Tiny · 75 MB", { exact: true })).toBeInTheDocument();
+    await expect.element(page.getByText("Small · 466 MB", { exact: true })).toBeInTheDocument();
+  });
+
   it("creates and shows a pairing link when network access is enabled", async () => {
     window.desktopBridge = createDesktopBridgeStub({
       serverExposureState: {

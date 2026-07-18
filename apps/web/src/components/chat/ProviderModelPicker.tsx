@@ -1,7 +1,6 @@
 import {
   type ProviderInstanceId,
   type ProviderDriverKind,
-  type ProviderOptionSelection,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
 import { memo, useEffect, useMemo, useState } from "react";
@@ -23,23 +22,6 @@ import { setModelPickerOpen } from "../../modelPickerOpenState";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 
-const REASONING_MODEL_OPTION_IDS = new Set(["reasoningEffort", "reasoning", "effort"]);
-
-function getReasoningLevelValue(
-  selections: ReadonlyArray<ProviderOptionSelection> | null | undefined,
-): string | null {
-  for (const selection of selections ?? []) {
-    if (!REASONING_MODEL_OPTION_IDS.has(selection.id) || typeof selection.value !== "string") {
-      continue;
-    }
-    const trimmed = selection.value.trim();
-    if (trimmed.length > 0) {
-      return trimmed;
-    }
-  }
-  return null;
-}
-
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   /**
    * The instance currently selected in the composer. Drives the trigger
@@ -53,7 +35,6 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
   keybindings?: ResolvedKeybindingsConfig;
   modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
-  modelOptionSelections?: ReadonlyArray<ProviderOptionSelection> | null | undefined;
   activeProviderIconClassName?: string;
   compact?: boolean;
   disabled?: boolean;
@@ -94,17 +75,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const triggerTitle = selectedModel
     ? formatSelectedModelName(getTriggerDisplayModelName(selectedModel))
     : formatSelectedModelName(props.model);
-  // The compact composer surfaces reasoning effort in its own dedicated picker,
-  // so it is omitted from the model trigger text there to avoid duplication.
-  const triggerReasoningLevel = props.compact
-    ? null
-    : getReasoningLevelValue(props.modelOptionSelections);
-  const triggerBaseLabel = selectedModel
+  const triggerLabel = selectedModel
     ? formatSelectedModelName(getTriggerDisplayModelLabel(selectedModel))
     : formatSelectedModelName(props.model);
-  const triggerLabel = triggerReasoningLevel
-    ? `${triggerBaseLabel} ${triggerReasoningLevel}`
-    : triggerBaseLabel;
   const duplicateDriverCount = props.instanceEntries.filter(
     (entry) => activeEntry !== null && entry.driverKind === activeEntry.driverKind,
   ).length;
@@ -240,9 +213,6 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               render={<span className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden" />}
             >
               <span className="min-w-0 truncate">{triggerTitle}</span>
-              {triggerReasoningLevel ? (
-                <span className="shrink-0 text-muted-foreground/60">{triggerReasoningLevel}</span>
-              ) : null}
             </TooltipTrigger>
             <TooltipPopup side="top">{triggerLabel}</TooltipPopup>
           </Tooltip>

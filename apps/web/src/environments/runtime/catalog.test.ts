@@ -6,6 +6,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  fetchEnvironmentHttp,
   resetSavedEnvironmentRegistryStoreForTests,
   resetSavedEnvironmentRuntimeStoreForTests,
   useSavedEnvironmentRegistryStore,
@@ -20,6 +21,7 @@ let resolveRegistryRead: () => void = () => {
 describe("environment runtime catalog stores", () => {
   beforeEach(async () => {
     vi.stubGlobal("window", {
+      location: { origin: "https://app.example.com" },
       nativeApi: {
         persistence: {
           getClientSettings: async () => null,
@@ -141,5 +143,34 @@ describe("environment runtime catalog stores", () => {
     await hydrationPromise;
 
     expect(useSavedEnvironmentRegistryStore.getState().byId[environmentId]).toEqual(record);
+  });
+
+  it("authenticates HTTP requests to saved environments with their bearer token", async () => {
+    const environmentId = EnvironmentId.make("environment-remote");
+    useSavedEnvironmentRegistryStore.getState().upsert({
+      environmentId,
+      label: "Remote environment",
+      httpBaseUrl: "https://remote.example.com/",
+      wsBaseUrl: "wss://remote.example.com/",
+      createdAt: "2026-04-09T00:00:00.000Z",
+      lastConnectedAt: null,
+    });
+    vi.spyOn(window.nativeApi!.persistence, "getSavedEnvironmentSecret").mockResolvedValue(
+      "remote-token",
+    );
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await fetchEnvironmentHttp(
+      { environmentId, pathname: "/api/transcription/status" },
+      { method: "GET" },
+    );
+
+    expect(response.status).toBe(204);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://remote.example.com/api/transcription/status");
+    expect(init?.credentials).toBe("omit");
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer remote-token");
   });
 });

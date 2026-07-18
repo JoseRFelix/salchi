@@ -92,6 +92,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
                   T3CODE_NO_BROWSER: "true",
                   T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD: "false",
                   T3CODE_LOG_WS_EVENTS: "true",
+                  T3CODE_WHISPER_SERVER_URL: "http://127.0.0.1:8080",
+                  T3CODE_WHISPER_AUTO_PROVISION: "false",
                 },
               }),
             ),
@@ -118,6 +120,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: true,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
+        whisperServerUrl: new URL("http://127.0.0.1:8080"),
+        whisperAutoProvision: false,
       });
     }),
   );

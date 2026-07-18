@@ -3,7 +3,6 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   EnvironmentId,
   ModelSelection,
-  type ProviderOptionDescriptor,
   ProviderInstanceId,
   ProviderDriverKind,
   ThreadId,
@@ -17,13 +16,8 @@ import { render } from "vitest-browser-react";
 import { createModelCapabilities, createModelSelection } from "@t3tools/shared/model";
 
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
-import { isReasoningDescriptor, TraitsMenuContent } from "./TraitsPicker";
+import { TraitsMenuContent } from "./TraitsPicker";
 import { useComposerDraftStore } from "../../composerDraftStore";
-
-// The compact "more controls" menu mirrors the app: the reasoning-effort
-// control is promoted to its own picker, so it is filtered out here.
-const withoutReasoning = (descriptor: ProviderOptionDescriptor) =>
-  !isReasoningDescriptor(descriptor);
 
 const LOCAL_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 
@@ -156,7 +150,6 @@ async function mountMenu(props?: { modelSelection?: ModelSelection; prompt?: str
           prompt={props?.prompt ?? ""}
           modelOptions={providerOptions}
           onPromptChange={onPromptChange}
-          descriptorFilter={withoutReasoning}
         />
       }
       onToggleInteractionMode={vi.fn()}
@@ -221,7 +214,7 @@ describe("CompactComposerControlsMenu", () => {
     });
   });
 
-  it("omits the reasoning-effort control (it lives in its own picker)", async () => {
+  it("shows reasoning controls inside the more-controls menu", async () => {
     await using _ = await mountMenu({
       modelSelection: createModelSelection(
         ProviderInstanceId.make("claudeAgent"),
@@ -233,9 +226,10 @@ describe("CompactComposerControlsMenu", () => {
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      // Reasoning section header and its options are absent; Fast Mode remains.
-      expect(text).not.toContain("Reasoning");
-      expect(text).not.toContain("Ultrathink");
+      expect(text).toContain("Reasoning");
+      expect(text).toContain("Low");
+      expect(text).toContain("High");
+      expect(text).toContain("Ultrathink");
       expect(text).toContain("Fast Mode");
     });
   });
