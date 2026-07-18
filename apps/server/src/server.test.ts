@@ -25,8 +25,11 @@ import {
   WS_METHODS,
   WsRpcGroup,
   EditorId,
+  TRANSCRIPTION_ROUTE_PATH,
+  TRANSCRIPTION_STATUS_ROUTE_PATH,
 } from "@t3tools/contracts";
 import { computeOrchestrationThreadDetailFingerprint } from "@t3tools/shared/orchestrationThreadDetailFingerprint";
+import * as NetService from "@t3tools/shared/Net";
 import { assert, it } from "@effect/vitest";
 import { assertFailure, assertInclude, assertTrue } from "@effect/vitest/utils";
 import * as Clock from "effect/Clock";
@@ -144,6 +147,7 @@ import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as Data from "effect/Data";
 import { WebPushServiceNoop } from "./push/Layers/WebPushService.ts";
+import { LocalTranscriptionLive } from "./transcription/LocalTranscription.ts";
 
 const defaultProjectId = ProjectId.make("project-default");
 const defaultThreadId = ThreadId.make("thread-default");
@@ -400,6 +404,8 @@ const buildAppUnderTest = (options?: {
       logWebSocketEvents: false,
       tailscaleServeEnabled: false,
       tailscaleServePort: 443,
+      whisperServerUrl: undefined,
+      whisperAutoProvision: false,
       ...options?.config,
     };
     const layerConfig = Layer.succeed(ServerConfig, config);
@@ -787,6 +793,8 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provideMerge(makeAuthTestLayer()),
+      Layer.provide(LocalTranscriptionLive),
+      Layer.provide(NetService.layer),
       Layer.provide(workspaceAndProjectServicesLayer),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(layerConfig),
@@ -1223,6 +1231,88 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         "bearer-session-token",
       ]);
       assert.isTrue(body.auth.sessionCookieName.startsWith("t3_session_"));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("protects the local transcription status and reports when it is not configured", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const unauthenticatedResponse = yield* HttpClient.get(TRANSCRIPTION_STATUS_ROUTE_PATH);
+      assert.equal(unauthenticatedResponse.status, 401);
+
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const authenticatedResponse = yield* HttpClient.get(TRANSCRIPTION_STATUS_ROUTE_PATH, {
+        headers: { cookie },
+      });
+      const body = yield* authenticatedResponse.json;
+
+      assert.equal(authenticatedResponse.status, 200);
+      assert.deepEqual(body, {
+        configured: false,
+        state: "unavailable",
+        downloadedBytes: null,
+        totalBytes: null,
+        message: null,
+      });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("proxies an authenticated audio upload to a loopback whisper sidecar", () =>
+    Effect.gen(function* () {
+      const sidecar = yield* Effect.acquireRelease(
+        Effect.promise(async () => {
+          const NodeHttp = await import("node:http");
+          return await new Promise<{
+            readonly close: () => Promise<void>;
+            readonly url: URL;
+          }>((resolve, reject) => {
+            const server = NodeHttp.createServer((request, response) => {
+              request.resume();
+              request.on("end", () => {
+                response.statusCode = 200;
+                response.setHeader("content-type", "application/json");
+                response.end(JSON.stringify({ text: "  fix the login flow  " }));
+              });
+            });
+            server.once("error", reject);
+            server.listen(0, "127.0.0.1", () => {
+              const address = server.address();
+              if (!address || typeof address === "string") {
+                reject(new Error("Unable to resolve test whisper server address."));
+                return;
+              }
+              resolve({
+                url: new URL(`http://127.0.0.1:${address.port}`),
+                close: () =>
+                  new Promise<void>((resolveClose, rejectClose) => {
+                    server.closeAllConnections();
+                    server.close((error) => (error ? rejectClose(error) : resolveClose()));
+                  }),
+              });
+            });
+          });
+        }),
+        (server) => Effect.promise(server.close).pipe(Effect.orDie),
+      );
+
+      yield* buildAppUnderTest({ config: { whisperServerUrl: sidecar.url } });
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const formData = new FormData();
+      formData.append(
+        "file",
+        new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }),
+        "recording.webm",
+      );
+
+      const response = yield* HttpClient.post(TRANSCRIPTION_ROUTE_PATH, {
+        headers: { cookie },
+        body: HttpBody.formData(formData),
+      });
+      const body = (yield* response.json) as { readonly text: string };
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(body, { text: "fix the login flow" });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

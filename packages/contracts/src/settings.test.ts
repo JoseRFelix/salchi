@@ -26,6 +26,22 @@ describe("ClientSettings defaults", () => {
   });
 });
 
+describe("ServerSettings.transcriptionModel", () => {
+  it("defaults legacy settings to the balanced English model", () => {
+    expect(decodeServerSettings({}).transcriptionModel).toBe("base.en");
+  });
+
+  it("accepts supported model sizes and rejects unknown models", () => {
+    expect(decodeServerSettings({ transcriptionModel: "small.en" }).transcriptionModel).toBe(
+      "small.en",
+    );
+    expect(decodeServerSettingsPatch({ transcriptionModel: "tiny.en" }).transcriptionModel).toBe(
+      "tiny.en",
+    );
+    expect(() => decodeServerSettingsPatch({ transcriptionModel: "large-v3" })).toThrow();
+  });
+});
+
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("defaults to an empty record so legacy configs without the key still decode", () => {
     expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});

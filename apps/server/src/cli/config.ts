@@ -136,6 +136,14 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  whisperServerUrl: Config.url("T3CODE_WHISPER_SERVER_URL").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  whisperAutoProvision: Config.boolean("T3CODE_WHISPER_AUTO_PROVISION").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
 });
 
 export interface CliServerFlags {
@@ -381,6 +389,8 @@ export const resolveServerConfig = (
       logWebSocketEvents,
       tailscaleServeEnabled,
       tailscaleServePort,
+      whisperServerUrl: env.whisperServerUrl,
+      whisperAutoProvision: env.whisperAutoProvision ?? true,
     };
 
     return config;

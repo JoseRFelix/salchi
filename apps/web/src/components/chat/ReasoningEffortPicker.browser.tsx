@@ -18,8 +18,7 @@ import { useComposerDraftStore } from "../../composerDraftStore";
 
 const LOCAL_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 
-// Mirrors the compact composer: the standalone reasoning picker only renders
-// the reasoning-effort control.
+// Exercises descriptor filtering with a reasoning-only picker.
 const reasoningOnly = (descriptor: ProviderOptionDescriptor) => isReasoningDescriptor(descriptor);
 
 function selectDescriptor(
@@ -145,7 +144,7 @@ describe("reasoning effort picker", () => {
       expect(text).toContain("Medium");
       expect(text).toContain("High");
       expect(text).toContain("Ultrathink");
-      // Sibling traits stay in the "more controls" menu, not here.
+      // Sibling traits are excluded by the targeted descriptor filter.
       expect(text).not.toContain("Fast Mode");
     });
   });

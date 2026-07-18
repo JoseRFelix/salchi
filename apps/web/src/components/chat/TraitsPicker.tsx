@@ -51,8 +51,6 @@ const COMPOSER_ACCESS_BOOLEAN_DESCRIPTOR_IDS = new Set([AUTO_REVIEW_MODEL_OPTION
 /**
  * Descriptor ids that represent the model's reasoning-effort control across
  * providers (Claude: `effort`, Codex: `reasoningEffort`, Cursor: `reasoning`).
- * The compact composer promotes this control out of the "more controls" menu
- * into its own dedicated picker, so callers filter on these ids.
  */
 export const REASONING_OPTION_IDS = new Set(["reasoningEffort", "reasoning", "effort"]);
 
@@ -236,11 +234,7 @@ export interface TraitsMenuContentProps {
   onPromptChange: (prompt: string) => void;
   modelOptions?: ProviderOptions | null | undefined;
   allowPromptInjectedEffort?: boolean;
-  /**
-   * Restricts the rendered option descriptors. The compact composer uses this
-   * to split the reasoning-effort control into its own picker while keeping the
-   * remaining traits in the "more controls" menu.
-   */
+  /** Restricts the rendered option descriptors for targeted picker variants. */
   descriptorFilter?: DescriptorFilter;
   triggerVariant?: VariantProps<typeof buttonVariants>["variant"];
   triggerClassName?: string;

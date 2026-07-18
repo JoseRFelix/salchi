@@ -9187,6 +9187,164 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("keeps the mobile composer expanded when pressing attachment and dictation controls", async () => {
+    const mounted = await mountChatView({
+      viewport: COMPACT_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-mobile-media-controls" as MessageId,
+        targetText: "mobile media controls thread",
+      }),
+    });
+
+    try {
+      const expandComposerButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Expand composer"]'),
+        "Unable to find collapsed mobile composer expand control.",
+      );
+      expandComposerButton.click();
+      await waitForLayout();
+
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(() => {
+        expect(document.activeElement).toBe(composerEditor);
+      });
+
+      for (const label of ["Attach files", "Dictate"]) {
+        const button = await waitForElement(
+          () => document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`),
+          `Unable to find ${label} composer control.`,
+        );
+        const defaultAllowed = button.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, cancelable: true }),
+        );
+
+        expect(defaultAllowed).toBe(false);
+        expect(document.activeElement).toBe(composerEditor);
+      }
+
+      await waitForLayout();
+      const composerSurface = document.querySelector<HTMLElement>(
+        "[data-chat-composer-mobile-collapsed]",
+      );
+      expect(composerSurface?.dataset.chatComposerMobileCollapsed).toBe("false");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("replaces footer controls with live dictation feedback while recording", async () => {
+    const originalMediaRecorder = globalThis.MediaRecorder;
+    const originalGetUserMedia = navigator.mediaDevices.getUserMedia;
+    let activeRecorderState: "inactive" | "recording" = "inactive";
+
+    class MockMediaRecorder extends EventTarget {
+      static isTypeSupported(): boolean {
+        return true;
+      }
+
+      readonly mimeType = "audio/webm;codecs=opus";
+      state: "inactive" | "recording" | "paused" = "inactive";
+
+      start(): void {
+        this.state = "recording";
+        activeRecorderState = "recording";
+      }
+
+      stop(): void {
+        this.state = "inactive";
+        activeRecorderState = "inactive";
+        this.dispatchEvent(new Event("stop"));
+      }
+    }
+
+    vi.stubGlobal("MediaRecorder", MockMediaRecorder);
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+      configurable: true,
+      value: vi.fn(async () => new MediaStream()),
+    });
+
+    const mounted = await mountChatView({
+      viewport: COMPACT_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-dictation-feedback" as MessageId,
+        targetText: "dictation feedback thread",
+      }),
+    });
+
+    try {
+      const expandComposerButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Expand composer"]'),
+        "Unable to find collapsed mobile composer expand control.",
+      );
+      expandComposerButton.click();
+      await waitForLayout();
+      const composerEditor = await waitForComposerEditor();
+
+      await waitForElement(
+        findComposerProviderModelPicker,
+        "Unable to find provider model picker before recording.",
+      );
+      const dictateButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Dictate"]'),
+        "Unable to find dictation control.",
+      );
+      dictateButton.click();
+
+      const waveform = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-chat-composer-dictation-waveform="true"]'),
+        "Unable to find live dictation waveform.",
+      );
+      expect(waveform.textContent).toContain("0:00");
+      await vi.waitFor(() => {
+        expect(findComposerProviderModelPicker()).toBeNull();
+        expect(
+          document.querySelector<HTMLElement>('[data-chat-composer-footer="true"]')?.dataset
+            .chatComposerDictationActive,
+        ).toBe("true");
+      });
+
+      composerEditor.blur();
+      await waitForLayout();
+      await vi.waitFor(() => {
+        expect(document.activeElement).not.toBe(composerEditor);
+        expect(activeRecorderState).toBe("recording");
+        expect(waveform.isConnected).toBe(true);
+        expect(
+          document.querySelector<HTMLElement>("[data-chat-composer-mobile-collapsed]")?.dataset
+            .chatComposerMobileCollapsed,
+        ).toBe("false");
+      });
+
+      const stopButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop and transcribe"]'),
+        "Unable to find dictation stop control.",
+      );
+      stopButton.click();
+
+      const expandAfterRecordingButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Expand composer"]'),
+        "Composer did not return to its normal collapsed state after dictation finished.",
+      );
+      expandAfterRecordingButton.click();
+
+      await waitForElement(
+        findComposerProviderModelPicker,
+        "Provider controls did not return after recording stopped.",
+      );
+      expect(
+        document.querySelector<HTMLElement>('[data-chat-composer-footer="true"]')?.dataset
+          .chatComposerDictationActive,
+      ).toBe("false");
+    } finally {
+      await mounted.cleanup();
+      vi.stubGlobal("MediaRecorder", originalMediaRecorder);
+      Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+        configurable: true,
+        value: originalGetUserMedia,
+      });
+    }
+  });
+
   it("prefills implementation drafts without auto-submitting and carries the source plan on send", async () => {
     const planMarkdown = "# Follow-up plan\n\n- Keep the composer footer stable on resize.";
     const sourcePlanId = "plan-follow-up-browser-test" as OrchestrationProposedPlanId;

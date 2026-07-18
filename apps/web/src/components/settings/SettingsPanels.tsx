@@ -21,6 +21,11 @@ import {
 import { scopeThreadRef } from "@t3tools/client-runtime";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { createModelSelection } from "@t3tools/shared/model";
+import {
+  findTranscriptionModel,
+  isTranscriptionModel,
+  TRANSCRIPTION_MODELS,
+} from "@t3tools/shared/transcriptionModel";
 import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
@@ -402,6 +407,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.enableAssistantStreaming !== DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming
         ? ["Assistant output"]
         : []),
+      ...(settings.transcriptionModel !== DEFAULT_UNIFIED_SETTINGS.transcriptionModel
+        ? ["Dictation model"]
+        : []),
       ...(Duration.toMillis(settings.automaticGitFetchInterval) !==
       Duration.toMillis(DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval)
         ? ["Automatic Git fetch interval"]
@@ -431,6 +439,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.diffWordWrap,
       settings.automaticGitFetchInterval,
       settings.enableAssistantStreaming,
+      settings.transcriptionModel,
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
       isThemeDirty,
@@ -457,6 +466,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
       enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
+      transcriptionModel: DEFAULT_UNIFIED_SETTINGS.transcriptionModel,
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
       defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
@@ -593,6 +603,7 @@ export function GeneralSettingsPanel() {
     settings.textGenerationModelSelection ?? null,
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
   );
+  const transcriptionModel = findTranscriptionModel(settings.transcriptionModel);
 
   return (
     <SettingsPageContainer>
@@ -717,6 +728,46 @@ export function GeneralSettingsPanel() {
               }
               aria-label="Stream assistant messages"
             />
+          }
+        />
+
+        <SettingsRow
+          title="Dictation model"
+          description={`Runs locally on this server. ${transcriptionModel.label} downloads ${transcriptionModel.downloadSizeLabel} and uses ${transcriptionModel.memorySizeLabel}. Larger models improve accuracy but transcribe more slowly.`}
+          resetAction={
+            settings.transcriptionModel !== DEFAULT_UNIFIED_SETTINGS.transcriptionModel ? (
+              <SettingResetButton
+                label="dictation model"
+                onClick={() =>
+                  updateSettings({
+                    transcriptionModel: DEFAULT_UNIFIED_SETTINGS.transcriptionModel,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.transcriptionModel}
+              onValueChange={(value) => {
+                if (value && isTranscriptionModel(value)) {
+                  updateSettings({ transcriptionModel: value });
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-44" aria-label="Dictation model">
+                <SelectValue>
+                  {transcriptionModel.label} · {transcriptionModel.downloadSizeLabel}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {TRANSCRIPTION_MODELS.map((model) => (
+                  <SelectItem key={model.id} hideIndicator value={model.id}>
+                    {model.label} · {model.downloadSizeLabel}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
           }
         />
 
@@ -891,7 +942,6 @@ export function GeneralSettingsPanel() {
                 lockedProvider={null}
                 instanceEntries={gitModelInstanceEntries}
                 modelOptionsByInstance={gitModelOptionsByInstance}
-                modelOptionSelections={textGenModelOptions}
                 triggerVariant="outline"
                 triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
                 onInstanceModelChange={(instanceId, model) => {

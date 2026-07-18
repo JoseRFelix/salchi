@@ -773,6 +773,47 @@ describe("GeneralSettingsPanel observability", () => {
       .toBeInTheDocument();
   });
 
+  it("shows local dictation model sizes and supported choices", async () => {
+    const updateSettings = vi.fn<LocalApi["server"]["updateSettings"]>().mockResolvedValue({
+      ...DEFAULT_SERVER_SETTINGS,
+      transcriptionModel: "tiny.en",
+    });
+    window.nativeApi = {
+      persistence: {
+        getClientSettings: vi.fn().mockResolvedValue(null),
+        setClientSettings: vi.fn().mockResolvedValue(undefined),
+      },
+      server: {
+        updateSettings,
+      },
+    } as unknown as LocalApi;
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <GeneralSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    const dictationModel = page.getByLabelText("Dictation model", { exact: true });
+    await expect.element(dictationModel).toHaveTextContent("Base · 142 MB");
+    await expect
+      .element(
+        page.getByText(
+          "Runs locally on this server. Base downloads 142 MB and uses ~388 MB RAM. Larger models improve accuracy but transcribe more slowly.",
+        ),
+      )
+      .toBeInTheDocument();
+
+    await dictationModel.click();
+    await expect.element(page.getByText("Tiny · 75 MB", { exact: true })).toBeInTheDocument();
+    await expect.element(page.getByText("Small · 466 MB", { exact: true })).toBeInTheDocument();
+
+    await page.getByText("Tiny · 75 MB", { exact: true }).click();
+    await expect.element(dictationModel).toHaveTextContent("Tiny · 75 MB");
+    expect(updateSettings).toHaveBeenCalledWith({ transcriptionModel: "tiny.en" });
+  });
+
   it("creates and shows a pairing link when network access is enabled", async () => {
     window.desktopBridge = createDesktopBridgeStub({
       serverExposureState: {

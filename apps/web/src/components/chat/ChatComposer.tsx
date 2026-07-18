@@ -94,12 +94,13 @@ import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
 import { ComposerQueuedTurnsPanel } from "./ComposerQueuedTurnsPanel";
+import { ComposerDictationButton } from "./ComposerDictationButton";
+import { preserveComposerFocusOnPointerDown } from "./composerFocus";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { searchSlashCommandItems } from "./composerSlashCommandSearch";
 import {
   getComposerProviderState,
-  renderProviderReasoningPicker,
-  renderProviderTraitsMenuContentWithoutReasoning,
+  renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
 import { ContextWindowMeter } from "./ContextWindowMeter";
@@ -141,6 +142,7 @@ import {
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { resolveDictationInsertion } from "../../dictation";
 
 const ATTACHMENT_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 
@@ -344,7 +346,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
                   className={cn(
                     "shrink-0 whitespace-nowrap px-2 sm:px-3",
                     props.planSidebarOpen
-                      ? "bg-blue-500/10 text-blue-400 hover:bg-blue-500/15 hover:text-blue-300"
+                      ? "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary"
                       : "text-muted-foreground/70 hover:text-foreground/80",
                   )}
                   size="sm"
@@ -958,6 +960,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
+  const [isDictationActive, setIsDictationActive] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const isMobileViewport = useMediaQuery("max-sm");
@@ -970,6 +973,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     shouldCollapseComposerOnMobile &&
     isMobileViewport &&
     !isComposerFocused &&
+    !isDictationActive &&
     !mobileSelectionMenuKeepsComposerExpanded;
 
   // ------------------------------------------------------------------
@@ -1206,12 +1210,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     prompt,
     onPromptChange: setPromptFromTraits,
   };
-  // Compact footer (mobile/narrow): reasoning effort gets its own picker, so it
-  // is excluded from the "more controls" menu. The full traits picker (with
-  // reasoning) is still used on the roomier non-compact footer.
-  const providerTraitsMenuContent =
-    renderProviderTraitsMenuContentWithoutReasoning(traitsRenderInput);
-  const providerReasoningPicker = renderProviderReasoningPicker(traitsRenderInput);
+  const providerTraitsMenuContent = renderProviderTraitsMenuContent(traitsRenderInput);
   const providerTraitsPicker = renderProviderTraitsPicker(traitsRenderInput);
   const pendingPrimaryAction = useMemo(
     () =>
@@ -1231,7 +1230,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const collapsedComposerPrimaryActionLabel =
     phase === "running" ? "Queue message" : "Send message";
   const showMobilePendingAnswerActions =
-    isMobileViewport && !isComposerCollapsedMobile && pendingPrimaryAction !== null;
+    isMobileViewport &&
+    !isComposerCollapsedMobile &&
+    !isDictationActive &&
+    pendingPrimaryAction !== null;
 
   // ------------------------------------------------------------------
   // Prompt helpers
@@ -1694,6 +1696,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       terminalContextIds: composerTerminalContexts.map((context) => context.id),
     };
   }, [composerCursor, composerTerminalContexts, promptRef]);
+
+  const insertDictationTranscript = useCallback(
+    (transcript: string) => {
+      const snapshot = readComposerSnapshot();
+      const insertion = resolveDictationInsertion(
+        snapshot.value,
+        snapshot.expandedCursor,
+        transcript,
+      );
+      if (!insertion) return;
+      applyPromptReplacement(insertion.rangeStart, insertion.rangeEnd, insertion.replacement);
+    },
+    [applyPromptReplacement, readComposerSnapshot],
+  );
 
   const resolveActiveComposerTrigger = useCallback((): {
     snapshot: { value: string; cursor: number; expandedCursor: number };
@@ -2649,7 +2665,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           </div>
 
           {/* Bottom toolbar */}
-          {isComposerCollapsedMobile ? null : activePendingApproval ? (
+          {isComposerCollapsedMobile ? null : activePendingApproval && !isDictationActive ? (
             <div className="flex items-center justify-end gap-2 px-2.5 pb-2.5 sm:px-3 sm:pb-3">
               <ComposerPendingApprovalActions
                 requestId={activePendingApproval.requestId}
@@ -2661,14 +2677,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             <div
               data-chat-composer-footer="true"
               data-chat-composer-footer-compact={isComposerFooterCompact ? "true" : "false"}
+              data-chat-composer-dictation-active={isDictationActive ? "true" : "false"}
               className={cn(
                 "flex min-w-0 flex-nowrap items-center justify-between gap-2 overflow-visible px-2.5 pb-2.5 sm:px-3 sm:pb-3",
                 pendingUserInputs.length > 0 && "pt-2",
                 isComposerFooterCompact ? "gap-1.5" : "gap-2 sm:gap-0",
-                showMobilePendingAnswerActions && "hidden sm:flex",
+                showMobilePendingAnswerActions && !isDictationActive && "hidden sm:flex",
               )}
             >
-              <div className="-m-1 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <div
+                className={cn(
+                  "-m-1 flex min-w-0 flex-1 items-center gap-1 p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+                  isDictationActive ? "overflow-hidden" : "overflow-x-auto",
+                )}
+              >
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -2682,6 +2704,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           (environmentUnavailable !== null && activePendingProgress === null)
                         }
                         aria-label="Attach files"
+                        onPointerDown={preserveComposerFocusOnPointerDown}
                         onClick={openAttachmentPicker}
                       />
                     }
@@ -2690,71 +2713,89 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   </TooltipTrigger>
                   <TooltipPopup side="top">Attach images or PDFs</TooltipPopup>
                 </Tooltip>
-                <ProviderModelPicker
-                  compact={isComposerFooterCompact}
-                  activeInstanceId={selectedInstanceId}
-                  model={selectedModelForPickerWithCustomFallback}
-                  lockedProvider={lockedProvider}
-                  lockedContinuationGroupKey={lockedContinuationGroupKey}
-                  instanceEntries={providerInstanceEntries}
-                  keybindings={keybindings}
-                  modelOptionsByInstance={modelOptionsByInstance}
-                  modelOptionSelections={selectedModelOptionsForDispatch}
-                  terminalOpen={terminalOpen}
-                  open={isComposerModelPickerOpen}
-                  {...(composerProviderState.modelPickerIconClassName
-                    ? {
-                        activeProviderIconClassName: composerProviderState.modelPickerIconClassName,
-                      }
-                    : {})}
-                  onOpenChange={(open) => {
-                    setIsComposerModelPickerOpen(open);
-                  }}
-                  getModelDisabledReason={getModelDisabledReason}
-                  onInstanceModelChange={onProviderModelSelect}
+                <ComposerDictationButton
+                  environmentId={environmentId}
+                  disabled={
+                    isConnecting ||
+                    isComposerApprovalState ||
+                    (environmentUnavailable !== null && activePendingProgress === null)
+                  }
+                  onTranscript={insertDictationTranscript}
+                  onActiveChange={setIsDictationActive}
                 />
+                {isDictationActive ? null : (
+                  <>
+                    <ProviderModelPicker
+                      compact={isComposerFooterCompact}
+                      activeInstanceId={selectedInstanceId}
+                      model={selectedModelForPickerWithCustomFallback}
+                      lockedProvider={lockedProvider}
+                      lockedContinuationGroupKey={lockedContinuationGroupKey}
+                      instanceEntries={providerInstanceEntries}
+                      keybindings={keybindings}
+                      modelOptionsByInstance={modelOptionsByInstance}
+                      terminalOpen={terminalOpen}
+                      open={isComposerModelPickerOpen}
+                      {...(composerProviderState.modelPickerIconClassName
+                        ? {
+                            activeProviderIconClassName:
+                              composerProviderState.modelPickerIconClassName,
+                          }
+                        : {})}
+                      onOpenChange={(open) => {
+                        setIsComposerModelPickerOpen(open);
+                      }}
+                      getModelDisabledReason={getModelDisabledReason}
+                      onInstanceModelChange={onProviderModelSelect}
+                    />
 
-                {isComposerFooterCompact ? (
-                  <>
-                    {providerReasoningPicker}
-                    <CompactComposerControlsMenu
-                      activePlan={showPlanSidebarToggle}
-                      interactionMode={interactionMode}
-                      planSidebarLabel={planSidebarLabel}
-                      planSidebarOpen={planSidebarOpen}
-                      runtimeMode={runtimeMode}
-                      showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
-                      traitsMenuContent={providerTraitsMenuContent}
-                      autoReviewAvailable={autoReviewAvailable}
-                      autoReviewEnabled={autoReviewEnabled}
-                      onToggleInteractionMode={toggleInteractionMode}
-                      onTogglePlanSidebar={togglePlanSidebar}
-                      onRuntimeModeChange={handleRuntimeModeChange}
-                      onAutoReviewChange={handleAutoReviewChange}
-                    />
-                  </>
-                ) : (
-                  <>
-                    {providerTraitsPicker ? (
+                    {isComposerFooterCompact ? (
+                      <CompactComposerControlsMenu
+                        activePlan={showPlanSidebarToggle}
+                        interactionMode={interactionMode}
+                        planSidebarLabel={planSidebarLabel}
+                        planSidebarOpen={planSidebarOpen}
+                        runtimeMode={runtimeMode}
+                        showInteractionModeToggle={
+                          composerProviderControls.showInteractionModeToggle
+                        }
+                        traitsMenuContent={providerTraitsMenuContent}
+                        autoReviewAvailable={autoReviewAvailable}
+                        autoReviewEnabled={autoReviewEnabled}
+                        onToggleInteractionMode={toggleInteractionMode}
+                        onTogglePlanSidebar={togglePlanSidebar}
+                        onRuntimeModeChange={handleRuntimeModeChange}
+                        onAutoReviewChange={handleAutoReviewChange}
+                      />
+                    ) : (
                       <>
-                        <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
-                        {providerTraitsPicker}
+                        {providerTraitsPicker ? (
+                          <>
+                            <Separator
+                              orientation="vertical"
+                              className="mx-0.5 hidden h-4 sm:block"
+                            />
+                            {providerTraitsPicker}
+                          </>
+                        ) : null}
+                        <ComposerFooterModeControls
+                          showInteractionModeToggle={
+                            composerProviderControls.showInteractionModeToggle
+                          }
+                          interactionMode={interactionMode}
+                          runtimeMode={runtimeMode}
+                          showPlanToggle={showPlanSidebarToggle}
+                          planSidebarLabel={planSidebarLabel}
+                          planSidebarOpen={planSidebarOpen}
+                          autoReviewAvailable={autoReviewAvailable}
+                          autoReviewEnabled={autoReviewEnabled}
+                          onToggleInteractionMode={toggleInteractionMode}
+                          onRuntimeModeChange={handleRuntimeModeChange}
+                          onTogglePlanSidebar={togglePlanSidebar}
+                          onAutoReviewChange={handleAutoReviewChange}
+                        />
                       </>
-                    ) : null}
-                    <ComposerFooterModeControls
-                      showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
-                      interactionMode={interactionMode}
-                      runtimeMode={runtimeMode}
-                      showPlanToggle={showPlanSidebarToggle}
-                      planSidebarLabel={planSidebarLabel}
-                      planSidebarOpen={planSidebarOpen}
-                      autoReviewAvailable={autoReviewAvailable}
-                      autoReviewEnabled={autoReviewEnabled}
-                      onToggleInteractionMode={toggleInteractionMode}
-                      onRuntimeModeChange={handleRuntimeModeChange}
-                      onTogglePlanSidebar={togglePlanSidebar}
-                      onAutoReviewChange={handleAutoReviewChange}
-                    />
+                    )}
                   </>
                 )}
               </div>
@@ -2769,7 +2810,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               >
                 <ComposerFooterPrimaryActions
                   compact={isComposerPrimaryActionsCompact}
-                  activeContextWindow={activeContextWindow}
+                  activeContextWindow={isDictationActive ? null : activeContextWindow}
                   activeThreadProviderDisplayName={activeThreadProviderDisplayName}
                   pendingAction={pendingPrimaryAction}
                   isRunning={phase === "running"}

@@ -1,9 +1,4 @@
-import {
-  ProviderDriverKind,
-  ProviderInstanceId,
-  type ProviderOptionSelection,
-  type ServerProvider,
-} from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import { EnvironmentId } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { page, userEvent } from "vitest/browser";
@@ -258,7 +253,6 @@ async function mountPicker(props: {
   lockedProvider: ProviderDriverKind | null;
   lockedContinuationGroupKey?: string | null;
   providers?: ReadonlyArray<ServerProvider>;
-  modelOptionSelections?: ReadonlyArray<ProviderOptionSelection> | null;
   settings?: UnifiedSettings;
   triggerVariant?: "ghost" | "outline";
   compact?: boolean;
@@ -284,7 +278,6 @@ async function mountPicker(props: {
       lockedContinuationGroupKey={props.lockedContinuationGroupKey ?? null}
       instanceEntries={instanceEntries}
       modelOptionsByInstance={modelOptionsByInstance}
-      modelOptionSelections={props.modelOptionSelections}
       triggerVariant={props.triggerVariant}
       {...(props.compact ? { compact: true } : {})}
       {...(props.getModelDisabledReason
@@ -749,12 +742,11 @@ describe("ProviderModelPicker", () => {
     }
   });
 
-  it("shows the selected reasoning level after the trigger model name", async () => {
+  it("shows only the model name in the desktop trigger", async () => {
     const mounted = await mountPicker({
       activeInstanceId: CODEX_INSTANCE_ID,
       model: "gpt-5-codex",
       lockedProvider: null,
-      modelOptionSelections: [{ id: "reasoningEffort", value: "high" }],
     });
 
     try {
@@ -765,20 +757,17 @@ describe("ProviderModelPicker", () => {
       const label = trigger?.textContent ?? "";
       // The trigger drops the "GPT-" company prefix from the selected model.
       expect(label).not.toContain("GPT-5 Codex");
-      expect(label).toContain("5 Codex");
-      expect(label).toContain("high");
-      expect(label.indexOf("high")).toBeGreaterThan(label.indexOf("5 Codex"));
+      expect(label).toBe("5 Codex");
     } finally {
       await mounted.cleanup();
     }
   });
 
-  it("omits the reasoning level from the compact trigger (it has its own picker)", async () => {
+  it("shows only the model name in the compact trigger", async () => {
     const mounted = await mountPicker({
       activeInstanceId: CODEX_INSTANCE_ID,
       model: "gpt-5-codex",
       lockedProvider: null,
-      modelOptionSelections: [{ id: "reasoningEffort", value: "high" }],
       compact: true,
     });
 
@@ -788,8 +777,7 @@ describe("ProviderModelPicker", () => {
       );
       expect(trigger).not.toBeNull();
       const label = trigger?.textContent ?? "";
-      expect(label).toContain("5 Codex");
-      expect(label).not.toContain("high");
+      expect(label).toBe("5 Codex");
     } finally {
       await mounted.cleanup();
     }

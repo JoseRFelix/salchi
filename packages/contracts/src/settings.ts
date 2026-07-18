@@ -6,6 +6,7 @@ import { NonNegativeInt, TrimmedNonEmptyString, TrimmedString } from "./baseSche
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL, ProviderOptionSelections } from "./model.ts";
 import { ModelSelection } from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
+import { DEFAULT_TRANSCRIPTION_MODEL, TranscriptionModel } from "./transcription.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -403,6 +404,9 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed("local" as const satisfies ThreadEnvMode)),
   ),
   addProjectBaseDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  transcriptionModel: TranscriptionModel.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_TRANSCRIPTION_MODEL)),
+  ),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(
       Effect.succeed({
@@ -526,6 +530,7 @@ export const ServerSettingsPatch = Schema.Struct({
   automaticGitFetchInterval: Schema.optionalKey(Schema.DurationFromMillis),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
+  transcriptionModel: Schema.optionalKey(TranscriptionModel),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   themeMode: Schema.optionalKey(ThemeMode),
   colorThemeLight: Schema.optionalKey(Schema.String),
