@@ -118,6 +118,7 @@ import { closeSourceControlPanel, useSourceControlPanelState } from "../sourceCo
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import {
   closeWorkspaceFilePreview,
+  isWorkspaceFileExplorerOpen,
   openWorkspaceFileExplorer,
   setActiveWorkspaceFileExplorerContext,
   useWorkspaceFilePanelState,
@@ -1015,7 +1016,7 @@ export default function ChatView(props: ChatViewProps) {
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const diffOpen = rawSearch.diff === "1";
-  const sourceControlOpen = useSourceControlPanelState().open;
+  const sourceControlOpen = useSourceControlPanelState().open && !diffOpen;
   const activeThreadId = activeThread?.id ?? null;
   const activeThreadRef = useMemo(
     () => (activeThread ? scopeThreadRef(activeThread.environmentId, activeThread.id) : null),
@@ -2244,7 +2245,7 @@ export default function ChatView(props: ChatViewProps) {
     setThreadBranch,
   ]);
   const fileExplorerAvailable = activeWorkspaceRoot !== undefined;
-  const fileExplorerOpen = filePanelState.open && filePanelState.view === "explorer";
+  const fileExplorerOpen = isWorkspaceFileExplorerOpen(filePanelState);
   const toggleFileExplorerSidebar = useCallback(() => {
     if (fileExplorerOpen) {
       closeWorkspaceFilePreview();

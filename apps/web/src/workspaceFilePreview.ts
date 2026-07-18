@@ -50,6 +50,13 @@ export interface WorkspaceFilePreviewReturnPreview {
 
 export type WorkspaceFilePanelView = "explorer" | "preview" | "source-control";
 
+export function isWorkspaceFileExplorerOpen(state: {
+  readonly open: boolean;
+  readonly view: WorkspaceFilePanelView;
+}): boolean {
+  return state.open && (state.view === "explorer" || state.view === "preview");
+}
+
 export interface WorkspaceFilePanelPreviewHistoryEntry {
   kind: "preview";
   explorerContext: WorkspaceFileExplorerContext | null;

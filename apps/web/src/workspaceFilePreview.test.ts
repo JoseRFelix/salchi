@@ -6,6 +6,7 @@ import {
   __resetWorkspaceFilePanelStateForTests,
   closeWorkspaceFilePreview,
   closeWorkspaceSourceControlPanel,
+  isWorkspaceFileExplorerOpen,
   openPathInWorkspaceFilePreview,
   openWorkspaceFileExplorer,
   openWorkspaceFilePreview,
@@ -123,6 +124,19 @@ describe("openPathInWorkspaceFilePreview", () => {
 });
 
 describe("workspace file panel state", () => {
+  it("treats file previews as part of the open file explorer surface", () => {
+    expect(isWorkspaceFileExplorerOpen(__readWorkspaceFilePanelStateForTests())).toBe(false);
+
+    openWorkspaceFileExplorer({ environmentId, cwd: "/repo/project" });
+    expect(isWorkspaceFileExplorerOpen(__readWorkspaceFilePanelStateForTests())).toBe(true);
+
+    openWorkspaceFilePreview(createPreviewTarget());
+    expect(isWorkspaceFileExplorerOpen(__readWorkspaceFilePanelStateForTests())).toBe(true);
+
+    openWorkspaceSourceControlPanel();
+    expect(isWorkspaceFileExplorerOpen(__readWorkspaceFilePanelStateForTests())).toBe(false);
+  });
+
   it("opens the explorer and stores its workspace context", () => {
     openWorkspaceFileExplorer({
       environmentId,

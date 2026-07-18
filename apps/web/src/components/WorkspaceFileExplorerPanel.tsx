@@ -243,7 +243,7 @@ const WorkspaceExplorerEntryRow = memo(function WorkspaceExplorerEntryRow(props:
     <div
       className={cn(
         EXPLORER_ROW_HEIGHT_CLASS_NAME,
-        "group flex w-full min-w-0 select-none items-center pr-2 text-base transition-colors [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] [-webkit-user-select:none] hover:bg-accent/70 focus-within:bg-accent focus-within:ring-2 focus-within:ring-ring",
+        "group flex w-full min-w-0 select-none items-center pr-2 text-base transition-colors [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] [-webkit-user-select:none] hover:bg-accent/70 focus-within:bg-accent focus-within:ring-2 focus-within:ring-ring md:text-xs",
       )}
       style={{ paddingLeft: 8 + depth * 14 }}
     >
@@ -299,7 +299,7 @@ const WorkspaceExplorerEntryRow = memo(function WorkspaceExplorerEntryRow(props:
           aria-label={statusBadgeLabel}
           title={statusBadgeTitle}
           className={cn(
-            "ml-1 flex w-6 shrink-0 justify-center font-mono text-sm font-semibold",
+            "ml-1 flex w-6 shrink-0 justify-center font-mono text-sm font-semibold md:text-[11px]",
             statusBadge.className,
           )}
         >

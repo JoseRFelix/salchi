@@ -75,7 +75,7 @@ const {
     Promise.resolve({ commitMessage: "Update staged files" }),
   ),
   hasServerThreadRef: { current: true },
-  navigateSpy: vi.fn(),
+  navigateSpy: vi.fn((_input: unknown) => Promise.resolve()),
   pullMutateAsyncSpy: vi.fn(() =>
     Promise.resolve({
       status: "pulled",
@@ -667,7 +667,7 @@ describe("SourceControlPanel git action runner", () => {
     }
   });
 
-  it("opens staged and unstaged file rows in the matching diff sidebar", async () => {
+  it("moves staged and unstaged file rows exclusively into the matching diff sidebar", async () => {
     currentGitStatusRef.current = createPanelStatus({
       stagedFiles: [{ path: "staged-only.ts", status: "modified", insertions: 1, deletions: 0 }],
       unstagedFiles: [
@@ -707,11 +707,14 @@ describe("SourceControlPanel git action runner", () => {
         diffFilePath: "staged-only.ts",
         panel: "activity",
       });
-      expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
-        open: true,
-        view: "source-control",
+      await vi.waitFor(() => {
+        expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+          open: false,
+          view: "source-control",
+        });
       });
 
+      openWorkspaceSourceControlPanel();
       findButtonByText("unstaged-only.ts")?.click();
       navigateInput = navigateSpy.mock.calls.at(-1)?.[0] as typeof navigateInput;
       expect(
@@ -726,6 +729,12 @@ describe("SourceControlPanel git action runner", () => {
         diffSource: "unstaged",
         diffFilePath: "unstaged-only.ts",
         panel: "activity",
+      });
+      await vi.waitFor(() => {
+        expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+          open: false,
+          view: "source-control",
+        });
       });
     } finally {
       await screen.unmount();
@@ -761,15 +770,18 @@ describe("SourceControlPanel git action runner", () => {
       await vi.waitFor(() => {
         expect(navigateSpy).toHaveBeenCalled();
       });
-      expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
-        open: true,
-        view: "source-control",
+      await vi.waitFor(() => {
+        expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+          open: false,
+          view: "source-control",
+        });
       });
     } finally {
       await firstRender.screen.unmount();
       firstRender.host.remove();
     }
 
+    openWorkspaceSourceControlPanel();
     const secondRender = await renderPanel();
     try {
       await vi.waitFor(() => {

@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import type { TurnId } from "@t3tools/contracts";
 import {
-  ArrowLeftIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -47,7 +46,6 @@ import {
   type ThreadRouteTarget,
 } from "../threadRoutes";
 import { useSettings } from "../hooks/useSettings";
-import { useSourceControlPanelState } from "../sourceControlPanelState";
 import { formatShortTimestamp } from "../timestampFormat";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { Button } from "./ui/button";
@@ -365,7 +363,6 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   });
   const diffSearch = useSearch({ strict: false, select: (search) => parseDiffRouteSearch(search) });
   const diffOpen = diffSearch.diff === "1";
-  const sourceControlOpen = useSourceControlPanelState().open;
   const routeThreadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
   const routeDraftId = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
   const serverThread = useStore(
@@ -868,18 +865,6 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   })();
   const headerRow = (
     <>
-      {sourceControlOpen ? (
-        <Button
-          size="icon-xs"
-          variant="outline"
-          aria-label="Back to source control"
-          title="Back to source control"
-          className="shrink-0 [-webkit-app-region:no-drag]"
-          onClick={closeDiffPanel}
-        >
-          <ArrowLeftIcon className="size-3.5" />
-        </Button>
-      ) : null}
       <div className="hidden min-w-0 flex-1 [-webkit-app-region:no-drag] max-[760px]:block">
         <Select
           value={diffSelectionValue}

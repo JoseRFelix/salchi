@@ -13,7 +13,6 @@ const {
   openWorkspaceFilePreviewSpy,
   parsePatchFilesMock,
   parsedFilesRef,
-  sourceControlOpenRef,
   virtualizerRenderCalls,
   workingTreeDiffRef,
 } = vi.hoisted(() => ({
@@ -33,7 +32,6 @@ const {
       unifiedLineCount: number;
     }>,
   },
-  sourceControlOpenRef: { current: false },
   virtualizerRenderCalls: [] as Array<{
     className: string | undefined;
     config:
@@ -212,13 +210,6 @@ vi.mock("../workspaceFilePreview", () => ({
   openWorkspaceFilePreview: openWorkspaceFilePreviewSpy,
 }));
 
-vi.mock("../sourceControlPanelState", () => ({
-  useSourceControlPanelState: vi.fn(() => ({
-    commitMessage: "",
-    open: sourceControlOpenRef.current,
-  })),
-}));
-
 vi.mock("../workspaceImagePreview", () => ({
   isWorkspaceImagePreviewPath: vi.fn(() => false),
   resolveWorkspaceGitImagePreviewUrl: vi.fn(() => null),
@@ -249,7 +240,6 @@ describe("DiffPanel", () => {
     openWorkspaceFilePreviewSpy.mockClear();
     parsePatchFilesMock.mockReset();
     parsedFilesRef.current = [];
-    sourceControlOpenRef.current = false;
     workingTreeDiffRef.current = "diff --git a/src/App.tsx b/src/App.tsx";
     resetColorTheme();
     localStorage.clear();
@@ -354,43 +344,15 @@ describe("DiffPanel", () => {
     }
   });
 
-  it("returns to source control from the diff header when source control is hidden behind diff", async () => {
-    sourceControlOpenRef.current = true;
+  it("does not expose source control as an underlying diff layer", async () => {
     parsedFilesRef.current = [fileDiff("src/App.tsx")];
     const screen = await render(<DiffPanel mode="sidebar" />);
 
     try {
       await vi.waitFor(() => {
-        expect(
-          document.querySelector('button[aria-label="Back to source control"]'),
-        ).not.toBeNull();
+        expect(document.querySelector('[data-testid="diff-file-render"]')).not.toBeNull();
       });
-
-      document
-        .querySelector<HTMLButtonElement>('button[aria-label="Back to source control"]')
-        ?.click();
-
-      const navigateInput = navigateSpy.mock.calls.at(-1)?.[0] as
-        | {
-            search: (previous: Record<string, unknown>) => Record<string, unknown>;
-            to: string;
-          }
-        | undefined;
-      expect(navigateInput).toMatchObject({ to: "/$environmentId/$threadId" });
-      expect(
-        navigateInput?.search({
-          diff: "1",
-          diffSource: "unstaged",
-          diffFilePath: "src/App.tsx",
-          panel: "activity",
-        }),
-      ).toEqual({
-        diff: undefined,
-        diffSource: undefined,
-        diffTurnId: undefined,
-        diffFilePath: undefined,
-        panel: "activity",
-      });
+      expect(document.querySelector('button[aria-label="Back to source control"]')).toBeNull();
     } finally {
       await screen.unmount();
     }

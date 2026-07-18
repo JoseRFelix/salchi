@@ -5335,18 +5335,37 @@ describe("ChatView timeline estimator parity (full app)", () => {
             truncated: false,
           };
         }
+        if (body._tag === WS_METHODS.projectsReadFile) {
+          return {
+            relativePath: "README.md",
+            contents: "Draft README\n",
+            truncated: false,
+            sizeBytes: 13,
+          };
+        }
         return undefined;
       },
     });
 
     try {
       await waitForComposerEditor();
-      await page.getByRole("button", { name: "Toggle file explorer" }).click();
+      const fileExplorerToggle = page.getByRole("button", { name: "Toggle file explorer" });
+      await fileExplorerToggle.click();
 
       await expect
         .element(page.getByRole("searchbox", { name: "Search workspace files" }))
         .toBeVisible();
       await expect.element(page.getByRole("button", { name: "README.md" })).toBeVisible();
+
+      await page.getByRole("button", { name: "README.md" }).click();
+
+      await expect.element(page.getByRole("button", { name: "Close file preview" })).toBeVisible();
+      await expect.element(fileExplorerToggle).toHaveAttribute("aria-pressed", "true");
+
+      await fileExplorerToggle.click();
+
+      await expect.element(fileExplorerToggle).toHaveAttribute("aria-pressed", "false");
+      expect(__readWorkspaceFilePanelStateForTests().open).toBe(false);
     } finally {
       await mounted.cleanup();
     }

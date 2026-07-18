@@ -48,6 +48,7 @@ import {
   recordSourceControlPanelScrollTop,
   recordSourceControlPanelViewMode,
   sourceControlPanelScrollKey,
+  closeSourceControlPanel,
   useSetSourceControlCommitMessage,
   useSourceControlPanelState,
   useSourceControlPanelWorkspaceViewState,
@@ -854,7 +855,7 @@ export default function SourceControlPanel({ mode = "sidebar", onClose }: Source
           to: "/draft/$draftId",
           params: buildDraftThreadRouteParams(routeTarget.draftId),
           search: (previous) => buildOpenDiffSearch(previous, { source: section, filePath }),
-        });
+        }).then(closeSourceControlPanel);
         return;
       }
 
@@ -862,7 +863,7 @@ export default function SourceControlPanel({ mode = "sidebar", onClose }: Source
         to: "/$environmentId/$threadId",
         params: buildThreadRouteParams(routeTarget.threadRef),
         search: (previous) => buildOpenDiffSearch(previous, { source: section, filePath }),
-      });
+      }).then(closeSourceControlPanel);
     },
     [cwd, environmentId, navigate, routeTarget],
   );
@@ -1579,7 +1580,7 @@ function SourceControlTreeRow({
     return (
       <div
         style={indentStyle}
-        className="mx-1.5 flex h-8 items-center gap-1 rounded-md pr-2 text-left text-base text-foreground/90 transition-colors hover:bg-accent/50"
+        className="mx-1.5 flex h-8 items-center gap-1 rounded-md pr-2 text-left text-base text-foreground/90 transition-colors hover:bg-accent/50 md:text-xs"
         data-source-control-row-key={rowKey}
       >
         <button
@@ -1630,7 +1631,9 @@ function SourceControlTreeRow({
           theme={resolvedTheme}
           className="size-4 shrink-0"
         />
-        <span className="min-w-0 flex-1 truncate text-base text-foreground/90">{node.name}</span>
+        <span className="min-w-0 flex-1 truncate text-base text-foreground/90 md:text-xs">
+          {node.name}
+        </span>
       </button>
       <div className="grid shrink-0 grid-cols-[1.25rem_1.5rem_1.5rem] items-center justify-items-center gap-0.5">
         <span
