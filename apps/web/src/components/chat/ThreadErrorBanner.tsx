@@ -13,25 +13,29 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
 }) {
   if (!error) return null;
   return (
-    <div className="pt-3 mx-auto max-w-3xl">
-      <Alert variant="error">
-        <CircleAlertIcon />
-        <Tooltip>
-          <TooltipTrigger render={<AlertDescription className="line-clamp-3" />}>
-            {error}
-          </TooltipTrigger>
-          <TooltipPopup side="top" className="max-w-96 whitespace-pre-wrap">
-            {error}
-          </TooltipPopup>
-        </Tooltip>
-        {onDismiss && (
-          <AlertAction>
-            <Button variant="ghost" size="icon-xs" aria-label="Dismiss error" onClick={onDismiss}>
-              <XIcon className="text-destructive" />
-            </Button>
-          </AlertAction>
-        )}
-      </Alert>
+    <div className="w-full px-3 pt-3 sm:px-5">
+      <div className="mx-auto w-full min-w-0 max-w-3xl">
+        <Alert variant="error">
+          <CircleAlertIcon />
+          <AlertDescription>
+            <Tooltip>
+              <TooltipTrigger render={<span className="line-clamp-3 wrap-break-word" />}>
+                {error}
+              </TooltipTrigger>
+              <TooltipPopup side="top" className="max-w-96 whitespace-pre-wrap">
+                {error}
+              </TooltipPopup>
+            </Tooltip>
+          </AlertDescription>
+          {onDismiss && (
+            <AlertAction>
+              <Button variant="ghost" size="icon-xs" aria-label="Dismiss error" onClick={onDismiss}>
+                <XIcon className="text-destructive" />
+              </Button>
+            </AlertAction>
+          )}
+        </Alert>
+      </div>
     </div>
   );
 });
