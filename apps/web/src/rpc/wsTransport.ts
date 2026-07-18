@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
-import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { RpcClient } from "effect/unstable/rpc";
@@ -37,7 +36,7 @@ interface SubscribeOptions {
 }
 
 interface RequestOptions {
-  readonly timeout?: Option.Option<Duration.Input>;
+  readonly signal?: AbortSignal;
 }
 
 const DEFAULT_SUBSCRIPTION_RETRY_DELAY_MS = Duration.millis(250);
@@ -95,15 +94,19 @@ export class WsTransport {
 
   async request<TSuccess>(
     execute: (client: WsRpcProtocolClient) => Effect.Effect<TSuccess, Error, never>,
-    _options?: RequestOptions,
+    options?: RequestOptions,
   ): Promise<TSuccess> {
     if (this.disposed) {
       throw new Error("Transport disposed");
     }
 
     const session = this.session;
-    const client = await session.clientPromise;
-    return await session.runtime.runPromise(Effect.suspend(() => execute(client)));
+    return await session.runtime.runPromise(
+      Effect.promise(() => session.clientPromise).pipe(
+        Effect.flatMap((client) => Effect.suspend(() => execute(client))),
+      ),
+      options?.signal ? { signal: options.signal } : undefined,
+    );
   }
 
   async requestStream<TValue>(

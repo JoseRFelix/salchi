@@ -4977,6 +4977,53 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("restores a message and shows an error toast after connection retries are exhausted", async () => {
+    const prompt = "Keep this message ready to resend";
+    const dispatchCommand = vi.fn(async () => {
+      throw new Error("SocketCloseError: dispatchCommand failed after 3 retries: WebSocket closed");
+    });
+    __setEnvironmentApiOverrideForTests(
+      LOCAL_ENVIRONMENT_ID,
+      createMockEnvironmentApi({
+        browse: vi.fn(async () => ({ parentPath: "/", entries: [] })),
+        dispatchCommand,
+      }),
+    );
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-send-retry-exhausted" as MessageId,
+        targetText: "send retry exhausted target",
+      }),
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_REF, prompt);
+      await waitForLayout();
+
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(dispatchCommand).toHaveBeenCalledTimes(1);
+          expect(useComposerDraftStore.getState().draftsByThreadKey[THREAD_KEY]?.prompt).toBe(
+            prompt,
+          );
+          expect(document.body.textContent).toContain("Couldn’t confirm message delivery");
+          expect(document.body.textContent).toContain(
+            "The connection failed after several retries. Your message is back in the composer; check the thread before resending.",
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("shows a pointer cursor for the running stop button", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
