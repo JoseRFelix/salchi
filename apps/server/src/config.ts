@@ -73,8 +73,8 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly logWebSocketEvents: boolean;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
-  readonly whisperServerUrl?: URL | undefined;
-  readonly whisperAutoProvision?: boolean | undefined;
+  readonly whisperServerUrl: URL | undefined;
+  readonly whisperAutoProvision: boolean;
 }
 
 export const deriveServerPaths = Effect.fn(function* (

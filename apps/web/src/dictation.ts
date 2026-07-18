@@ -1,5 +1,11 @@
-import type { EnvironmentId, TranscriptionResult, TranscriptionStatus } from "@t3tools/contracts";
-import { TRANSCRIPTION_ROUTE_PATH, TRANSCRIPTION_STATUS_ROUTE_PATH } from "@t3tools/contracts";
+import {
+  TRANSCRIPTION_ROUTE_PATH,
+  TRANSCRIPTION_STATUS_ROUTE_PATH,
+  TranscriptionResult,
+  TranscriptionStatus,
+  type EnvironmentId,
+} from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 
 import { fetchEnvironmentHttp } from "./environments/runtime";
 
@@ -183,6 +189,21 @@ async function readResponseError(response: Response, fallback: string): Promise<
   return fallback;
 }
 
+const decodeTranscriptionStatus = Schema.decodeUnknownSync(TranscriptionStatus);
+const decodeTranscriptionResult = Schema.decodeUnknownSync(TranscriptionResult);
+
+function decodeTranscriptionResponse<A>(
+  decode: (input: unknown) => A,
+  input: unknown,
+  invalidResponseMessage: string,
+): A {
+  try {
+    return decode(input);
+  } catch {
+    throw new Error(invalidResponseMessage);
+  }
+}
+
 export async function getEnvironmentTranscriptionStatus(
   environmentId: EnvironmentId,
 ): Promise<TranscriptionStatus> {
@@ -194,31 +215,11 @@ export async function getEnvironmentTranscriptionStatus(
     throw new Error(await readResponseError(response, "Could not check local transcription."));
   }
   const body: unknown = await response.json();
-  if (
-    typeof body !== "object" ||
-    body === null ||
-    !("configured" in body) ||
-    typeof body.configured !== "boolean" ||
-    !("state" in body) ||
-    ![
-      "unavailable",
-      "checking",
-      "downloading-runtime",
-      "downloading-model",
-      "starting",
-      "ready",
-      "error",
-    ].includes(String(body.state)) ||
-    !("downloadedBytes" in body) ||
-    (body.downloadedBytes !== null && typeof body.downloadedBytes !== "number") ||
-    !("totalBytes" in body) ||
-    (body.totalBytes !== null && typeof body.totalBytes !== "number") ||
-    !("message" in body) ||
-    (body.message !== null && typeof body.message !== "string")
-  ) {
-    throw new Error("The transcription status response was invalid.");
-  }
-  return body as TranscriptionStatus;
+  return decodeTranscriptionResponse(
+    decodeTranscriptionStatus,
+    body,
+    "The transcription status response was invalid.",
+  );
 }
 
 export async function transcribeEnvironmentAudio(
@@ -241,13 +242,9 @@ export async function transcribeEnvironmentAudio(
     throw new Error(await readResponseError(response, "Local transcription failed."));
   }
   const body: unknown = await response.json();
-  if (
-    typeof body !== "object" ||
-    body === null ||
-    !("text" in body) ||
-    typeof body.text !== "string"
-  ) {
-    throw new Error("The transcription response was invalid.");
-  }
-  return { text: body.text };
+  return decodeTranscriptionResponse(
+    decodeTranscriptionResult,
+    body,
+    "The transcription response was invalid.",
+  );
 }

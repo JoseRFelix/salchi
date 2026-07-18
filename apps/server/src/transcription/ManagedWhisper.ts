@@ -18,6 +18,8 @@ import { ServerConfig } from "../config.ts";
 
 export const MANAGED_WHISPER_VERSION = "v1.9.1";
 const MANAGED_WHISPER_DOWNLOAD_TIMEOUT = "15 minutes";
+const MANAGED_WHISPER_EXTRACTION_TIMEOUT = "1 minute";
+const MANAGED_WHISPER_HEALTH_REQUEST_TIMEOUT = "2 seconds";
 const MANAGED_WHISPER_START_TIMEOUT = "30 seconds";
 
 interface ManagedWhisperModelAsset {
@@ -214,7 +216,7 @@ const downloadVerifiedFile = Effect.fn("managedWhisper.downloadVerifiedFile")(fu
   yield* fileSystem.rename(partialPath, input.filePath);
 });
 
-const runTarExtraction = Effect.fn("managedWhisper.runTarExtraction")(function* (input: {
+export const runTarExtraction = Effect.fn("managedWhisper.runTarExtraction")(function* (input: {
   readonly archivePath: string;
   readonly destination: string;
 }) {
@@ -233,7 +235,17 @@ const runTarExtraction = Effect.fn("managedWhisper.runTarExtraction")(function* 
           },
         ),
       );
-      const exitCode = yield* child.exitCode;
+      const exitCode = yield* child.exitCode.pipe(
+        Effect.timeoutOrElse({
+          duration: MANAGED_WHISPER_EXTRACTION_TIMEOUT,
+          orElse: () =>
+            Effect.fail(
+              managedWhisperError(
+                `Timed out extracting whisper.cpp after ${MANAGED_WHISPER_EXTRACTION_TIMEOUT}.`,
+              ),
+            ),
+        }),
+      );
       if (Number(exitCode) !== 0) {
         return yield* managedWhisperError(`Failed to extract whisper.cpp (tar exit ${exitCode}).`);
       }
@@ -320,11 +332,14 @@ const ensureManagedModel = Effect.fn("managedWhisper.ensureModel")(function* (in
   return modelPath;
 });
 
-const awaitSidecarHealth = Effect.fn("managedWhisper.awaitHealth")(function* (healthUrl: URL) {
+export const awaitSidecarHealth = Effect.fn("managedWhisper.awaitHealth")(function* (
+  healthUrl: URL,
+) {
   const httpClient = yield* HttpClient.HttpClient;
   const deadline = (yield* Clock.currentTimeMillis) + 30_000;
   while ((yield* Clock.currentTimeMillis) < deadline) {
     const healthy = yield* httpClient.get(healthUrl).pipe(
+      Effect.timeout(MANAGED_WHISPER_HEALTH_REQUEST_TIMEOUT),
       Effect.map((response) => response.status >= 200 && response.status < 300),
       Effect.catch(() => Effect.succeed(false)),
     );

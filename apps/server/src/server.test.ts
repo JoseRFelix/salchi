@@ -404,6 +404,7 @@ const buildAppUnderTest = (options?: {
       logWebSocketEvents: false,
       tailscaleServeEnabled: false,
       tailscaleServePort: 443,
+      whisperServerUrl: undefined,
       whisperAutoProvision: false,
       ...options?.config,
     };

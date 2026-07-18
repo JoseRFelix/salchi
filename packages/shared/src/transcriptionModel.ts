@@ -1,4 +1,4 @@
-import type { TranscriptionModel } from "@t3tools/contracts";
+import { DEFAULT_TRANSCRIPTION_MODEL, type TranscriptionModel } from "@t3tools/contracts";
 
 export interface TranscriptionModelMetadata {
   readonly id: TranscriptionModel;
@@ -37,7 +37,15 @@ export const TRANSCRIPTION_MODELS = [
 ] as const satisfies ReadonlyArray<TranscriptionModelMetadata>;
 
 export function findTranscriptionModel(id: TranscriptionModel): TranscriptionModelMetadata {
-  return TRANSCRIPTION_MODELS.find((model) => model.id === id) ?? TRANSCRIPTION_MODELS[1];
+  const defaultModel = TRANSCRIPTION_MODELS.find(
+    (model) => model.id === DEFAULT_TRANSCRIPTION_MODEL,
+  );
+  if (!defaultModel) {
+    throw new Error(
+      `Missing metadata for default transcription model ${DEFAULT_TRANSCRIPTION_MODEL}.`,
+    );
+  }
+  return TRANSCRIPTION_MODELS.find((model) => model.id === id) ?? defaultModel;
 }
 
 export function isTranscriptionModel(value: string): value is TranscriptionModel {

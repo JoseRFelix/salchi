@@ -389,10 +389,8 @@ export const resolveServerConfig = (
       logWebSocketEvents,
       tailscaleServeEnabled,
       tailscaleServePort,
-      ...(env.whisperServerUrl ? { whisperServerUrl: env.whisperServerUrl } : {}),
-      ...(env.whisperAutoProvision !== undefined
-        ? { whisperAutoProvision: env.whisperAutoProvision }
-        : {}),
+      whisperServerUrl: env.whisperServerUrl,
+      whisperAutoProvision: env.whisperAutoProvision ?? true,
     };
 
     return config;

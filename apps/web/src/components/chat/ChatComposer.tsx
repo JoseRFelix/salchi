@@ -1230,7 +1230,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const collapsedComposerPrimaryActionLabel =
     phase === "running" ? "Queue message" : "Send message";
   const showMobilePendingAnswerActions =
-    isMobileViewport && !isComposerCollapsedMobile && pendingPrimaryAction !== null;
+    isMobileViewport &&
+    !isComposerCollapsedMobile &&
+    !isDictationActive &&
+    pendingPrimaryAction !== null;
 
   // ------------------------------------------------------------------
   // Prompt helpers
