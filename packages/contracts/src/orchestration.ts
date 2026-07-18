@@ -289,6 +289,12 @@ export const OrchestrationQueuedTurn = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  steering: Schema.optional(
+    Schema.Struct({
+      expectedTurnId: TurnId,
+      requestedAt: IsoDateTime,
+    }),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -829,6 +835,15 @@ const ThreadQueuedTurnCancelCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadQueuedTurnSteerCommand = Schema.Struct({
+  type: Schema.Literal("thread.queued-turn.steer"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  expectedTurnId: TurnId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnInterruptCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.interrupt"),
   commandId: CommandId,
@@ -884,6 +899,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadTurnStartCommand,
   ThreadTurnQueueCommand,
   ThreadQueuedTurnCancelCommand,
+  ThreadQueuedTurnSteerCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
@@ -907,6 +923,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ClientThreadTurnStartCommand,
   ClientThreadTurnQueueCommand,
   ThreadQueuedTurnCancelCommand,
+  ThreadQueuedTurnSteerCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
@@ -1000,6 +1017,25 @@ const ThreadQueuedTurnDispatchCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadQueuedTurnSteerCompleteCommand = Schema.Struct({
+  type: Schema.Literal("thread.queued-turn.steer.complete"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  turnId: TurnId,
+  createdAt: IsoDateTime,
+});
+
+const ThreadQueuedTurnSteerFailCommand = Schema.Struct({
+  type: Schema.Literal("thread.queued-turn.steer.fail"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  expectedTurnId: TurnId,
+  detail: Schema.String,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -1010,6 +1046,8 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   ThreadQueuedTurnDispatchCommand,
+  ThreadQueuedTurnSteerCompleteCommand,
+  ThreadQueuedTurnSteerFailCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1034,6 +1072,9 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.turn-queued",
   "thread.queued-turn-cancelled",
   "thread.queued-turn-dispatched",
+  "thread.queued-turn-steer-requested",
+  "thread.queued-turn-steer-failed",
+  "thread.queued-turn-steered",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
   "thread.approval-response-requested",
@@ -1179,6 +1220,31 @@ export const ThreadQueuedTurnDispatchedPayload = Schema.Struct({
   dispatchedAt: IsoDateTime,
 });
 export type ThreadQueuedTurnDispatchedPayload = typeof ThreadQueuedTurnDispatchedPayload.Type;
+
+export const ThreadQueuedTurnSteerRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  expectedTurnId: TurnId,
+  createdAt: IsoDateTime,
+});
+export type ThreadQueuedTurnSteerRequestedPayload =
+  typeof ThreadQueuedTurnSteerRequestedPayload.Type;
+
+export const ThreadQueuedTurnSteeredPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  turnId: TurnId,
+  steeredAt: IsoDateTime,
+});
+export type ThreadQueuedTurnSteeredPayload = typeof ThreadQueuedTurnSteeredPayload.Type;
+
+export const ThreadQueuedTurnSteerFailedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  expectedTurnId: TurnId,
+  failedAt: IsoDateTime,
+});
+export type ThreadQueuedTurnSteerFailedPayload = typeof ThreadQueuedTurnSteerFailedPayload.Type;
 
 export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   threadId: ThreadId,
@@ -1336,6 +1402,21 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.queued-turn-dispatched"),
     payload: ThreadQueuedTurnDispatchedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.queued-turn-steer-requested"),
+    payload: ThreadQueuedTurnSteerRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.queued-turn-steer-failed"),
+    payload: ThreadQueuedTurnSteerFailedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.queued-turn-steered"),
+    payload: ThreadQueuedTurnSteeredPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

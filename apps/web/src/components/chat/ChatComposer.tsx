@@ -497,7 +497,11 @@ export interface ChatComposerProps {
   } | null;
   queuedTurns: readonly QueuedTurn[];
   cancelingQueuedMessageIds: ReadonlySet<MessageId>;
+  steeringQueuedMessageIds: ReadonlySet<MessageId>;
+  steerableQueuedMessageIds: ReadonlySet<MessageId>;
+  canSteerQueuedTurns: boolean;
   onCancelQueuedTurn: (messageId: QueuedTurn["messageId"]) => void;
+  onSteerQueuedTurn: (messageId: QueuedTurn["messageId"]) => void;
 
   // Pending approvals / inputs
   activePendingApproval: PendingApproval | null;
@@ -610,7 +614,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     environmentUnavailable,
     queuedTurns,
     cancelingQueuedMessageIds,
+    steeringQueuedMessageIds,
+    steerableQueuedMessageIds,
+    canSteerQueuedTurns,
     onCancelQueuedTurn,
+    onSteerQueuedTurn,
     activePendingApproval,
     pendingApprovals,
     pendingUserInputs,
@@ -2333,7 +2341,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             <ComposerQueuedTurnsPanel
               queuedTurns={queuedTurns}
               cancelingQueuedMessageIds={cancelingQueuedMessageIds}
+              steeringQueuedMessageIds={steeringQueuedMessageIds}
+              steerableQueuedMessageIds={steerableQueuedMessageIds}
+              canSteerQueuedTurns={canSteerQueuedTurns}
               onCancelQueuedTurn={onCancelQueuedTurn}
+              onSteerQueuedTurn={onSteerQueuedTurn}
             />
           ) : null}
 

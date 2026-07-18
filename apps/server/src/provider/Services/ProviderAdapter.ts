@@ -14,6 +14,7 @@ import type {
   ProviderUserInputAnswers,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
+  ProviderSteerTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
   ThreadId,
@@ -25,6 +26,11 @@ import type * as Stream from "effect/Stream";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "unsupported";
 export type ProviderChildThreadMode = "none" | "activity-only" | "materialized";
+export type ProviderActiveTurnSteeringMode =
+  | "native"
+  | "streaming-input"
+  | "async-prompt"
+  | "unsupported";
 
 export interface ProviderAdapterCapabilities {
   /**
@@ -36,6 +42,11 @@ export interface ProviderAdapterCapabilities {
    * Declares how provider-native child/subagent work should be represented.
    */
   readonly childThreadMode: ProviderChildThreadMode;
+
+  /**
+   * Declares how this adapter can append input to an already-running turn.
+   */
+  readonly activeTurnSteering: ProviderActiveTurnSteeringMode;
 }
 
 export interface ProviderThreadTurnSnapshot {
@@ -67,6 +78,13 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly sendTurn: (
     input: ProviderSendTurnInput,
+  ) => Effect.Effect<ProviderTurnStartResult, TError>;
+
+  /**
+   * Append input to the expected active turn without opening a new turn.
+   */
+  readonly steerTurn: (
+    input: ProviderSteerTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, TError>;
 
   /**

@@ -1,5 +1,13 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { ChevronDownIcon, FileTextIcon, ImageIcon, PaperclipIcon, Trash2Icon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  CornerDownLeftIcon,
+  FileTextIcon,
+  ImageIcon,
+  LoaderCircleIcon,
+  PaperclipIcon,
+  Trash2Icon,
+} from "lucide-react";
 
 import type { MessageId } from "@t3tools/contracts";
 import type { QueuedTurn } from "../../types";
@@ -10,7 +18,11 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/colla
 interface ComposerQueuedTurnsPanelProps {
   queuedTurns: readonly QueuedTurn[];
   cancelingQueuedMessageIds: ReadonlySet<MessageId>;
+  steeringQueuedMessageIds: ReadonlySet<MessageId>;
+  steerableQueuedMessageIds: ReadonlySet<MessageId>;
+  canSteerQueuedTurns: boolean;
   onCancelQueuedTurn: (messageId: MessageId) => void;
+  onSteerQueuedTurn: (messageId: MessageId) => void;
 }
 
 function formatQueuedTurnTimestamp(createdAt: string): string {
@@ -27,7 +39,15 @@ function formatQueuedTurnTimestamp(createdAt: string): string {
 export const ComposerQueuedTurnsPanel = memo(function ComposerQueuedTurnsPanel(
   props: ComposerQueuedTurnsPanelProps,
 ) {
-  const { queuedTurns, cancelingQueuedMessageIds, onCancelQueuedTurn } = props;
+  const {
+    queuedTurns,
+    cancelingQueuedMessageIds,
+    steeringQueuedMessageIds,
+    steerableQueuedMessageIds,
+    canSteerQueuedTurns,
+    onCancelQueuedTurn,
+    onSteerQueuedTurn,
+  } = props;
   const [open, setOpen] = useState(queuedTurns.length > 0);
   const previousCountRef = useRef(queuedTurns.length);
 
@@ -60,6 +80,9 @@ export const ComposerQueuedTurnsPanel = memo(function ComposerQueuedTurnsPanel(
             {queuedTurns.map((queuedTurn) => {
               const attachmentCount = queuedTurn.attachments.length;
               const timestamp = formatQueuedTurnTimestamp(queuedTurn.createdAt);
+              const isSteering =
+                queuedTurn.steering !== undefined ||
+                steeringQueuedMessageIds.has(queuedTurn.messageId);
               return (
                 <div
                   key={queuedTurn.messageId}
@@ -111,18 +134,47 @@ export const ComposerQueuedTurnsPanel = memo(function ComposerQueuedTurnsPanel(
                       </div>
                     ) : null}
                   </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    className="mt-0.5 shrink-0 text-muted-foreground hover:text-destructive"
-                    disabled={cancelingQueuedMessageIds.has(queuedTurn.messageId)}
-                    aria-label="Cancel queued message"
-                    title="Cancel queued message"
-                    onClick={() => onCancelQueuedTurn(queuedTurn.messageId)}
-                  >
-                    <Trash2Icon />
-                  </Button>
+                  <div className="mt-0.5 flex shrink-0 items-center gap-1">
+                    {canSteerQueuedTurns ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 gap-1.5 px-2 text-muted-foreground hover:text-foreground"
+                        disabled={
+                          !steerableQueuedMessageIds.has(queuedTurn.messageId) ||
+                          isSteering ||
+                          cancelingQueuedMessageIds.has(queuedTurn.messageId)
+                        }
+                        aria-label="Steer queued message into the current turn"
+                        title={
+                          steerableQueuedMessageIds.has(queuedTurn.messageId)
+                            ? "Steer into current turn"
+                            : "Waiting for queued message to sync"
+                        }
+                        onClick={() => onSteerQueuedTurn(queuedTurn.messageId)}
+                      >
+                        {isSteering ? (
+                          <LoaderCircleIcon className="animate-spin" />
+                        ) : (
+                          <CornerDownLeftIcon />
+                        )}
+                        Steer now
+                      </Button>
+                    ) : null}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      className="shrink-0 text-muted-foreground hover:text-destructive"
+                      disabled={cancelingQueuedMessageIds.has(queuedTurn.messageId) || isSteering}
+                      aria-label="Cancel queued message"
+                      title="Cancel queued message"
+                      onClick={() => onCancelQueuedTurn(queuedTurn.messageId)}
+                    >
+                      <Trash2Icon />
+                    </Button>
+                  </div>
                 </div>
               );
             })}

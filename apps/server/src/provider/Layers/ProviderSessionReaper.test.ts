@@ -153,6 +153,7 @@ describe("ProviderSessionReaper", () => {
     const providerService: ProviderServiceShape = {
       startSession: () => unsupported(),
       sendTurn: () => unsupported(),
+      steerTurn: () => unsupported(),
       interruptTurn: () => unsupported(),
       respondToRequest: () => unsupported(),
       respondToUserInput: () => unsupported(),
@@ -160,7 +161,11 @@ describe("ProviderSessionReaper", () => {
       registerMaterializedSessionBinding: () => Effect.void,
       listSessions: () => Effect.succeed([]),
       getCapabilities: () =>
-        Effect.succeed({ sessionModelSwitch: "in-session", childThreadMode: "none" }),
+        Effect.succeed({
+          sessionModelSwitch: "in-session",
+          childThreadMode: "none",
+          activeTurnSteering: "unsupported",
+        }),
       getInstanceInfo: (instanceId) => {
         const driverKind = ProviderDriverKind.make(String(instanceId));
         return Effect.succeed({

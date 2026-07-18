@@ -2608,7 +2608,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     );
 
   const resolveAttachment = Effect.fn("resolveAttachment")(function* (
-    input: ProviderSendTurnInput,
+    method: "turn/start" | "turn/steer",
     attachment: NonNullable<ProviderSendTurnInput["attachments"]>[number],
   ) {
     const attachmentPath = resolveAttachmentPath({
@@ -2618,7 +2618,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     if (!attachmentPath) {
       return yield* new ProviderAdapterRequestError({
         provider: PROVIDER,
-        method: "turn/start",
+        method,
         detail: `Invalid attachment id '${attachment.id}'.`,
       });
     }
@@ -2638,7 +2638,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,
-            method: "turn/start",
+            method,
             detail: `Failed to read attachment file: ${cause.message}.`,
             cause,
           }),
@@ -2655,7 +2655,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const sendTurn: CodexAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
     const resolvedAttachments = yield* Effect.forEach(
       input.attachments ?? [],
-      (attachment) => resolveAttachment(input, attachment),
+      (attachment) => resolveAttachment("turn/start", attachment),
       { concurrency: 1 },
     );
     const codexAttachments = resolvedAttachments.map((attachment) => attachment.input);
@@ -2700,6 +2700,39 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     return yield* turn.pipe(
       Effect.map((result) => ({ ...result, threadId: input.threadId })),
       Effect.mapError((cause) => mapCodexRuntimeError(input.threadId, "turn/start", cause)),
+    );
+  });
+
+  const steerTurn: CodexAdapterShape["steerTurn"] = Effect.fn("steerTurn")(function* (input) {
+    const resolvedAttachments = yield* Effect.forEach(
+      input.attachments ?? [],
+      (attachment) => resolveAttachment("turn/steer", attachment),
+      { concurrency: 1 },
+    );
+    const codexAttachments = resolvedAttachments.map((attachment) => attachment.input);
+    const attachmentReferenceText = formatPdfAttachmentReferenceText(
+      resolvedAttachments.flatMap((attachment) =>
+        attachment.reference ? [attachment.reference] : [],
+      ),
+    );
+    const runtimeInputText = [input.input, attachmentReferenceText]
+      .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+      .join("\n\n");
+    const runtimeSteerInput = {
+      expectedTurnId: input.expectedTurnId,
+      messageId: input.messageId,
+      ...(runtimeInputText.length > 0 ? { input: runtimeInputText } : {}),
+      ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
+    } satisfies Parameters<CodexSessionRuntimeShape["steerTurn"]>[0];
+
+    const session = yield* requireSession(input.threadId);
+    const turn =
+      session.kind === "child"
+        ? session.runtime.steerTurnToProviderThread(session.providerThreadId, runtimeSteerInput)
+        : session.runtime.steerTurn(runtimeSteerInput);
+    return yield* turn.pipe(
+      Effect.map((result) => ({ ...result, threadId: input.threadId })),
+      Effect.mapError((cause) => mapCodexRuntimeError(input.threadId, "turn/steer", cause)),
     );
   });
 
@@ -2962,9 +2995,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     capabilities: {
       sessionModelSwitch: "in-session",
       childThreadMode: "materialized",
+      activeTurnSteering: "native",
     },
     startSession,
     sendTurn,
+    steerTurn,
     interruptTurn,
     readThread,
     rollbackThread,

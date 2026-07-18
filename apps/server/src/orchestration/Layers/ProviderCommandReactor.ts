@@ -21,6 +21,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -54,6 +55,8 @@ type ProviderIntentEvent = Extract<
     type:
       | "thread.runtime-mode-set"
       | "thread.turn-queued"
+      | "thread.queued-turn-steer-requested"
+      | "thread.queued-turn-steer-failed"
       | "thread.turn-start-requested"
       | "thread.turn-interrupt-requested"
       | "thread.approval-response-requested"
@@ -238,6 +241,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly kind:
       | "provider.turn.start.failed"
+      | "provider.turn.steer.failed"
       | "provider.turn.interrupt.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
@@ -247,6 +251,7 @@ const make = Effect.gen(function* () {
     readonly turnId: TurnId | null;
     readonly createdAt: string;
     readonly requestId?: string;
+    readonly messageId?: MessageId;
   }) =>
     Effect.all({
       commandId: serverCommandId("provider-failure-activity"),
@@ -265,6 +270,7 @@ const make = Effect.gen(function* () {
             payload: {
               detail: input.detail,
               ...(input.requestId ? { requestId: input.requestId } : {}),
+              ...(input.messageId ? { messageId: input.messageId } : {}),
             },
             turnId: input.turnId,
             createdAt: input.createdAt,
@@ -1040,9 +1046,70 @@ const make = Effect.gen(function* () {
   });
 
   const processTurnQueued = Effect.fn("processTurnQueued")(function* (
-    event: Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>,
+    event: Extract<
+      ProviderIntentEvent,
+      { type: "thread.turn-queued" | "thread.queued-turn-steer-failed" }
+    >,
   ) {
     yield* startNextAvailableTurnForThread(event.payload.threadId);
+  });
+
+  const processQueuedTurnSteerRequested = Effect.fn("processQueuedTurnSteerRequested")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.queued-turn-steer-requested" }>,
+  ) {
+    const failSteering = (detail: string) =>
+      Effect.gen(function* () {
+        const createdAt = yield* nowIso;
+        const commandId = yield* serverCommandId("queued-turn-steer-fail");
+        yield* orchestrationEngine.dispatch({
+          type: "thread.queued-turn.steer.fail",
+          commandId,
+          threadId: event.payload.threadId,
+          messageId: event.payload.messageId,
+          expectedTurnId: event.payload.expectedTurnId,
+          detail,
+          createdAt,
+        });
+      });
+
+    const queuedTurn = yield* projectionThreadQueuedTurnRepository.getByThreadAndMessageId({
+      threadId: event.payload.threadId,
+      messageId: event.payload.messageId,
+    });
+    if (Option.isNone(queuedTurn)) {
+      return yield* failSteering(`Queued message '${event.payload.messageId}' was not found.`);
+    }
+    const input = toNonEmptyProviderInput(queuedTurn.value.text);
+
+    const steerExit = yield* providerService
+      .steerTurn({
+        threadId: event.payload.threadId,
+        expectedTurnId: event.payload.expectedTurnId,
+        messageId: event.payload.messageId,
+        ...(input !== undefined ? { input } : {}),
+        ...(queuedTurn.value.attachments.length > 0
+          ? { attachments: queuedTurn.value.attachments }
+          : {}),
+      })
+      .pipe(Effect.exit);
+    if (Exit.isFailure(steerExit)) {
+      if (Cause.hasInterruptsOnly(steerExit.cause)) {
+        return yield* Effect.failCause(steerExit.cause);
+      }
+      yield* failSteering(formatFailureDetail(steerExit.cause));
+      return;
+    }
+
+    const createdAt = yield* nowIso;
+    const commandId = yield* serverCommandId("queued-turn-steer-complete");
+    yield* orchestrationEngine.dispatch({
+      type: "thread.queued-turn.steer.complete",
+      commandId,
+      threadId: event.payload.threadId,
+      messageId: event.payload.messageId,
+      turnId: steerExit.value.turnId,
+      createdAt,
+    });
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
@@ -1231,6 +1298,12 @@ const make = Effect.gen(function* () {
       case "thread.turn-queued":
         yield* processTurnQueued(event);
         return;
+      case "thread.queued-turn-steer-failed":
+        yield* processTurnQueued(event);
+        return;
+      case "thread.queued-turn-steer-requested":
+        yield* processQueuedTurnSteerRequested(event);
+        return;
       case "thread.turn-start-requested":
         yield* processTurnStartRequested(event);
         return;
@@ -1275,6 +1348,8 @@ const make = Effect.gen(function* () {
       if (
         event.type === "thread.runtime-mode-set" ||
         event.type === "thread.turn-queued" ||
+        event.type === "thread.queued-turn-steer-failed" ||
+        event.type === "thread.queued-turn-steer-requested" ||
         event.type === "thread.turn-start-requested" ||
         event.type === "thread.activity-appended" ||
         event.type === "thread.session-set" ||

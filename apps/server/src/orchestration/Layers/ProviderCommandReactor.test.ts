@@ -9,6 +9,7 @@ import {
   ProviderSession,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ProviderTurnStartResult,
   type ServerProvider,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -23,6 +24,7 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
@@ -315,6 +317,12 @@ describe("ProviderCommandReactor", () => {
         };
       }),
     );
+    const steerTurn = vi.fn<ProviderServiceShape["steerTurn"]>((rawInput) =>
+      Effect.succeed({
+        threadId: rawInput.threadId,
+        turnId: rawInput.expectedTurnId,
+      }),
+    );
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
@@ -387,6 +395,7 @@ describe("ProviderCommandReactor", () => {
     const service: ProviderServiceShape = {
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn,
+      steerTurn,
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
@@ -396,6 +405,7 @@ describe("ProviderCommandReactor", () => {
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
           childThreadMode: "none",
+          activeTurnSteering: "native",
         }),
       getInstanceInfo: (instanceId) => {
         const raw = String(instanceId);
@@ -511,6 +521,7 @@ describe("ProviderCommandReactor", () => {
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       startSession,
       sendTurn,
+      steerTurn,
       interruptTurn,
       respondToRequest,
       respondToUserInput,
@@ -771,6 +782,427 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.queuedTurns).toEqual([]);
     expect(thread?.messages.map((message) => message.text)).toContain("oldest queued turn");
     expect(thread?.messages.map((message) => message.text)).not.toContain("cancelled queued turn");
+  });
+
+  it("steers a persisted queued message into the expected running turn", async () => {
+    const harness = await createHarness({ autoCompleteTurns: false });
+    const threadId = ThreadId.make("thread-1");
+    const turnId = asTurnId("turn-active-steer");
+    const messageId = asMessageId("user-message-steer");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-running-steer"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:01.000Z",
+        },
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.queue",
+        commandId: CommandId.make("cmd-queue-steer"),
+        threadId,
+        message: {
+          messageId,
+          role: "user",
+          text: "change course now",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.queued-turn.steer",
+        commandId: CommandId.make("cmd-steer-queued-message"),
+        threadId,
+        messageId,
+        expectedTurnId: turnId,
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.steerTurn.mock.calls.length === 1);
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === threadId);
+      return thread?.queuedTurns.length === 0;
+    });
+
+    expect(harness.steerTurn).toHaveBeenCalledWith({
+      threadId,
+      expectedTurnId: turnId,
+      messageId,
+      input: "change course now",
+    });
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    expect(thread?.messages.find((message) => message.id === messageId)).toMatchObject({
+      text: "change course now",
+      turnId,
+    });
+  });
+
+  it("reserves a queued message while provider steering is in flight", async () => {
+    const harness = await createHarness({ autoCompleteTurns: false });
+    const threadId = ThreadId.make("thread-1");
+    const turnId = asTurnId("turn-in-flight-steer");
+    const messageId = asMessageId("user-message-in-flight-steer");
+    const steerResult = Effect.runSync(Deferred.make<ProviderTurnStartResult>());
+    harness.steerTurn.mockImplementationOnce(() => Deferred.await(steerResult));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-running-in-flight-steer"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:01.000Z",
+        },
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.queue",
+        commandId: CommandId.make("cmd-queue-in-flight-steer"),
+        threadId,
+        message: {
+          messageId,
+          role: "user",
+          text: "reserved while steering",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.queued-turn.steer",
+        commandId: CommandId.make("cmd-in-flight-steer"),
+        threadId,
+        messageId,
+        expectedTurnId: turnId,
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.steerTurn.mock.calls.length === 1);
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return (
+        readModel.threads
+          .find((entry) => entry.id === threadId)
+          ?.queuedTurns.find((entry) => entry.messageId === messageId)?.steering !== undefined
+      );
+    });
+    const pendingReadModel = await harness.readModel();
+    expect(
+      pendingReadModel.threads
+        .find((entry) => entry.id === threadId)
+        ?.queuedTurns.find((entry) => entry.messageId === messageId)?.steering,
+    ).toEqual({
+      expectedTurnId: turnId,
+      requestedAt: "2026-01-01T00:00:03.000Z",
+    });
+
+    await expect(
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.queued-turn.cancel",
+          commandId: CommandId.make("cmd-cancel-in-flight-steer"),
+          threadId,
+          messageId,
+          createdAt: "2026-01-01T00:00:04.000Z",
+        }),
+      ),
+    ).rejects.toThrow("is already being steered");
+
+    await Effect.runPromise(
+      Deferred.succeed(steerResult, {
+        threadId,
+        turnId,
+      }),
+    );
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === threadId);
+      return thread?.queuedTurns.length === 0;
+    });
+  });
+
+  it("keeps a steering reservation when completion persistence fails after provider success", async () => {
+    const harness = await createHarness({ autoCompleteTurns: false });
+    const threadId = ThreadId.make("thread-1");
+    const turnId = asTurnId("turn-completion-failure-steer");
+    const messageId = asMessageId("user-message-completion-failure-steer");
+    const steerResult = Effect.runSync(Deferred.make<ProviderTurnStartResult>());
+    harness.steerTurn.mockImplementationOnce(() => Deferred.await(steerResult));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-running-completion-failure-steer"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:01.000Z",
+        },
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.queue",
+        commandId: CommandId.make("cmd-queue-completion-failure-steer"),
+        threadId,
+        message: {
+          messageId,
+          role: "user",
+          text: "provider accepted this once",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.queued-turn.steer",
+        commandId: CommandId.make("cmd-completion-failure-steer"),
+        threadId,
+        messageId,
+        expectedTurnId: turnId,
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    );
+    await waitFor(() => harness.steerTurn.mock.calls.length === 1);
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return (
+        readModel.threads
+          .find((entry) => entry.id === threadId)
+          ?.queuedTurns.find((entry) => entry.messageId === messageId)?.steering !== undefined
+      );
+    });
+
+    const dispatch = harness.engine.dispatch;
+    Object.assign(harness.engine, {
+      dispatch: ((command: Parameters<OrchestrationEngineShape["dispatch"]>[0]) =>
+        command.type === "thread.queued-turn.steer.complete"
+          ? Effect.die(new Error("simulated completion persistence failure"))
+          : dispatch(command)) as OrchestrationEngineShape["dispatch"],
+    });
+    await Effect.runPromise(Deferred.succeed(steerResult, { threadId, turnId }));
+    await harness.drain();
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return (
+        readModel.threads
+          .find((entry) => entry.id === threadId)
+          ?.queuedTurns.find((entry) => entry.messageId === messageId)?.steering !== undefined
+      );
+    });
+
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    expect(thread?.queuedTurns.find((entry) => entry.messageId === messageId)?.steering).toEqual({
+      expectedTurnId: turnId,
+      requestedAt: "2026-01-01T00:00:03.000Z",
+    });
+    expect(thread?.messages.some((message) => message.id === messageId)).toBe(false);
+    expect(
+      thread?.activities.some((activity) => activity.kind === "provider.turn.steer.failed"),
+    ).toBe(false);
+    expect(harness.steerTurn).toHaveBeenCalledTimes(1);
+
+    await expect(
+      Effect.runPromise(
+        dispatch({
+          type: "thread.queued-turn.steer",
+          commandId: CommandId.make("cmd-retry-completion-failure-steer"),
+          threadId,
+          messageId,
+          expectedTurnId: turnId,
+          createdAt: "2026-01-01T00:00:04.000Z",
+        }),
+      ),
+    ).rejects.toThrow("is already being steered");
+  });
+
+  it("keeps a queued message when the provider rejects steering", async () => {
+    const harness = await createHarness({ autoCompleteTurns: false });
+    const threadId = ThreadId.make("thread-1");
+    const turnId = asTurnId("turn-rejected-steer");
+    const messageId = asMessageId("user-message-rejected-steer");
+    harness.steerTurn.mockReturnValueOnce(
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "codex",
+          method: "turn/steer",
+          detail: "active turn cannot accept steering",
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-running-rejected-steer"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:01.000Z",
+        },
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.queue",
+        commandId: CommandId.make("cmd-queue-rejected-steer"),
+        threadId,
+        message: {
+          messageId,
+          role: "user",
+          text: "keep me queued",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.queued-turn.steer",
+        commandId: CommandId.make("cmd-rejected-steer"),
+        threadId,
+        messageId,
+        expectedTurnId: turnId,
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === threadId);
+      return (
+        thread?.activities.some((activity) => activity.kind === "provider.turn.steer.failed") ??
+        false
+      );
+    });
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    expect(thread?.queuedTurns.map((queuedTurn) => queuedTurn.messageId)).toEqual([messageId]);
+    expect(thread?.queuedTurns[0]?.steering).toBeUndefined();
+    expect(thread?.messages.some((message) => message.id === messageId)).toBe(false);
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.turn.steer.failed"),
+    ).toMatchObject({
+      payload: {
+        detail: "active turn cannot accept steering",
+        messageId,
+      },
+      turnId,
+    });
+  });
+
+  it("rejects a stale queued steer command without removing the message", async () => {
+    const harness = await createHarness({ autoCompleteTurns: false });
+    const threadId = ThreadId.make("thread-1");
+    const activeTurnId = asTurnId("turn-current");
+    const messageId = asMessageId("user-message-stale-steer");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-running-stale-steer"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId,
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:01.000Z",
+        },
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.queue",
+        commandId: CommandId.make("cmd-queue-stale-steer"),
+        threadId,
+        message: {
+          messageId,
+          role: "user",
+          text: "still queued",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+
+    await expect(
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.queued-turn.steer",
+          commandId: CommandId.make("cmd-stale-steer"),
+          threadId,
+          messageId,
+          expectedTurnId: asTurnId("turn-stale"),
+          createdAt: "2026-01-01T00:00:03.000Z",
+        }),
+      ),
+    ).rejects.toThrow("is no longer the active running turn");
+
+    expect(harness.steerTurn).not.toHaveBeenCalled();
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    expect(thread?.queuedTurns.map((queuedTurn) => queuedTurn.messageId)).toEqual([messageId]);
   });
 
   it("promotes persisted queued turns on reactor startup when the thread is idle", async () => {

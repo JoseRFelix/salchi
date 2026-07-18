@@ -769,6 +769,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         case "thread.turn-queued":
         case "thread.queued-turn-cancelled":
         case "thread.queued-turn-dispatched":
+        case "thread.queued-turn-steer-requested":
+        case "thread.queued-turn-steer-failed":
+        case "thread.queued-turn-steered":
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended":
         case "thread.approval-response-requested":
@@ -919,10 +922,46 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.queued-turn-dispatched":
+        case "thread.queued-turn-steered":
           yield* projectionThreadQueuedTurnRepository.deleteByMessageId({
             messageId: event.payload.messageId,
           });
           return;
+
+        case "thread.queued-turn-steer-requested": {
+          const queuedTurn = yield* projectionThreadQueuedTurnRepository.getByThreadAndMessageId({
+            threadId: event.payload.threadId,
+            messageId: event.payload.messageId,
+          });
+          if (Option.isNone(queuedTurn)) {
+            return;
+          }
+          yield* projectionThreadQueuedTurnRepository.upsert({
+            ...queuedTurn.value,
+            steering: {
+              expectedTurnId: event.payload.expectedTurnId,
+              requestedAt: event.payload.createdAt,
+            },
+            updatedAt: event.occurredAt,
+          });
+          return;
+        }
+
+        case "thread.queued-turn-steer-failed": {
+          const queuedTurn = yield* projectionThreadQueuedTurnRepository.getByThreadAndMessageId({
+            threadId: event.payload.threadId,
+            messageId: event.payload.messageId,
+          });
+          if (Option.isNone(queuedTurn)) {
+            return;
+          }
+          const { steering: _steering, ...retryableQueuedTurn } = queuedTurn.value;
+          yield* projectionThreadQueuedTurnRepository.upsert({
+            ...retryableQueuedTurn,
+            updatedAt: event.occurredAt,
+          });
+          return;
+        }
 
         case "thread.archived": {
           yield* projectionThreadQueuedTurnRepository.deleteByThreadId({

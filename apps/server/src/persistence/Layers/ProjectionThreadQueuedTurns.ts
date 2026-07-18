@@ -1,8 +1,10 @@
 import {
   ChatAttachment,
+  IsoDateTime,
   ModelSelection,
   OrchestrationProposedPlanId,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -34,6 +36,8 @@ const ProjectionThreadQueuedTurnDbRow = Schema.Struct({
   interactionMode: ProjectionThreadQueuedTurn.fields.interactionMode,
   sourceProposedPlanThreadId: Schema.NullOr(ThreadId),
   sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
+  steeringExpectedTurnId: Schema.NullOr(TurnId),
+  steeringRequestedAt: Schema.NullOr(IsoDateTime),
   createdAt: ProjectionThreadQueuedTurn.fields.createdAt,
   updatedAt: ProjectionThreadQueuedTurn.fields.updatedAt,
 });
@@ -63,6 +67,14 @@ function toProjectionThreadQueuedTurn(
           },
         }
       : {}),
+    ...(row.steeringExpectedTurnId !== null && row.steeringRequestedAt !== null
+      ? {
+          steering: {
+            expectedTurnId: row.steeringExpectedTurnId,
+            requestedAt: row.steeringRequestedAt,
+          },
+        }
+      : {}),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -87,6 +99,8 @@ const makeProjectionThreadQueuedTurnRepository = Effect.gen(function* () {
           interaction_mode,
           source_proposed_plan_thread_id,
           source_proposed_plan_id,
+          steering_expected_turn_id,
+          steering_requested_at,
           created_at,
           updated_at
         )
@@ -102,6 +116,8 @@ const makeProjectionThreadQueuedTurnRepository = Effect.gen(function* () {
           ${row.interactionMode},
           ${row.sourceProposedPlan?.threadId ?? null},
           ${row.sourceProposedPlan?.planId ?? null},
+          ${row.steering?.expectedTurnId ?? null},
+          ${row.steering?.requestedAt ?? null},
           ${row.createdAt},
           ${row.updatedAt}
         )
@@ -117,6 +133,8 @@ const makeProjectionThreadQueuedTurnRepository = Effect.gen(function* () {
           interaction_mode = excluded.interaction_mode,
           source_proposed_plan_thread_id = excluded.source_proposed_plan_thread_id,
           source_proposed_plan_id = excluded.source_proposed_plan_id,
+          steering_expected_turn_id = excluded.steering_expected_turn_id,
+          steering_requested_at = excluded.steering_requested_at,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at
       `,
@@ -139,6 +157,8 @@ const makeProjectionThreadQueuedTurnRepository = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
           source_proposed_plan_id AS "sourceProposedPlanId",
+          steering_expected_turn_id AS "steeringExpectedTurnId",
+          steering_requested_at AS "steeringRequestedAt",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_queued_turns
@@ -164,6 +184,8 @@ const makeProjectionThreadQueuedTurnRepository = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
           source_proposed_plan_id AS "sourceProposedPlanId",
+          steering_expected_turn_id AS "steeringExpectedTurnId",
+          steering_requested_at AS "steeringRequestedAt",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_queued_turns
@@ -190,6 +212,8 @@ const makeProjectionThreadQueuedTurnRepository = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
           source_proposed_plan_id AS "sourceProposedPlanId",
+          steering_expected_turn_id AS "steeringExpectedTurnId",
+          steering_requested_at AS "steeringRequestedAt",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_queued_turns
@@ -216,6 +240,8 @@ const makeProjectionThreadQueuedTurnRepository = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
           source_proposed_plan_id AS "sourceProposedPlanId",
+          steering_expected_turn_id AS "steeringExpectedTurnId",
+          steering_requested_at AS "steeringRequestedAt",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_queued_turns

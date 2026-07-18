@@ -400,6 +400,15 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
         } satisfies ProviderTurnStartResult;
       });
 
+    const steerTurn: ProviderAdapterShape<ProviderAdapterError>["steerTurn"] = (input) =>
+      Effect.fail(
+        new ProviderAdapterValidationError({
+          provider,
+          operation: "steerTurn",
+          issue: `Test adapter does not support steering turn ${input.expectedTurnId}.`,
+        }),
+      );
+
     const interruptTurn: ProviderAdapterShape<ProviderAdapterError>["interruptTurn"] = (
       threadId,
       turnId,
@@ -493,9 +502,11 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
       capabilities: {
         sessionModelSwitch: "in-session",
         childThreadMode: "none",
+        activeTurnSteering: "unsupported",
       },
       startSession,
       sendTurn,
+      steerTurn,
       interruptTurn,
       respondToRequest,
       respondToUserInput,

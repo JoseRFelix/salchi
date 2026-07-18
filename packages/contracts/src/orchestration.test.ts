@@ -511,6 +511,31 @@ it.effect("decodes queued turn commands", () =>
       messageId: "msg-queued-1",
       createdAt: "2026-01-01T00:00:02.000Z",
     });
+    const steer = yield* decodeClientOrchestrationCommand({
+      type: "thread.queued-turn.steer",
+      commandId: "cmd-queue-steer",
+      threadId: "thread-1",
+      messageId: "msg-queued-1",
+      expectedTurnId: "turn-active",
+      createdAt: "2026-01-01T00:00:03.000Z",
+    });
+    const steerComplete = yield* decodeOrchestrationCommand({
+      type: "thread.queued-turn.steer.complete",
+      commandId: "cmd-queue-steer-complete",
+      threadId: "thread-1",
+      messageId: "msg-queued-1",
+      turnId: "turn-active",
+      createdAt: "2026-01-01T00:00:04.000Z",
+    });
+    const steerFail = yield* decodeOrchestrationCommand({
+      type: "thread.queued-turn.steer.fail",
+      commandId: "cmd-queue-steer-fail",
+      threadId: "thread-1",
+      messageId: "msg-queued-1",
+      expectedTurnId: "turn-active",
+      detail: "provider rejected steering",
+      createdAt: "2026-01-01T00:00:05.000Z",
+    });
 
     if (queued.type !== "thread.turn.queue") {
       assert.fail(`Expected thread.turn.queue command, received ${queued.type}.`);
@@ -518,6 +543,9 @@ it.effect("decodes queued turn commands", () =>
     assert.strictEqual(queued.modelSelection?.instanceId, "codex");
     assert.strictEqual(cancel.type, "thread.queued-turn.cancel");
     assert.strictEqual(dispatch.type, "thread.queued-turn.dispatch");
+    assert.strictEqual(steer.type, "thread.queued-turn.steer");
+    assert.strictEqual(steerComplete.type, "thread.queued-turn.steer.complete");
+    assert.strictEqual(steerFail.type, "thread.queued-turn.steer.fail");
   }),
 );
 
@@ -959,6 +987,60 @@ it.effect("decodes queued turn events and thread snapshots", () =>
       correlationId: null,
       metadata: {},
     });
+    const steerRequested = yield* decodeOrchestrationEvent({
+      sequence: 4,
+      eventId: "event-steer-requested",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.queued-turn-steer-requested",
+      payload: {
+        threadId: "thread-1",
+        messageId: "msg-queued-1",
+        expectedTurnId: "turn-active",
+        createdAt: "2026-01-01T00:00:03.000Z",
+      },
+      occurredAt: "2026-01-01T00:00:03.000Z",
+      commandId: "cmd-steer-requested",
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+    });
+    const steered = yield* decodeOrchestrationEvent({
+      sequence: 5,
+      eventId: "event-steered",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.queued-turn-steered",
+      payload: {
+        threadId: "thread-1",
+        messageId: "msg-queued-1",
+        turnId: "turn-active",
+        steeredAt: "2026-01-01T00:00:04.000Z",
+      },
+      occurredAt: "2026-01-01T00:00:04.000Z",
+      commandId: "cmd-steered",
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+    });
+    const steerFailed = yield* decodeOrchestrationEvent({
+      sequence: 6,
+      eventId: "event-steer-failed",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.queued-turn-steer-failed",
+      payload: {
+        threadId: "thread-1",
+        messageId: "msg-queued-1",
+        expectedTurnId: "turn-active",
+        failedAt: "2026-01-01T00:00:05.000Z",
+      },
+      occurredAt: "2026-01-01T00:00:05.000Z",
+      commandId: "cmd-steer-failed",
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+    });
     const snapshot = yield* decodeOrchestrationReadModel({
       snapshotSequence: 3,
       updatedAt: "2026-01-01T00:00:00.000Z",
@@ -1008,6 +1090,9 @@ it.effect("decodes queued turn events and thread snapshots", () =>
     assert.strictEqual(queued.type, "thread.turn-queued");
     assert.strictEqual(cancelled.type, "thread.queued-turn-cancelled");
     assert.strictEqual(dispatched.type, "thread.queued-turn-dispatched");
+    assert.strictEqual(steerRequested.type, "thread.queued-turn-steer-requested");
+    assert.strictEqual(steerFailed.type, "thread.queued-turn-steer-failed");
+    assert.strictEqual(steered.type, "thread.queued-turn-steered");
     assert.strictEqual(snapshot.threads[0]?.queuedTurns[0]?.messageId, "msg-queued-1");
   }),
 );

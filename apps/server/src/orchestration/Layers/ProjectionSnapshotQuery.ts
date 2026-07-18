@@ -98,6 +98,8 @@ const ProjectionThreadQueuedTurnDbRowSchema = Schema.Struct({
   interactionMode: ProjectionThreadQueuedTurn.fields.interactionMode,
   sourceProposedPlanThreadId: Schema.NullOr(ThreadId),
   sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
+  steeringExpectedTurnId: Schema.NullOr(TurnId),
+  steeringRequestedAt: Schema.NullOr(IsoDateTime),
   createdAt: ProjectionThreadQueuedTurn.fields.createdAt,
   updatedAt: ProjectionThreadQueuedTurn.fields.updatedAt,
 });
@@ -356,6 +358,14 @@ function mapQueuedTurnRow(
           sourceProposedPlan: {
             threadId: row.sourceProposedPlanThreadId,
             planId: row.sourceProposedPlanId,
+          },
+        }
+      : {}),
+    ...(row.steeringExpectedTurnId !== null && row.steeringRequestedAt !== null
+      ? {
+          steering: {
+            expectedTurnId: row.steeringExpectedTurnId,
+            requestedAt: row.steeringRequestedAt,
           },
         }
       : {}),
@@ -738,6 +748,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
           source_proposed_plan_id AS "sourceProposedPlanId",
+          steering_expected_turn_id AS "steeringExpectedTurnId",
+          steering_requested_at AS "steeringRequestedAt",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_queued_turns
@@ -1160,6 +1172,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
           source_proposed_plan_id AS "sourceProposedPlanId",
+          steering_expected_turn_id AS "steeringExpectedTurnId",
+          steering_requested_at AS "steeringRequestedAt",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_queued_turns

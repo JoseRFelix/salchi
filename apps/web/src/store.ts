@@ -292,6 +292,7 @@ function mapQueuedTurn(
     ...(queuedTurn.sourceProposedPlan !== undefined
       ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
       : {}),
+    ...(queuedTurn.steering !== undefined ? { steering: queuedTurn.steering } : {}),
     createdAt: queuedTurn.createdAt,
     updatedAt: queuedTurn.updatedAt,
   };
@@ -706,6 +707,8 @@ function queuedTurnsEqual(left: QueuedTurn, right: QueuedTurn): boolean {
     left.titleSeed === right.titleSeed &&
     left.runtimeMode === right.runtimeMode &&
     left.interactionMode === right.interactionMode &&
+    left.steering?.expectedTurnId === right.steering?.expectedTurnId &&
+    left.steering?.requestedAt === right.steering?.requestedAt &&
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
     chatAttachmentsEqual(left.attachments, right.attachments) &&
@@ -941,6 +944,23 @@ function mapDispatchedQueuedTurnMessage(queuedTurn: QueuedTurn, dispatchedAt: st
     turnId: null,
     createdAt: dispatchedAt,
     completedAt: dispatchedAt,
+    streaming: false,
+    ...(queuedTurn.attachments.length > 0 ? { attachments: [...queuedTurn.attachments] } : {}),
+  };
+}
+
+function mapSteeredQueuedTurnMessage(
+  queuedTurn: QueuedTurn,
+  turnId: TurnId,
+  steeredAt: string,
+): ChatMessage {
+  return {
+    id: queuedTurn.messageId,
+    role: queuedTurn.role,
+    text: queuedTurn.text,
+    turnId,
+    createdAt: steeredAt,
+    completedAt: steeredAt,
     streaming: false,
     ...(queuedTurn.attachments.length > 0 ? { attachments: [...queuedTurn.attachments] } : {}),
   };
@@ -2597,6 +2617,67 @@ function applyEnvironmentOrchestrationEventUnchecked(
         options,
       );
 
+    case "thread.queued-turn-steer-requested":
+      return updateThreadState(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          let changed = false;
+          const queuedTurns = thread.queuedTurns.map((entry) => {
+            if (entry.messageId !== event.payload.messageId) {
+              return entry;
+            }
+            changed = true;
+            return {
+              ...entry,
+              steering: {
+                expectedTurnId: event.payload.expectedTurnId,
+                requestedAt: event.payload.createdAt,
+              },
+              updatedAt: event.occurredAt,
+            };
+          });
+          if (!changed) {
+            return thread;
+          }
+          return {
+            ...thread,
+            queuedTurns,
+            updatedAt: event.occurredAt,
+          };
+        },
+        options,
+      );
+
+    case "thread.queued-turn-steer-failed":
+      return updateThreadState(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          let changed = false;
+          const queuedTurns = thread.queuedTurns.map((entry) => {
+            if (entry.messageId !== event.payload.messageId || entry.steering === undefined) {
+              return entry;
+            }
+            changed = true;
+            const { steering: _steering, ...queuedTurn } = entry;
+            return {
+              ...queuedTurn,
+              updatedAt: event.occurredAt,
+            };
+          });
+          if (!changed) {
+            return thread;
+          }
+          return {
+            ...thread,
+            queuedTurns,
+            updatedAt: event.occurredAt,
+          };
+        },
+        options,
+      );
+
     case "thread.queued-turn-dispatched":
       return updateThreadState(
         state,
@@ -2618,6 +2699,46 @@ function applyEnvironmentOrchestrationEventUnchecked(
               ? [
                   ...thread.messages,
                   mapDispatchedQueuedTurnMessage(queuedTurn, event.payload.dispatchedAt),
+                ]
+                  .toSorted(compareMessagesByOrder)
+                  .slice(-MAX_THREAD_MESSAGES)
+              : thread.messages;
+
+          return {
+            ...thread,
+            queuedTurns,
+            messages,
+            updatedAt: event.occurredAt,
+          };
+        },
+        options,
+      );
+
+    case "thread.queued-turn-steered":
+      return updateThreadState(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const queuedTurn = thread.queuedTurns.find(
+            (entry) => entry.messageId === event.payload.messageId,
+          );
+          const queuedTurns = thread.queuedTurns.filter(
+            (entry) => entry.messageId !== event.payload.messageId,
+          );
+          if (queuedTurns.length === thread.queuedTurns.length) {
+            return thread;
+          }
+
+          const messages =
+            queuedTurn !== undefined &&
+            !thread.messages.some((message) => message.id === queuedTurn.messageId)
+              ? [
+                  ...thread.messages,
+                  mapSteeredQueuedTurnMessage(
+                    queuedTurn,
+                    event.payload.turnId,
+                    event.payload.steeredAt,
+                  ),
                 ]
                   .toSorted(compareMessagesByOrder)
                   .slice(-MAX_THREAD_MESSAGES)

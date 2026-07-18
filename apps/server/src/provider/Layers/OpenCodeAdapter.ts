@@ -4,6 +4,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderRuntimeEvent,
+  type ProviderSendTurnInput,
   type ProviderSession,
   RuntimeItemId,
   RuntimeRequestId,
@@ -1149,12 +1150,22 @@ export function makeOpenCodeAdapter(
       },
     );
 
-    const sendTurn: OpenCodeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
+    const sendTurnInternal = Effect.fn("sendTurnInternal")(function* (
+      input: ProviderSendTurnInput,
+      expectedTurnId?: TurnId,
+    ) {
       const context = ensureSessionContext(sessions, input.threadId);
       // A sendTurn while a turn is active is a steer: OpenCode queues the
       // prompt into the busy session and the work continues as one turn, so
       // the active turn id is reused instead of opening a new turn.
       const steeringTurnId = context.activeTurnId;
+      if (expectedTurnId !== undefined && steeringTurnId !== expectedTurnId) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "turn/steer",
+          detail: `Expected active turn '${expectedTurnId}', received '${steeringTurnId ?? "none"}'.`,
+        });
+      }
       const turnId = steeringTurnId ?? TurnId.make(`opencode-turn-${yield* randomUUIDv4}`);
       const modelSelection =
         input.modelSelection ??
@@ -1271,6 +1282,17 @@ export function makeOpenCodeAdapter(
         turnId,
       };
     });
+
+    const sendTurn: OpenCodeAdapterShape["sendTurn"] = (input) => sendTurnInternal(input);
+    const steerTurn: OpenCodeAdapterShape["steerTurn"] = (input) =>
+      sendTurnInternal(
+        {
+          threadId: input.threadId,
+          ...(input.input !== undefined ? { input: input.input } : {}),
+          ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
+        },
+        input.expectedTurnId,
+      );
 
     const interruptTurn: OpenCodeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
       function* (threadId, turnId) {
@@ -1437,9 +1459,11 @@ export function makeOpenCodeAdapter(
       capabilities: {
         sessionModelSwitch: "in-session",
         childThreadMode: "none",
+        activeTurnSteering: "async-prompt",
       },
       startSession,
       sendTurn,
+      steerTurn,
       interruptTurn,
       respondToRequest,
       respondToUserInput,
