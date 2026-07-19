@@ -8,6 +8,7 @@ import { render } from "vitest-browser-react";
 const {
   terminalConstructorSpy,
   terminalDisposeSpy,
+  terminalFocusSpy,
   terminalInstances,
   terminalLineTextByRow,
   terminalWriteSpy,
@@ -21,6 +22,7 @@ const {
 } = vi.hoisted(() => ({
   terminalConstructorSpy: vi.fn(),
   terminalDisposeSpy: vi.fn(),
+  terminalFocusSpy: vi.fn(),
   terminalInstances: [] as Array<{
     clearSelection: ReturnType<typeof vi.fn>;
     scrollLines: ReturnType<typeof vi.fn>;
@@ -124,7 +126,9 @@ vi.mock("@xterm/xterm", () => ({
         lineText.slice(column, Math.min(lineText.length, column + length)) || "selected text";
     });
 
-    focus() {}
+    focus() {
+      terminalFocusSpy();
+    }
 
     refresh() {}
 
@@ -267,9 +271,11 @@ async function mountTerminalViewport(props: {
   threadRef: ReturnType<typeof scopeThreadRef>;
   drawerBackgroundColor?: string;
   drawerTextColor?: string;
+  autoFocus?: boolean;
 }) {
   let currentProps = {
     threadRef: props.threadRef,
+    autoFocus: props.autoFocus ?? false,
   };
   const drawer = document.createElement("div");
   drawer.className = "thread-terminal-drawer";
@@ -296,7 +302,7 @@ async function mountTerminalViewport(props: {
       onSessionExited={() => undefined}
       onAddTerminalContext={() => undefined}
       focusRequestId={0}
-      autoFocus={false}
+      autoFocus={currentProps.autoFocus}
       resizeEpoch={0}
       drawerHeight={320}
       keybindings={[]}
@@ -308,6 +314,7 @@ async function mountTerminalViewport(props: {
     rerender: async (
       nextProps: Partial<{
         threadRef: ReturnType<typeof scopeThreadRef>;
+        autoFocus: boolean;
       }>,
     ) => {
       currentProps = { ...currentProps, ...nextProps };
@@ -321,7 +328,7 @@ async function mountTerminalViewport(props: {
           onSessionExited={() => undefined}
           onAddTerminalContext={() => undefined}
           focusRequestId={0}
-          autoFocus={false}
+          autoFocus={currentProps.autoFocus}
           resizeEpoch={0}
           drawerHeight={320}
           keybindings={[]}
@@ -439,6 +446,7 @@ describe("TerminalViewport", () => {
     });
     terminalConstructorSpy.mockClear();
     terminalDisposeSpy.mockClear();
+    terminalFocusSpy.mockClear();
     terminalWriteSpy.mockClear();
     fitAddonFitSpy.mockClear();
     fitAddonLoadSpy.mockClear();
@@ -552,6 +560,48 @@ describe("TerminalViewport", () => {
         ),
       ).toBe(false);
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not refocus the terminal after a delayed open when the user moved focus elsewhere", async () => {
+    let resolveOpen!: (snapshot: ReturnType<typeof createTerminalSnapshot>) => void;
+    const environment = createEnvironmentApi();
+    environment.terminal.open.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOpen = resolve;
+        }),
+    );
+    environmentApiById.set("environment-a", environment);
+
+    const mounted = await mountTerminalViewport({
+      threadRef: scopeThreadRef("environment-a" as never, THREAD_ID),
+      autoFocus: true,
+    });
+    const composer = document.createElement("textarea");
+    document.body.append(composer);
+
+    try {
+      await vi.waitFor(() => {
+        expect(environment.terminal.open).toHaveBeenCalledTimes(1);
+        expect(terminalFocusSpy).toHaveBeenCalledTimes(1);
+      });
+
+      composer.focus();
+      expect(document.activeElement).toBe(composer);
+
+      resolveOpen(createTerminalSnapshot());
+      await new Promise<void>((resolve) =>
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => resolve());
+        }),
+      );
+
+      expect(terminalFocusSpy).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(composer);
+    } finally {
+      composer.remove();
       await mounted.cleanup();
     }
   });

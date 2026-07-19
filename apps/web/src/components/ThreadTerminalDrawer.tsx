@@ -1660,18 +1660,6 @@ export function TerminalViewport({
       openRetryAttemptRef.current = 0;
       clearOpenRetryTimer();
       flushDeferredResize();
-      if (autoFocus && (reason === "mount" || reason === "retry")) {
-        recordTerminalDiagnostic(threadRef, terminalId, "focus-requested", {
-          reason: "open-terminal",
-        });
-        window.requestAnimationFrame(() => {
-          activeTerminal.focus();
-          recordTerminalDiagnostic(threadRef, terminalId, "focus-applied", {
-            dom: readTerminalDomDiagnostics(containerRef.current),
-            reason: "open-terminal",
-          });
-        });
-      }
       return snapshot;
     };
 

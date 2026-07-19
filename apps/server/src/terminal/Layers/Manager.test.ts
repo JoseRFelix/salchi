@@ -45,10 +45,12 @@ class FakePtyProcess implements PtyProcess {
   readonly pid: number;
   private readonly dataListeners = new Set<(data: string) => void>();
   private readonly exitListeners = new Set<(event: PtyExitEvent) => void>();
+  private readonly outputOnDataSubscribe: string | null;
   killed = false;
 
-  constructor(pid: number) {
+  constructor(pid: number, outputOnDataSubscribe: string | null = null) {
     this.pid = pid;
+    this.outputOnDataSubscribe = outputOnDataSubscribe;
   }
 
   write(data: string): void {
@@ -66,6 +68,9 @@ class FakePtyProcess implements PtyProcess {
 
   onData(callback: (data: string) => void): () => void {
     this.dataListeners.add(callback);
+    if (this.outputOnDataSubscribe !== null) {
+      callback(this.outputOnDataSubscribe);
+    }
     return () => {
       this.dataListeners.delete(callback);
     };
@@ -96,10 +101,12 @@ class FakePtyAdapter implements PtyAdapterShape {
   readonly processes: FakePtyProcess[] = [];
   readonly spawnFailures: Error[] = [];
   private readonly mode: "sync" | "async";
+  private readonly outputOnDataSubscribe: string | null;
   private nextPid = 9000;
 
-  constructor(mode: "sync" | "async" = "sync") {
+  constructor(mode: "sync" | "async" = "sync", outputOnDataSubscribe: string | null = null) {
     this.mode = mode;
+    this.outputOnDataSubscribe = outputOnDataSubscribe;
   }
 
   spawn(input: PtySpawnInput): Effect.Effect<PtyProcess, PtySpawnError> {
@@ -114,7 +121,7 @@ class FakePtyAdapter implements PtyAdapterShape {
         }),
       );
     }
-    const process = new FakePtyProcess(this.nextPid++);
+    const process = new FakePtyProcess(this.nextPid++, this.outputOnDataSubscribe);
     this.processes.push(process);
     if (this.mode === "async") {
       return Effect.tryPromise({
@@ -340,6 +347,32 @@ it.layer(
       assert.equal(snapshot.status, "running");
       expect(ptyAdapter.spawnInputs).toHaveLength(1);
       expect(ptyAdapter.processes).toHaveLength(1);
+    }),
+  );
+
+  it.effect("preserves PTY output emitted while the session is becoming running", () =>
+    Effect.gen(function* () {
+      const prompt = "prompt> ";
+      const { manager, getEvents } = yield* createManager(5, {
+        ptyAdapter: new FakePtyAdapter("sync", prompt),
+      });
+
+      yield* manager.open(openInput());
+
+      yield* waitFor(
+        Effect.map(getEvents, (events) =>
+          events.some((event) => event.type === "output" && event.data === prompt),
+        ),
+      );
+      const opened = yield* manager.snapshot({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+      });
+
+      expect(opened.history).toBe(prompt);
+      expect(yield* getEvents).toContainEqual(
+        expect.objectContaining({ type: "output", data: prompt }),
+      );
     }),
   );
 

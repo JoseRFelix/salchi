@@ -1435,17 +1435,23 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
               startedShell = spawnResult.shellLabel;
 
               const processPid = ptyProcess.pid;
-              const unsubscribeData = ptyProcess.onData((data) => {
-                if (!enqueueProcessEvent(session, processPid, { type: "output", data })) {
+              const startupEvents: PendingProcessEvent[] = [];
+              let terminalIsReadyForEvents = false;
+              const handleProcessEvent = (event: PendingProcessEvent) => {
+                if (!terminalIsReadyForEvents) {
+                  startupEvents.push(event);
+                  return;
+                }
+                if (!enqueueProcessEvent(session, processPid, event)) {
                   return;
                 }
                 runFork(drainProcessEvents(session, processPid));
+              };
+              const unsubscribeData = ptyProcess.onData((data) => {
+                handleProcessEvent({ type: "output", data });
               });
               const unsubscribeExit = ptyProcess.onExit((event) => {
-                if (!enqueueProcessEvent(session, processPid, { type: "exit", event })) {
-                  return;
-                }
-                runFork(drainProcessEvents(session, processPid));
+                handleProcessEvent({ type: "exit", event });
               });
 
               const runningAt = yield* nowIso;
@@ -1458,6 +1464,17 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
                 session.unsubscribeExit = unsubscribeExit;
                 return [undefined, state] as const;
               });
+
+              terminalIsReadyForEvents = true;
+              let shouldDrainStartupEvents = false;
+              for (const event of startupEvents) {
+                shouldDrainStartupEvents =
+                  enqueueProcessEvent(session, processPid, event) || shouldDrainStartupEvents;
+              }
+              startupEvents.length = 0;
+              if (shouldDrainStartupEvents) {
+                runFork(drainProcessEvents(session, processPid));
+              }
 
               const createdAt = yield* nowIso;
               yield* publishEvent({
