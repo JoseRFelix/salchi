@@ -531,6 +531,18 @@ const make = Effect.gen(function* () {
         detail: `Requested provider instance '${desiredInstanceId}' uses unknown provider driver '${desiredDriverKind}'. The driver is not installed in this build.`,
       });
     }
+    const desiredProviderSnapshot = (yield* providerRegistry.getProviders).find(
+      (snapshot) => snapshot.instanceId === desiredInstanceId,
+    );
+    if (desiredProviderSnapshot?.auth.status === "unauthenticated") {
+      return yield* new ProviderAdapterRequestError({
+        provider: desiredDriverKind,
+        method: "thread.turn.start",
+        detail:
+          desiredProviderSnapshot.message ??
+          `${desiredProviderSnapshot.displayName ?? desiredDriverKind} is not authenticated. Sign in and try again.`,
+      });
+    }
     const preferredProvider: ProviderDriverKind = desiredDriverKind;
     if (thread.session !== null) {
       yield* rejectStartedThreadModelChangeIfRequired({

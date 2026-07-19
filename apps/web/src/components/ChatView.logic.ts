@@ -290,6 +290,20 @@ export function deriveComposerSendState(options: {
   };
 }
 
+export function getProviderAuthenticationBlockReason(input: {
+  providers: ReadonlyArray<ServerProvider>;
+  instanceId: ModelSelection["instanceId"];
+}): string | null {
+  const provider = input.providers.find((entry) => entry.instanceId === input.instanceId);
+  if (provider?.auth.status !== "unauthenticated") {
+    return null;
+  }
+  return (
+    provider.message ??
+    `${provider.displayName ?? provider.driver} is not authenticated. Sign in and try again.`
+  );
+}
+
 export function buildExpiredTerminalContextToastCopy(
   expiredTerminalContextCount: number,
   variant: "omitted" | "empty",

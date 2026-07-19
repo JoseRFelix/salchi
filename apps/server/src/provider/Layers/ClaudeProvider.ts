@@ -24,6 +24,7 @@ import { compareSemverVersions } from "@t3tools/shared/semver";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import {
   query as claudeQuery,
+  type AccountInfo as ClaudeAccountInfo,
   type SlashCommand as ClaudeSlashCommand,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -526,11 +527,57 @@ function nonEmptyProbeString(value: string): string | undefined {
 }
 
 type ClaudeCapabilitiesProbe = {
-  readonly email: string | undefined;
-  readonly subscriptionType: string | undefined;
-  readonly tokenSource: string | undefined;
+  readonly email: ClaudeAccountInfo["email"];
+  readonly organization: ClaudeAccountInfo["organization"];
+  readonly subscriptionType: ClaudeAccountInfo["subscriptionType"];
+  readonly tokenSource: ClaudeAccountInfo["tokenSource"];
+  readonly apiKeySource: ClaudeAccountInfo["apiKeySource"];
+  readonly apiProvider: ClaudeAccountInfo["apiProvider"];
   readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
 };
+
+type ClaudeAuthProbeResult = {
+  readonly status: Exclude<ServerProviderState, "disabled">;
+  readonly auth: Pick<ServerProviderAuth, "status">;
+  readonly message?: string;
+};
+
+function hasClaudeCredentialSource(value: string | undefined): boolean {
+  const normalized = value
+    ?.trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+  return normalized !== undefined && normalized !== "" && normalized !== "none";
+}
+
+function claudeCapabilitiesAuthStatus(
+  capabilities: ClaudeCapabilitiesProbe,
+): ServerProviderAuth["status"] {
+  if (capabilities.apiProvider && capabilities.apiProvider !== "firstParty") {
+    // Claude Code delegates authentication to the configured cloud provider.
+    return "authenticated";
+  }
+
+  if (
+    capabilities.email ||
+    capabilities.organization ||
+    capabilities.subscriptionType ||
+    hasClaudeCredentialSource(capabilities.tokenSource) ||
+    hasClaudeCredentialSource(capabilities.apiKeySource)
+  ) {
+    return "authenticated";
+  }
+
+  if (
+    capabilities.apiProvider === "firstParty" &&
+    (capabilities.tokenSource?.trim().toLowerCase() === "none" ||
+      capabilities.apiKeySource?.trim().toLowerCase() === "none")
+  ) {
+    return "unauthenticated";
+  }
+
+  return "unknown";
+}
 
 function parseClaudeInitializationCommands(
   commands: ReadonlyArray<ClaudeSlashCommand> | undefined,
@@ -643,17 +690,14 @@ const probeClaudeCapabilities = (
         },
       });
       const init = await q.initializationResult();
-      const account = init.account as
-        | {
-            readonly email?: string;
-            readonly subscriptionType?: string;
-            readonly tokenSource?: string;
-          }
-        | undefined;
+      const account: ClaudeAccountInfo | undefined = init.account;
       return {
         email: account?.email,
+        organization: account?.organization,
         subscriptionType: account?.subscriptionType,
         tokenSource: account?.tokenSource,
+        apiKeySource: account?.apiKeySource,
+        apiProvider: account?.apiProvider,
         slashCommands: parseClaudeInitializationCommands(init.commands),
       } satisfies ClaudeCapabilitiesProbe;
     });
@@ -799,34 +843,37 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   const slashCommands = capabilities?.slashCommands ?? [];
   const dedupedSlashCommands = dedupeSlashCommands(slashCommands);
 
-  if (!capabilities) {
+  const sdkAuthStatus = capabilities ? claudeCapabilitiesAuthStatus(capabilities) : "unknown";
+  let resolvedAuth: ClaudeAuthProbeResult;
+  if (sdkAuthStatus === "authenticated") {
+    resolvedAuth = { status: "ready", auth: { status: "authenticated" } };
+  } else if (sdkAuthStatus === "unauthenticated") {
+    resolvedAuth = {
+      status: "error",
+      auth: { status: "unauthenticated" },
+      message: "Claude is not authenticated. Run `claude auth login` and try again.",
+    };
+  } else {
     const authProbe = yield* runClaudeCommand(claudeSettings, ["auth", "status"], environment).pipe(
       Effect.timeoutOption(AUTH_PROBE_TIMEOUT_MS),
       Effect.result,
     );
 
     if (Result.isSuccess(authProbe) && Option.isSome(authProbe.success)) {
-      const parsedAuth = parseClaudeAuthStatusFromOutput(authProbe.success.value);
-      return buildServerProvider({
-        presentation: CLAUDE_PRESENTATION,
-        enabled: claudeSettings.enabled,
-        checkedAt,
-        models,
-        slashCommands: dedupedSlashCommands,
-        probe: {
-          installed: true,
-          version: parsedVersion,
-          status: parsedAuth.status,
-          auth: parsedAuth.auth,
-          ...(parsedAuth.message
-            ? { message: parsedAuth.message }
-            : claudeModelUpgradeMessage
-              ? { message: claudeModelUpgradeMessage }
-              : {}),
-        },
-      });
+      resolvedAuth = parseClaudeAuthStatusFromOutput(authProbe.success.value);
+    } else {
+      resolvedAuth = {
+        status: "warning",
+        auth: { status: "unknown" },
+        message:
+          Result.isSuccess(authProbe) && Option.isNone(authProbe.success)
+            ? "Could not verify Claude authentication status. Timed out while running command."
+            : "Could not verify Claude authentication status.",
+      };
     }
+  }
 
+  if (resolvedAuth.auth.status !== "authenticated") {
     return buildServerProvider({
       presentation: CLAUDE_PRESENTATION,
       enabled: claudeSettings.enabled,
@@ -836,19 +883,20 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       probe: {
         installed: true,
         version: parsedVersion,
-        status: "warning",
-        auth: { status: "unknown" },
-        message:
-          Result.isSuccess(authProbe) && Option.isNone(authProbe.success)
-            ? "Could not verify Claude authentication status. Timed out while running command."
-            : "Could not verify Claude authentication status.",
+        status: resolvedAuth.status,
+        auth: resolvedAuth.auth,
+        ...(resolvedAuth.message
+          ? { message: resolvedAuth.message }
+          : claudeModelUpgradeMessage
+            ? { message: claudeModelUpgradeMessage }
+            : {}),
       },
     });
   }
 
   const authMetadata = claudeAuthMetadata({
-    subscriptionType: capabilities.subscriptionType,
-    authMethod: capabilities.tokenSource,
+    subscriptionType: capabilities?.subscriptionType,
+    authMethod: capabilities?.tokenSource ?? capabilities?.apiKeySource,
   });
   return buildServerProvider({
     presentation: CLAUDE_PRESENTATION,
@@ -862,7 +910,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       status: "ready",
       auth: {
         status: "authenticated",
-        ...(capabilities.email ? { email: capabilities.email } : {}),
+        ...(capabilities?.email ? { email: capabilities.email } : {}),
         ...(authMetadata ? authMetadata : {}),
       },
       ...(claudeModelUpgradeMessage ? { message: claudeModelUpgradeMessage } : {}),

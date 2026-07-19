@@ -6,6 +6,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ServerProvider,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -21,6 +22,7 @@ import {
   createLocalDispatchSnapshot,
   deriveIsInterrupting,
   deriveComposerSendState,
+  getProviderAuthenticationBlockReason,
   getStartedThreadModelChangeBlockReason,
   hasOlderThreadDetailPage,
   hasServerAcknowledgedLocalDispatch,
@@ -81,6 +83,53 @@ describe("deriveComposerSendState", () => {
     expect(state.trimmedPrompt).toBe("yoo  waddup");
     expect(state.expiredTerminalContextCount).toBe(1);
     expect(state.hasSendableContent).toBe(true);
+  });
+});
+
+describe("getProviderAuthenticationBlockReason", () => {
+  const provider = (overrides: Partial<ServerProvider> = {}): ServerProvider => ({
+    instanceId: ProviderInstanceId.make("claudeAgent"),
+    driver: ProviderDriverKind.make("claudeAgent"),
+    displayName: "Claude",
+    enabled: true,
+    installed: true,
+    version: "1.0.0",
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    models: [],
+    slashCommands: [],
+    skills: [],
+    ...overrides,
+  });
+
+  it("blocks an explicitly unauthenticated provider with its remediation message", () => {
+    expect(
+      getProviderAuthenticationBlockReason({
+        providers: [
+          provider({
+            auth: { status: "unauthenticated" },
+            message: "Sign in to Claude and try again.",
+          }),
+        ],
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+      }),
+    ).toBe("Sign in to Claude and try again.");
+  });
+
+  it("allows authenticated and unknown provider states", () => {
+    expect(
+      getProviderAuthenticationBlockReason({
+        providers: [provider()],
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+      }),
+    ).toBeNull();
+    expect(
+      getProviderAuthenticationBlockReason({
+        providers: [provider({ auth: { status: "unknown" } })],
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+      }),
+    ).toBeNull();
   });
 });
 

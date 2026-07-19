@@ -1,4 +1,4 @@
-import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime";
+import { scopedProjectKey, scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
 import { DEFAULT_RUNTIME_MODE, type ScopedProjectRef } from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
@@ -15,7 +15,7 @@ import {
   getProjectOrderKey,
   selectProjectGroupingSettings,
 } from "../logicalProject";
-import { selectProjectsAcrossEnvironments, useStore } from "../store";
+import { selectProjectsAcrossEnvironments, selectThreadExistsByRef, useStore } from "../store";
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { useUiStateStore } from "../uiStateStore";
@@ -44,6 +44,7 @@ function useNewThreadState() {
         getDraftSession,
         getDraftThread,
         initializeFreshProjectDraftThread,
+        markDraftThreadPromoting,
         setDraftThreadContext,
         setLogicalProjectDraftThreadId,
       } = useComposerDraftStore.getState();
@@ -65,7 +66,12 @@ function useNewThreadState() {
           ? getDraftThread(currentRouteTarget.threadRef)
           : getDraftSession(currentRouteTarget.draftId)
         : null;
-      if (storedDraftThread) {
+      const draftThreadExistsOnServer = (draftThread: DraftThreadState): boolean =>
+        selectThreadExistsByRef(
+          useStore.getState(),
+          scopeThreadRef(draftThread.environmentId, draftThread.threadId),
+        );
+      if (storedDraftThread && !draftThreadExistsOnServer(storedDraftThread)) {
         return (async () => {
           if (hasBranchOption || hasWorktreePathOption || hasEnvModeOption) {
             setDraftThreadContext(storedDraftThread.draftId, {
@@ -89,12 +95,19 @@ function useNewThreadState() {
           });
         })();
       }
+      if (storedDraftThread) {
+        markDraftThreadPromoting(
+          storedDraftThread.draftId,
+          scopeThreadRef(storedDraftThread.environmentId, storedDraftThread.threadId),
+        );
+      }
 
       if (
         latestActiveDraftThread &&
         currentRouteTarget?.kind === "draft" &&
         latestActiveDraftThread.logicalProjectKey === logicalProjectKey &&
-        latestActiveDraftThread.promotedTo == null
+        latestActiveDraftThread.promotedTo == null &&
+        !draftThreadExistsOnServer(latestActiveDraftThread)
       ) {
         if (hasBranchOption || hasWorktreePathOption || hasEnvModeOption) {
           setDraftThreadContext(currentRouteTarget.draftId, {

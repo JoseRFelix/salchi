@@ -208,6 +208,7 @@ import {
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  getProviderAuthenticationBlockReason,
   hasServerAcknowledgedLocalDispatch,
   getStartedThreadModelChangeBlockReason,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
@@ -3677,6 +3678,19 @@ export default function ChatView(props: ChatViewProps) {
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
     } = sendCtx;
+    const providerAuthenticationBlockReason = getProviderAuthenticationBlockReason({
+      providers: providerStatuses,
+      instanceId: ctxSelectedModelSelection.instanceId,
+    });
+    if (providerAuthenticationBlockReason) {
+      setThreadError(activeThread.id, providerAuthenticationBlockReason);
+      toastManager.add({
+        type: "error",
+        title: "Provider sign-in required",
+        description: providerAuthenticationBlockReason,
+      });
+      return;
+    }
     const promptForSend = promptRef.current;
     const {
       trimmedPrompt: trimmed,

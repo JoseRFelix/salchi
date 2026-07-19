@@ -2590,6 +2590,55 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("does not dispatch a message through an explicitly unauthenticated provider", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-provider-auth-preflight" as MessageId,
+        targetText: "provider auth preflight",
+      }),
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      const provider = fixture.serverConfig.providers[0];
+      if (!provider) {
+        throw new Error("Expected the default provider fixture.");
+      }
+      applyProvidersUpdated({
+        providers: [
+          {
+            ...provider,
+            status: "error",
+            auth: { status: "unauthenticated" },
+            message: "Sign in before sending.",
+          },
+        ],
+      });
+
+      useComposerDraftStore.getState().setPrompt(THREAD_REF, "This must stay in the composer");
+      await waitForLayout();
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Sign in before sending.");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      expect(
+        wsRequests.filter((request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand),
+      ).toHaveLength(0);
+      expect(useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.prompt).toBe(
+        "This must stay in the composer",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("renders locked single-environment mobile run context as a static workspace label", async () => {
     const mounted = await mountChatView({
       viewport: COMPACT_FOOTER_VIEWPORT,
@@ -6925,6 +6974,49 @@ describe("ChatView timeline estimator parity (full app)", () => {
         "Route should change to a second draft thread instead of reusing the promoting draft.",
       );
       expect(draftIdFromPath(secondDraftPath)).not.toBe(firstDraftId);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("creates a fresh draft when a delayed promotion marker still points at a server thread", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-stale-promotion-new-thread-test" as MessageId,
+        targetText: "stale promotion new thread test",
+      }),
+    });
+
+    try {
+      const newThreadButton = page.getByTestId("new-thread-button");
+      await expect.element(newThreadButton).toBeInTheDocument();
+
+      const staleDraftId = DraftId.make("draft-stale-failed-thread");
+      useComposerDraftStore.getState().setLogicalProjectDraftThreadId(
+        PROJECT_LOGICAL_KEY,
+        {
+          environmentId: LOCAL_ENVIRONMENT_ID,
+          projectId: PROJECT_ID,
+        },
+        staleDraftId,
+        {
+          threadId: THREAD_ID,
+          createdAt: NOW_ISO,
+        },
+      );
+      expect(useComposerDraftStore.getState().getDraftSession(staleDraftId)?.promotedTo).toBeNull();
+      expect(selectThreadByRef(useStore.getState(), THREAD_REF)).not.toBeNull();
+
+      await newThreadButton.click();
+
+      const freshDraftPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "A stale failed-thread draft must not redirect New Thread back to the server thread.",
+      );
+      expect(draftIdFromPath(freshDraftPath)).not.toBe(staleDraftId);
+      expect(draftThreadIdFor(draftIdFromPath(freshDraftPath))).not.toBe(THREAD_ID);
     } finally {
       await mounted.cleanup();
     }

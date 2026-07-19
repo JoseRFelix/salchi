@@ -190,6 +190,7 @@ describe("ProviderCommandReactor", () => {
     readonly autoCompleteTurns?: boolean;
     readonly startReactor?: boolean;
     readonly requiresNewThreadForModelChange?: boolean;
+    readonly providerSnapshotOverrides?: Partial<ServerProvider>;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "t3code-reactor-"));
@@ -383,12 +384,12 @@ describe("ProviderCommandReactor", () => {
       ),
     );
     const providerSnapshots = [
-      makeServerProviderSnapshot(
-        modelSelection.instanceId,
-        input?.requiresNewThreadForModelChange === true
+      makeServerProviderSnapshot(modelSelection.instanceId, {
+        ...(input?.requiresNewThreadForModelChange === true
           ? { requiresNewThreadForModelChange: true }
-          : {},
-      ),
+          : {}),
+        ...input?.providerSnapshotOverrides,
+      }),
     ];
 
     const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
@@ -574,6 +575,52 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("rejects a turn before starting an explicitly unauthenticated provider", async () => {
+    const detail = "Claude is not authenticated. Run `claude auth login` and try again.";
+    const harness = await createHarness({
+      threadModelSelection: {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-sonnet-4-6",
+      },
+      providerSnapshotOverrides: {
+        auth: { status: "unauthenticated" },
+        status: "error",
+        message: detail,
+      },
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-unauthenticated"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-unauthenticated"),
+          role: "user",
+          text: "do not retry this",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    await harness.drain();
+
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.activities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "provider.turn.start.failed",
+          payload: expect.objectContaining({ detail }),
+        }),
+      ]),
+    );
   });
 
   it("queues turn starts while a provider turn is running and sends them FIFO after completion", async () => {

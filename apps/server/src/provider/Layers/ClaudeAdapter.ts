@@ -123,6 +123,8 @@ const CLAUDE_OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const CLAUDE_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const CLAUDE_OAUTH_CLIENT_ID = "22422756-60c9-4084-8eb7-27705fd5cf9a";
 const CLAUDE_OAUTH_BETA_HEADER = "oauth-2025-04-20";
+const CLAUDE_AUTH_FAILURE_MESSAGE =
+  "Claude is not authenticated. Run `claude auth login` and try again.";
 // Claude Code added rate-limit statusline support in 2.1.80; this endpoint
 // is more aggressively rate-limited for non-Claude-Code user agents.
 const CLAUDE_OAUTH_USAGE_USER_AGENT = "claude-code/2.1.80";
@@ -309,6 +311,7 @@ interface ClaudeSessionContext {
   lastKnownTotalProcessedTokens: number | undefined;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
+  terminalTurnFailure: string | undefined;
   stopped: boolean;
 }
 
@@ -3485,6 +3488,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       return;
     }
 
+    if (context.terminalTurnFailure !== undefined) {
+      const terminalTurnFailure = context.terminalTurnFailure;
+      context.terminalTurnFailure = undefined;
+      yield* completeTurn(context, "failed", terminalTurnFailure, message);
+      return;
+    }
+
     const status = turnStatusFromResult(message);
     const errorMessage = message.subtype === "success" ? undefined : message.errors[0];
 
@@ -3543,6 +3553,30 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             detail: message,
           },
         });
+        return;
+      case "api_retry":
+        if (message.error === "authentication_failed") {
+          if (context.terminalTurnFailure !== undefined) {
+            return;
+          }
+          context.terminalTurnFailure = CLAUDE_AUTH_FAILURE_MESSAGE;
+          yield* emitRuntimeError(context, CLAUDE_AUTH_FAILURE_MESSAGE, message);
+          yield* Effect.tryPromise({
+            try: () => context.query.interrupt(),
+            catch: (cause) =>
+              toProcessError(
+                cause,
+                "Failed to interrupt Claude after an authentication failure.",
+                context.session.threadId,
+              ),
+          });
+          return;
+        }
+        yield* emitRuntimeWarning(
+          context,
+          `Claude API request failed (${message.error}); retrying attempt ${message.attempt} of ${message.max_retries}.`,
+          message,
+        );
         return;
       case "compact_boundary":
         yield* emitThreadTokenUsage(
@@ -3902,7 +3936,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       return;
     }
 
-    if (Exit.isFailure(exit)) {
+    if (context.terminalTurnFailure !== undefined) {
+      const terminalTurnFailure = context.terminalTurnFailure;
+      context.terminalTurnFailure = undefined;
+      if (context.turnState) {
+        yield* completeTurn(context, "failed", terminalTurnFailure);
+      }
+    } else if (Exit.isFailure(exit)) {
       if (isClaudeInterruptedCause(exit.cause)) {
         if (context.turnState) {
           yield* completeTurn(
@@ -4651,6 +4691,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         lastKnownTotalProcessedTokens: undefined,
         lastAssistantUuid: resumeState?.resumeSessionAt,
         lastThreadStartedId: undefined,
+        terminalTurnFailure: undefined,
         stopped: false,
       };
       yield* Ref.set(contextRef, context);
