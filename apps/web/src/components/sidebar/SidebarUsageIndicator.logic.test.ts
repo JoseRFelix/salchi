@@ -280,7 +280,7 @@ describe("SidebarUsageIndicator.logic", () => {
     expect(rows[0]?.windows.fiveHour?.usedPercent).toBe(12);
   });
 
-  it("omits stale Claude usage when the provider is unauthenticated", () => {
+  it("omits stale Claude usage unless the provider is authenticated", () => {
     const rows = deriveSidebarUsageProviderRows({
       providerInstances: [
         {
@@ -300,6 +300,12 @@ describe("SidebarUsageIndicator.logic", () => {
           driverKind: ProviderDriverKind.make("claudeAgent"),
           installed: true,
           authStatus: "unauthenticated",
+        },
+        {
+          instanceId: ProviderInstanceId.make("claude_unknown"),
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+          installed: true,
+          authStatus: "unknown",
         },
       ],
       threads: [
@@ -354,6 +360,17 @@ describe("SidebarUsageIndicator.logic", () => {
             source: "claude.oauth.usage",
             primary: {
               usedPercent: 91,
+              windowDurationMins: 300,
+              resetsAt: FUTURE_RESET_SECONDS,
+            },
+          },
+        },
+        claude_unknown: {
+          updatedAt: "2026-05-03T00:00:00.000Z",
+          rateLimits: {
+            source: "claude.oauth.usage",
+            primary: {
+              usedPercent: 99,
               windowDurationMins: 300,
               resetsAt: FUTURE_RESET_SECONDS,
             },

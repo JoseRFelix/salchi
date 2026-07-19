@@ -16,6 +16,11 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import { selectProjectsAcrossEnvironments, useStore } from "../store";
+import {
+  draftThreadExistsOnServer,
+  draftThreadServerRef,
+  finalizeMaterializedPromotedDraftThreadByRef,
+} from "../draftPromotionRecovery";
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { useUiStateStore } from "../uiStateStore";
@@ -44,6 +49,7 @@ function useNewThreadState() {
         getDraftSession,
         getDraftThread,
         initializeFreshProjectDraftThread,
+        markDraftThreadPromoting,
         setDraftThreadContext,
         setLogicalProjectDraftThreadId,
       } = useComposerDraftStore.getState();
@@ -65,7 +71,12 @@ function useNewThreadState() {
           ? getDraftThread(currentRouteTarget.threadRef)
           : getDraftSession(currentRouteTarget.draftId)
         : null;
-      if (storedDraftThread) {
+      if (latestActiveDraftThread && draftThreadExistsOnServer(latestActiveDraftThread)) {
+        const activeThreadRef = draftThreadServerRef(latestActiveDraftThread);
+        markDraftThreadPromoting(activeThreadRef, activeThreadRef);
+        finalizeMaterializedPromotedDraftThreadByRef(activeThreadRef);
+      }
+      if (storedDraftThread && !draftThreadExistsOnServer(storedDraftThread)) {
         return (async () => {
           if (hasBranchOption || hasWorktreePathOption || hasEnvModeOption) {
             setDraftThreadContext(storedDraftThread.draftId, {
@@ -89,12 +100,18 @@ function useNewThreadState() {
           });
         })();
       }
+      if (storedDraftThread) {
+        const storedThreadRef = draftThreadServerRef(storedDraftThread);
+        markDraftThreadPromoting(storedDraftThread.draftId, storedThreadRef);
+        finalizeMaterializedPromotedDraftThreadByRef(storedThreadRef);
+      }
 
       if (
         latestActiveDraftThread &&
         currentRouteTarget?.kind === "draft" &&
         latestActiveDraftThread.logicalProjectKey === logicalProjectKey &&
-        latestActiveDraftThread.promotedTo == null
+        latestActiveDraftThread.promotedTo == null &&
+        !draftThreadExistsOnServer(latestActiveDraftThread)
       ) {
         if (hasBranchOption || hasWorktreePathOption || hasEnvModeOption) {
           setDraftThreadContext(currentRouteTarget.draftId, {
@@ -127,6 +144,14 @@ function useNewThreadState() {
           envMode: options?.envMode ?? "local",
           runtimeMode: DEFAULT_RUNTIME_MODE,
         });
+        if (storedDraftThread) {
+          finalizeMaterializedPromotedDraftThreadByRef(draftThreadServerRef(storedDraftThread));
+        }
+        if (latestActiveDraftThread) {
+          finalizeMaterializedPromotedDraftThreadByRef(
+            draftThreadServerRef(latestActiveDraftThread),
+          );
+        }
 
         await router.navigate({
           to: "/draft/$draftId",

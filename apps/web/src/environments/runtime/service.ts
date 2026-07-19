@@ -29,6 +29,7 @@ import {
   markPromotedDraftThreadsByRef,
   useComposerDraftStore,
 } from "~/composerDraftStore";
+import { finalizeMaterializedPromotedDraftThreadsByRef } from "~/draftPromotionRecovery";
 import { ensureLocalApi } from "~/localApi";
 import { collectActiveTerminalThreadIds } from "~/lib/terminalStateCleanup";
 import {
@@ -2695,15 +2696,15 @@ function syncProjectUiFromStore() {
 
 function syncThreadUiFromStore() {
   const threads = selectThreadsAcrossEnvironments(useStore.getState());
+  const threadRefs = threads.map((thread) => scopeThreadRef(thread.environmentId, thread.id));
   useUiStateStore.getState().syncThreads(
     threads.map((thread) => ({
       key: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
       seedVisitedAt: thread.updatedAt ?? thread.createdAt,
     })),
   );
-  markPromotedDraftThreadsByRef(
-    threads.map((thread) => scopeThreadRef(thread.environmentId, thread.id)),
-  );
+  markPromotedDraftThreadsByRef(threadRefs);
+  finalizeMaterializedPromotedDraftThreadsByRef(threadRefs);
 }
 
 function reconcileSnapshotDerivedState() {
@@ -2846,6 +2847,9 @@ function applyRecoveredEventBatch(
   for (const threadId of batchEffects.promoteDraftThreadIds) {
     markPromotedDraftThreadByRef(scopeThreadRef(environmentId, threadId));
   }
+  finalizeMaterializedPromotedDraftThreadsByRef(
+    collectThreadIdsFromEvents(events).map((threadId) => scopeThreadRef(environmentId, threadId)),
+  );
   for (const threadId of batchEffects.clearDeletedThreadIds) {
     const threadRef = scopeThreadRef(environmentId, threadId);
     disposeThreadDetailSubscriptionByKey(scopedThreadKey(threadRef));
@@ -2959,6 +2963,9 @@ function applyShellEvent(event: OrchestrationShellStreamEvent, environmentId: En
       }
       if (!previousThread && threadRef) {
         markPromotedDraftThreadByRef(threadRef);
+      }
+      if (threadRef) {
+        finalizeMaterializedPromotedDraftThreadsByRef([threadRef]);
       }
       if (previousThread?.archivedAt === null && event.thread.archivedAt !== null && threadRef) {
         useTerminalStateStore.getState().removeTerminalState(threadRef);

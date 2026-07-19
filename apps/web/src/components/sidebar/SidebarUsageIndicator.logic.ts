@@ -363,7 +363,9 @@ function isUsageProviderIncluded(instance: SidebarUsageProviderInstanceInput): b
   return (
     instance.installed !== false &&
     instance.availability !== "unavailable" &&
-    (String(instance.driverKind) !== "claudeAgent" || instance.authStatus !== "unauthenticated")
+    (String(instance.driverKind) !== "claudeAgent" ||
+      instance.authStatus === undefined ||
+      instance.authStatus === "authenticated")
   );
 }
 
