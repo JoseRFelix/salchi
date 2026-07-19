@@ -4,6 +4,7 @@ import {
   createComposerNativeInputTracker,
   isComposerNativeComposingKeyEvent,
   isComposerNativeInputSettling,
+  markComposerNativeInputSettling,
   markComposerNativeInputSuppression,
   readComposerNativeInputChangeMetadata,
   shouldLetBrowserHandleComposerBeforeInput,
@@ -61,6 +62,39 @@ describe("composerNativeInput", () => {
     ).toBe(false);
   });
 
+  it("lets iOS WebKit own an untyped collapsed beforeinput event", () => {
+    expect(
+      shouldLetBrowserHandleComposerBeforeInput(undefined, {
+        isIosWebkit: true,
+        isSelectionCollapsed: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldLetBrowserHandleComposerBeforeInput("", {
+        isIosWebkit: true,
+        isSelectionCollapsed: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat an untyped event as browser-owned outside iOS", () => {
+    expect(
+      shouldLetBrowserHandleComposerBeforeInput(undefined, {
+        isIosWebkit: false,
+        isSelectionCollapsed: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps Lexical in control of an untyped iOS event with an expanded selection", () => {
+    expect(
+      shouldLetBrowserHandleComposerBeforeInput("", {
+        isIosWebkit: true,
+        isSelectionCollapsed: false,
+      }),
+    ).toBe(false);
+  });
+
   it("treats composing keydown events as ineligible for command handling", () => {
     expect(isComposerNativeComposingKeyEvent({ isComposing: true, key: "a" })).toBe(true);
     expect(isComposerNativeComposingKeyEvent({ isComposing: false, key: "Process" })).toBe(true);
@@ -84,15 +118,28 @@ describe("composerNativeInput", () => {
     const tracker = createComposerNativeInputTracker();
     markComposerNativeInputSuppression(tracker, "insertText");
 
-    expect(isComposerNativeInputSettling(tracker, tracker.suppressTriggerDetectionUntil - 1)).toBe(
+    expect(isComposerNativeInputSettling(tracker, tracker.suppressControlledSyncUntil - 1)).toBe(
       true,
     );
     expect(readComposerNativeInputChangeMetadata(tracker).suppressTriggerDetection).toBe(true);
   });
 
+  it("settles browser-owned iOS input without delaying trigger detection", () => {
+    const tracker = createComposerNativeInputTracker();
+    markComposerNativeInputSettling(tracker, "insertText");
+
+    expect(isComposerNativeInputSettling(tracker, tracker.suppressControlledSyncUntil - 1)).toBe(
+      true,
+    );
+    expect(readComposerNativeInputChangeMetadata(tracker)).toMatchObject({
+      inputType: "insertText",
+      suppressTriggerDetection: false,
+    });
+  });
+
   it("stops settling after the suppression window ends", () => {
     const tracker = createComposerNativeInputTracker();
-    tracker.suppressTriggerDetectionUntil = 0;
+    tracker.suppressControlledSyncUntil = 0;
 
     expect(isComposerNativeInputSettling(tracker, 0)).toBe(false);
     expect(readComposerNativeInputChangeMetadata(tracker).suppressTriggerDetection).toBe(false);
