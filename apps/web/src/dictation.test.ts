@@ -1,14 +1,158 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   calculateDictationAudioLevel,
   encodeMonoPcm16Wav,
   formatDictationRecordingDuration,
+  normalizeDictationTranscript,
+  prepareDictationPcmRecorder,
+  prepareDictationStartSound,
   resampleToMonoPcm,
   resolveDictationInstallationState,
   resolveDictationInsertion,
   selectDictationAudioMimeType,
+  triggerDictationStartVibration,
 } from "./dictation";
+
+describe("dictation recording start sound", () => {
+  it("plays a short ascending cue and closes its audio context", async () => {
+    let state: AudioContextState = "suspended";
+    let endedListener: EventListenerOrEventListenerObject | null = null;
+    const frequency = {
+      setValueAtTime: vi.fn(),
+      exponentialRampToValueAtTime: vi.fn(),
+    };
+    const gainParam = {
+      setValueAtTime: vi.fn(),
+      exponentialRampToValueAtTime: vi.fn(),
+    };
+    const oscillator = {
+      type: "sine",
+      frequency,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      addEventListener: vi.fn((_type: string, listener: EventListenerOrEventListenerObject) => {
+        endedListener = listener;
+      }),
+      start: vi.fn(),
+      stop: vi.fn(() => {
+        queueMicrotask(() => {
+          if (typeof endedListener === "function") {
+            endedListener(new Event("ended"));
+          } else {
+            endedListener?.handleEvent(new Event("ended"));
+          }
+        });
+      }),
+    };
+    const gain = {
+      gain: gainParam,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    };
+    const context = {
+      get state() {
+        return state;
+      },
+      currentTime: 4,
+      destination: {},
+      resume: vi.fn(async () => {
+        state = "running";
+      }),
+      close: vi.fn(async () => {
+        state = "closed";
+      }),
+      createOscillator: vi.fn(() => oscillator),
+      createGain: vi.fn(() => gain),
+    };
+
+    const sound = prepareDictationStartSound(() => context as unknown as AudioContext);
+    await sound.play();
+
+    expect(context.resume).toHaveBeenCalledOnce();
+    expect(frequency.setValueAtTime).toHaveBeenCalledWith(660, 4);
+    expect(frequency.exponentialRampToValueAtTime).toHaveBeenCalledWith(880, 4.1);
+    expect(oscillator.start).toHaveBeenCalledWith(4);
+    expect(oscillator.stop).toHaveBeenCalledWith(4.1);
+    expect(context.close).toHaveBeenCalledOnce();
+  });
+});
+
+describe("dictation recording start vibration", () => {
+  it("requests a short vibration when the browser supports it", () => {
+    const vibrate = vi.fn(() => true);
+
+    expect(triggerDictationStartVibration({ vibrate })).toBe(true);
+    expect(vibrate).toHaveBeenCalledWith(50);
+  });
+
+  it("does not fail recording when vibration is unavailable or rejected", () => {
+    expect(triggerDictationStartVibration(null)).toBe(false);
+    expect(
+      triggerDictationStartVibration({
+        vibrate: () => {
+          throw new Error("Vibration unavailable");
+        },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("dictation PCM recording", () => {
+  it("captures microphone samples directly as canonical WAV", async () => {
+    let state: AudioContextState = "running";
+    const source = {
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    };
+    const processor = {
+      onaudioprocess: null as ((event: AudioProcessingEvent) => void) | null,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    };
+    const mutedOutput = {
+      gain: { value: 1 },
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    };
+    const context = {
+      get state() {
+        return state;
+      },
+      sampleRate: 16_000,
+      destination: {},
+      resume: vi.fn(async () => {
+        state = "running";
+      }),
+      close: vi.fn(async () => {
+        state = "closed";
+      }),
+      createMediaStreamSource: vi.fn(() => source),
+      createScriptProcessor: vi.fn(() => processor),
+      createGain: vi.fn(() => mutedOutput),
+    };
+    const prepared = prepareDictationPcmRecorder(() => context as unknown as AudioContext);
+    expect(prepared).not.toBeNull();
+
+    const recorder = await prepared?.start({} as MediaStream);
+    processor.onaudioprocess?.({
+      inputBuffer: {
+        getChannelData: () => new Float32Array([-1, 0, 1]),
+      },
+    } as unknown as AudioProcessingEvent);
+    const wav = await recorder?.stop();
+    const view = new DataView(await wav!.arrayBuffer());
+
+    expect(context.createScriptProcessor).toHaveBeenCalledWith(4_096, 1, 1);
+    expect(mutedOutput.gain.value).toBe(0);
+    expect(wav?.type).toBe("audio/wav");
+    expect(wav?.size).toBe(50);
+    expect(view.getUint32(24, true)).toBe(16_000);
+    expect(view.getInt16(44, true)).toBe(-32_768);
+    expect(view.getInt16(48, true)).toBe(32_767);
+    expect(context.close).toHaveBeenCalledOnce();
+  });
+});
 
 describe("dictation recording feedback", () => {
   it("calculates microphone amplitude from time-domain samples", () => {
@@ -93,6 +237,12 @@ describe("resolveDictationInsertion", () => {
 
   it("ignores an empty transcript", () => {
     expect(resolveDictationInsertion("Keep this", 4, " \n ")).toBeNull();
+  });
+
+  it("ignores Whisper blank-audio sentinels", () => {
+    expect(normalizeDictationTranscript("  [BLANK_AUDIO]  ")).toBe("");
+    expect(resolveDictationInsertion("Keep this", 4, "[BLANK_AUDIO]")).toBeNull();
+    expect(resolveDictationInsertion("Keep this", 4, "[blank_audio] [BLANK_AUDIO]")).toBeNull();
   });
 });
 
