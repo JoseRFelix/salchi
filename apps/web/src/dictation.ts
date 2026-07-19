@@ -36,6 +36,137 @@ export function localTranscriptionStatusRefetchInterval(input: {
     : 750;
 }
 
+const DICTATION_START_SOUND_DURATION_SECONDS = 0.1;
+const DICTATION_START_SOUND_TIMEOUT_MS = 250;
+const DICTATION_START_VIBRATION_MS = 50;
+const DICTATION_BLANK_AUDIO_PATTERN = /^(?:\[BLANK_AUDIO\]\s*)+$/i;
+
+export interface PreparedDictationStartSound {
+  readonly play: () => Promise<void>;
+  readonly dispose: () => void;
+}
+
+export interface DictationPcmRecorder {
+  readonly stop: () => Promise<Blob>;
+}
+
+export type DictationCaptureInterruption =
+  | "audio-context-closed"
+  | "audio-context-interrupted"
+  | "audio-context-suspended"
+  | "stream-inactive"
+  | "track-ended";
+
+export interface DictationPcmRecorderStartOptions {
+  readonly onInterrupted?: (reason: DictationCaptureInterruption) => void;
+}
+
+export interface PreparedDictationPcmRecorder {
+  readonly start: (
+    stream: MediaStream,
+    options?: DictationPcmRecorderStartOptions,
+  ) => Promise<DictationPcmRecorder>;
+  readonly dispose: () => void;
+}
+
+export function triggerDictationStartVibration(
+  navigatorLike: Pick<Navigator, "vibrate"> | null = typeof navigator !== "undefined" &&
+  typeof navigator.vibrate === "function"
+    ? navigator
+    : null,
+): boolean {
+  try {
+    return navigatorLike?.vibrate(DICTATION_START_VIBRATION_MS) ?? false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Prepare the recording-start cue while the microphone click still counts as
+ * a user gesture. The cue is played after microphone access succeeds and
+ * finishes before MediaRecorder starts, so it is not captured in the clip.
+ */
+export function prepareDictationStartSound(
+  createAudioContext: () => AudioContext = () => new AudioContext(),
+): PreparedDictationStartSound {
+  let context: AudioContext;
+  try {
+    context = createAudioContext();
+  } catch {
+    return {
+      play: () => Promise.resolve(),
+      dispose: () => undefined,
+    };
+  }
+
+  let disposed = false;
+  let finishPlayback: (() => void) | null = null;
+  const resumePromise =
+    context.state === "running" ? Promise.resolve() : context.resume().catch(() => undefined);
+
+  const closeContext = () => {
+    if (disposed) return;
+    disposed = true;
+    finishPlayback?.();
+    finishPlayback = null;
+    void context.close().catch(() => undefined);
+  };
+
+  return {
+    play: async () => {
+      let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = null;
+      try {
+        const timeoutPromise = new Promise<void>((resolve) => {
+          timeoutId = globalThis.setTimeout(resolve, DICTATION_START_SOUND_TIMEOUT_MS);
+        });
+        const playbackPromise = (async () => {
+          await resumePromise;
+          if (disposed || context.state !== "running") return;
+
+          await new Promise<void>((resolve) => {
+            const oscillator = context.createOscillator();
+            const gain = context.createGain();
+            const startedAt = context.currentTime;
+            const endsAt = startedAt + DICTATION_START_SOUND_DURATION_SECONDS;
+            let finished = false;
+
+            const finish = () => {
+              if (finished) return;
+              finished = true;
+              finishPlayback = null;
+              oscillator.disconnect();
+              gain.disconnect();
+              resolve();
+            };
+            finishPlayback = finish;
+
+            oscillator.type = "sine";
+            oscillator.frequency.setValueAtTime(660, startedAt);
+            oscillator.frequency.exponentialRampToValueAtTime(880, endsAt);
+            gain.gain.setValueAtTime(0.0001, startedAt);
+            gain.gain.exponentialRampToValueAtTime(0.08, startedAt + 0.008);
+            gain.gain.exponentialRampToValueAtTime(0.0001, endsAt);
+            oscillator.connect(gain);
+            gain.connect(context.destination);
+            oscillator.addEventListener("ended", finish, { once: true });
+            oscillator.start(startedAt);
+            oscillator.stop(endsAt);
+          });
+        })();
+
+        await Promise.race([playbackPromise, timeoutPromise]);
+      } catch {
+        // Audio feedback is optional; recording should still start if it fails.
+      } finally {
+        if (timeoutId !== null) globalThis.clearTimeout(timeoutId);
+        closeContext();
+      }
+    },
+    dispose: closeContext,
+  };
+}
+
 export function selectDictationAudioMimeType(
   isTypeSupported: (mimeType: string) => boolean,
 ): string | undefined {
@@ -60,6 +191,11 @@ export function formatDictationRecordingDuration(durationMs: number): string {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+export function normalizeDictationTranscript(transcript: string): string {
+  const normalizedTranscript = transcript.trim().replace(/\s+/g, " ");
+  return DICTATION_BLANK_AUDIO_PATTERN.test(normalizedTranscript) ? "" : normalizedTranscript;
+}
+
 export function resolveDictationInstallationState(status: TranscriptionStatus | undefined): {
   installing: boolean;
   progress: number | null;
@@ -80,7 +216,7 @@ export function resolveDictationInsertion(
   cursor: number,
   transcript: string,
 ): { rangeStart: number; rangeEnd: number; replacement: string } | null {
-  const normalizedTranscript = transcript.trim().replace(/\s+/g, " ");
+  const normalizedTranscript = normalizeDictationTranscript(transcript);
   if (!normalizedTranscript) return null;
 
   const safeCursor = Math.max(0, Math.min(text.length, cursor));
@@ -183,6 +319,128 @@ export function encodeMonoPcm16Wav(samples: Float32Array, sampleRate = 16_000): 
   return new Blob([buffer], { type: "audio/wav" });
 }
 
+/**
+ * Capture microphone PCM without passing through MediaRecorder's container.
+ * This is used on iOS because WebKit may fail to decode its own fragmented
+ * MediaRecorder output through decodeAudioData().
+ */
+export function prepareDictationPcmRecorder(
+  createAudioContext: () => AudioContext = () => new AudioContext(),
+): PreparedDictationPcmRecorder | null {
+  let context: AudioContext;
+  try {
+    context = createAudioContext();
+  } catch {
+    return null;
+  }
+
+  let handedOff = false;
+  let disposed = false;
+  const initialResume =
+    context.state === "running" ? Promise.resolve() : context.resume().catch(() => undefined);
+
+  const closePreparedContext = () => {
+    if (disposed || handedOff) return;
+    disposed = true;
+    void context.close().catch(() => undefined);
+  };
+
+  return {
+    start: async (stream, options) => {
+      if (disposed || handedOff) throw new Error("Audio capture is no longer available.");
+      await initialResume;
+      if (disposed || handedOff) throw new Error("Audio capture is no longer available.");
+      if (context.state !== "running") {
+        await context.resume();
+      }
+      if (context.state !== "running") {
+        throw new Error("Unable to start audio capture.");
+      }
+
+      const source = context.createMediaStreamSource(stream);
+      const processor = context.createScriptProcessor(4_096, 1, 1);
+      const mutedOutput = context.createGain();
+      const chunks: Float32Array[] = [];
+      const sampleRate = context.sampleRate;
+      const tracks = stream.getTracks();
+      let stopPromise: Promise<Blob> | null = null;
+      let stopping = false;
+      let interruptionReported = false;
+
+      const reportInterruption = (reason: DictationCaptureInterruption) => {
+        if (stopping || interruptionReported) return;
+        interruptionReported = true;
+        queueMicrotask(() => {
+          if (stopping) return;
+          try {
+            options?.onInterrupted?.(reason);
+          } catch {
+            // Capture cleanup must not depend on a consumer callback succeeding.
+          }
+        });
+      };
+      const handleStreamInactive = () => reportInterruption("stream-inactive");
+      const handleTrackEnded = () => reportInterruption("track-ended");
+      const handleContextStateChange = () => {
+        const state = context.state as string;
+        if (state === "closed") reportInterruption("audio-context-closed");
+        if (state === "suspended") reportInterruption("audio-context-suspended");
+        if (state === "interrupted") reportInterruption("audio-context-interrupted");
+      };
+      const removeInterruptionListeners = () => {
+        stream.removeEventListener("inactive", handleStreamInactive);
+        for (const track of tracks) track.removeEventListener("ended", handleTrackEnded);
+        context.removeEventListener("statechange", handleContextStateChange);
+      };
+
+      mutedOutput.gain.value = 0;
+      processor.onaudioprocess = (event) => {
+        const samples = event.inputBuffer.getChannelData(0);
+        if (samples.length > 0) chunks.push(new Float32Array(samples));
+      };
+      source.connect(processor);
+      processor.connect(mutedOutput);
+      mutedOutput.connect(context.destination);
+      stream.addEventListener("inactive", handleStreamInactive);
+      for (const track of tracks) track.addEventListener("ended", handleTrackEnded);
+      context.addEventListener("statechange", handleContextStateChange);
+      handedOff = true;
+      if (tracks.length > 0 && stream.active === false) reportInterruption("stream-inactive");
+      for (const track of tracks) {
+        if (track.readyState === "ended") reportInterruption("track-ended");
+      }
+      handleContextStateChange();
+
+      return {
+        stop: () => {
+          stopping = true;
+          stopPromise ??= (async () => {
+            removeInterruptionListeners();
+            processor.onaudioprocess = null;
+            source.disconnect();
+            processor.disconnect();
+            mutedOutput.disconnect();
+            await context.close().catch(() => undefined);
+
+            const sampleCount = chunks.reduce((total, chunk) => total + chunk.length, 0);
+            if (sampleCount === 0) return new Blob([], { type: "audio/wav" });
+
+            const samples = new Float32Array(sampleCount);
+            let offset = 0;
+            for (const chunk of chunks) {
+              samples.set(chunk, offset);
+              offset += chunk.length;
+            }
+            return encodeMonoPcm16Wav(resampleToMonoPcm([samples], sampleRate));
+          })();
+          return stopPromise;
+        },
+      };
+    },
+    dispose: closePreparedContext,
+  };
+}
+
 export async function normalizeDictationAudioToWav(audio: Blob): Promise<Blob> {
   const context = new AudioContext();
   try {
@@ -245,6 +503,7 @@ export async function getEnvironmentTranscriptionStatus(
 export async function transcribeEnvironmentAudio(
   environmentId: EnvironmentId,
   audio: Blob,
+  options?: { readonly signal?: AbortSignal },
 ): Promise<TranscriptionResult> {
   const formData = new FormData();
   formData.append("file", audio, "recording.wav");
@@ -256,6 +515,7 @@ export async function transcribeEnvironmentAudio(
     {
       method: "POST",
       body: formData,
+      ...(options?.signal ? { signal: options.signal } : {}),
     },
   );
   if (!response.ok) {
