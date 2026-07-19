@@ -130,11 +130,18 @@ describe("dictation PCM recording", () => {
       createMediaStreamSource: vi.fn(() => source),
       createScriptProcessor: vi.fn(() => processor),
       createGain: vi.fn(() => mutedOutput),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
     };
     const prepared = prepareDictationPcmRecorder(() => context as unknown as AudioContext);
     expect(prepared).not.toBeNull();
 
-    const recorder = await prepared?.start({} as MediaStream);
+    const stream = {
+      getTracks: () => [],
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as MediaStream;
+    const recorder = await prepared?.start(stream);
     processor.onaudioprocess?.({
       inputBuffer: {
         getChannelData: () => new Float32Array([-1, 0, 1]),
@@ -152,6 +159,114 @@ describe("dictation PCM recording", () => {
     expect(view.getInt16(48, true)).toBe(32_767);
     expect(context.close).toHaveBeenCalledOnce();
   });
+
+  it("reports a capture interruption once and removes every listener on stop", async () => {
+    let state: AudioContextState | "interrupted" = "running";
+    let contextStateListener: EventListener = () => undefined;
+    const track = new EventTarget() as MediaStreamTrack;
+    const stream = Object.assign(new EventTarget(), {
+      getTracks: () => [track],
+    }) as unknown as MediaStream;
+    const source = { connect: vi.fn(), disconnect: vi.fn() };
+    const processor = {
+      onaudioprocess: null,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    };
+    const output = {
+      gain: { value: 1 },
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    };
+    const context = {
+      get state() {
+        return state;
+      },
+      sampleRate: 16_000,
+      destination: {},
+      resume: vi.fn(async () => {
+        state = "running";
+      }),
+      close: vi.fn(async () => {
+        state = "closed";
+        contextStateListener(new Event("statechange"));
+      }),
+      createMediaStreamSource: vi.fn(() => source),
+      createScriptProcessor: vi.fn(() => processor),
+      createGain: vi.fn(() => output),
+      addEventListener: vi.fn((_type: string, listener: EventListener) => {
+        contextStateListener = listener;
+      }),
+      removeEventListener: vi.fn(),
+    };
+    const onInterrupted = vi.fn();
+    const prepared = prepareDictationPcmRecorder(() => context as unknown as AudioContext);
+    const recorder = await prepared?.start(stream, { onInterrupted });
+
+    track.dispatchEvent(new Event("ended"));
+    stream.dispatchEvent(new Event("inactive"));
+    await Promise.resolve();
+
+    expect(onInterrupted).toHaveBeenCalledOnce();
+    expect(onInterrupted).toHaveBeenCalledWith("track-ended");
+
+    await recorder?.stop();
+    track.dispatchEvent(new Event("ended"));
+    contextStateListener(new Event("statechange"));
+    await Promise.resolve();
+
+    expect(onInterrupted).toHaveBeenCalledOnce();
+    expect(context.removeEventListener).toHaveBeenCalledWith("statechange", contextStateListener);
+  });
+
+  it.each(["suspended", "interrupted", "closed"] as const)(
+    "reports an AudioContext %s state",
+    async (nextState) => {
+      let state: AudioContextState | "interrupted" = "running";
+      let contextStateListener: EventListener = () => undefined;
+      const context = {
+        get state() {
+          return state;
+        },
+        sampleRate: 16_000,
+        destination: {},
+        resume: vi.fn(async () => undefined),
+        close: vi.fn(async () => {
+          state = "closed";
+        }),
+        createMediaStreamSource: vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() })),
+        createScriptProcessor: vi.fn(() => ({
+          onaudioprocess: null,
+          connect: vi.fn(),
+          disconnect: vi.fn(),
+        })),
+        createGain: vi.fn(() => ({
+          gain: { value: 1 },
+          connect: vi.fn(),
+          disconnect: vi.fn(),
+        })),
+        addEventListener: vi.fn((_type: string, listener: EventListener) => {
+          contextStateListener = listener;
+        }),
+        removeEventListener: vi.fn(),
+      };
+      const stream = {
+        getTracks: () => [],
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      } as unknown as MediaStream;
+      const onInterrupted = vi.fn();
+      const prepared = prepareDictationPcmRecorder(() => context as unknown as AudioContext);
+      const recorder = await prepared?.start(stream, { onInterrupted });
+
+      state = nextState;
+      contextStateListener(new Event("statechange"));
+      await Promise.resolve();
+
+      expect(onInterrupted).toHaveBeenCalledWith(`audio-context-${nextState}`);
+      await recorder?.stop();
+    },
+  );
 });
 
 describe("dictation recording feedback", () => {

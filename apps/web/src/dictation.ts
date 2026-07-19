@@ -30,8 +30,22 @@ export interface DictationPcmRecorder {
   readonly stop: () => Promise<Blob>;
 }
 
+export type DictationCaptureInterruption =
+  | "audio-context-closed"
+  | "audio-context-interrupted"
+  | "audio-context-suspended"
+  | "stream-inactive"
+  | "track-ended";
+
+export interface DictationPcmRecorderStartOptions {
+  readonly onInterrupted?: (reason: DictationCaptureInterruption) => void;
+}
+
 export interface PreparedDictationPcmRecorder {
-  readonly start: (stream: MediaStream) => Promise<DictationPcmRecorder>;
+  readonly start: (
+    stream: MediaStream,
+    options?: DictationPcmRecorderStartOptions,
+  ) => Promise<DictationPcmRecorder>;
   readonly dispose: () => void;
 }
 
@@ -312,9 +326,10 @@ export function prepareDictationPcmRecorder(
   };
 
   return {
-    start: async (stream) => {
+    start: async (stream, options) => {
       if (disposed || handedOff) throw new Error("Audio capture is no longer available.");
       await initialResume;
+      if (disposed || handedOff) throw new Error("Audio capture is no longer available.");
       if (context.state !== "running") {
         await context.resume();
       }
@@ -327,7 +342,36 @@ export function prepareDictationPcmRecorder(
       const mutedOutput = context.createGain();
       const chunks: Float32Array[] = [];
       const sampleRate = context.sampleRate;
+      const tracks = stream.getTracks();
       let stopPromise: Promise<Blob> | null = null;
+      let stopping = false;
+      let interruptionReported = false;
+
+      const reportInterruption = (reason: DictationCaptureInterruption) => {
+        if (stopping || interruptionReported) return;
+        interruptionReported = true;
+        queueMicrotask(() => {
+          if (stopping) return;
+          try {
+            options?.onInterrupted?.(reason);
+          } catch {
+            // Capture cleanup must not depend on a consumer callback succeeding.
+          }
+        });
+      };
+      const handleStreamInactive = () => reportInterruption("stream-inactive");
+      const handleTrackEnded = () => reportInterruption("track-ended");
+      const handleContextStateChange = () => {
+        const state = context.state as string;
+        if (state === "closed") reportInterruption("audio-context-closed");
+        if (state === "suspended") reportInterruption("audio-context-suspended");
+        if (state === "interrupted") reportInterruption("audio-context-interrupted");
+      };
+      const removeInterruptionListeners = () => {
+        stream.removeEventListener("inactive", handleStreamInactive);
+        for (const track of tracks) track.removeEventListener("ended", handleTrackEnded);
+        context.removeEventListener("statechange", handleContextStateChange);
+      };
 
       mutedOutput.gain.value = 0;
       processor.onaudioprocess = (event) => {
@@ -337,11 +381,21 @@ export function prepareDictationPcmRecorder(
       source.connect(processor);
       processor.connect(mutedOutput);
       mutedOutput.connect(context.destination);
+      stream.addEventListener("inactive", handleStreamInactive);
+      for (const track of tracks) track.addEventListener("ended", handleTrackEnded);
+      context.addEventListener("statechange", handleContextStateChange);
       handedOff = true;
+      if (tracks.length > 0 && stream.active === false) reportInterruption("stream-inactive");
+      for (const track of tracks) {
+        if (track.readyState === "ended") reportInterruption("track-ended");
+      }
+      handleContextStateChange();
 
       return {
         stop: () => {
+          stopping = true;
           stopPromise ??= (async () => {
+            removeInterruptionListeners();
             processor.onaudioprocess = null;
             source.disconnect();
             processor.disconnect();
@@ -429,6 +483,7 @@ export async function getEnvironmentTranscriptionStatus(
 export async function transcribeEnvironmentAudio(
   environmentId: EnvironmentId,
   audio: Blob,
+  options?: { readonly signal?: AbortSignal },
 ): Promise<TranscriptionResult> {
   const formData = new FormData();
   formData.append("file", audio, "recording.wav");
@@ -440,6 +495,7 @@ export async function transcribeEnvironmentAudio(
     {
       method: "POST",
       body: formData,
+      ...(options?.signal ? { signal: options.signal } : {}),
     },
   );
   if (!response.ok) {

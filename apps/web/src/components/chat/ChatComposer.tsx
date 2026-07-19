@@ -143,6 +143,7 @@ import { formatProviderSkillDisplayName } from "../../providerSkillPresentation"
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { resolveDictationInsertion } from "../../dictation";
+import { createDictationRecordingOwnerKey } from "../../retainedDictationRecordingStore";
 
 const ATTACHMENT_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 
@@ -971,6 +972,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isDictationActive, setIsDictationActive] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
+  const dictationRecordingOwnerKey = useMemo(
+    () =>
+      createDictationRecordingOwnerKey({
+        kind: "thread",
+        environmentId: routeThreadRef.environmentId,
+        threadId: routeThreadRef.threadId,
+      }),
+    [routeThreadRef.environmentId, routeThreadRef.threadId],
+  );
   const isMobileViewport = useMediaQuery("max-sm");
   // Dismissing the mobile keyboard blurs the editor, but active @file and
   // $skill suggestion menus should remain available for touch selection.
@@ -2726,6 +2736,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   <TooltipPopup side="top">Attach images or PDFs</TooltipPopup>
                 </Tooltip>
                 <ComposerDictationButton
+                  key={dictationRecordingOwnerKey}
+                  recordingOwnerKey={dictationRecordingOwnerKey}
                   environmentId={environmentId}
                   disabled={
                     isConnecting ||
