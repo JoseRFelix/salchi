@@ -83,13 +83,15 @@ describe("ChatHeader", () => {
 
     const markup = renderHeader([]);
 
-    expect(markup.match(/max-\[760px\]:size-11/g)).toHaveLength(4);
-    expect(markup.match(/max-\[760px\]:rounded-xl/g)).toHaveLength(4);
-    expect(markup.match(/max-\[760px\]:pointer-coarse:after:hidden/g)).toHaveLength(4);
+    expect(markup.match(/sm:size-11/g)).toHaveLength(4);
+    expect(markup.match(/rounded-xl/g)).toHaveLength(4);
+    expect(markup.match(/pointer-coarse:after:hidden/g)).toHaveLength(4);
     expect(markup).toContain('data-slot="compact-sidebar-trigger-slot"');
     expect(markup).toContain("pointer-coarse:after:-translate-x-1/2");
     expect(markup).toContain("pointer-coarse:after:-translate-y-1/2");
     expect(markup).toContain("border-border/35 bg-background");
     expect(markup).not.toContain("border-input bg-background");
+    expect(markup).not.toContain("max-[760px]");
+    expect(markup).not.toContain("sm:size-3");
   });
 });

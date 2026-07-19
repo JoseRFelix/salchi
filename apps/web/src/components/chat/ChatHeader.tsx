@@ -68,7 +68,8 @@ interface ChatHeaderProps {
 }
 
 const COMPACT_HEADER_ICON_ACTION_CLASS_NAME =
-  "shrink-0 max-[760px]:size-11 max-[760px]:min-w-11 max-[760px]:rounded-xl max-[760px]:px-0 max-[760px]:before:rounded-[calc(var(--radius-xl)-1px)] max-[760px]:pointer-coarse:after:hidden";
+  "size-11 min-w-11 shrink-0 rounded-xl px-0 before:rounded-[calc(var(--radius-xl)-1px)] pointer-coarse:after:hidden sm:size-11 sm:min-w-11";
+const STANDARD_HEADER_ICON_ACTION_CLASS_NAME = "shrink-0";
 
 export function shouldShowOpenInPicker(input: {
   readonly activeProjectName: string | undefined;
@@ -151,6 +152,10 @@ export const ChatHeader = memo(function ChatHeader({
   const hasProjectScriptsControl = activeProjectScripts !== undefined;
   const hasSourceControl = Boolean(activeProjectName && gitCwd);
   const showCompactOverflowActions = isCompactHeader && hasProjectScriptsControl;
+  const headerIconActionClassName = isCompactHeader
+    ? COMPACT_HEADER_ICON_ACTION_CLASS_NAME
+    : STANDARD_HEADER_ICON_ACTION_CLASS_NAME;
+  const headerToggleIconClassName = isCompactHeader ? "size-4.5" : "size-3";
 
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
@@ -223,9 +228,10 @@ export const ChatHeader = memo(function ChatHeader({
             />
           </>
         )}
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1" data-slot="chat-header-icon-actions">
           <ChatHeaderDevServerButton
             browserHostname={devServerProbeBrowserHostname}
+            compact={isCompactHeader}
             links={devServerLinks}
             probe={probeDevServerUrl}
           />
@@ -233,7 +239,7 @@ export const ChatHeader = memo(function ChatHeader({
             <TooltipTrigger
               render={
                 <Toggle
-                  className={COMPACT_HEADER_ICON_ACTION_CLASS_NAME}
+                  className={headerIconActionClassName}
                   pressed={sourceControlOpen}
                   onPressedChange={onToggleSourceControl}
                   aria-label="Toggle source control"
@@ -241,7 +247,7 @@ export const ChatHeader = memo(function ChatHeader({
                   size="xs"
                   disabled={!hasSourceControl}
                 >
-                  <GitBranchIcon className="size-4.5 sm:size-3" />
+                  <GitBranchIcon className={headerToggleIconClassName} />
                 </Toggle>
               }
             />
@@ -257,7 +263,7 @@ export const ChatHeader = memo(function ChatHeader({
             <TooltipTrigger
               render={
                 <Toggle
-                  className={COMPACT_HEADER_ICON_ACTION_CLASS_NAME}
+                  className={headerIconActionClassName}
                   pressed={terminalOpen}
                   onPressedChange={onToggleTerminal}
                   aria-label="Toggle terminal drawer"
@@ -265,7 +271,7 @@ export const ChatHeader = memo(function ChatHeader({
                   size="xs"
                   disabled={!terminalAvailable}
                 >
-                  <TerminalSquareIcon className="size-4.5 sm:size-3" />
+                  <TerminalSquareIcon className={headerToggleIconClassName} />
                 </Toggle>
               }
             />
@@ -282,7 +288,7 @@ export const ChatHeader = memo(function ChatHeader({
               <TooltipTrigger
                 render={
                   <Toggle
-                    className={COMPACT_HEADER_ICON_ACTION_CLASS_NAME}
+                    className={headerIconActionClassName}
                     pressed={fileExplorerOpen}
                     onPressedChange={onToggleFileExplorer}
                     aria-label="Toggle file explorer"
@@ -306,7 +312,7 @@ export const ChatHeader = memo(function ChatHeader({
               <TooltipTrigger
                 render={
                   <Toggle
-                    className={COMPACT_HEADER_ICON_ACTION_CLASS_NAME}
+                    className={headerIconActionClassName}
                     pressed={diffOpen}
                     onPressedChange={onToggleDiff}
                     aria-label="Toggle diff panel"
@@ -332,14 +338,14 @@ export const ChatHeader = memo(function ChatHeader({
               <MenuTrigger
                 render={
                   <Button
-                    className={COMPACT_HEADER_ICON_ACTION_CLASS_NAME}
+                    className={headerIconActionClassName}
                     size="icon-xs"
                     variant="subtle-outline"
                     aria-label="More thread actions"
                   />
                 }
               >
-                <EllipsisIcon className="size-4.5 sm:size-4" />
+                <EllipsisIcon className="size-4.5" />
               </MenuTrigger>
               <MenuPopup align="end" side="bottom" className="min-w-48">
                 <MenuItem onClick={() => onToggleDiff()} disabled={!isGitRepo && !diffOpen}>
@@ -568,10 +574,12 @@ function DevServerBrowserIcon({
 
 function ChatHeaderDevServerButton({
   browserHostname,
+  compact,
   links,
   probe,
 }: {
   readonly browserHostname: string | null;
+  readonly compact: boolean;
   readonly links: ReadonlyArray<DevServerLink>;
   readonly probe: (url: string) => Promise<boolean>;
 }) {
@@ -586,12 +594,16 @@ function ChatHeaderDevServerButton({
       ? (links[0]?.displayUrl ?? "Open dev server")
       : "Open dev server"
     : "No running dev servers";
+  const buttonSizeClassName = compact
+    ? COMPACT_HEADER_ICON_ACTION_CLASS_NAME
+    : STANDARD_HEADER_ICON_ACTION_CLASS_NAME;
   const buttonClassName = buttonEnabled
-    ? `${COMPACT_HEADER_ICON_ACTION_CLASS_NAME} text-foreground hover:text-foreground`
-    : COMPACT_HEADER_ICON_ACTION_CLASS_NAME;
+    ? `${buttonSizeClassName} text-foreground hover:text-foreground`
+    : buttonSizeClassName;
+  const iconSizeClassName = compact ? "size-4.5" : buttonEnabled ? "size-3" : "size-3.5";
   const iconClassName = buttonEnabled
-    ? "size-4.5 text-foreground sm:size-3"
-    : "size-4.5 text-muted-foreground opacity-80 sm:size-3.5";
+    ? `${iconSizeClassName} text-foreground`
+    : `${iconSizeClassName} text-muted-foreground opacity-80`;
 
   useEffect(() => {
     if (!buttonEnabled) return;
