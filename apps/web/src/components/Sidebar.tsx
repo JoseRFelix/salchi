@@ -199,6 +199,10 @@ import {
   type SidebarSortableProjectHandleProps,
 } from "./sidebar/SidebarProjectDndList";
 import { SidebarFooterItems } from "./sidebar/SidebarFooterItems";
+import {
+  getFixedVirtualItemStyle,
+  useFixedSharedScrollVirtualizer,
+} from "./virtualization/useSharedScrollVirtualizer";
 
 const LazySettingsSidebarNav = React.lazy(async () => {
   const module = await import("./settings/SettingsSidebarNav");
@@ -217,6 +221,13 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   duration: 180,
   easing: "ease-out",
 } as const;
+const SIDEBAR_THREAD_ROW_HEIGHT = 28;
+const SIDEBAR_THREAD_ROW_GAP = 2;
+const SIDEBAR_THREAD_ROW_STRIDE = SIDEBAR_THREAD_ROW_HEIGHT + SIDEBAR_THREAD_ROW_GAP;
+const SIDEBAR_THREAD_VIRTUALIZATION_THRESHOLD = 40;
+const SIDEBAR_THREAD_VIRTUALIZATION_OVERSCAN = SIDEBAR_THREAD_ROW_STRIDE * 10;
+const SIDEBAR_THREAD_VIRTUALIZATION_INITIAL_COUNT = 24;
+const SIDEBAR_THREAD_LIST_INLINE_PADDING = "calc(var(--spacing) * 1.5)";
 const EMPTY_THREAD_JUMP_LABELS = new Map<string, string>();
 const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
   repository: "Group by repository",
@@ -376,6 +387,8 @@ interface SidebarThreadRowProps {
   attemptArchiveThread: (threadRef: ScopedThreadRef) => Promise<void>;
   openPrLink: (event: React.MouseEvent<HTMLElement>, prUrl: string) => void;
   toggleThreadExpanded: (threadKey: string) => void;
+  virtualIndex?: number;
+  virtualSetSize?: number;
 }
 
 const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
@@ -408,6 +421,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     childCount,
     isThreadExpanded,
     toggleThreadExpanded,
+    virtualIndex,
+    virtualSetSize,
   } = props;
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const threadKey = scopedThreadKey(threadRef);
@@ -663,6 +678,18 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     <SidebarMenuSubItem
       className="w-full"
       data-thread-item
+      data-virtual-index={virtualIndex}
+      aria-posinset={virtualIndex === undefined ? undefined : virtualIndex + 1}
+      aria-setsize={virtualSetSize}
+      style={
+        virtualIndex === undefined
+          ? undefined
+          : getFixedVirtualItemStyle(
+              virtualIndex,
+              SIDEBAR_THREAD_ROW_STRIDE,
+              SIDEBAR_THREAD_LIST_INLINE_PADDING,
+            )
+      }
       onMouseLeave={handleMouseLeave}
       onBlurCapture={handleBlurCapture}
     >
@@ -928,7 +955,7 @@ interface SidebarProjectThreadListProps {
   confirmingArchiveThreadKey: string | null;
   setConfirmingArchiveThreadKey: React.Dispatch<React.SetStateAction<string | null>>;
   confirmArchiveButtonRefs: React.RefObject<Map<string, HTMLButtonElement>>;
-  attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
+  scrollViewportRef: React.RefObject<HTMLDivElement | null>;
   handleThreadClick: (
     event: React.MouseEvent,
     threadRef: ScopedThreadRef,
@@ -982,7 +1009,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
     confirmingArchiveThreadKey,
     setConfirmingArchiveThreadKey,
     confirmArchiveButtonRefs,
-    attachThreadListAutoAnimateRef,
+    scrollViewportRef,
     handleThreadClick,
     navigateToThread,
     handleMultiSelectContextMenu,
@@ -998,11 +1025,85 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
   } = props;
   const showMoreButtonRender = useMemo(() => <button type="button" />, []);
   const showLessButtonRender = useMemo(() => <button type="button" />, []);
+  const threadListRef = useRef<HTMLUListElement | null>(null);
+  const shouldVirtualize =
+    shouldShowThreadPanel && renderedThreadItems.length > SIDEBAR_THREAD_VIRTUALIZATION_THRESHOLD;
+  const virtualRange = useFixedSharedScrollVirtualizer({
+    enabled: shouldVirtualize,
+    itemCount: renderedThreadItems.length,
+    itemStride: SIDEBAR_THREAD_ROW_STRIDE,
+    overscan: SIDEBAR_THREAD_VIRTUALIZATION_OVERSCAN,
+    initialRenderCount: SIDEBAR_THREAD_VIRTUALIZATION_INITIAL_COUNT,
+    listRef: threadListRef,
+    scrollViewportRef,
+  });
+  const visibleThreadItems = shouldVirtualize
+    ? renderedThreadItems.slice(virtualRange.startIndex, virtualRange.endIndex)
+    : renderedThreadItems;
+  const rowsHeight =
+    renderedThreadItems.length === 0
+      ? 0
+      : renderedThreadItems.length * SIDEBAR_THREAD_ROW_STRIDE - SIDEBAR_THREAD_ROW_GAP;
+  const hasListControl = projectExpanded && hasOverflowingThreads;
+  const listControlTop = rowsHeight + (renderedThreadItems.length > 0 ? SIDEBAR_THREAD_ROW_GAP : 0);
+  const virtualListHeight = listControlTop + (hasListControl ? 24 : 0);
+  const virtualControlStyle = shouldVirtualize
+    ? ({ position: "absolute", top: listControlTop, insetInline: 0 } as const)
+    : undefined;
+
+  const renderThreadRow = (
+    { thread, depth, childCount }: SidebarThreadTreeItem<SidebarThreadSummary>,
+    index: number,
+  ) => {
+    const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    return (
+      <SidebarThreadRow
+        key={threadKey}
+        thread={thread}
+        isPending={pendingThreadKeys.has(threadKey)}
+        nestingDepth={depth}
+        childCount={childCount}
+        isThreadExpanded={threadExpandedByKey.get(threadKey) ?? true}
+        projectCwd={projectCwd}
+        orderedProjectThreadKeys={orderedProjectThreadKeys}
+        isActive={activeRouteThreadKey === threadKey}
+        hasActiveLocalDispatch={activeLocalDispatchThreadKeys.has(threadKey)}
+        jumpLabel={threadJumpLabelByKey.get(threadKey) ?? null}
+        appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
+        renamingThreadKey={renamingThreadKey}
+        renamingTitle={renamingTitle}
+        setRenamingTitle={setRenamingTitle}
+        renamingInputRef={renamingInputRef}
+        renamingCommittedRef={renamingCommittedRef}
+        confirmingArchiveThreadKey={confirmingArchiveThreadKey}
+        setConfirmingArchiveThreadKey={setConfirmingArchiveThreadKey}
+        confirmArchiveButtonRefs={confirmArchiveButtonRefs}
+        handleThreadClick={handleThreadClick}
+        navigateToThread={navigateToThread}
+        handleMultiSelectContextMenu={handleMultiSelectContextMenu}
+        handleThreadContextMenu={handleThreadContextMenu}
+        clearSelection={clearSelection}
+        commitRename={commitRename}
+        cancelRename={cancelRename}
+        attemptArchiveThread={attemptArchiveThread}
+        openPrLink={openPrLink}
+        toggleThreadExpanded={toggleThreadExpanded}
+        {...(shouldVirtualize
+          ? { virtualIndex: index, virtualSetSize: renderedThreadItems.length }
+          : {})}
+      />
+    );
+  };
 
   return (
     <SidebarMenuSub
-      ref={attachThreadListAutoAnimateRef}
-      className="mx-1 my-0 w-full translate-x-0 gap-0.5 overflow-hidden px-1.5 py-0"
+      ref={threadListRef}
+      data-sidebar-thread-list-virtualized={shouldVirtualize ? "true" : "false"}
+      className={cn(
+        "mx-1 my-0 w-full translate-x-0 gap-0.5 overflow-hidden px-1.5 py-0",
+        shouldVirtualize && "relative block",
+      )}
+      style={shouldVirtualize ? { height: virtualListHeight } : undefined}
     >
       {shouldShowThreadPanel && showEmptyThreadState ? (
         <SidebarMenuSubItem className="w-full" data-thread-selection-safe>
@@ -1015,46 +1116,15 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
         </SidebarMenuSubItem>
       ) : null}
       {shouldShowThreadPanel &&
-        renderedThreadItems.map(({ thread, depth, childCount }) => {
-          const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-          return (
-            <SidebarThreadRow
-              key={threadKey}
-              thread={thread}
-              isPending={pendingThreadKeys.has(threadKey)}
-              nestingDepth={depth}
-              childCount={childCount}
-              isThreadExpanded={threadExpandedByKey.get(threadKey) ?? true}
-              projectCwd={projectCwd}
-              orderedProjectThreadKeys={orderedProjectThreadKeys}
-              isActive={activeRouteThreadKey === threadKey}
-              hasActiveLocalDispatch={activeLocalDispatchThreadKeys.has(threadKey)}
-              jumpLabel={threadJumpLabelByKey.get(threadKey) ?? null}
-              appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
-              renamingThreadKey={renamingThreadKey}
-              renamingTitle={renamingTitle}
-              setRenamingTitle={setRenamingTitle}
-              renamingInputRef={renamingInputRef}
-              renamingCommittedRef={renamingCommittedRef}
-              confirmingArchiveThreadKey={confirmingArchiveThreadKey}
-              setConfirmingArchiveThreadKey={setConfirmingArchiveThreadKey}
-              confirmArchiveButtonRefs={confirmArchiveButtonRefs}
-              handleThreadClick={handleThreadClick}
-              navigateToThread={navigateToThread}
-              handleMultiSelectContextMenu={handleMultiSelectContextMenu}
-              handleThreadContextMenu={handleThreadContextMenu}
-              clearSelection={clearSelection}
-              commitRename={commitRename}
-              cancelRename={cancelRename}
-              attemptArchiveThread={attemptArchiveThread}
-              openPrLink={openPrLink}
-              toggleThreadExpanded={toggleThreadExpanded}
-            />
-          );
-        })}
+        visibleThreadItems.map((item, visibleIndex) =>
+          renderThreadRow(
+            item,
+            shouldVirtualize ? virtualRange.startIndex + visibleIndex : visibleIndex,
+          ),
+        )}
 
       {projectExpanded && hasOverflowingThreads && !isThreadListExpanded && (
-        <SidebarMenuSubItem className="w-full">
+        <SidebarMenuSubItem className="w-full" style={virtualControlStyle}>
           <SidebarMenuSubButton
             render={showMoreButtonRender}
             data-thread-selection-safe
@@ -1072,7 +1142,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
         </SidebarMenuSubItem>
       )}
       {projectExpanded && hasOverflowingThreads && isThreadListExpanded && (
-        <SidebarMenuSubItem className="w-full">
+        <SidebarMenuSubItem className="w-full" style={virtualControlStyle}>
           <SidebarMenuSubButton
             render={showLessButtonRender}
             data-thread-selection-safe
@@ -1099,7 +1169,7 @@ interface SidebarProjectItemProps {
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
   threadJumpLabelByKey: ReadonlyMap<string, string>;
-  attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
+  scrollViewportRef: React.RefObject<HTMLDivElement | null>;
   expandThreadListForProject: (projectKey: string) => void;
   collapseThreadListForProject: (projectKey: string) => void;
   dragInProgressRef: React.RefObject<boolean>;
@@ -1119,7 +1189,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     archiveThread,
     deleteThread,
     threadJumpLabelByKey,
-    attachThreadListAutoAnimateRef,
+    scrollViewportRef,
     expandThreadListForProject,
     collapseThreadListForProject,
     dragInProgressRef,
@@ -2436,7 +2506,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         confirmingArchiveThreadKey={confirmingArchiveThreadKey}
         setConfirmingArchiveThreadKey={setConfirmingArchiveThreadKey}
         confirmArchiveButtonRefs={confirmArchiveButtonRefs}
-        attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+        scrollViewportRef={scrollViewportRef}
         handleThreadClick={handleThreadClick}
         navigateToThread={navigateToThread}
         handleMultiSelectContextMenu={handleMultiSelectContextMenu}
@@ -2836,7 +2906,6 @@ interface SidebarProjectsContentProps {
   newThreadShortcutLabel: string | null;
   commandPaletteShortcutLabel: string | null;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
-  attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
   expandThreadListForProject: (projectKey: string) => void;
   collapseThreadListForProject: (projectKey: string) => void;
   dragInProgressRef: React.RefObject<boolean>;
@@ -2876,7 +2945,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     newThreadShortcutLabel,
     commandPaletteShortcutLabel,
     threadJumpLabelByKey,
-    attachThreadListAutoAnimateRef,
     expandThreadListForProject,
     collapseThreadListForProject,
     dragInProgressRef,
@@ -2886,6 +2954,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     projectsLength,
   } = props;
   const { isMobile, setOpenMobile } = useSidebar();
+  const scrollViewportRef = useRef<HTMLDivElement | null>(null);
 
   const handleProjectSortOrderChange = useCallback(
     (sortOrder: SidebarProjectSortOrder) => {
@@ -2929,7 +2998,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
       archiveThread={archiveThread}
       deleteThread={deleteThread}
       threadJumpLabelByKey={threadJumpLabelByKey}
-      attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+      scrollViewportRef={scrollViewportRef}
       expandThreadListForProject={expandThreadListForProject}
       collapseThreadListForProject={collapseThreadListForProject}
       dragInProgressRef={dragInProgressRef}
@@ -2952,7 +3021,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
       archiveThread={archiveThread}
       deleteThread={deleteThread}
       threadJumpLabelByKey={threadJumpLabelByKey}
-      attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+      scrollViewportRef={scrollViewportRef}
       expandThreadListForProject={expandThreadListForProject}
       collapseThreadListForProject={collapseThreadListForProject}
       dragInProgressRef={dragInProgressRef}
@@ -2964,7 +3033,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
   );
 
   return (
-    <SidebarContent className="gap-0">
+    <SidebarContent className="gap-0" scrollViewportRef={scrollViewportRef}>
       <SidebarGroup className="px-2 pt-2 pb-1">
         <SidebarMenu>
           <SidebarMenuItem>
@@ -3329,16 +3398,6 @@ export default function Sidebar() {
     (node: HTMLElement | null) => {
       if (enableListAnimations) {
         attachDeferredAutoAnimate(node, animatedProjectListsRef.current);
-      }
-    },
-    [enableListAnimations],
-  );
-
-  const animatedThreadListsRef = useRef(new WeakSet<HTMLElement>());
-  const attachThreadListAutoAnimateRef = useCallback(
-    (node: HTMLElement | null) => {
-      if (enableListAnimations) {
-        attachDeferredAutoAnimate(node, animatedThreadListsRef.current);
       }
     },
     [enableListAnimations],
@@ -3778,7 +3837,6 @@ export default function Sidebar() {
             newThreadShortcutLabel={newThreadShortcutLabel}
             commandPaletteShortcutLabel={commandPaletteShortcutLabel}
             threadJumpLabelByKey={visibleThreadJumpLabelByKey}
-            attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
             expandThreadListForProject={expandThreadListForProject}
             collapseThreadListForProject={collapseThreadListForProject}
             dragInProgressRef={dragInProgressRef}
