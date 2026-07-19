@@ -243,7 +243,15 @@ export function ComposerDictationButton(props: {
 
       streamRef.current = stream;
       if (preparedPcmRecorder) {
-        pcmRecorderRef.current = await preparedPcmRecorder.start(stream);
+        const pcmRecorder = await preparedPcmRecorder.start(stream);
+        if (!mountedRef.current) {
+          void pcmRecorder
+            .stop()
+            .catch(() => undefined)
+            .finally(stopTracks);
+          return;
+        }
+        pcmRecorderRef.current = pcmRecorder;
         recordingStartedAtRef.current = performance.now();
         setState("recording");
         stopTimerRef.current = window.setTimeout(stopRecording, TRANSCRIPTION_MAX_RECORDING_MS);

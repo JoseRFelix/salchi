@@ -46,6 +46,109 @@ function deferred<A>() {
   return { promise, reject, resolve };
 }
 
+const IOS_WEBKIT_USER_AGENT =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148";
+
+class MockMediaRecorder extends EventTarget {
+  static isTypeSupported(): boolean {
+    return true;
+  }
+
+  readonly mimeType = "audio/webm;codecs=opus";
+  state: "inactive" | "recording" | "paused" = "inactive";
+
+  start(): void {
+    this.state = "recording";
+  }
+
+  stop(): void {
+    this.state = "inactive";
+  }
+}
+
+function overrideProperty(target: object, key: PropertyKey, value: unknown): () => void {
+  const original = Object.getOwnPropertyDescriptor(target, key);
+  Object.defineProperty(target, key, { configurable: true, value });
+  return () => {
+    if (original) {
+      Object.defineProperty(target, key, original);
+    } else {
+      Reflect.deleteProperty(target, key);
+    }
+  };
+}
+
+async function renderPcmLifecycleButton(options: {
+  readonly pcmStart: () => Promise<{ readonly stop: () => Promise<Blob> }>;
+  readonly stream: MediaStream;
+  readonly transcribe?: () => Promise<{ readonly text: string }>;
+}) {
+  vi.stubGlobal("MediaRecorder", MockMediaRecorder);
+  const wakeLockSentinel = new MockWakeLockSentinel();
+  const wakeLockRequest = vi.fn(async () => wakeLockSentinel as unknown as WakeLockSentinel);
+  const restoreProperties = [
+    overrideProperty(navigator, "userAgent", IOS_WEBKIT_USER_AGENT),
+    overrideProperty(
+      navigator.mediaDevices,
+      "getUserMedia",
+      vi.fn(async () => options.stream),
+    ),
+    overrideProperty(navigator, "wakeLock", { request: wakeLockRequest }),
+  ];
+  const disposePcmRecorder = vi.fn();
+  dictationMocks.prepareStartSound.mockReturnValue({
+    play: vi.fn(async () => undefined),
+    dispose: vi.fn(),
+  });
+  dictationMocks.preparePcmRecorder.mockReturnValue({
+    start: options.pcmStart,
+    dispose: disposePcmRecorder,
+  });
+  dictationMocks.getStatus.mockResolvedValue({
+    configured: true,
+    state: "ready",
+    downloadedBytes: null,
+    totalBytes: null,
+    message: null,
+  });
+  dictationMocks.transcribe.mockImplementation(
+    options.transcribe ?? (async () => ({ text: "Transcript" })),
+  );
+
+  const onTranscript = vi.fn();
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const screen = await render(
+    <QueryClientProvider client={queryClient}>
+      <ComposerDictationButton
+        environmentId={EnvironmentId.make("pcm-lifecycle-test")}
+        disabled={false}
+        onTranscript={onTranscript}
+      />
+    </QueryClientProvider>,
+  );
+  let unmounted = false;
+  const unmount = async () => {
+    if (unmounted) return;
+    unmounted = true;
+    await screen.unmount();
+  };
+
+  return {
+    disposePcmRecorder,
+    onTranscript,
+    wakeLockRequest,
+    wakeLockSentinel,
+    unmount,
+    cleanup: async () => {
+      await unmount();
+      queryClient.clear();
+      for (const restore of restoreProperties.toReversed()) restore();
+    },
+  };
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
 });
@@ -58,6 +161,86 @@ afterEach(() => {
 });
 
 describe("ComposerDictationButton", () => {
+  it("stops a PCM recorder that finishes starting after unmount", async () => {
+    const trackStop = vi.fn();
+    const stream = new MediaStream();
+    vi.spyOn(stream, "getTracks").mockReturnValue([
+      { stop: trackStop } as unknown as MediaStreamTrack,
+    ]);
+    const pcmRecorder = deferred<{ readonly stop: () => Promise<Blob> }>();
+    const pcmStop = vi.fn(async () => new Blob([], { type: "audio/wav" }));
+    const pcmStart = vi.fn(() => pcmRecorder.promise);
+    const lifecycle = await renderPcmLifecycleButton({ pcmStart, stream });
+
+    try {
+      await page.getByTestId("ios-dictation-haptic-switch").click();
+      await vi.waitFor(() => {
+        expect(pcmStart).toHaveBeenCalledOnce();
+      });
+
+      await lifecycle.unmount();
+      expect(trackStop).toHaveBeenCalledOnce();
+      expect(lifecycle.wakeLockRequest).not.toHaveBeenCalled();
+
+      pcmRecorder.resolve({ stop: pcmStop });
+      await vi.waitFor(() => {
+        expect(pcmStop).toHaveBeenCalledOnce();
+        expect(lifecycle.disposePcmRecorder).toHaveBeenCalledOnce();
+      });
+      expect(lifecycle.onTranscript).not.toHaveBeenCalled();
+    } finally {
+      await lifecycle.cleanup();
+    }
+  });
+
+  it.each(["recording", "transcribing"] as const)(
+    "releases PCM capture and wake lock when unmounted while %s",
+    async (phase) => {
+      const trackStop = vi.fn();
+      const stream = new MediaStream();
+      vi.spyOn(stream, "getTracks").mockReturnValue([
+        { stop: trackStop } as unknown as MediaStreamTrack,
+      ]);
+      const pcmAudio = new Blob([new Uint8Array([1, 2, 3])], { type: "audio/wav" });
+      const pcmStop = vi.fn(async () => pcmAudio);
+      const pcmStart = vi.fn(async () => ({ stop: pcmStop }));
+      const transcription = deferred<{ text: string }>();
+      const lifecycle = await renderPcmLifecycleButton({
+        pcmStart,
+        stream,
+        transcribe: () => transcription.promise,
+      });
+
+      try {
+        await page.getByTestId("ios-dictation-haptic-switch").click();
+        await vi.waitFor(() => {
+          expect(page.getByRole("button", { name: "Stop and transcribe" })).toBeVisible();
+          expect(lifecycle.wakeLockRequest).toHaveBeenCalledOnce();
+        });
+
+        if (phase === "transcribing") {
+          await page.getByRole("button", { name: "Stop and transcribe" }).click();
+          await vi.waitFor(() => {
+            expect(dictationMocks.transcribe).toHaveBeenCalledOnce();
+            expect(trackStop).toHaveBeenCalledOnce();
+          });
+          expect(lifecycle.wakeLockSentinel.release).not.toHaveBeenCalled();
+        }
+
+        await lifecycle.unmount();
+        await vi.waitFor(() => {
+          expect(pcmStop).toHaveBeenCalledOnce();
+          expect(trackStop).toHaveBeenCalledOnce();
+          expect(lifecycle.wakeLockSentinel.release).toHaveBeenCalledOnce();
+        });
+        expect(lifecycle.onTranscript).not.toHaveBeenCalled();
+      } finally {
+        transcription.resolve({ text: "Late transcript" });
+        await lifecycle.cleanup();
+      }
+    },
+  );
+
   it("plays its cue, holds a wake lock, and retains failed audio for resend", async () => {
     const lifecycleEvents: string[] = [];
     const recordedAudio = new Blob([new Uint8Array([1, 2, 3])], {
