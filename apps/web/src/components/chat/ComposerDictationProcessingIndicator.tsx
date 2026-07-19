@@ -1,5 +1,4 @@
 import type { TranscriptionStatus } from "@t3tools/contracts";
-import { LoaderCircleIcon } from "lucide-react";
 
 import { resolveDictationInstallationState } from "../../dictation";
 
@@ -49,16 +48,9 @@ export function ComposerDictationProcessingIndicator(props: {
           )}
         </div>
       ) : (
-        <>
-          <div className="relative h-6 min-w-12 flex-1 overflow-hidden" aria-hidden="true">
-            <div className="border-muted-foreground/35 absolute inset-x-0 top-1/2 border-t border-dashed" />
-          </div>
-          <LoaderCircleIcon
-            data-chat-composer-dictation-spinner="true"
-            className="text-muted-foreground size-4 shrink-0 animate-spin"
-            aria-hidden="true"
-          />
-        </>
+        <div className="relative h-6 min-w-12 flex-1 overflow-hidden" aria-hidden="true">
+          <div className="border-muted-foreground/35 absolute inset-x-0 top-1/2 border-t border-dashed" />
+        </div>
       )}
     </div>
   );

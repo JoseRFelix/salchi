@@ -3694,6 +3694,124 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("streams and reconciles queued-turn detail updates", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-queued-turn-detail-events");
+      const messageId = MessageId.make("message-queued-turn-detail-events");
+      const initialUpdatedAt = "2026-01-01T00:00:01.000Z";
+      const editedUpdatedAt = "2026-01-01T00:00:02.000Z";
+      const baseThread = makeDefaultOrchestrationReadModel().threads[0]!;
+      const initialSnapshot = {
+        snapshotSequence: 1,
+        thread: {
+          ...baseThread,
+          id: threadId,
+          queuedTurns: [
+            {
+              threadId,
+              messageId,
+              role: "user" as const,
+              text: "Original queued text",
+              attachments: [],
+              runtimeMode: "full-access" as const,
+              interactionMode: "default" as const,
+              createdAt: initialUpdatedAt,
+              updatedAt: initialUpdatedAt,
+            },
+          ],
+        },
+        pageInfo: EMPTY_ORCHESTRATION_THREAD_DETAIL_PAGE_INFO,
+      };
+      const updatedSnapshot = {
+        ...initialSnapshot,
+        snapshotSequence: 2,
+        thread: {
+          ...initialSnapshot.thread,
+          queuedTurns: initialSnapshot.thread.queuedTurns.map((queuedTurn) => ({
+            ...queuedTurn,
+            text: "Edited queued text",
+            updatedAt: editedUpdatedAt,
+          })),
+        },
+      };
+      const updatedEvent = {
+        sequence: 2,
+        eventId: EventId.make("event-queued-turn-detail-events"),
+        aggregateKind: "thread" as const,
+        aggregateId: threadId,
+        type: "thread.queued-turn-updated" as const,
+        occurredAt: editedUpdatedAt,
+        commandId: CommandId.make("command-queued-turn-detail-events"),
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          text: "Edited queued text",
+          updatedAt: editedUpdatedAt,
+        },
+      } satisfies OrchestrationEvent;
+      let snapshotReadCount = 0;
+
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getThreadDetailSnapshotById: () =>
+              Effect.succeed(
+                Option.some(snapshotReadCount++ === 0 ? initialSnapshot : updatedSnapshot),
+              ),
+          },
+          orchestrationEngine: {
+            readEvents: (fromSequenceExclusive) =>
+              fromSequenceExclusive < updatedEvent.sequence
+                ? Stream.make(updatedEvent)
+                : Stream.empty,
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const subscriptionItems = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({ threadId }).pipe(
+            Stream.take(2),
+            Stream.runCollect,
+          ),
+        ),
+      );
+      assert.deepEqual(
+        Array.from(subscriptionItems).map((item) =>
+          item.kind === "snapshot" ? `snapshot:${item.snapshot.snapshotSequence}` : item.event.type,
+        ),
+        ["snapshot:1", "thread.queued-turn-updated"],
+      );
+
+      const reconcileResult = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.reconcileThreadDetail]({
+            threadId,
+            clientSequence: initialSnapshot.snapshotSequence,
+            verifiedSequence: initialSnapshot.snapshotSequence,
+            verifiedFingerprint: computeOrchestrationThreadDetailFingerprint(initialSnapshot),
+          }),
+        ),
+      );
+      assert.equal(reconcileResult.kind, "events");
+      if (reconcileResult.kind === "events") {
+        assert.deepEqual(
+          reconcileResult.events.map((event) => event.type),
+          ["thread.queued-turn-updated"],
+        );
+        assert.equal(reconcileResult.serverSequence, 2);
+        assert.deepEqual(
+          reconcileResult.serverFingerprint,
+          computeOrchestrationThreadDetailFingerprint(updatedSnapshot),
+        );
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("routes websocket rpc orchestration shell snapshot errors", () =>
     Effect.gen(function* () {
       const projectionError = new PersistenceSqlError({

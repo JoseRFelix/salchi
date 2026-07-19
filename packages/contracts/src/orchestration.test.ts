@@ -504,6 +504,14 @@ it.effect("decodes queued turn commands", () =>
       messageId: "msg-queued-1",
       createdAt: "2026-01-01T00:00:01.000Z",
     });
+    const update = yield* decodeClientOrchestrationCommand({
+      type: "thread.queued-turn.update",
+      commandId: "cmd-queue-update",
+      threadId: "thread-1",
+      messageId: "msg-queued-1",
+      text: "edited queued prompt",
+      createdAt: "2026-01-01T00:00:01.500Z",
+    });
     const dispatch = yield* decodeOrchestrationCommand({
       type: "thread.queued-turn.dispatch",
       commandId: "cmd-queue-dispatch",
@@ -541,6 +549,10 @@ it.effect("decodes queued turn commands", () =>
       assert.fail(`Expected thread.turn.queue command, received ${queued.type}.`);
     }
     assert.strictEqual(queued.modelSelection?.instanceId, "codex");
+    assert.strictEqual(update.type, "thread.queued-turn.update");
+    if (update.type === "thread.queued-turn.update") {
+      assert.strictEqual(update.text, "edited queued prompt");
+    }
     assert.strictEqual(cancel.type, "thread.queued-turn.cancel");
     assert.strictEqual(dispatch.type, "thread.queued-turn.dispatch");
     assert.strictEqual(steer.type, "thread.queued-turn.steer");
@@ -953,6 +965,24 @@ it.effect("decodes queued turn events and thread snapshots", () =>
       correlationId: null,
       metadata: {},
     });
+    const updated = yield* decodeOrchestrationEvent({
+      sequence: 2,
+      eventId: "event-update",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.queued-turn-updated",
+      payload: {
+        threadId: "thread-1",
+        messageId: "msg-queued-1",
+        text: "edited queued prompt",
+        updatedAt: "2026-01-01T00:00:00.500Z",
+      },
+      occurredAt: "2026-01-01T00:00:00.500Z",
+      commandId: "cmd-update",
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+    });
     const cancelled = yield* decodeOrchestrationEvent({
       sequence: 2,
       eventId: "event-cancel",
@@ -1088,6 +1118,10 @@ it.effect("decodes queued turn events and thread snapshots", () =>
     });
 
     assert.strictEqual(queued.type, "thread.turn-queued");
+    assert.strictEqual(updated.type, "thread.queued-turn-updated");
+    if (updated.type === "thread.queued-turn-updated") {
+      assert.strictEqual(updated.payload.text, "edited queued prompt");
+    }
     assert.strictEqual(cancelled.type, "thread.queued-turn-cancelled");
     assert.strictEqual(dispatched.type, "thread.queued-turn-dispatched");
     assert.strictEqual(steerRequested.type, "thread.queued-turn-steer-requested");

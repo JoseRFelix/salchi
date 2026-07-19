@@ -8,7 +8,7 @@ export const TRANSCRIPTION_MAX_RECORDING_MS = 2 * 60 * 1000;
 
 export const TranscriptionModel = Schema.Literals(["tiny.en", "base.en", "small.en"]);
 export type TranscriptionModel = typeof TranscriptionModel.Type;
-export const DEFAULT_TRANSCRIPTION_MODEL: TranscriptionModel = "base.en";
+export const DEFAULT_TRANSCRIPTION_MODEL: TranscriptionModel = "small.en";
 
 export const TranscriptionStatusState = Schema.Literals([
   "unavailable",

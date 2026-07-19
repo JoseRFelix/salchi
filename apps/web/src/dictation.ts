@@ -4,6 +4,7 @@ import {
   TranscriptionResult,
   TranscriptionStatus,
   type EnvironmentId,
+  type TranscriptionModel,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -15,6 +16,25 @@ export const DICTATION_AUDIO_MIME_TYPES = [
   "audio/webm",
   "audio/ogg;codecs=opus",
 ] as const;
+
+export function localTranscriptionStatusQueryKey(
+  environmentId: EnvironmentId,
+  model: TranscriptionModel,
+) {
+  return ["local-transcription-status", environmentId, model] as const;
+}
+
+export function localTranscriptionStatusRefetchInterval(input: {
+  readonly transcribing: boolean;
+  readonly status: TranscriptionStatus | undefined;
+}): 750 | false {
+  if (input.transcribing) return 750;
+  return input.status?.state === "ready" ||
+    input.status?.state === "error" ||
+    input.status?.state === "unavailable"
+    ? false
+    : 750;
+}
 
 const DICTATION_START_SOUND_DURATION_SECONDS = 0.1;
 const DICTATION_START_SOUND_TIMEOUT_MS = 250;

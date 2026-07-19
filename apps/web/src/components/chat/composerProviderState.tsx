@@ -15,7 +15,16 @@ import type { ReactNode } from "react";
 
 import type { DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
-import { shouldRenderTraitsControls, TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
+import {
+  type DescriptorFilter,
+  isReasoningDescriptor,
+  shouldRenderTraitsControls,
+  TraitsMenuContent,
+  TraitsPicker,
+} from "./TraitsPicker";
+
+const reasoningOnlyFilter: DescriptorFilter = (descriptor) => isReasoningDescriptor(descriptor);
+const withoutReasoningFilter: DescriptorFilter = (descriptor) => !isReasoningDescriptor(descriptor);
 
 export type ComposerProviderStateInput = {
   provider: ProviderDriverKind;
@@ -77,6 +86,8 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
 function renderTraitsControl(
   Component: typeof TraitsMenuContent | typeof TraitsPicker,
   input: TraitsRenderInput,
+  descriptorFilter?: DescriptorFilter,
+  compactReasoningTriggerLabel = false,
 ): ReactNode {
   const {
     provider,
@@ -98,6 +109,7 @@ function renderTraitsControl(
       model,
       modelOptions,
       prompt,
+      ...(descriptorFilter ? { descriptorFilter } : {}),
     })
   ) {
     return null;
@@ -113,6 +125,8 @@ function renderTraitsControl(
       modelOptions={modelOptions}
       prompt={prompt}
       onPromptChange={onPromptChange}
+      {...(descriptorFilter ? { descriptorFilter } : {})}
+      {...(compactReasoningTriggerLabel ? { compactReasoningTriggerLabel: true } : {})}
     />
   );
 }
@@ -123,4 +137,16 @@ export function renderProviderTraitsMenuContent(input: TraitsRenderInput): React
 
 export function renderProviderTraitsPicker(input: TraitsRenderInput): ReactNode {
   return renderTraitsControl(TraitsPicker, input);
+}
+
+/** Compact traits menu content with the standalone reasoning control removed. */
+export function renderProviderTraitsMenuContentWithoutReasoning(
+  input: TraitsRenderInput,
+): ReactNode {
+  return renderTraitsControl(TraitsMenuContent, input, withoutReasoningFilter);
+}
+
+/** Standalone reasoning-level picker for compact composer footers. */
+export function renderProviderReasoningPicker(input: TraitsRenderInput): ReactNode {
+  return renderTraitsControl(TraitsPicker, input, reasoningOnlyFilter, true);
 }

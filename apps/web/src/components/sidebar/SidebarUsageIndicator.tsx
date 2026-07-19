@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import * as Schema from "effect/Schema";
 
 import { useLocalStorage } from "../../hooks/useLocalStorage";
+import { claimClaudeLoginNotification } from "../../claudeLoginNotification";
 import { ensureLocalApi } from "../../localApi";
 import type { AppState } from "../../store";
 import { useStore } from "../../store";
@@ -30,7 +31,6 @@ import {
 
 const SIDEBAR_USAGE_EXPANDED_STORAGE_KEY = "t3code:sidebar-usage-expanded:v1";
 const SIDEBAR_USAGE_POLL_INTERVAL_MS = 30_000;
-const promptedClaudeLoginInstanceIds = new Set<string>();
 
 function collectSidebarUsageThreads(
   environmentStateById: AppState["environmentStateById"],
@@ -267,6 +267,7 @@ export function SidebarUsageIndicator() {
   const sidebarVisible = isMobile ? openMobile : open;
   const previousSidebarVisibleRef = useRef(false);
   const refreshInFlightRef = useRef<Promise<unknown> | null>(null);
+  const claudeLoginNotificationAttemptedRef = useRef(false);
 
   const threads = useMemo(
     () => collectSidebarUsageThreads(environmentStateById),
@@ -293,21 +294,12 @@ export function SidebarUsageIndicator() {
   );
 
   useEffect(() => {
-    const unauthenticatedIds = new Set(claudeLoginPromptInstanceIds);
-    for (const promptedInstanceId of promptedClaudeLoginInstanceIds) {
-      if (!unauthenticatedIds.has(promptedInstanceId)) {
-        promptedClaudeLoginInstanceIds.delete(promptedInstanceId);
-      }
-    }
-
-    const unpromptedInstanceIds = claudeLoginPromptInstanceIds.filter(
-      (instanceId) => !promptedClaudeLoginInstanceIds.has(instanceId),
-    );
-    if (unpromptedInstanceIds.length === 0) {
+    if (claudeLoginNotificationAttemptedRef.current || claudeLoginPromptInstanceIds.length === 0) {
       return;
     }
-    for (const instanceId of unpromptedInstanceIds) {
-      promptedClaudeLoginInstanceIds.add(instanceId);
+    claudeLoginNotificationAttemptedRef.current = true;
+    if (!claimClaudeLoginNotification()) {
+      return;
     }
 
     let toastId!: ReturnType<typeof toastManager.add>;

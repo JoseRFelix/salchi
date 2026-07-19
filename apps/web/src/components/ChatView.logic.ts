@@ -24,6 +24,9 @@ import {
   type TerminalContextDraft,
 } from "../lib/terminalContext";
 import type { DraftThreadEnvMode } from "../composerDraftStore";
+import { threadHasStarted } from "../threadLifecycle";
+
+export { threadHasStarted } from "../threadLifecycle";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
@@ -290,6 +293,20 @@ export function deriveComposerSendState(options: {
   };
 }
 
+export function getProviderAuthenticationBlockReason(input: {
+  providers: ReadonlyArray<ServerProvider>;
+  instanceId: ModelSelection["instanceId"];
+}): string | null {
+  const provider = input.providers.find((entry) => entry.instanceId === input.instanceId);
+  if (provider?.auth.status !== "unauthenticated") {
+    return null;
+  }
+  return (
+    provider.message ??
+    `${provider.displayName ?? provider.driver} is not authenticated. Sign in and try again.`
+  );
+}
+
 export function buildExpiredTerminalContextToastCopy(
   expiredTerminalContextCount: number,
   variant: "omitted" | "empty",
@@ -306,12 +323,6 @@ export function buildExpiredTerminalContextToastCopy(
     title: `${noun} omitted from message`,
     description: "Re-add it if you want that terminal output included.",
   };
-}
-
-export function threadHasStarted(thread: Thread | null | undefined): boolean {
-  return Boolean(
-    thread && (thread.latestTurn !== null || thread.messages.length > 0 || thread.session !== null),
-  );
 }
 
 export function shouldShowThreadDetailLoading(

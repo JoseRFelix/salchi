@@ -29,6 +29,7 @@ import {
   markPromotedDraftThreadsByRef,
   useComposerDraftStore,
 } from "~/composerDraftStore";
+import { finalizeMaterializedPromotedDraftThreadsByRef } from "~/draftPromotionRecovery";
 import { ensureLocalApi } from "~/localApi";
 import { collectActiveTerminalThreadIds } from "~/lib/terminalStateCleanup";
 import {
@@ -78,6 +79,7 @@ import {
   selectThreadsAcrossEnvironments,
 } from "~/store";
 import { computeOrchestrationThreadDetailFingerprint } from "@t3tools/shared/orchestrationThreadDetailFingerprint";
+import { isOrchestrationThreadDetailEvent } from "@t3tools/shared/orchestrationThreadDetailEvents";
 import { selectThreadTerminalState, useTerminalStateStore } from "~/terminalStateStore";
 import { useUiStateStore } from "~/uiStateStore";
 import type { WsProtocolCloseContext } from "../../rpc/protocol";
@@ -979,17 +981,6 @@ function getOrchestrationEventThreadId(event: OrchestrationEvent): ThreadId | nu
   return "threadId" in event.payload ? event.payload.threadId : null;
 }
 
-function isThreadDetailReplayEvent(event: OrchestrationEvent): boolean {
-  return (
-    event.type === "thread.message-sent" ||
-    event.type === "thread.proposed-plan-upserted" ||
-    event.type === "thread.activity-appended" ||
-    event.type === "thread.turn-diff-completed" ||
-    event.type === "thread.reverted" ||
-    event.type === "thread.session-set"
-  );
-}
-
 function reconcileThreadDetailSubscriptionsAfterRecoveredEvents(
   events: ReadonlyArray<OrchestrationEvent>,
   environmentId: EnvironmentId,
@@ -1007,7 +998,7 @@ function reconcileThreadDetailSubscriptionsAfterRecoveredEvents(
       continue;
     }
 
-    if (isThreadDetailReplayEvent(event)) {
+    if (isOrchestrationThreadDetailEvent(event)) {
       markThreadDetailSequence(entry, event.sequence);
     }
     scheduleThreadDetailReconcileIfBehind(environmentId, threadId, event.sequence);
@@ -2695,15 +2686,15 @@ function syncProjectUiFromStore() {
 
 function syncThreadUiFromStore() {
   const threads = selectThreadsAcrossEnvironments(useStore.getState());
+  const threadRefs = threads.map((thread) => scopeThreadRef(thread.environmentId, thread.id));
   useUiStateStore.getState().syncThreads(
     threads.map((thread) => ({
       key: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
       seedVisitedAt: thread.updatedAt ?? thread.createdAt,
     })),
   );
-  markPromotedDraftThreadsByRef(
-    threads.map((thread) => scopeThreadRef(thread.environmentId, thread.id)),
-  );
+  markPromotedDraftThreadsByRef(threadRefs);
+  finalizeMaterializedPromotedDraftThreadsByRef(threadRefs);
 }
 
 function reconcileSnapshotDerivedState() {
@@ -2846,6 +2837,9 @@ function applyRecoveredEventBatch(
   for (const threadId of batchEffects.promoteDraftThreadIds) {
     markPromotedDraftThreadByRef(scopeThreadRef(environmentId, threadId));
   }
+  finalizeMaterializedPromotedDraftThreadsByRef(
+    collectThreadIdsFromEvents(events).map((threadId) => scopeThreadRef(environmentId, threadId)),
+  );
   for (const threadId of batchEffects.clearDeletedThreadIds) {
     const threadRef = scopeThreadRef(environmentId, threadId);
     disposeThreadDetailSubscriptionByKey(scopedThreadKey(threadRef));
@@ -2959,6 +2953,9 @@ function applyShellEvent(event: OrchestrationShellStreamEvent, environmentId: En
       }
       if (!previousThread && threadRef) {
         markPromotedDraftThreadByRef(threadRef);
+      }
+      if (threadRef) {
+        finalizeMaterializedPromotedDraftThreadsByRef([threadRef]);
       }
       if (previousThread?.archivedAt === null && event.thread.archivedAt !== null && threadRef) {
         useTerminalStateStore.getState().removeTerminalState(threadRef);

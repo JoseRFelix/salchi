@@ -9,6 +9,8 @@ import {
   type PreparedDictationPcmRecorder,
   type PreparedDictationStartSound,
   getEnvironmentTranscriptionStatus,
+  localTranscriptionStatusQueryKey,
+  localTranscriptionStatusRefetchInterval,
   normalizeDictationAudioToWav,
   normalizeDictationTranscript,
   prepareDictationPcmRecorder,
@@ -27,7 +29,9 @@ import {
   retainDictationRecording,
   subscribeRetainedDictationRecording,
 } from "../../retainedDictationRecordingStore";
+import { useSettings } from "~/hooks/useSettings";
 import { Button } from "../ui/button";
+import { Spinner } from "../ui/spinner";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { preserveComposerFocusOnPointerDown } from "./composerFocus";
@@ -75,6 +79,7 @@ export function ComposerDictationButton(props: {
   readonly onActiveChange?: (active: boolean) => void;
 }) {
   const [state, setState] = useState<DictationState>("idle");
+  const transcriptionModel = useSettings((settings) => settings.transcriptionModel);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const pcmRecorderRef = useRef<DictationPcmRecorder | null>(null);
   const preparedPcmRecorderRef = useRef<PreparedDictationPcmRecorder | null>(null);
@@ -103,19 +108,16 @@ export function ComposerDictationButton(props: {
     typeof MediaRecorder !== "undefined";
 
   const statusQuery = useQuery({
-    queryKey: ["local-transcription-status", props.environmentId],
+    queryKey: localTranscriptionStatusQueryKey(props.environmentId, transcriptionModel),
     queryFn: () => getEnvironmentTranscriptionStatus(props.environmentId),
     enabled: browserSupportsRecording,
     retry: false,
-    staleTime: 60_000,
-    refetchInterval: (query) => {
-      const status = query.state.data;
-      return status?.state === "ready" ||
-        status?.state === "error" ||
-        status?.state === "unavailable"
-        ? false
-        : 750;
-    },
+    staleTime: 0,
+    refetchInterval: (query) =>
+      localTranscriptionStatusRefetchInterval({
+        transcribing: state === "transcribing",
+        status: query.state.data,
+      }),
   });
 
   const clearStopTimer = useCallback(() => {
@@ -696,13 +698,17 @@ export function ComposerDictationButton(props: {
       </div>
     );
   }
-  if (recording && streamRef.current) {
+  if ((recording && streamRef.current) || transcribing) {
     return (
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        <ComposerDictationVisualizer
-          stream={streamRef.current}
-          startedAtMs={recordingStartedAtRef.current}
-        />
+        {recording && streamRef.current ? (
+          <ComposerDictationVisualizer
+            stream={streamRef.current}
+            startedAtMs={recordingStartedAtRef.current}
+          />
+        ) : (
+          <ComposerDictationProcessingIndicator status={statusQuery.data} />
+        )}
         <Tooltip>
           <TooltipTrigger
             render={
@@ -711,23 +717,28 @@ export function ComposerDictationButton(props: {
                 variant="secondary"
                 size="icon-sm"
                 aria-label={label}
-                aria-pressed="true"
-                className="shrink-0 rounded-full"
+                aria-pressed={recording}
+                disabled={transcribing}
+                className="size-8 shrink-0 rounded-full sm:size-8"
                 onPointerDown={preserveComposerFocusOnPointerDown}
                 onClick={() => stopRecording()}
               />
             }
           >
-            <SquareIcon className="size-3 fill-current" aria-hidden="true" />
+            {transcribing ? (
+              <Spinner
+                data-chat-composer-dictation-spinner="true"
+                className="size-4"
+                aria-hidden="true"
+              />
+            ) : (
+              <SquareIcon className="size-3 fill-current" aria-hidden="true" />
+            )}
           </TooltipTrigger>
           <TooltipPopup side="top">{label}</TooltipPopup>
         </Tooltip>
       </div>
     );
-  }
-
-  if (transcribing) {
-    return <ComposerDictationProcessingIndicator status={statusQuery.data} />;
   }
 
   return (
@@ -742,6 +753,7 @@ export function ComposerDictationButton(props: {
               disabled={busy || (!recording && props.disabled)}
               aria-label={label}
               aria-pressed={recording}
+              className="size-8 sm:size-8"
               onPointerDown={preserveComposerFocusOnPointerDown}
               onClick={recording ? () => stopRecording() : () => void startRecording()}
             />

@@ -796,18 +796,20 @@ describe("GeneralSettingsPanel observability", () => {
     );
 
     const dictationModel = page.getByLabelText("Dictation model", { exact: true });
-    await expect.element(dictationModel).toHaveTextContent("Base · 142 MB");
+    await expect.element(dictationModel).toHaveTextContent("Small · 253 MB");
     await expect
       .element(
         page.getByText(
-          "Runs locally on this server. Base downloads 142 MB and uses ~388 MB RAM. Larger models improve accuracy but transcribe more slowly.",
+          "Runs locally on this server. Small downloads 253 MB and uses ~560 MB RAM. Larger models improve accuracy but transcribe more slowly.",
         ),
       )
       .toBeInTheDocument();
 
     await dictationModel.click();
     await expect.element(page.getByText("Tiny · 75 MB", { exact: true })).toBeInTheDocument();
-    await expect.element(page.getByText("Small · 466 MB", { exact: true })).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("option", { name: "Small · 253 MB", exact: true }))
+      .toBeInTheDocument();
 
     await page.getByText("Tiny · 75 MB", { exact: true }).click();
     await expect.element(dictationModel).toHaveTextContent("Tiny · 75 MB");

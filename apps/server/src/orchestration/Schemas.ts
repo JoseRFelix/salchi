@@ -11,6 +11,7 @@ import {
   ThreadUnarchivedPayload as ContractsThreadUnarchivedPayloadSchema,
   ThreadMessageSentPayload as ContractsThreadMessageSentPayloadSchema,
   ThreadTurnQueuedPayload as ContractsThreadTurnQueuedPayloadSchema,
+  ThreadQueuedTurnUpdatedPayload as ContractsThreadQueuedTurnUpdatedPayloadSchema,
   ThreadQueuedTurnCancelledPayload as ContractsThreadQueuedTurnCancelledPayloadSchema,
   ThreadQueuedTurnDispatchedPayload as ContractsThreadQueuedTurnDispatchedPayloadSchema,
   ThreadQueuedTurnSteerRequestedPayload as ContractsThreadQueuedTurnSteerRequestedPayloadSchema,
@@ -43,6 +44,7 @@ export const ThreadUnarchivedPayload = ContractsThreadUnarchivedPayloadSchema;
 
 export const MessageSentPayloadSchema = ContractsThreadMessageSentPayloadSchema;
 export const ThreadTurnQueuedPayload = ContractsThreadTurnQueuedPayloadSchema;
+export const ThreadQueuedTurnUpdatedPayload = ContractsThreadQueuedTurnUpdatedPayloadSchema;
 export const ThreadQueuedTurnCancelledPayload = ContractsThreadQueuedTurnCancelledPayloadSchema;
 export const ThreadQueuedTurnDispatchedPayload = ContractsThreadQueuedTurnDispatchedPayloadSchema;
 export const ThreadQueuedTurnSteerRequestedPayload =
