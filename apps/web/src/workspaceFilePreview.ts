@@ -1,4 +1,4 @@
-import type { EnvironmentId, TurnId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId, TurnId } from "@t3tools/contracts";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
@@ -48,7 +48,22 @@ export interface WorkspaceFilePreviewReturnPreview {
   returnTarget: WorkspaceFilePreviewReturnTarget | null;
 }
 
-export type WorkspaceFilePanelView = "explorer" | "preview" | "source-control";
+export type WorkspaceFilePanelView = "diff" | "explorer" | "preview" | "source-control";
+
+export type WorkspaceFilePanelNavigationMode = "push" | "replace";
+
+export type WorkspaceFilePanelOwnerKey = `draft:${string}` | `thread:${string}:${string}`;
+
+export function buildWorkspaceFilePanelDraftOwnerKey(draftId: string): WorkspaceFilePanelOwnerKey {
+  return `draft:${encodeURIComponent(draftId)}`;
+}
+
+export function buildWorkspaceFilePanelThreadOwnerKey(input: {
+  environmentId: EnvironmentId;
+  threadId: ThreadId;
+}): WorkspaceFilePanelOwnerKey {
+  return `thread:${encodeURIComponent(input.environmentId)}:${encodeURIComponent(input.threadId)}`;
+}
 
 export function isWorkspaceFileExplorerOpen(state: {
   readonly open: boolean;
@@ -77,8 +92,10 @@ export type WorkspaceFilePanelHistoryEntry =
 const MAX_WORKSPACE_FILE_PANEL_HISTORY_LENGTH = 50;
 
 interface WorkspaceFilePreviewState {
+  ownerKey: WorkspaceFilePanelOwnerKey | null;
   open: boolean;
   view: WorkspaceFilePanelView;
+  diffTarget: WorkspaceFilePreviewDiffReturnTarget | null;
   target: WorkspaceFilePreviewTarget | null;
   activeExplorerContext: WorkspaceFileExplorerContext | null;
   explorerContext: WorkspaceFileExplorerContext | null;
@@ -91,9 +108,22 @@ interface WorkspaceFilePreviewState {
   ) => void;
   openExplorer: (
     context: WorkspaceFileExplorerContext,
-    options?: { returnToPreview?: WorkspaceFilePreviewReturnPreview | null },
+    options?: {
+      navigation?: WorkspaceFilePanelNavigationMode;
+      returnToPreview?: WorkspaceFilePreviewReturnPreview | null;
+    },
   ) => void;
   openSourceControl: () => void;
+  openDiff: (
+    target: WorkspaceFilePreviewDiffReturnTarget,
+    options?: { navigation?: WorkspaceFilePanelNavigationMode },
+  ) => void;
+  claimOwner: (ownerKey: WorkspaceFilePanelOwnerKey) => void;
+  releaseOwner: (ownerKey: WorkspaceFilePanelOwnerKey) => void;
+  syncDiffRoute: (
+    ownerKey: WorkspaceFilePanelOwnerKey,
+    target: WorkspaceFilePreviewDiffReturnTarget | null,
+  ) => void;
   reopenPanel: () => void;
   reopenPreview: () => void;
   returnBack: () => void;
@@ -102,6 +132,21 @@ interface WorkspaceFilePreviewState {
   setActiveExplorerContext: (context: WorkspaceFileExplorerContext | null) => void;
   closePreview: () => void;
   closeSourceControl: () => void;
+}
+
+function resetWorkspaceFilePanelNavigation(ownerKey: WorkspaceFilePanelOwnerKey | null) {
+  return {
+    ownerKey,
+    open: false,
+    view: "preview" as const,
+    diffTarget: null,
+    target: null,
+    activeExplorerContext: null,
+    explorerContext: null,
+    explorerReturnPreview: null,
+    history: [],
+    returnTarget: null,
+  };
 }
 
 function sameExplorerContextWorkspace(
@@ -231,6 +276,8 @@ function currentHistoryEntry(
   }
 
   switch (state.view) {
+    case "diff":
+      return state.diffTarget;
     case "explorer":
       return state.explorerContext ? { kind: "explorer", context: state.explorerContext } : null;
     case "preview":
@@ -309,10 +356,19 @@ function historyWithCurrentEntry(
 
 function restoreHistoryEntry(
   state: WorkspaceFilePreviewState,
-  entry: Exclude<WorkspaceFilePanelHistoryEntry, WorkspaceFilePreviewDiffReturnTarget>,
+  entry: WorkspaceFilePanelHistoryEntry,
   history: ReadonlyArray<WorkspaceFilePanelHistoryEntry>,
 ): Partial<WorkspaceFilePreviewState> {
   switch (entry.kind) {
+    case "diff":
+      return {
+        open: true,
+        view: "diff",
+        diffTarget: entry,
+        explorerReturnPreview: null,
+        history,
+        returnTarget: returnTargetForHistory(history),
+      };
     case "explorer":
       return {
         open: true,
@@ -361,8 +417,10 @@ export function workspaceFilePanelBackButtonLabel(target: WorkspaceFilePanelHist
 }
 
 const useWorkspaceFilePreviewStore = create<WorkspaceFilePreviewState>((set) => ({
+  ownerKey: null,
   open: false,
   view: "preview",
+  diffTarget: null,
   target: null,
   activeExplorerContext: null,
   explorerContext: null,
@@ -411,9 +469,11 @@ const useWorkspaceFilePreviewStore = create<WorkspaceFilePreviewState>((set) => 
         context,
       } satisfies WorkspaceFilePanelExplorerHistoryEntry;
       let history: ReadonlyArray<WorkspaceFilePanelHistoryEntry> =
-        state.open && state.view === "explorer" && !options?.returnToPreview
+        options?.navigation === "replace"
           ? []
-          : historyWithCurrentEntry(state, destination);
+          : state.open && state.view === "explorer" && !options?.returnToPreview
+            ? []
+            : historyWithCurrentEntry(state, destination);
       const fallbackReturnPreview = !state.open ? (options?.returnToPreview ?? null) : null;
 
       if (fallbackReturnPreview) {
@@ -437,15 +497,110 @@ const useWorkspaceFilePreviewStore = create<WorkspaceFilePreviewState>((set) => 
       };
     }),
   openSourceControl: () =>
+    set({
+      open: true,
+      view: "source-control",
+      explorerReturnPreview: null,
+      history: [],
+      returnTarget: null,
+    }),
+  openDiff: (target, options) =>
     set((state) => {
-      const history = historyWithCurrentEntry(state, { kind: "source-control" });
+      const history =
+        options?.navigation === "replace" ? [] : historyWithCurrentEntry(state, target);
       return {
         open: true,
-        view: "source-control",
+        view: "diff",
+        diffTarget: target,
         explorerReturnPreview: null,
         history,
-        returnTarget: null,
+        returnTarget: returnTargetForHistory(history),
       };
+    }),
+  claimOwner: (ownerKey) =>
+    set((state) =>
+      state.ownerKey === ownerKey
+        ? state
+        : { ...state, ...resetWorkspaceFilePanelNavigation(ownerKey) },
+    ),
+  releaseOwner: (ownerKey) =>
+    set((state) =>
+      state.ownerKey !== ownerKey
+        ? state
+        : { ...state, ...resetWorkspaceFilePanelNavigation(null) },
+    ),
+  syncDiffRoute: (ownerKey, target) =>
+    set((state) => {
+      const ownerState =
+        state.ownerKey === ownerKey
+          ? state
+          : { ...state, ...resetWorkspaceFilePanelNavigation(ownerKey) };
+
+      if (target) {
+        if (ownerState.open && ownerState.view === "diff") {
+          return sameDiffReturnTarget(ownerState.diffTarget ?? { kind: "diff" }, target)
+            ? ownerState
+            : { ...ownerState, diffTarget: target };
+        }
+
+        const diffHistoryIndex = ownerState.history.findLastIndex((entry) => entry.kind === "diff");
+        if (diffHistoryIndex >= 0) {
+          const existing = ownerState.history[
+            diffHistoryIndex
+          ] as WorkspaceFilePreviewDiffReturnTarget;
+          if (sameDiffReturnTarget(existing, target)) {
+            return ownerState;
+          }
+          const history = [...ownerState.history];
+          history[diffHistoryIndex] = target;
+          return { ...ownerState, history };
+        }
+
+        if (ownerState.open) {
+          const history = historyWithCurrentEntry(ownerState, target);
+          return {
+            ...ownerState,
+            open: true,
+            view: "diff",
+            diffTarget: target,
+            explorerReturnPreview: null,
+            history,
+            returnTarget: returnTargetForHistory(history),
+          };
+        }
+
+        return {
+          ...ownerState,
+          open: true,
+          view: "diff",
+          diffTarget: target,
+          explorerReturnPreview: null,
+          history: [],
+          returnTarget: null,
+        };
+      }
+
+      if (ownerState.open && ownerState.view === "diff") {
+        const previousEntry = ownerState.history[ownerState.history.length - 1];
+        if (!previousEntry) {
+          return {
+            ...ownerState,
+            open: false,
+            explorerReturnPreview: null,
+            history: [],
+            returnTarget: null,
+          };
+        }
+        return {
+          ...ownerState,
+          ...restoreHistoryEntry(ownerState, previousEntry, ownerState.history.slice(0, -1)),
+        };
+      }
+
+      const history = ownerState.history.filter((entry) => entry.kind !== "diff");
+      return history.length === ownerState.history.length
+        ? ownerState
+        : { ...ownerState, history, returnTarget: returnTargetForHistory(history) };
     }),
   reopenPanel: () =>
     set((state) => {
@@ -563,7 +718,7 @@ const useWorkspaceFilePreviewStore = create<WorkspaceFilePreviewState>((set) => 
   returnBack: () =>
     set((state) => {
       const previousEntry = state.history[state.history.length - 1];
-      if (!previousEntry || previousEntry.kind === "diff") {
+      if (!previousEntry) {
         return state;
       }
 
@@ -725,7 +880,10 @@ export function openWorkspaceFilePreview(
 
 export function openWorkspaceFileExplorer(
   context: WorkspaceFileExplorerContext,
-  options?: { returnToPreview?: WorkspaceFilePreviewReturnPreview | null },
+  options?: {
+    navigation?: WorkspaceFilePanelNavigationMode;
+    returnToPreview?: WorkspaceFilePreviewReturnPreview | null;
+  },
 ): void {
   useWorkspaceFilePreviewStore.getState().openExplorer(context, options);
   openRightPanel("file");
@@ -733,6 +891,35 @@ export function openWorkspaceFileExplorer(
 
 export function openWorkspaceSourceControlPanel(): void {
   useWorkspaceFilePreviewStore.getState().openSourceControl();
+}
+
+export function openWorkspaceDiffPanel(
+  target: WorkspaceFilePreviewDiffReturnTarget,
+  options?: { navigation?: WorkspaceFilePanelNavigationMode },
+): void {
+  useWorkspaceFilePreviewStore.getState().openDiff(target, options);
+}
+
+export function syncWorkspaceDiffPanelRoute(
+  ownerKey: WorkspaceFilePanelOwnerKey,
+  target: WorkspaceFilePreviewDiffReturnTarget | null,
+): void {
+  useWorkspaceFilePreviewStore.getState().syncDiffRoute(ownerKey, target);
+}
+
+export function claimWorkspaceFilePanelOwner(ownerKey: WorkspaceFilePanelOwnerKey): void {
+  useWorkspaceFilePreviewStore.getState().claimOwner(ownerKey);
+}
+
+export function releaseWorkspaceFilePanelOwner(ownerKey: WorkspaceFilePanelOwnerKey): void {
+  useWorkspaceFilePreviewStore.getState().releaseOwner(ownerKey);
+}
+
+export function hasWorkspaceDiffPanelInStack(): boolean {
+  const state = useWorkspaceFilePreviewStore.getState();
+  return (
+    (state.open && state.view === "diff") || state.history.some((entry) => entry.kind === "diff")
+  );
 }
 
 export function openPathInWorkspaceFilePreview(input: {
@@ -791,6 +978,7 @@ export function useWorkspaceFilePreviewState() {
     useShallow((state) => ({
       open: state.open,
       view: state.view,
+      diffTarget: state.diffTarget,
       target: state.target,
       activeExplorerContext: state.activeExplorerContext,
       explorerContext: state.explorerContext,
@@ -827,8 +1015,10 @@ export function setActiveWorkspaceFileExplorerContext(
 
 export function __readWorkspaceFilePanelStateForTests() {
   const {
+    ownerKey,
     open,
     view,
+    diffTarget,
     target,
     activeExplorerContext,
     explorerContext,
@@ -837,8 +1027,10 @@ export function __readWorkspaceFilePanelStateForTests() {
     returnTarget,
   } = useWorkspaceFilePreviewStore.getState();
   return {
+    ownerKey,
     open,
     view,
+    diffTarget,
     target,
     activeExplorerContext,
     explorerContext,
@@ -850,8 +1042,10 @@ export function __readWorkspaceFilePanelStateForTests() {
 
 export function __resetWorkspaceFilePanelStateForTests(): void {
   useWorkspaceFilePreviewStore.setState({
+    ownerKey: null,
     open: false,
     view: "preview",
+    diffTarget: null,
     target: null,
     activeExplorerContext: null,
     explorerContext: null,

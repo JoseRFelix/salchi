@@ -114,6 +114,7 @@ import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useMobileEdgeSwipe } from "../hooks/useMobileEdgeSwipe";
 import { providerSupportsActiveTurnSteering } from "../providerTurnCapabilities";
 import { markRightPanelUsed, openRightPanel, useRegisterRightPanel } from "../rightPanelGesture";
+import { useRegisterPlanRightPanelContent } from "../rightPanelContentRegistry";
 import { closeSourceControlPanel, useSourceControlPanelState } from "../sourceControlPanelState";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import {
@@ -248,7 +249,6 @@ import {
   sanitizeThreadErrorMessage,
 } from "~/rpc/transportError";
 import { retainActiveThreadDetailSubscription } from "../environments/runtime/service";
-import { RightPanelSheet } from "./RightPanelSheet";
 import { Button } from "./ui/button";
 import {
   mergeDevServerLinks,
@@ -1027,7 +1027,7 @@ export default function ChatView(props: ChatViewProps) {
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const diffOpen = rawSearch.diff === "1";
-  const sourceControlOpen = useSourceControlPanelState().open && !diffOpen;
+  const sourceControlOpen = useSourceControlPanelState().open;
   const activeThreadId = activeThread?.id ?? null;
   const activeThreadRef = useMemo(
     () => (activeThread ? scopeThreadRef(activeThread.environmentId, activeThread.id) : null),
@@ -1814,9 +1814,17 @@ export default function ChatView(props: ChatViewProps) {
   );
   const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
   const currentPlanSidebarDismissalKey = useMemo(() => {
-    const key = activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
+    const key =
+      activeLatestTurn?.turnId ??
+      activePlan?.turnId ??
+      sidebarProposedPlan?.turnId ??
+      "__dismissed__";
     return String(key);
-  }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
+  }, [activeLatestTurn?.turnId, activePlan?.turnId, sidebarProposedPlan?.turnId]);
+  const dismissPlanSidebarForCurrentTurn = useCallback(() => {
+    planSidebarDismissedForTurnRef.current = currentPlanSidebarDismissalKey;
+    setPlanSidebarOpen(false);
+  }, [currentPlanSidebarDismissalKey]);
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -2290,14 +2298,41 @@ export default function ChatView(props: ChatViewProps) {
   const toggleFileExplorerSidebar = useCallback(() => {
     if (fileExplorerOpen) {
       closeWorkspaceFilePreview();
+      if (diffOpen) {
+        if (routeKind === "draft" && draftId) {
+          void navigate({
+            to: "/draft/$draftId",
+            params: buildDraftThreadRouteParams(draftId),
+            replace: true,
+            search: (previous) => buildClosedDiffSearch(previous),
+          });
+        } else {
+          void navigate({
+            to: "/$environmentId/$threadId",
+            params: { environmentId, threadId },
+            replace: true,
+            search: (previous) => buildClosedDiffSearch(previous),
+          });
+        }
+      }
       return;
     }
     if (!activeFileExplorerContext) {
       return;
     }
-    setPlanSidebarOpen(false);
-    openWorkspaceFileExplorer(activeFileExplorerContext);
-  }, [activeFileExplorerContext, fileExplorerOpen]);
+    dismissPlanSidebarForCurrentTurn();
+    openWorkspaceFileExplorer(activeFileExplorerContext, { navigation: "replace" });
+  }, [
+    activeFileExplorerContext,
+    dismissPlanSidebarForCurrentTurn,
+    diffOpen,
+    draftId,
+    environmentId,
+    fileExplorerOpen,
+    navigate,
+    routeKind,
+    threadId,
+  ]);
   useEffect(() => {
     setActiveWorkspaceFileExplorerContext(activeFileExplorerContext);
     return () => {
@@ -2349,9 +2384,9 @@ export default function ChatView(props: ChatViewProps) {
   );
   const openDiffPanelExclusive = useCallback(() => {
     closeWorkspaceFilePreview();
-    closeSourceControlPanel();
+    dismissPlanSidebarForCurrentTurn();
     onDiffPanelOpen?.();
-  }, [onDiffPanelOpen]);
+  }, [dismissPlanSidebarForCurrentTurn, onDiffPanelOpen]);
   const onToggleDiff = useCallback(() => {
     if (routeKind === "server" && !isServerThread) {
       return;
@@ -2392,6 +2427,10 @@ export default function ChatView(props: ChatViewProps) {
       return buildOpenDiffSearch(previous, { source: openDiffSource });
     };
 
+    if (diffOpen) {
+      closeWorkspaceFilePreview();
+    }
+
     if (routeKind === "draft" && draftId) {
       void navigate({
         to: "/draft/$draftId",
@@ -2429,10 +2468,10 @@ export default function ChatView(props: ChatViewProps) {
       closeSourceControlPanel();
       return;
     }
-    setPlanSidebarOpen(false);
+    dismissPlanSidebarForCurrentTurn();
     // Opens the source control panel and closes any other registered right panel.
     openRightPanel("source-control");
-  }, [sourceControlOpen]);
+  }, [dismissPlanSidebarForCurrentTurn, sourceControlOpen]);
 
   const envLocked = Boolean(
     activeThread &&
@@ -2921,37 +2960,54 @@ export default function ChatView(props: ChatViewProps) {
   const toggleInteractionMode = useCallback(() => {
     handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
   }, [handleInteractionModeChange, interactionMode]);
-  const hidePlanSidebar = useCallback(() => {
-    setPlanSidebarOpen(false);
-  }, []);
   const openPlanSidebar = useCallback(() => {
     planSidebarDismissedForTurnRef.current = null;
     closeWorkspaceFilePreview();
-    closeSourceControlPanel();
     markRightPanelUsed("plan");
     setPlanSidebarOpen(true);
   }, []);
   const togglePlanSidebar = useCallback(() => {
-    setPlanSidebarOpen((open) => {
-      if (open) {
-        planSidebarDismissedForTurnRef.current = currentPlanSidebarDismissalKey;
-      } else {
-        planSidebarDismissedForTurnRef.current = null;
-        closeWorkspaceFilePreview();
-        closeSourceControlPanel();
-        markRightPanelUsed("plan");
-      }
-      return !open;
-    });
-  }, [currentPlanSidebarDismissalKey]);
-  const closePlanSidebar = useCallback(() => {
-    setPlanSidebarOpen(false);
-    planSidebarDismissedForTurnRef.current = currentPlanSidebarDismissalKey;
-  }, [currentPlanSidebarDismissalKey]);
+    if (planSidebarOpen) {
+      dismissPlanSidebarForCurrentTurn();
+      return;
+    }
+    planSidebarDismissedForTurnRef.current = null;
+    openRightPanel("plan");
+  }, [dismissPlanSidebarForCurrentTurn, planSidebarOpen]);
+  const planRightPanelContent = useMemo(
+    () => ({
+      open: planSidebarOpen,
+      onClose: dismissPlanSidebarForCurrentTurn,
+      render: (mode: "sheet" | "sidebar") => (
+        <PlanSidebar
+          activePlan={activePlan}
+          activeProposedPlan={sidebarProposedPlan}
+          label={planSidebarLabel}
+          environmentId={environmentId}
+          markdownCwd={gitCwd ?? undefined}
+          workspaceRoot={activeWorkspaceRoot}
+          timestampFormat={timestampFormat}
+          mode={mode}
+          onClose={dismissPlanSidebarForCurrentTurn}
+        />
+      ),
+    }),
+    [
+      activePlan,
+      activeWorkspaceRoot,
+      dismissPlanSidebarForCurrentTurn,
+      environmentId,
+      gitCwd,
+      planSidebarLabel,
+      planSidebarOpen,
+      sidebarProposedPlan,
+      timestampFormat,
+    ],
+  );
+  useRegisterPlanRightPanelContent(planRightPanelContent);
 
   useRegisterRightPanel({
-    close: hidePlanSidebar,
-    enabled: shouldUsePlanSidebarSheet,
+    close: dismissPlanSidebarForCurrentTurn,
     kind: "plan",
     open: openPlanSidebar,
   });
@@ -2960,7 +3016,7 @@ export default function ChatView(props: ChatViewProps) {
     action: "close",
     enabled: shouldUsePlanSidebarSheet && planSidebarOpen,
     horizontalScrollOwnerScope: "all",
-    onSwipe: closePlanSidebar,
+    onSwipe: dismissPlanSidebarForCurrentTurn,
     side: "right",
     startArea: "screen",
     startSurface: "panel",
@@ -3173,7 +3229,7 @@ export default function ChatView(props: ChatViewProps) {
     const shouldOpenPlanSidebar =
       routeKind === "server" && consumePlanSidebarAutoOpen(routeThreadRef);
     if (shouldOpenPlanSidebar) {
-      setPlanSidebarOpen(true);
+      openRightPanel("plan");
     } else {
       setPlanSidebarOpen(false);
     }
@@ -3233,7 +3289,7 @@ export default function ChatView(props: ChatViewProps) {
     const latestTurnId = activeLatestTurn?.turnId ?? null;
     if (latestTurnId && activePlan.turnId !== latestTurnId) return;
     if (planSidebarDismissedForTurnRef.current === currentPlanSidebarDismissalKey) return;
-    setPlanSidebarOpen(true);
+    openRightPanel("plan");
   }, [
     activePlan,
     activeLatestTurn?.turnId,
@@ -4569,7 +4625,7 @@ export default function ChatView(props: ChatViewProps) {
         // step-tracking activities that the sidebar will display.
         if (nextInteractionMode === "default" && canAutoOpenPlanSidebar) {
           planSidebarDismissedForTurnRef.current = null;
-          setPlanSidebarOpen(true);
+          openRightPanel("plan");
         }
         sendInFlightRef.current = false;
       } catch (err) {
@@ -5092,21 +5148,6 @@ export default function ChatView(props: ChatViewProps) {
           ) : null}
         </div>
         {/* end chat column */}
-
-        {/* Plan sidebar */}
-        {planSidebarOpen && !shouldUsePlanSidebarSheet ? (
-          <PlanSidebar
-            activePlan={activePlan}
-            activeProposedPlan={sidebarProposedPlan}
-            label={planSidebarLabel}
-            environmentId={environmentId}
-            markdownCwd={gitCwd ?? undefined}
-            workspaceRoot={activeWorkspaceRoot}
-            timestampFormat={timestampFormat}
-            mode="sidebar"
-            onClose={closePlanSidebar}
-          />
-        ) : null}
       </div>
       {/* end horizontal flex container */}
 
@@ -5127,22 +5168,6 @@ export default function ChatView(props: ChatViewProps) {
           onAddTerminalContext={addTerminalContextToDraft}
         />
       ))}
-      {shouldUsePlanSidebarSheet ? (
-        <RightPanelSheet open={planSidebarOpen} onClose={closePlanSidebar}>
-          <PlanSidebar
-            activePlan={activePlan}
-            activeProposedPlan={sidebarProposedPlan}
-            label={planSidebarLabel}
-            environmentId={environmentId}
-            markdownCwd={gitCwd ?? undefined}
-            workspaceRoot={activeWorkspaceRoot}
-            timestampFormat={timestampFormat}
-            mode="sheet"
-            onClose={closePlanSidebar}
-          />
-        </RightPanelSheet>
-      ) : null}
-
       {expandedImage && (
         <ExpandedImageDialog preview={expandedImage} onClose={closeExpandedImage} />
       )}

@@ -13,8 +13,9 @@ import {
 } from "../diffRouteSearch";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useMobileEdgeSwipe } from "../hooks/useMobileEdgeSwipe";
+import { useWorkspaceFilePanelRouteSync } from "../hooks/useWorkspaceFilePanelRouteSync";
 import {
-  resolveRightFilePanelVisibility,
+  resolveRightPanelSurfaceView,
   RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY,
 } from "../rightPanelLayout";
 import {
@@ -26,16 +27,14 @@ import { createThreadSelectorAcrossEnvironments } from "../storeSelectors";
 import { useStore } from "../store";
 import { buildThreadRouteParams } from "../threadRoutes";
 import {
+  buildWorkspaceFilePanelDraftOwnerKey,
   closeWorkspaceFilePreview,
+  hasWorkspaceDiffPanelInStack,
   reopenWorkspaceFilePanel,
   type WorkspaceFilePreviewDiffReturnTarget,
   useWorkspaceFilePanelState,
 } from "../workspaceFilePreview";
-import {
-  closeSourceControlPanel,
-  openSourceControlPanel,
-  useSourceControlPanelState,
-} from "../sourceControlPanelState";
+import { openSourceControlPanel } from "../sourceControlPanelState";
 
 function DraftChatThreadRouteView() {
   const navigate = useNavigate();
@@ -53,16 +52,21 @@ function DraftChatThreadRouteView() {
   const serverThreadStarted = threadHasStarted(serverThread);
   const serverThreadHasSubmittedMessage = Boolean(serverThread && serverThread.messages.length > 0);
   const diffOpen = search.diff === "1";
-  const filePanel = useWorkspaceFilePanelState();
-  const filePanelOpen = filePanel.open;
-  const sourceControlOpen = useSourceControlPanelState().open;
-  const shouldUseRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
-  const rightFilePanel = resolveRightFilePanelVisibility({
+  const workspaceFilePanelOwnerKey = buildWorkspaceFilePanelDraftOwnerKey(draftId);
+  useWorkspaceFilePanelRouteSync({
+    ownerKey: workspaceFilePanelOwnerKey,
     diffOpen,
-    filePanelOpen,
-    hasStoredFilePanelContext: filePanel.target !== null || filePanel.explorerContext !== null,
-    sourceControlOpen,
-    useSheet: shouldUseRightPanelSheet,
+    ...(search.diffSource ? { diffSource: search.diffSource } : {}),
+    ...(search.diffTurnId ? { diffTurnId: search.diffTurnId } : {}),
+    ...(search.diffFilePath ? { diffFilePath: search.diffFilePath } : {}),
+  });
+  const filePanel = useWorkspaceFilePanelState();
+  const sourceControlOpen = filePanel.open && filePanel.view === "source-control";
+  const shouldUseRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const activeRightPanelView = resolveRightPanelSurfaceView({
+    diffRouteOpen: diffOpen,
+    panelOpen: filePanel.open,
+    panelView: filePanel.view,
   });
   const [diffPanelMountState, setDiffPanelMountState] = useState(() => ({
     draftId,
@@ -99,7 +103,7 @@ function DraftChatThreadRouteView() {
   const shouldNavigateToCanonicalThread = Boolean(
     canonicalThreadRef && (!draftSession?.promotedTo || serverThreadHasSubmittedMessage),
   );
-  const closeDiff = useCallback(() => {
+  const closeDiffRoute = useCallback(() => {
     if (!diffOpen) {
       return;
     }
@@ -109,12 +113,14 @@ function DraftChatThreadRouteView() {
       search: (previous) => buildClosedDiffSearch(previous),
     });
   }, [diffOpen, draftId, navigate]);
+  const closeRightPanel = useCallback(() => {
+    closeWorkspaceFilePreview();
+    closeDiffRoute();
+  }, [closeDiffRoute]);
   const openDiff = useCallback(() => {
     if (!draftSession) {
       return;
     }
-    closeWorkspaceFilePreview();
-    closeSourceControlPanel();
     markDiffOpened();
     void navigate({
       to: "/draft/$draftId",
@@ -123,11 +129,17 @@ function DraftChatThreadRouteView() {
     });
   }, [draftId, draftSession, markDiffOpened, navigate]);
   const openFilePanel = useCallback(() => {
+    if (!hasWorkspaceDiffPanelInStack()) {
+      closeDiffRoute();
+    }
     reopenWorkspaceFilePanel();
-  }, []);
+  }, [closeDiffRoute]);
+  const openSourceControl = useCallback(() => {
+    closeDiffRoute();
+    openSourceControlPanel();
+  }, [closeDiffRoute]);
   const returnFromFilePreview = useCallback(
     (returnTarget: WorkspaceFilePreviewDiffReturnTarget) => {
-      closeWorkspaceFilePreview();
       if (!draftSession) {
         return;
       }
@@ -215,38 +227,33 @@ function DraftChatThreadRouteView() {
   }, [diffOpen]);
 
   useEffect(() => {
-    if (rightFilePanel.open && !sourceControlOpen) {
+    if (activeRightPanelView === "files" && !sourceControlOpen) {
       markRightPanelUsed("file");
     }
-  }, [rightFilePanel.open, sourceControlOpen]);
+  }, [activeRightPanelView, sourceControlOpen]);
 
   useRegisterRightPanel({
-    close: closeDiff,
+    close: closeRightPanel,
     enabled: draftSession !== null,
     kind: "diff",
     open: openDiff,
   });
   useRegisterRightPanel({
-    close: closeWorkspaceFilePreview,
+    close: closeRightPanel,
     enabled: draftSession !== null,
     kind: "file",
     open: openFilePanel,
   });
   useRegisterRightPanel({
-    close: closeSourceControlPanel,
+    close: closeRightPanel,
     enabled: draftSession !== null,
     kind: "source-control",
-    open: openSourceControlPanel,
+    open: openSourceControl,
   });
 
   useMobileEdgeSwipe({
     blockedByOpenPanelSide: "left",
-    enabled:
-      shouldUseRightPanelSheet &&
-      !diffOpen &&
-      !rightFilePanel.open &&
-      !sourceControlOpen &&
-      !leftSidebarOpenMobile,
+    enabled: shouldUseRightPanelSheet && activeRightPanelView === null && !leftSidebarOpenMobile,
     onSwipe: openLastUsedRightPanel,
     side: "right",
     startArea: "screen",
@@ -255,30 +262,9 @@ function DraftChatThreadRouteView() {
 
   useMobileEdgeSwipe({
     action: "close",
-    enabled:
-      shouldUseRightPanelSheet && sourceControlOpen && !rightFilePanel.sourceControlHiddenByDiff,
+    enabled: shouldUseRightPanelSheet && activeRightPanelView !== null,
     horizontalScrollOwnerScope: "all",
-    onSwipe: closeSourceControlPanel,
-    side: "right",
-    startArea: "screen",
-    startSurface: "panel",
-  });
-
-  useMobileEdgeSwipe({
-    action: "close",
-    enabled: shouldUseRightPanelSheet && diffOpen,
-    horizontalScrollOwnerScope: "all",
-    onSwipe: closeDiff,
-    side: "right",
-    startArea: "screen",
-    startSurface: "panel",
-  });
-
-  useMobileEdgeSwipe({
-    action: "close",
-    enabled: shouldUseRightPanelSheet && rightFilePanel.open && !sourceControlOpen,
-    horizontalScrollOwnerScope: "all",
-    onSwipe: closeWorkspaceFilePreview,
+    onSwipe: closeRightPanel,
     side: "right",
     startArea: "screen",
     startSurface: "panel",
@@ -303,11 +289,20 @@ function DraftChatThreadRouteView() {
   // See the thread route: reopen restores from the store, so only keep the
   // file/source-control panel mounted-while-closed inline, not on the mobile
   // sheet where the resident diff rendering is a crash risk.
-  const shouldRenderFilePanelContent = rightFilePanel.renderContent;
+  const shouldRenderFilePanelContent =
+    activeRightPanelView === "files" ||
+    (!shouldUseRightPanelSheet &&
+      (filePanel.target !== null || filePanel.explorerContext !== null));
   // See the thread route: keeping the diff panel (and its worker pool) mounted
   // after it closes is a memory win for inline layout switches but a crash risk
   // on the mobile sheet, so tear it down on dismiss there.
   const shouldRenderDiffContent = diffOpen || (!shouldUseRightPanelSheet && hasOpenedDiff);
+  const reopenRightPanel =
+    activeRightPanelView === "diff"
+      ? openDiff
+      : sourceControlOpen
+        ? openSourceControl
+        : openFilePanel;
 
   return (
     <>
@@ -322,13 +317,10 @@ function DraftChatThreadRouteView() {
         />
       </SidebarInset>
       <ChatRightPanels
-        diff={{
-          open: diffOpen,
-          onClose: closeDiff,
-          onOpen: openDiff,
-          renderContent: shouldRenderDiffContent,
-        }}
-        fileOpen={rightFilePanel.open}
+        activeView={activeRightPanelView}
+        onClose={closeRightPanel}
+        onOpen={reopenRightPanel}
+        renderDiffContent={shouldRenderDiffContent}
         renderFileContent={shouldRenderFilePanelContent}
         useSheet={shouldUseRightPanelSheet}
         onReturnFromFileToDiff={returnFromFilePreview}

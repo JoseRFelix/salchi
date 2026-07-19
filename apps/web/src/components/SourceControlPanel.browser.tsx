@@ -667,7 +667,7 @@ describe("SourceControlPanel git action runner", () => {
     }
   });
 
-  it("moves staged and unstaged file rows exclusively into the matching diff sidebar", async () => {
+  it("routes staged and unstaged file rows without mutating the panel before route commit", async () => {
     currentGitStatusRef.current = createPanelStatus({
       stagedFiles: [{ path: "staged-only.ts", status: "modified", insertions: 1, deletions: 0 }],
       unstagedFiles: [
@@ -707,11 +707,10 @@ describe("SourceControlPanel git action runner", () => {
         diffFilePath: "staged-only.ts",
         panel: "activity",
       });
-      await vi.waitFor(() => {
-        expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
-          open: false,
-          view: "source-control",
-        });
+      expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+        open: true,
+        view: "source-control",
+        history: [],
       });
 
       openWorkspaceSourceControlPanel();
@@ -730,11 +729,10 @@ describe("SourceControlPanel git action runner", () => {
         diffFilePath: "unstaged-only.ts",
         panel: "activity",
       });
-      await vi.waitFor(() => {
-        expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
-          open: false,
-          view: "source-control",
-        });
+      expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+        open: true,
+        view: "source-control",
+        history: [],
       });
     } finally {
       await screen.unmount();
@@ -770,11 +768,10 @@ describe("SourceControlPanel git action runner", () => {
       await vi.waitFor(() => {
         expect(navigateSpy).toHaveBeenCalled();
       });
-      await vi.waitFor(() => {
-        expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
-          open: false,
-          view: "source-control",
-        });
+      expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+        open: true,
+        view: "source-control",
+        history: [],
       });
     } finally {
       await firstRender.screen.unmount();

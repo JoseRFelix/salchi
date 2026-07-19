@@ -36,6 +36,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { render } from "vitest-browser-react";
 
 import { useCommandPaletteStore } from "../commandPaletteStore";
+import { CLIENT_SETTINGS_STORAGE_KEY } from "../clientPersistenceStorage";
 import { useComposerDraftStore, DraftId } from "../composerDraftStore";
 import {
   __resetEnvironmentApiOverridesForTests,
@@ -1390,6 +1391,56 @@ function createSnapshotWithPendingUserInput(): OrchestrationReadModel {
         : thread,
     ),
   };
+}
+
+function createSnapshotWithActivePlan(): OrchestrationReadModel {
+  const snapshot = createSnapshotForTargetUser({
+    targetMessageId: "msg-user-active-plan-target" as MessageId,
+    targetText: "active plan thread",
+    sessionStatus: "running",
+  });
+  const activeTurnId = snapshot.threads[0]?.latestTurn?.turnId;
+  if (!activeTurnId) {
+    throw new Error("Expected an active turn in the plan fixture.");
+  }
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            messages: [],
+            activities: [
+              {
+                id: EventId.make("activity-active-plan"),
+                tone: "info",
+                kind: "turn.plan.updated",
+                summary: "Plan updated",
+                payload: {
+                  explanation: "Active plan explanation",
+                  plan: [{ step: "Keep the selected workspace panel open", status: "inProgress" }],
+                },
+                turnId: activeTurnId,
+                sequence: 1,
+                createdAt: isoAt(1_000),
+              },
+            ],
+            updatedAt: isoAt(1_000),
+          }
+        : thread,
+    ),
+  };
+}
+
+function enableAutoOpenPlanSidebarForTest(): void {
+  localStorage.setItem(
+    CLIENT_SETTINGS_STORAGE_KEY,
+    JSON.stringify({
+      ...DEFAULT_CLIENT_SETTINGS,
+      autoOpenPlanSidebar: true,
+    }),
+  );
 }
 
 function createSnapshotWithPlanFollowUpPrompt(options?: {
@@ -7733,7 +7784,16 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(search.diff).toBe("1");
           expect(search.diffTurnId).toBe(checkpointTurnId);
           expect(search.diffFilePath).toBe("README.md");
-          expect(__readWorkspaceFilePanelStateForTests().open).toBe(false);
+          expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+            open: true,
+            view: "diff",
+            diffTarget: {
+              kind: "diff",
+              diffTurnId: checkpointTurnId,
+              diffFilePath: "README.md",
+            },
+            history: [],
+          });
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -7980,6 +8040,188 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await mounted.cleanup();
     }
   });
+
+  it.each([
+    {
+      buttonLabel: "Toggle source control",
+      expectedView: "source-control" as const,
+      panelName: "source control",
+    },
+    {
+      buttonLabel: "Toggle file explorer",
+      expectedView: "explorer" as const,
+      panelName: "file explorer",
+    },
+    {
+      buttonLabel: "Toggle diff panel",
+      expectedView: "diff" as const,
+      panelName: "diff",
+    },
+  ])(
+    "keeps $panelName open after dismissing an auto-opened plan for the active turn",
+    async ({ buttonLabel, expectedView }) => {
+      enableAutoOpenPlanSidebarForTest();
+      const mounted = await mountChatView({
+        viewport: WIDE_FOOTER_VIEWPORT,
+        snapshot: createSnapshotWithActivePlan(),
+      });
+
+      try {
+        await expect
+          .element(page.getByText("Keep the selected workspace panel open"))
+          .toBeVisible();
+
+        await page.getByRole("button", { name: buttonLabel }).click();
+        await vi.waitFor(
+          () => {
+            expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+              open: true,
+              view: expectedView,
+            });
+            expect(document.body.textContent).not.toContain(
+              "Keep the selected workspace panel open",
+            );
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        await waitForLayout();
+
+        expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+          open: true,
+          view: expectedView,
+        });
+        expect(document.body.textContent).not.toContain("Keep the selected workspace panel open");
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it("keeps the selected workspace panel open when the active turn's first plan arrives", async () => {
+    enableAutoOpenPlanSidebarForTest();
+    const plannedSnapshot = createSnapshotWithActivePlan();
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: {
+        ...plannedSnapshot,
+        threads: plannedSnapshot.threads.map((thread) => ({ ...thread, activities: [] })),
+      },
+    });
+
+    try {
+      await page.getByRole("button", { name: "Toggle source control" }).click();
+      await vi.waitFor(() => {
+        expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+          open: true,
+          view: "source-control",
+        });
+      });
+
+      fixture.snapshot = { ...plannedSnapshot, snapshotSequence: 2 };
+      emitThreadDetailSnapshot(THREAD_ID);
+      await vi.waitFor(() => {
+        expect(
+          selectThreadByRef(useStore.getState(), THREAD_REF)?.activities.some(
+            (activity) => activity.kind === "turn.plan.updated",
+          ),
+        ).toBe(true);
+      });
+      await waitForLayout();
+
+      expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+        open: true,
+        view: "source-control",
+      });
+      expect(document.body.textContent).not.toContain("Keep the selected workspace panel open");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it.each([
+    { label: "web", standalone: false, viewport: WIDE_FOOTER_VIEWPORT },
+    { label: "installed PWA", standalone: true, viewport: COMPACT_FOOTER_VIEWPORT },
+  ])(
+    "navigates the shared right-panel stack on $label",
+    async ({ standalone, viewport }) => {
+      if (standalone) {
+        emulateStandalonePwa();
+      }
+      const changedFile = {
+        path: "README.md",
+        status: "modified" as const,
+        insertions: 1,
+        deletions: 1,
+      };
+      useGitStatusMock.mockReturnValue({
+        ...repositoryGitStatusState,
+        data: {
+          ...repositoryGitStatusState.data,
+          hasWorkingTreeChanges: true,
+          workingTree: {
+            files: [changedFile],
+            insertions: 1,
+            deletions: 1,
+            staged: { files: [], insertions: 0, deletions: 0 },
+            unstaged: { files: [changedFile], insertions: 1, deletions: 1 },
+          },
+        },
+      });
+      const mounted = await mountChatView({
+        viewport,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: `msg-user-right-panel-${standalone ? "pwa" : "web"}` as MessageId,
+          targetText: "right panel stack target",
+        }),
+        resolveRpc: (body) =>
+          body._tag === WS_METHODS.vcsGetWorkingTreeDiff ? { diff: README_FILE_DIFF } : undefined,
+      });
+
+      try {
+        await page.getByRole("button", { name: "Toggle source control" }).click();
+        await expect.element(page.getByText("README.md")).toBeVisible();
+        await page.getByText("README.md").click();
+
+        await vi.waitFor(() => {
+          expect(mounted.router.state.location.search).toMatchObject({
+            diff: "1",
+            diffSource: "unstaged",
+            diffFilePath: "README.md",
+          });
+          expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+            open: true,
+            view: "diff",
+            history: [{ kind: "source-control" }],
+          });
+        });
+        await expect
+          .element(page.getByRole("button", { name: "Back to source control" }))
+          .toBeVisible();
+
+        if (standalone) {
+          expect(document.querySelectorAll('[data-right-panel-sheet="true"]')).toHaveLength(1);
+        } else {
+          const rightPanel = document.querySelector('[data-chat-right-panel-primary="true"]');
+          expect(rightPanel?.querySelectorAll('[data-slot="sidebar"]')).toHaveLength(1);
+        }
+
+        await page.getByRole("button", { name: "Back to source control" }).click();
+        await vi.waitFor(() => {
+          expect(mounted.router.state.location.search.diff).toBeUndefined();
+          expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+            open: true,
+            view: "source-control",
+            history: [],
+          });
+        });
+        await expect.element(page.getByText("Changes", { exact: true })).toBeVisible();
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+    60_000,
+  );
 
   it("uses the configured diff toggle binding without discarding the selected diff target", async () => {
     const mounted = await mountChatView({
