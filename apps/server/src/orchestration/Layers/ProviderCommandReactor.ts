@@ -371,6 +371,9 @@ const make = Effect.gen(function* () {
       return true;
     }
     const thread = yield* resolveThread(threadId);
+    if (thread?.session?.activeTurnId !== null && thread?.session?.activeTurnId !== undefined) {
+      return true;
+    }
     const sessionStatus = thread?.session?.status;
     return sessionStatus === "starting" || sessionStatus === "running";
   });
@@ -1026,9 +1029,11 @@ const make = Effect.gen(function* () {
   ) {
     const threadKey = String(event.payload.threadId);
     const { session } = event.payload;
-    if (session.status === "running" && session.activeTurnId !== null) {
+    if (session.activeTurnId !== null) {
       activeTurnStartThreadIds.add(threadKey);
-      observedRunningTurnThreadIds.add(threadKey);
+      if (session.status === "running") {
+        observedRunningTurnThreadIds.add(threadKey);
+      }
       return;
     }
     if (session.status === "starting" && activeTurnStartThreadIds.has(threadKey)) {

@@ -2639,6 +2639,49 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("allows local interaction-mode slash commands while the provider is unauthenticated", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-provider-auth-local-slash" as MessageId,
+        targetText: "provider auth local slash",
+      }),
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      const provider = fixture.serverConfig.providers[0];
+      if (!provider) {
+        throw new Error("Expected the default provider fixture.");
+      }
+      applyProvidersUpdated({
+        providers: [
+          {
+            ...provider,
+            status: "error",
+            auth: { status: "unauthenticated" },
+            message: "Sign in before sending.",
+          },
+        ],
+      });
+
+      useComposerDraftStore.getState().setPrompt(THREAD_REF, "/plan");
+      await waitForLayout();
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+
+      await waitForInteractionModeButton("Plan");
+      expect(
+        wsRequests.filter((request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand),
+      ).toHaveLength(0);
+      expect(useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.prompt ?? "").toBe("");
+      expect(document.body.textContent).not.toContain("Sign in before sending.");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("renders locked single-environment mobile run context as a static workspace label", async () => {
     const mounted = await mountChatView({
       viewport: COMPACT_FOOTER_VIEWPORT,
@@ -7005,6 +7048,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           createdAt: NOW_ISO,
         },
       );
+      useComposerDraftStore.getState().setPrompt(staleDraftId, "stale promoted composer text");
       expect(useComposerDraftStore.getState().getDraftSession(staleDraftId)?.promotedTo).toBeNull();
       expect(selectThreadByRef(useStore.getState(), THREAD_REF)).not.toBeNull();
 
@@ -7017,6 +7061,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       expect(draftIdFromPath(freshDraftPath)).not.toBe(staleDraftId);
       expect(draftThreadIdFor(draftIdFromPath(freshDraftPath))).not.toBe(THREAD_ID);
+      expect(useComposerDraftStore.getState().getDraftSession(staleDraftId)).toBeNull();
+      expect(useComposerDraftStore.getState().getComposerDraft(staleDraftId)).toBeNull();
     } finally {
       await mounted.cleanup();
     }

@@ -82,6 +82,9 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
     isAutoCompactEnabled: false,
     apiUsage: null,
   };
+  public interruptHandler: () => Promise<void> = () => Promise.resolve();
+  public getContextUsageHandler: () => Promise<SDKControlGetContextUsageResponse> = () =>
+    Promise.resolve(this.contextUsageResponse);
   public closeCalls = 0;
 
   emit(message: SDKMessage): void {
@@ -120,6 +123,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
 
   readonly interrupt = async (): Promise<void> => {
     this.interruptCalls.push(undefined);
+    await this.interruptHandler();
   };
 
   readonly setModel = async (model?: string): Promise<void> => {
@@ -136,7 +140,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
 
   readonly getContextUsage = async (): Promise<SDKControlGetContextUsageResponse> => {
     this.getContextUsageCalls.push(undefined);
-    return this.contextUsageResponse;
+    return this.getContextUsageHandler();
   };
 
   readonly close = (): void => {
@@ -2127,6 +2131,129 @@ describe("ClaudeAdapterLive", () => {
           turnCompleted.payload.errorMessage,
           "Claude is not authenticated. Run `claude auth login` and try again.",
         );
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("fails and closes the session when the authentication interrupt never resolves", () => {
+    const harness = makeHarness();
+    harness.query.interruptHandler = () => new Promise<void>(() => undefined);
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 8).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "system",
+        subtype: "api_retry",
+        attempt: 1,
+        max_retries: 10,
+        retry_delay_ms: 500,
+        error_status: 401,
+        error: "authentication_failed",
+        session_id: "sdk-session-auth-interrupt-timeout",
+        uuid: "api-retry-auth-interrupt-timeout",
+      } as unknown as SDKMessage);
+
+      while (harness.query.interruptCalls.length === 0) {
+        yield* Effect.yieldNow;
+      }
+      yield* TestClock.adjust("10 seconds");
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.equal(harness.query.interruptCalls.length, 1);
+      assert.equal(harness.query.closeCalls, 1);
+      assert.deepEqual(
+        runtimeEvents.map((event) => event.type),
+        [
+          "session.started",
+          "session.configured",
+          "session.state.changed",
+          "turn.started",
+          "thread.started",
+          "runtime.error",
+          "turn.completed",
+          "session.exited",
+        ],
+      );
+      const turnCompleted = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.equal(turnCompleted?.type, "turn.completed");
+      if (turnCompleted?.type === "turn.completed") {
+        assert.equal(String(turnCompleted.turnId), String(turn.turnId));
+        assert.equal(turnCompleted.payload.state, "failed");
+        assert.equal(
+          turnCompleted.payload.errorMessage,
+          "Claude is not authenticated. Run `claude auth login` and try again.",
+        );
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("completes the turn when the final context usage request never resolves", () => {
+    const harness = makeHarness();
+    harness.query.getContextUsageHandler = () =>
+      new Promise<SDKControlGetContextUsageResponse>(() => undefined);
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "done",
+        errors: [],
+        stop_reason: "end_turn",
+        session_id: "sdk-session-context-usage-timeout",
+        uuid: "result-context-usage-timeout",
+      } as unknown as SDKMessage);
+
+      while (harness.query.getContextUsageCalls.length === 0) {
+        yield* Effect.yieldNow;
+      }
+      yield* TestClock.adjust("10 seconds");
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const turnCompleted = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.equal(turnCompleted?.type, "turn.completed");
+      if (turnCompleted?.type === "turn.completed") {
+        assert.equal(String(turnCompleted.turnId), String(turn.turnId));
+        assert.equal(turnCompleted.payload.state, "completed");
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

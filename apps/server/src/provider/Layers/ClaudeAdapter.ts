@@ -117,6 +117,7 @@ const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.UnknownFromJ
 const PROVIDER = ProviderDriverKind.make("claudeAgent");
 const CLAUDE_USAGE_REFRESH_INTERVAL = Duration.seconds(30);
 const CLAUDE_USAGE_REFRESH_TIMEOUT = Duration.seconds(10);
+const CLAUDE_INTERRUPT_TIMEOUT = Duration.seconds(10);
 const CLAUDE_RATE_LIMIT_RESET_STALE_GRACE_MS = 2 * 60 * 1000;
 const CLAUDE_OAUTH_USAGE_CACHE_TTL_MS = 15 * 1000;
 const CLAUDE_OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
@@ -2602,7 +2603,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       } catch {
         return undefined;
       }
-    });
+    }).pipe(Effect.timeoutOption(CLAUDE_USAGE_REFRESH_TIMEOUT), Effect.map(Option.getOrUndefined));
     if (!usage) {
       return undefined;
     }
@@ -3569,7 +3570,22 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
                 "Failed to interrupt Claude after an authentication failure.",
                 context.session.threadId,
               ),
-          });
+          }).pipe(
+            Effect.timeoutOption(CLAUDE_INTERRUPT_TIMEOUT),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(
+                    new ProviderAdapterProcessError({
+                      provider: PROVIDER,
+                      threadId: context.session.threadId,
+                      detail: "Timed out interrupting Claude after an authentication failure.",
+                    }),
+                  ),
+                onSome: () => Effect.void,
+              }),
+            ),
+          );
           return;
         }
         yield* emitRuntimeWarning(

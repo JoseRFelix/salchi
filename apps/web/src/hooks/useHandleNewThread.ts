@@ -1,4 +1,4 @@
-import { scopedProjectKey, scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
+import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime";
 import { DEFAULT_RUNTIME_MODE, type ScopedProjectRef } from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
@@ -15,7 +15,12 @@ import {
   getProjectOrderKey,
   selectProjectGroupingSettings,
 } from "../logicalProject";
-import { selectProjectsAcrossEnvironments, selectThreadExistsByRef, useStore } from "../store";
+import { selectProjectsAcrossEnvironments, useStore } from "../store";
+import {
+  draftThreadExistsOnServer,
+  draftThreadServerRef,
+  finalizeMaterializedPromotedDraftThreadByRef,
+} from "../draftPromotionRecovery";
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { useUiStateStore } from "../uiStateStore";
@@ -66,11 +71,11 @@ function useNewThreadState() {
           ? getDraftThread(currentRouteTarget.threadRef)
           : getDraftSession(currentRouteTarget.draftId)
         : null;
-      const draftThreadExistsOnServer = (draftThread: DraftThreadState): boolean =>
-        selectThreadExistsByRef(
-          useStore.getState(),
-          scopeThreadRef(draftThread.environmentId, draftThread.threadId),
-        );
+      if (latestActiveDraftThread && draftThreadExistsOnServer(latestActiveDraftThread)) {
+        const activeThreadRef = draftThreadServerRef(latestActiveDraftThread);
+        markDraftThreadPromoting(activeThreadRef, activeThreadRef);
+        finalizeMaterializedPromotedDraftThreadByRef(activeThreadRef);
+      }
       if (storedDraftThread && !draftThreadExistsOnServer(storedDraftThread)) {
         return (async () => {
           if (hasBranchOption || hasWorktreePathOption || hasEnvModeOption) {
@@ -96,10 +101,9 @@ function useNewThreadState() {
         })();
       }
       if (storedDraftThread) {
-        markDraftThreadPromoting(
-          storedDraftThread.draftId,
-          scopeThreadRef(storedDraftThread.environmentId, storedDraftThread.threadId),
-        );
+        const storedThreadRef = draftThreadServerRef(storedDraftThread);
+        markDraftThreadPromoting(storedDraftThread.draftId, storedThreadRef);
+        finalizeMaterializedPromotedDraftThreadByRef(storedThreadRef);
       }
 
       if (
@@ -140,6 +144,14 @@ function useNewThreadState() {
           envMode: options?.envMode ?? "local",
           runtimeMode: DEFAULT_RUNTIME_MODE,
         });
+        if (storedDraftThread) {
+          finalizeMaterializedPromotedDraftThreadByRef(draftThreadServerRef(storedDraftThread));
+        }
+        if (latestActiveDraftThread) {
+          finalizeMaterializedPromotedDraftThreadByRef(
+            draftThreadServerRef(latestActiveDraftThread),
+          );
+        }
 
         await router.navigate({
           to: "/draft/$draftId",

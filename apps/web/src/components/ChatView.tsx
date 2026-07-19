@@ -160,6 +160,11 @@ import {
   useComposerDraftStore,
   type DraftId,
 } from "../composerDraftStore";
+import {
+  draftThreadExistsOnServer,
+  draftThreadServerRef,
+  finalizeMaterializedPromotedDraftThreadByRef,
+} from "../draftPromotionRecovery";
 import { useLocalDispatchStore } from "../localDispatchStore";
 import {
   appendTerminalContextsToPrompt,
@@ -845,6 +850,7 @@ export default function ChatView(props: ChatViewProps) {
   );
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
+  const markDraftThreadPromoting = useComposerDraftStore((store) => store.markDraftThreadPromoting);
   const getDraftSessionByLogicalProjectKey = useComposerDraftStore(
     (store) => store.getDraftSessionByLogicalProjectKey,
   );
@@ -1437,8 +1443,16 @@ export default function ChatView(props: ChatViewProps) {
         activeProject,
         projectGroupingSettings,
       );
+      const supersededDraftThreadRefs: ScopedThreadRef[] = [];
       const storedDraftSession = getDraftSessionByLogicalProjectKey(logicalProjectKey);
-      if (storedDraftSession) {
+      const activeDraftSession = routeKind === "draft" && draftId ? getDraftSession(draftId) : null;
+      if (activeDraftSession && draftId && draftThreadExistsOnServer(activeDraftSession)) {
+        const activeDraftThreadRef = draftThreadServerRef(activeDraftSession);
+        supersededDraftThreadRefs.push(activeDraftThreadRef);
+        markDraftThreadPromoting(draftId, activeDraftThreadRef);
+        finalizeMaterializedPromotedDraftThreadByRef(activeDraftThreadRef);
+      }
+      if (storedDraftSession && !draftThreadExistsOnServer(storedDraftSession)) {
         setDraftThreadContext(storedDraftSession.draftId, input);
         setLogicalProjectDraftThreadId(
           logicalProjectKey,
@@ -1457,12 +1471,17 @@ export default function ChatView(props: ChatViewProps) {
         }
         return storedDraftSession.threadId;
       }
-
-      const activeDraftSession = routeKind === "draft" && draftId ? getDraftSession(draftId) : null;
+      if (storedDraftSession) {
+        const storedThreadRef = draftThreadServerRef(storedDraftSession);
+        supersededDraftThreadRefs.push(storedThreadRef);
+        markDraftThreadPromoting(storedDraftSession.draftId, storedThreadRef);
+        finalizeMaterializedPromotedDraftThreadByRef(storedThreadRef);
+      }
       if (
         !isServerThread &&
         activeDraftSession?.logicalProjectKey === logicalProjectKey &&
-        draftId
+        draftId &&
+        !draftThreadExistsOnServer(activeDraftSession)
       ) {
         setDraftThreadContext(draftId, input);
         setLogicalProjectDraftThreadId(logicalProjectKey, activeProjectRef, draftId, {
@@ -1474,7 +1493,6 @@ export default function ChatView(props: ChatViewProps) {
         });
         return activeDraftSession.threadId;
       }
-
       const nextDraftId = newDraftId();
       const nextThreadId = newThreadId();
       initializeFreshProjectDraftThread(logicalProjectKey, activeProjectRef, nextDraftId, {
@@ -1484,6 +1502,9 @@ export default function ChatView(props: ChatViewProps) {
         interactionMode: DEFAULT_INTERACTION_MODE,
         ...input,
       });
+      for (const supersededDraftThreadRef of supersededDraftThreadRefs) {
+        finalizeMaterializedPromotedDraftThreadByRef(supersededDraftThreadRef);
+      }
       await navigate({
         to: "/draft/$draftId",
         params: buildDraftThreadRouteParams(nextDraftId),
@@ -1497,6 +1518,7 @@ export default function ChatView(props: ChatViewProps) {
       getDraftSessionByLogicalProjectKey,
       initializeFreshProjectDraftThread,
       isServerThread,
+      markDraftThreadPromoting,
       navigate,
       projectGroupingSettings,
       routeKind,
@@ -3682,15 +3704,18 @@ export default function ChatView(props: ChatViewProps) {
       providers: providerStatuses,
       instanceId: ctxSelectedModelSelection.instanceId,
     });
-    if (providerAuthenticationBlockReason) {
+    const blockUnauthenticatedProviderSend = (): boolean => {
+      if (!providerAuthenticationBlockReason) {
+        return false;
+      }
       setThreadError(activeThread.id, providerAuthenticationBlockReason);
       toastManager.add({
         type: "error",
         title: "Provider sign-in required",
         description: providerAuthenticationBlockReason,
       });
-      return;
-    }
+      return true;
+    };
     const promptForSend = promptRef.current;
     const {
       trimmedPrompt: trimmed,
@@ -3703,6 +3728,9 @@ export default function ChatView(props: ChatViewProps) {
       terminalContexts: composerTerminalContexts,
     });
     if (showPlanFollowUpPrompt && activeProposedPlan) {
+      if (blockUnauthenticatedProviderSend()) {
+        return;
+      }
       const followUp = resolvePlanFollowUpSubmission({
         draftText: trimmed,
         planMarkdown: activeProposedPlan.planMarkdown,
@@ -3741,6 +3769,9 @@ export default function ChatView(props: ChatViewProps) {
           }),
         );
       }
+      return;
+    }
+    if (blockUnauthenticatedProviderSend()) {
       return;
     }
     if (!activeProject) return;

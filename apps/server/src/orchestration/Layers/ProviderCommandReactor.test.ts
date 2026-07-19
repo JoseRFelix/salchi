@@ -711,6 +711,111 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("keeps queued turns blocked while an errored session still has an active turn", async () => {
+    const harness = await createHarness({ autoCompleteTurns: false });
+    const threadId = ThreadId.make("thread-1");
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-active-error-1"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-active-error-1"),
+          role: "user",
+          text: "active turn",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-running-active-error"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "claudeAgent",
+          providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-active-error"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-active-error-2"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-active-error-2"),
+          role: "user",
+          text: "must remain queued",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-error-active-error"),
+        threadId,
+        session: {
+          threadId,
+          status: "error",
+          providerName: "claudeAgent",
+          providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-active-error"),
+          lastError: "Claude authentication failed",
+          updatedAt: "2026-01-01T00:00:02.000Z",
+        },
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-completed-active-error"),
+        threadId,
+        session: {
+          threadId,
+          status: "error",
+          providerName: "claudeAgent",
+          providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: "Claude authentication failed",
+          updatedAt: "2026-01-01T00:00:03.000Z",
+        },
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
+      threadId,
+      input: "must remain queued",
+    });
+  });
+
   it("promotes queued turns FIFO after the current turn settles and skips cancelled turns", async () => {
     const harness = await createHarness({ autoCompleteTurns: false });
     const now = "2026-01-01T00:00:00.000Z";

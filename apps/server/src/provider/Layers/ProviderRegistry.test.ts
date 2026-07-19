@@ -1584,6 +1584,59 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
         ),
       );
 
+      it.effect("re-evaluates Claude SDK authentication on every provider check", () => {
+        let capabilities: TestClaudeCapabilities = {
+          email: undefined,
+          organization: undefined,
+          subscriptionType: undefined,
+          tokenSource: "none",
+          apiKeySource: undefined,
+          apiProvider: "firstParty",
+          slashCommands: [],
+        };
+        const resolveCapabilities = () => Effect.sync(() => capabilities);
+
+        return Effect.gen(function* () {
+          const loggedOut = yield* checkClaudeProviderStatus(
+            defaultClaudeSettings,
+            resolveCapabilities,
+          );
+          assert.strictEqual(loggedOut.auth.status, "unauthenticated");
+
+          capabilities = {
+            ...capabilities,
+            email: "claude@example.com",
+            tokenSource: "keychain",
+          };
+          const loggedIn = yield* checkClaudeProviderStatus(
+            defaultClaudeSettings,
+            resolveCapabilities,
+          );
+          assert.strictEqual(loggedIn.auth.status, "authenticated");
+          assert.strictEqual(loggedIn.auth.email, "claude@example.com");
+
+          capabilities = {
+            ...capabilities,
+            email: undefined,
+            tokenSource: "none",
+          };
+          const loggedOutAgain = yield* checkClaudeProviderStatus(
+            defaultClaudeSettings,
+            resolveCapabilities,
+          );
+          assert.strictEqual(loggedOutAgain.auth.status, "unauthenticated");
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              if (args.join(" ") === "--version") {
+                return { stdout: "2.1.214\n", stderr: "", code: 0 };
+              }
+              throw new Error(`Unexpected args: ${args.join(" ")}`);
+            }),
+          ),
+        );
+      });
+
       it.effect(
         "includes Claude Fable 5 with high as the default effort on supported versions",
         () =>
