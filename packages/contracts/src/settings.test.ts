@@ -27,8 +27,8 @@ describe("ClientSettings defaults", () => {
 });
 
 describe("ServerSettings.transcriptionModel", () => {
-  it("defaults legacy settings to the balanced English model", () => {
-    expect(decodeServerSettings({}).transcriptionModel).toBe("base.en");
+  it("defaults legacy settings to the small English model", () => {
+    expect(decodeServerSettings({}).transcriptionModel).toBe("small.en");
   });
 
   it("accepts supported model sizes and rejects unknown models", () => {

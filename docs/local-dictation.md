@@ -8,7 +8,7 @@ the transcription process stays bound to loopback.
 
 On Linux x64 and arm64, dictation is enabled by default and does not delay server
 startup. After the server starts, Salchi downloads a pinned official
-`whisper.cpp` release and the selected English model in the background. Base is
+`whisper.cpp` release and the selected English model in the background. Small is
 the default. If someone records during setup, the composer shows download
 progress while that recording waits for the model.
 
@@ -17,8 +17,13 @@ Choose a model in **Settings → General → Dictation model**:
 | Model         | Download | Approximate memory | Tradeoff                |
 | ------------- | -------: | -----------------: | ----------------------- |
 | Tiny English  |    75 MB |             273 MB | Fastest, lower accuracy |
-| Base English  |   142 MB |             388 MB | Balanced (default)      |
-| Small English |   466 MB |             852 MB | More accurate, slower   |
+| Base English  |   142 MB |             388 MB | Balanced                |
+| Small English |   253 MB |             560 MB | More accurate (default) |
+
+Small uses the official 8-bit quantized model to reduce its CPU and memory cost
+while retaining the Small architecture. For canonical mono 16 kHz WAV uploads,
+Salchi also selects an encoder context sized to the recording with one second of
+padding. Longer or unrecognized recordings retain Whisper's full context.
 
 Files are cached under Salchi's provider status cache, in its `dictation`
 directory, so later starts and model switches check and reuse cached downloads.

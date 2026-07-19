@@ -4,11 +4,72 @@ import {
   calculateDictationAudioLevel,
   encodeMonoPcm16Wav,
   formatDictationRecordingDuration,
+  localTranscriptionStatusQueryKey,
+  localTranscriptionStatusRefetchInterval,
   resampleToMonoPcm,
   resolveDictationInstallationState,
   resolveDictationInsertion,
   selectDictationAudioMimeType,
 } from "./dictation";
+
+describe("dictation status refresh", () => {
+  it("uses the selected model as part of the status cache contract", () => {
+    const environmentId = "env-local" as Parameters<typeof localTranscriptionStatusQueryKey>[0];
+
+    expect(localTranscriptionStatusQueryKey(environmentId, "base.en")).toEqual([
+      "local-transcription-status",
+      environmentId,
+      "base.en",
+    ]);
+    expect(localTranscriptionStatusQueryKey(environmentId, "small.en")).not.toEqual(
+      localTranscriptionStatusQueryKey(environmentId, "base.en"),
+    );
+  });
+
+  it("resumes polling terminal status while a recording is being transcribed", () => {
+    const ready = {
+      configured: true,
+      state: "ready" as const,
+      downloadedBytes: null,
+      totalBytes: null,
+      message: null,
+    };
+
+    expect(localTranscriptionStatusRefetchInterval({ transcribing: false, status: ready })).toBe(
+      false,
+    );
+    expect(localTranscriptionStatusRefetchInterval({ transcribing: true, status: ready })).toBe(
+      750,
+    );
+  });
+
+  it("polls non-terminal installation states and stops on terminal failures", () => {
+    expect(
+      localTranscriptionStatusRefetchInterval({
+        transcribing: false,
+        status: {
+          configured: true,
+          state: "downloading-model",
+          downloadedBytes: 1,
+          totalBytes: 2,
+          message: null,
+        },
+      }),
+    ).toBe(750);
+    expect(
+      localTranscriptionStatusRefetchInterval({
+        transcribing: false,
+        status: {
+          configured: true,
+          state: "error",
+          downloadedBytes: null,
+          totalBytes: null,
+          message: "failed",
+        },
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("dictation recording feedback", () => {
   it("calculates microphone amplitude from time-domain samples", () => {

@@ -29,9 +29,9 @@ export const TRANSCRIPTION_MODELS = [
   {
     id: "small.en",
     label: "Small",
-    downloadBytes: 487_614_201,
-    downloadSizeLabel: "466 MB",
-    memorySizeLabel: "~852 MB RAM",
+    downloadBytes: 264_477_561,
+    downloadSizeLabel: "253 MB",
+    memorySizeLabel: "~560 MB RAM",
     qualityLabel: "More accurate, slower",
   },
 ] as const satisfies ReadonlyArray<TranscriptionModelMetadata>;
