@@ -7,10 +7,13 @@ import {
 } from "@t3tools/contracts";
 import {
   getComposerProviderState,
+  renderProviderReasoningPicker,
   renderProviderTraitsMenuContent,
+  renderProviderTraitsMenuContentWithoutReasoning,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
 import { shouldRenderTraitsControls } from "./TraitsPicker";
+import { DraftId } from "../../composerDraftStore";
 
 // Everything in composerProviderState is now data-driven by the model's
 // optionDescriptors, so these tests use a single synthetic provider/model and
@@ -263,5 +266,45 @@ describe("provider traits render guards", () => {
 
     expect(renderProviderTraitsPicker(args)).toBeNull();
     expect(renderProviderTraitsMenuContent(args)).toBeNull();
+  });
+});
+
+describe("compact reasoning split", () => {
+  const draftId = DraftId.make("draft-reasoning-split");
+
+  function argsFor(descriptors: ReadonlyArray<ProviderOptionDescriptor>) {
+    return {
+      provider: PROVIDER,
+      model: MODEL,
+      models: modelWith(descriptors),
+      modelOptions: undefined,
+      prompt: "",
+      onPromptChange: () => {},
+      draftId,
+    };
+  }
+
+  it("renders a standalone picker only for models with reasoning controls", () => {
+    const reasoning = selectDescriptor("reasoningEffort", [
+      { id: "low", label: "Low" },
+      { id: "high", label: "High", isDefault: true },
+    ]);
+
+    expect(renderProviderReasoningPicker(argsFor([reasoning]))).not.toBeNull();
+    expect(renderProviderReasoningPicker(argsFor([booleanDescriptor("fastMode")]))).toBeNull();
+  });
+
+  it("keeps reasoning out of compact more-controls content", () => {
+    const reasoning = selectDescriptor("reasoningEffort", [
+      { id: "low", label: "Low" },
+      { id: "high", label: "High", isDefault: true },
+    ]);
+
+    expect(renderProviderTraitsMenuContentWithoutReasoning(argsFor([reasoning]))).toBeNull();
+    expect(
+      renderProviderTraitsMenuContentWithoutReasoning(
+        argsFor([reasoning, booleanDescriptor("fastMode")]),
+      ),
+    ).not.toBeNull();
   });
 });

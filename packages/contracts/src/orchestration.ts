@@ -835,6 +835,15 @@ const ThreadQueuedTurnCancelCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadQueuedTurnUpdateCommand = Schema.Struct({
+  type: Schema.Literal("thread.queued-turn.update"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  text: Schema.String,
+  createdAt: IsoDateTime,
+});
+
 const ThreadQueuedTurnSteerCommand = Schema.Struct({
   type: Schema.Literal("thread.queued-turn.steer"),
   commandId: CommandId,
@@ -898,6 +907,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
   ThreadTurnQueueCommand,
+  ThreadQueuedTurnUpdateCommand,
   ThreadQueuedTurnCancelCommand,
   ThreadQueuedTurnSteerCommand,
   ThreadTurnInterruptCommand,
@@ -922,6 +932,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
   ClientThreadTurnQueueCommand,
+  ThreadQueuedTurnUpdateCommand,
   ThreadQueuedTurnCancelCommand,
   ThreadQueuedTurnSteerCommand,
   ThreadTurnInterruptCommand,
@@ -1070,6 +1081,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.interaction-mode-set",
   "thread.message-sent",
   "thread.turn-queued",
+  "thread.queued-turn-updated",
   "thread.queued-turn-cancelled",
   "thread.queued-turn-dispatched",
   "thread.queued-turn-steer-requested",
@@ -1206,6 +1218,14 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
 
 export const ThreadTurnQueuedPayload = OrchestrationQueuedTurn;
 export type ThreadTurnQueuedPayload = typeof ThreadTurnQueuedPayload.Type;
+
+export const ThreadQueuedTurnUpdatedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  text: Schema.String,
+  updatedAt: IsoDateTime,
+});
+export type ThreadQueuedTurnUpdatedPayload = typeof ThreadQueuedTurnUpdatedPayload.Type;
 
 export const ThreadQueuedTurnCancelledPayload = Schema.Struct({
   threadId: ThreadId,
@@ -1392,6 +1412,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-queued"),
     payload: ThreadTurnQueuedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.queued-turn-updated"),
+    payload: ThreadQueuedTurnUpdatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

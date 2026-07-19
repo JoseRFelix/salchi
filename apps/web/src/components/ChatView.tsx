@@ -880,6 +880,10 @@ export default function ChatView(props: ChatViewProps) {
   optimisticQueuedTurnsRef.current = optimisticQueuedTurns;
   const [cancelingQueuedMessageIds, setCancelingQueuedMessageIds] = useState<MessageId[]>([]);
   const [steeringQueuedMessageIds, setSteeringQueuedMessageIds] = useState<MessageId[]>([]);
+  const [updatingQueuedMessageIds, setUpdatingQueuedMessageIds] = useState<MessageId[]>([]);
+  const [queuedTurnTextOverrides, setQueuedTurnTextOverrides] = useState<Record<string, string>>(
+    {},
+  );
   const [interruptingTurnId, setInterruptingTurnId] = useState<TurnId | null>(null);
   const [localDraftErrorsByDraftId, setLocalDraftErrorsByDraftId] = useState<
     Record<string, string | null>
@@ -2047,25 +2051,35 @@ export default function ChatView(props: ChatViewProps) {
   );
   const queuedTurnsForComposer = useMemo(() => {
     const serverQueuedTurns = activeThread?.queuedTurns ?? [];
-    if (optimisticQueuedTurns.length === 0) {
-      return serverQueuedTurns;
-    }
     const serverQueuedTurnIds = new Set(
       serverQueuedTurns.map((queuedTurn) => queuedTurn.messageId),
     );
-    const pendingOptimisticQueuedTurns = optimisticQueuedTurns.filter(
-      (queuedTurn) =>
-        queuedTurn.threadId === activeThread?.id && !serverQueuedTurnIds.has(queuedTurn.messageId),
-    );
-    if (pendingOptimisticQueuedTurns.length === 0) {
-      return serverQueuedTurns;
+    const pendingOptimisticQueuedTurns =
+      optimisticQueuedTurns.length === 0
+        ? []
+        : optimisticQueuedTurns.filter(
+            (queuedTurn) =>
+              queuedTurn.threadId === activeThread?.id &&
+              !serverQueuedTurnIds.has(queuedTurn.messageId),
+          );
+    const combinedQueuedTurns =
+      pendingOptimisticQueuedTurns.length === 0
+        ? serverQueuedTurns
+        : [...serverQueuedTurns, ...pendingOptimisticQueuedTurns].toSorted(
+            (left, right) =>
+              left.createdAt.localeCompare(right.createdAt) ||
+              left.messageId.localeCompare(right.messageId),
+          );
+    if (Object.keys(queuedTurnTextOverrides).length === 0) {
+      return combinedQueuedTurns;
     }
-    return [...serverQueuedTurns, ...pendingOptimisticQueuedTurns].toSorted(
-      (left, right) =>
-        left.createdAt.localeCompare(right.createdAt) ||
-        left.messageId.localeCompare(right.messageId),
-    );
-  }, [activeThread?.id, activeThread?.queuedTurns, optimisticQueuedTurns]);
+    return combinedQueuedTurns.map((queuedTurn) => {
+      const textOverride = queuedTurnTextOverrides[queuedTurn.messageId];
+      return textOverride === undefined || textOverride === queuedTurn.text
+        ? queuedTurn
+        : { ...queuedTurn, text: textOverride };
+    });
+  }, [activeThread?.id, activeThread?.queuedTurns, optimisticQueuedTurns, queuedTurnTextOverrides]);
   const cancelingQueuedMessageIdSet = useMemo(
     () => new Set(cancelingQueuedMessageIds),
     [cancelingQueuedMessageIds],
@@ -2074,9 +2088,13 @@ export default function ChatView(props: ChatViewProps) {
     () => new Set(steeringQueuedMessageIds),
     [steeringQueuedMessageIds],
   );
-  const steerableQueuedMessageIdSet = useMemo(
+  const persistedQueuedMessageIdSet = useMemo(
     () => new Set(activeThread?.queuedTurns.map((queuedTurn) => queuedTurn.messageId) ?? []),
     [activeThread?.queuedTurns],
+  );
+  const updatingQueuedMessageIdSet = useMemo(
+    () => new Set(updatingQueuedMessageIds),
+    [updatingQueuedMessageIds],
   );
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
@@ -3297,6 +3315,28 @@ export default function ChatView(props: ChatViewProps) {
   }, [activeThread?.id, activeThread?.queuedTurns, optimisticQueuedTurns]);
 
   useEffect(() => {
+    setQueuedTurnTextOverrides((existing) => {
+      const entries = Object.entries(existing);
+      if (entries.length === 0) {
+        return existing;
+      }
+      const serverQueuedTurnById = new Map(
+        (activeThread?.queuedTurns ?? []).map((queuedTurn) => [queuedTurn.messageId, queuedTurn]),
+      );
+      let changed = false;
+      const next = { ...existing };
+      for (const [messageId, text] of entries) {
+        const serverQueuedTurn = serverQueuedTurnById.get(messageId as MessageId);
+        if (!serverQueuedTurn || serverQueuedTurn.text === text) {
+          delete next[messageId];
+          changed = true;
+        }
+      }
+      return changed ? next : existing;
+    });
+  }, [activeThread?.queuedTurns]);
+
+  useEffect(() => {
     if (!activeThread?.id || activeThread.messages.length === 0) {
       return;
     }
@@ -3353,6 +3393,9 @@ export default function ChatView(props: ChatViewProps) {
       return [];
     });
     setCancelingQueuedMessageIds([]);
+    setSteeringQueuedMessageIds([]);
+    setUpdatingQueuedMessageIds([]);
+    setQueuedTurnTextOverrides({});
     setInterruptingTurnId(null);
     setExpandedImage(null);
   }, [activeThreadKey]);
@@ -4097,6 +4140,62 @@ export default function ChatView(props: ChatViewProps) {
       resetLocalDispatch();
     }
   };
+
+  const onUpdateQueuedTurn = useCallback(
+    async (messageId: MessageId, text: string): Promise<boolean> => {
+      const api = readEnvironmentApi(environmentId);
+      if (!api || !activeThread) return false;
+      const previousTextOverride = queuedTurnTextOverrides[messageId];
+
+      setUpdatingQueuedMessageIds((existing) =>
+        existing.includes(messageId) ? existing : [...existing, messageId],
+      );
+      setQueuedTurnTextOverrides((existing) => ({
+        ...existing,
+        [messageId]: text,
+      }));
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.queued-turn.update",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          messageId,
+          text,
+          createdAt: new Date().toISOString(),
+        });
+        setQueuedTurnTextOverrides((existing) => {
+          if (existing[messageId] !== text) {
+            return existing;
+          }
+          const next = { ...existing };
+          delete next[messageId];
+          return next;
+        });
+        return true;
+      } catch (err) {
+        setQueuedTurnTextOverrides((existing) => {
+          if (existing[messageId] !== text) {
+            return existing;
+          }
+          const next = { ...existing };
+          if (previousTextOverride === undefined) {
+            delete next[messageId];
+          } else {
+            next[messageId] = previousTextOverride;
+          }
+          return next;
+        });
+        setThreadError(
+          activeThread.id,
+          err instanceof Error ? err.message : "Failed to update queued message.",
+        );
+        return false;
+      } finally {
+        setUpdatingQueuedMessageIds((existing) => existing.filter((id) => id !== messageId));
+      }
+    },
+    [activeThread, environmentId, queuedTurnTextOverrides, setThreadError],
+  );
 
   const onCancelQueuedTurn = useCallback(
     async (messageId: MessageId) => {
@@ -4885,8 +4984,10 @@ export default function ChatView(props: ChatViewProps) {
                   queuedTurns={queuedTurnsForComposer}
                   cancelingQueuedMessageIds={cancelingQueuedMessageIdSet}
                   steeringQueuedMessageIds={steeringQueuedMessageIdSet}
-                  steerableQueuedMessageIds={steerableQueuedMessageIdSet}
+                  updatingQueuedMessageIds={updatingQueuedMessageIdSet}
+                  persistedQueuedMessageIds={persistedQueuedMessageIdSet}
                   canSteerQueuedTurns={canSteerQueuedTurns}
+                  onUpdateQueuedTurn={onUpdateQueuedTurn}
                   onCancelQueuedTurn={onCancelQueuedTurn}
                   onSteerQueuedTurn={onSteerQueuedTurn}
                   activePendingApproval={activePendingApproval}

@@ -3,6 +3,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   EnvironmentId,
   ModelSelection,
+  type ProviderOptionDescriptor,
   ProviderInstanceId,
   ProviderDriverKind,
   ThreadId,
@@ -16,8 +17,11 @@ import { render } from "vitest-browser-react";
 import { createModelCapabilities, createModelSelection } from "@t3tools/shared/model";
 
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
-import { TraitsMenuContent } from "./TraitsPicker";
+import { isReasoningDescriptor, TraitsMenuContent } from "./TraitsPicker";
 import { useComposerDraftStore } from "../../composerDraftStore";
+
+const withoutReasoning = (descriptor: ProviderOptionDescriptor) =>
+  !isReasoningDescriptor(descriptor);
 
 const LOCAL_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 
@@ -150,6 +154,7 @@ async function mountMenu(props?: { modelSelection?: ModelSelection; prompt?: str
           prompt={props?.prompt ?? ""}
           modelOptions={providerOptions}
           onPromptChange={onPromptChange}
+          descriptorFilter={withoutReasoning}
         />
       }
       onToggleInteractionMode={vi.fn()}
@@ -214,7 +219,7 @@ describe("CompactComposerControlsMenu", () => {
     });
   });
 
-  it("shows reasoning controls inside the more-controls menu", async () => {
+  it("omits reasoning controls from the more-controls menu", async () => {
     await using _ = await mountMenu({
       modelSelection: createModelSelection(
         ProviderInstanceId.make("claudeAgent"),
@@ -226,10 +231,8 @@ describe("CompactComposerControlsMenu", () => {
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Reasoning");
-      expect(text).toContain("Low");
-      expect(text).toContain("High");
-      expect(text).toContain("Ultrathink");
+      expect(text).not.toContain("Reasoning");
+      expect(text).not.toContain("Ultrathink");
       expect(text).toContain("Fast Mode");
     });
   });

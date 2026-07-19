@@ -1,3 +1,6 @@
+// Production CSS is part of the provider rail geometry under test.
+import "../../index.css";
+
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import { EnvironmentId } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
@@ -17,6 +20,7 @@ import {
   DEFAULT_UNIFIED_SETTINGS,
   type UnifiedSettings,
 } from "@t3tools/contracts/settings";
+import { CLIENT_SETTINGS_STORAGE_KEY } from "../../clientPersistenceStorage";
 import { __resetLocalApiForTests } from "../../localApi";
 
 // Mock the environments/runtime module to provide a mock primary environment connection
@@ -375,6 +379,54 @@ describe("ProviderModelPicker", () => {
       });
     } finally {
       await mounted.cleanup();
+    }
+  });
+
+  it("centers the selected provider indicator on its rail button at mobile width", async () => {
+    localStorage.setItem(
+      CLIENT_SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        ...DEFAULT_CLIENT_SETTINGS,
+        favorites: [],
+      }),
+    );
+    await page.viewport(390, 844);
+    const mounted = await mountPicker({
+      activeInstanceId: CODEX_INSTANCE_ID,
+      model: "gpt-5-codex",
+      lockedProvider: null,
+      settings: {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        favorites: [],
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        const selectedProvider = document.querySelector<HTMLElement>(
+          '[data-model-picker-provider="codex"]',
+        );
+        const selectedIndicator = document.querySelector<HTMLElement>(
+          '[data-model-picker-selected-indicator="true"]',
+        );
+        expect(selectedProvider).not.toBeNull();
+        expect(selectedIndicator).not.toBeNull();
+        if (!selectedProvider || !selectedIndicator) {
+          throw new Error("Selected provider rail geometry is unavailable.");
+        }
+
+        const providerRect = selectedProvider.getBoundingClientRect();
+        const indicatorRect = selectedIndicator.getBoundingClientRect();
+        const providerCenter = providerRect.top + providerRect.height / 2;
+        const indicatorCenter = indicatorRect.top + indicatorRect.height / 2;
+        expect(Math.abs(providerCenter - indicatorCenter)).toBeLessThanOrEqual(0.5);
+      });
+    } finally {
+      await mounted.cleanup();
+      localStorage.removeItem(CLIENT_SETTINGS_STORAGE_KEY);
+      await page.viewport(1024, 768);
     }
   });
 

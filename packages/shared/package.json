@@ -135,6 +135,10 @@
       "types": "./src/orchestrationThreadDetailFingerprint.ts",
       "import": "./src/orchestrationThreadDetailFingerprint.ts"
     },
+    "./orchestrationThreadDetailEvents": {
+      "types": "./src/orchestrationThreadDetailEvents.ts",
+      "import": "./src/orchestrationThreadDetailEvents.ts"
+    },
     "./Record": {
       "types": "./src/Record.ts",
       "import": "./src/Record.ts"

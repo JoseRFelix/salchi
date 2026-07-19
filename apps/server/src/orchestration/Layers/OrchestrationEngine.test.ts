@@ -434,18 +434,32 @@ describe("OrchestrationEngine", () => {
       }),
     );
 
+    await system.run(
+      engine.dispatch({
+        type: "thread.queued-turn.update",
+        commandId: CommandId.make("cmd-turn-queue-update"),
+        threadId,
+        messageId: asMessageId("msg-queued-cancel"),
+        text: "edited before cancel",
+        createdAt: "2026-01-01T00:00:01.500Z",
+      }),
+    );
+
     const queuedReadModel = await system.readModel();
     const queuedThread = queuedReadModel.threads.find((thread) => thread.id === threadId);
     expect(queuedThread?.messages).toEqual([]);
-    expect(queuedThread?.queuedTurns.map((queuedTurn) => queuedTurn.text)).toEqual(["cancel me"]);
+    expect(queuedThread?.queuedTurns.map((queuedTurn) => queuedTurn.text)).toEqual([
+      "edited before cancel",
+    ]);
     expect(queuedThread?.queuedTurns[0]?.createdAt).toBe("2026-01-01T00:00:01.000Z");
+    expect(queuedThread?.queuedTurns[0]?.updatedAt).toBe("2026-01-01T00:00:01.500Z");
 
     const queuedDetail = await system.readThreadDetail(threadId);
     expect(Option.isSome(queuedDetail)).toBe(true);
     if (Option.isSome(queuedDetail)) {
       expect(queuedDetail.value.thread.messages).toEqual([]);
       expect(queuedDetail.value.thread.queuedTurns.map((queuedTurn) => queuedTurn.text)).toEqual([
-        "cancel me",
+        "edited before cancel",
       ]);
     }
 
@@ -489,6 +503,17 @@ describe("OrchestrationEngine", () => {
 
     await system.run(
       engine.dispatch({
+        type: "thread.queued-turn.update",
+        commandId: CommandId.make("cmd-turn-queue-dispatch-update"),
+        threadId,
+        messageId: asMessageId("msg-queued-dispatch"),
+        text: "edited dispatch me",
+        createdAt: "2026-01-01T00:00:03.500Z",
+      }),
+    );
+
+    await system.run(
+      engine.dispatch({
         type: "thread.queued-turn.dispatch",
         commandId: CommandId.make("cmd-turn-queue-dispatch-dispatch"),
         threadId,
@@ -500,7 +525,9 @@ describe("OrchestrationEngine", () => {
     const dispatchedReadModel = await system.readModel();
     const dispatchedThread = dispatchedReadModel.threads.find((thread) => thread.id === threadId);
     expect(dispatchedThread?.queuedTurns).toEqual([]);
-    expect(dispatchedThread?.messages.map((message) => message.text)).toEqual(["dispatch me"]);
+    expect(dispatchedThread?.messages.map((message) => message.text)).toEqual([
+      "edited dispatch me",
+    ]);
     expect(dispatchedThread?.messages[0]?.createdAt).toBe("2026-01-01T00:00:04.000Z");
 
     const dispatchEvents = (await system.readEvents()).filter(
@@ -517,6 +544,137 @@ describe("OrchestrationEngine", () => {
     expect(dispatchedMessageEvent?.payload).toMatchObject({
       createdAt: "2026-01-01T00:00:04.000Z",
       updatedAt: "2026-01-01T00:00:04.000Z",
+    });
+
+    await system.dispose();
+  });
+
+  it("rejects queued turn updates while steering and without content", async () => {
+    const createdAt = now();
+    const projectId = asProjectId("project-queue-update-invariants");
+    const threadId = ThreadId.make("thread-queue-update-invariants");
+    const activeTurnId = asTurnId("turn-queue-update-invariants");
+    const steeringMessageId = asMessageId("msg-queued-steering");
+    const emptyMessageId = asMessageId("msg-queued-empty-update");
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-queue-update-invariants"),
+        projectId,
+        title: "Queue update invariant project",
+        workspaceRoot: "/tmp/project-queue-update-invariants",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-queue-update-invariants"),
+        threadId,
+        projectId,
+        title: "Queue update invariant thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-queue-update-invariants"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    for (const [messageId, commandId] of [
+      [steeringMessageId, "cmd-turn-queue-steering"],
+      [emptyMessageId, "cmd-turn-queue-empty-update"],
+    ] as const) {
+      await system.run(
+        engine.dispatch({
+          type: "thread.turn.queue",
+          commandId: CommandId.make(commandId),
+          threadId,
+          message: {
+            messageId,
+            role: "user",
+            text: "queued content",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt,
+        }),
+      );
+    }
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.queued-turn.steer",
+        commandId: CommandId.make("cmd-turn-queue-steer-in-progress"),
+        threadId,
+        messageId: steeringMessageId,
+        expectedTurnId: activeTurnId,
+        createdAt,
+      }),
+    );
+
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.queued-turn.update",
+          commandId: CommandId.make("cmd-turn-queue-update-while-steering"),
+          threadId,
+          messageId: steeringMessageId,
+          text: "updated too late",
+          createdAt,
+        }),
+      ),
+    ).rejects.toMatchObject({
+      _tag: "OrchestrationCommandInvariantError",
+      commandType: "thread.queued-turn.update",
+      detail: `Queued turn '${steeringMessageId}' is already being steered into turn '${activeTurnId}'.`,
+    });
+
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.queued-turn.update",
+          commandId: CommandId.make("cmd-turn-queue-update-empty"),
+          threadId,
+          messageId: emptyMessageId,
+          text: "   ",
+          createdAt,
+        }),
+      ),
+    ).rejects.toMatchObject({
+      _tag: "OrchestrationCommandInvariantError",
+      commandType: "thread.queued-turn.update",
+      detail: `Queued turn '${emptyMessageId}' must include text or an attachment.`,
     });
 
     await system.dispose();

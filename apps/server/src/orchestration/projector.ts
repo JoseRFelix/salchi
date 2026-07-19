@@ -22,6 +22,7 @@ import {
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
+  ThreadQueuedTurnUpdatedPayload,
   ThreadQueuedTurnCancelledPayload,
   ThreadQueuedTurnDispatchedPayload,
   ThreadQueuedTurnSteerFailedPayload,
@@ -491,6 +492,43 @@ export function projectEvent(
           }),
         };
       });
+
+    case "thread.queued-turn-updated":
+      return decodeForEvent(
+        ThreadQueuedTurnUpdatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          let changed = false;
+          const queuedTurns = thread.queuedTurns.map((entry) => {
+            if (entry.messageId !== payload.messageId) {
+              return entry;
+            }
+            changed = true;
+            return {
+              ...entry,
+              text: payload.text,
+              updatedAt: payload.updatedAt,
+            };
+          });
+          if (!changed) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              queuedTurns,
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
 
     case "thread.queued-turn-cancelled":
       return decodeForEvent(

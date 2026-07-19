@@ -33,7 +33,7 @@ describe("ComposerDictationProcessingIndicator", () => {
     }
   });
 
-  it("shows only the spinner when the model is ready", async () => {
+  it("leaves the spinner to the fixed-size dictation action when the model is ready", async () => {
     const screen = await render(
       <ComposerDictationProcessingIndicator
         status={{
@@ -48,8 +48,9 @@ describe("ComposerDictationProcessingIndicator", () => {
 
     try {
       expect(document.querySelector('[role="progressbar"]')).toBeNull();
+      expect(document.querySelector('[data-chat-composer-dictation-spinner="true"]')).toBeNull();
       expect(
-        document.querySelector('[data-chat-composer-dictation-spinner="true"]'),
+        document.querySelector('[data-chat-composer-dictation-processing="true"]'),
       ).not.toBeNull();
     } finally {
       await screen.unmount();
