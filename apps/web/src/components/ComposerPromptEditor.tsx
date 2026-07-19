@@ -62,6 +62,7 @@ import {
   createComposerNativeInputTracker,
   isComposerNativeComposingKeyEvent,
   isComposerNativeInputSettling,
+  markComposerNativeInputSettling,
   markComposerNativeInputSuppression,
   readComposerNativeInputChangeMetadata,
   shouldLetBrowserHandleComposerBeforeInput,
@@ -91,8 +92,7 @@ import { formatProviderSkillDisplayName } from "~/providerSkillPresentation";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 const COMPOSER_EDITOR_HMR_KEY = `composer-editor-${Math.random().toString(36).slice(2)}`;
-const IS_IOS_WEBKIT = isIosWebkit();
-const USE_NATIVE_IOS_BACKSPACE = IS_IOS_WEBKIT && canUseBeforeInput();
+const USE_NATIVE_IOS_BACKSPACE = isIosWebkit() && canUseBeforeInput();
 const SURROUND_SYMBOLS: [string, string][] = [
   ["(", ")"],
   ["[", "]"],
@@ -1153,6 +1153,8 @@ function ComposerNativeInputPlugin(props: {
   const [editor] = useLexicalComposerContext();
 
   useEffect(() => {
+    const useIosNativeInput = isIosWebkit();
+
     const markInputType = (inputType: string | null) => {
       const tracker = props.nativeInputTrackerRef.current;
       if (!tracker) return;
@@ -1163,17 +1165,21 @@ function ComposerNativeInputPlugin(props: {
     };
 
     const onBeforeInput = (event: InputEvent) => {
-      markInputType(event.inputType);
+      const inputType = event.inputType || null;
+      markInputType(inputType);
       const target = event.target as HTMLElement | null;
       const documentSelection = target?.ownerDocument?.defaultView?.getSelection?.();
       const isSelectionCollapsed = documentSelection ? documentSelection.isCollapsed : true;
-      if (
-        !shouldLetBrowserHandleComposerBeforeInput(event.inputType, {
-          isIosWebkit: IS_IOS_WEBKIT,
-          isSelectionCollapsed,
-        })
-      ) {
+      const letBrowserHandleInput = shouldLetBrowserHandleComposerBeforeInput(inputType, {
+        isIosWebkit: useIosNativeInput,
+        isSelectionCollapsed,
+      });
+      if (!letBrowserHandleInput) {
         return;
+      }
+      const tracker = props.nativeInputTrackerRef.current;
+      if (tracker) {
+        markComposerNativeInputSettling(tracker, inputType);
       }
       event.stopPropagation();
       event.stopImmediatePropagation();
@@ -1181,7 +1187,7 @@ function ComposerNativeInputPlugin(props: {
 
     const onInput = (event: Event) => {
       const inputEvent = event as InputEvent;
-      markInputType(inputEvent.inputType ?? null);
+      markInputType(inputEvent.inputType || null);
     };
 
     const onCompositionStart = () => {
@@ -1565,6 +1571,15 @@ function ComposerPromptEditorInner({
       return;
     }
 
+    const rootElement = editor.getRootElement();
+    const isFocused = Boolean(rootElement && document.activeElement === rootElement);
+    const shouldRewriteEditorState =
+      previousSnapshot.value !== value || contextsChanged || skillsChanged;
+    const isSelectionOnlyUpdate = !shouldRewriteEditorState && isFocused;
+    if (isSelectionOnlyUpdate && isComposerNativeInputSettling(nativeInputTrackerRef.current)) {
+      return;
+    }
+
     snapshotRef.current = {
       value,
       cursor: normalizedCursor,
@@ -1574,16 +1589,7 @@ function ComposerPromptEditorInner({
     terminalContextsSignatureRef.current = terminalContextsSignature;
     skillsSignatureRef.current = skillsSignature;
 
-    const rootElement = editor.getRootElement();
-    const isFocused = Boolean(rootElement && document.activeElement === rootElement);
     if (previousSnapshot.value === value && !contextsChanged && !skillsChanged && !isFocused) {
-      return;
-    }
-
-    const shouldRewriteEditorState =
-      previousSnapshot.value !== value || contextsChanged || skillsChanged;
-    const isSelectionOnlyUpdate = !shouldRewriteEditorState && isFocused;
-    if (isSelectionOnlyUpdate && isComposerNativeInputSettling(nativeInputTrackerRef.current)) {
       return;
     }
 
