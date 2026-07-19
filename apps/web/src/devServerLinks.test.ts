@@ -137,6 +137,22 @@ describe("detectDevServerLinksFromText", () => {
     ]);
   });
 
+  it("detects the WebSocket endpoint printed by the Mobius bridge", () => {
+    expect(
+      detectDevServerLinksFromText(
+        "Mobius OpenTUI bridge listening on ws://localhost:3001/terminal",
+      ),
+    ).toEqual([
+      {
+        url: "ws://localhost:3001/terminal",
+        displayUrl: "ws://localhost:3001/terminal",
+        label: "Local localhost:3001",
+        host: "localhost:3001",
+        port: "3001",
+      },
+    ]);
+  });
+
   it("detects Vite URLs when ANSI styling splits the URL text", () => {
     expect(
       detectDevServerLinksFromText(
@@ -241,6 +257,12 @@ describe("canCurrentBrowserReachDevServerUrl", () => {
         url: "http://macbook.tail1234.ts.net:5173/",
       }),
     ).toBe(true);
+    expect(
+      canCurrentBrowserReachDevServerUrl({
+        browserHostname: "macbook.tail1234.ts.net",
+        url: "ws://100.82.150.82:3001/terminal",
+      }),
+    ).toBe(true);
   });
 
   it("rejects server-only interfaces the remote browser cannot reach", () => {
@@ -298,6 +320,43 @@ describe("rewriteDevServerLinksForTailscale", () => {
         label: "MagicDNS macbook.tail1234.ts.net:5173",
         host: "macbook.tail1234.ts.net:5173",
         port: "5173",
+      },
+    ]);
+  });
+
+  it("preserves WebSocket protocol and path when rewriting a loopback endpoint", () => {
+    const links = detectDevServerLinksFromText(
+      "Mobius OpenTUI bridge listening on ws://localhost:3001/terminal",
+    );
+
+    expect(
+      rewriteDevServerLinksForTailscale(links, {
+        environmentHttpBaseUrl: "https://macbook.tail1234.ts.net/",
+        advertisedEndpoints: [
+          {
+            id: "tailscale-ip:http://100.82.150.82:3773",
+            httpBaseUrl: "http://100.82.150.82:3773/",
+          },
+          {
+            id: "tailscale-magicdns:https://macbook.tail1234.ts.net/",
+            httpBaseUrl: "https://macbook.tail1234.ts.net/",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        url: "ws://100.82.150.82:3001/terminal",
+        displayUrl: "ws://100.82.150.82:3001/terminal",
+        label: "Tailscale IP 100.82.150.82:3001",
+        host: "100.82.150.82:3001",
+        port: "3001",
+      },
+      {
+        url: "ws://macbook.tail1234.ts.net:3001/terminal",
+        displayUrl: "ws://macbook.tail1234.ts.net:3001/terminal",
+        label: "MagicDNS macbook.tail1234.ts.net:3001",
+        host: "macbook.tail1234.ts.net:3001",
+        port: "3001",
       },
     ]);
   });

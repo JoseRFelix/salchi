@@ -29,9 +29,28 @@ describe("resolveProbeTarget", () => {
   it("defaults the port from the scheme when absent", () => {
     expect(resolveProbeTarget("https://localhost/")).toEqual({ host: "localhost", port: 443 });
     expect(resolveProbeTarget("http://localhost/")).toEqual({ host: "localhost", port: 80 });
+    expect(resolveProbeTarget("wss://localhost/terminal")).toEqual({
+      host: "localhost",
+      port: 443,
+    });
+    expect(resolveProbeTarget("ws://localhost/terminal")).toEqual({
+      host: "localhost",
+      port: 80,
+    });
   });
 
-  it("rejects public hosts, link-local metadata, and non-HTTP schemes", () => {
+  it("accepts local WebSocket endpoints with explicit ports", () => {
+    expect(resolveProbeTarget("ws://localhost:3001/terminal")).toEqual({
+      host: "localhost",
+      port: 3001,
+    });
+    expect(resolveProbeTarget("wss://100.82.150.82:3443/socket")).toEqual({
+      host: "100.82.150.82",
+      port: 3443,
+    });
+  });
+
+  it("rejects public hosts, link-local metadata, and unsupported schemes", () => {
     expect(resolveProbeTarget("http://example.com:8080/")).toBeNull();
     expect(resolveProbeTarget("http://169.254.169.254/latest/meta-data/")).toBeNull();
     expect(resolveProbeTarget("http://8.8.8.8:80/")).toBeNull();

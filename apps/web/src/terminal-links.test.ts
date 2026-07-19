@@ -37,6 +37,21 @@ describe("extractTerminalLinks", () => {
     ]);
   });
 
+  it("finds WebSocket URLs without treating their paths as file links", () => {
+    const url = "ws://localhost:3001/terminal";
+    const line = `Mobius OpenTUI bridge listening on ${url}`;
+    const start = line.indexOf(url);
+
+    expect(extractTerminalLinks(line)).toEqual([
+      {
+        kind: "url",
+        text: url,
+        start,
+        end: start + url.length,
+      },
+    ]);
+  });
+
   it("trims trailing punctuation from links", () => {
     const line = "(https://example.com/docs), ./src/main.ts:12.";
     expect(extractTerminalLinks(line)).toEqual([

@@ -921,6 +921,21 @@ export function selectTerminalDevServerLinks(
   );
 }
 
+export function selectThreadDevServerLinks(
+  terminalDevServerLinksByKey: Record<string, ReadonlyArray<DevServerLink>>,
+  threadRef: ScopedThreadRef | null | undefined,
+  terminalIds: ReadonlyArray<string>,
+): ReadonlyArray<DevServerLink> {
+  if (!threadRef || threadRef.threadId.length === 0 || terminalIds.length === 0) {
+    return EMPTY_DEV_SERVER_LINKS;
+  }
+
+  const links = terminalIds.flatMap((terminalId) =>
+    selectTerminalDevServerLinks(terminalDevServerLinksByKey, threadRef, terminalId),
+  );
+  return links.length > 0 ? mergeDevServerLinks(links) : EMPTY_DEV_SERVER_LINKS;
+}
+
 interface TerminalStateStoreState {
   terminalStateByThreadKey: Record<string, ThreadTerminalState>;
   terminalLaunchContextByThreadKey: Record<string, ThreadTerminalLaunchContext>;

@@ -589,11 +589,7 @@ function ChatHeaderDevServerButton({
   const disabledTooltipDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const probeStatuses = useDevServerReachability(links, probe, browserHostname);
   const headerProbeStatus = aggregateProbeStatus(links, probeStatuses);
-  const tooltipLabel = buttonEnabled
-    ? links.length === 1
-      ? (links[0]?.displayUrl ?? "Open dev server")
-      : "Open dev server"
-    : "No running dev servers";
+  const tooltipLabel = buttonEnabled ? "Select dev server" : "No running dev servers";
   const buttonSizeClassName = compact
     ? COMPACT_HEADER_ICON_ACTION_CLASS_NAME
     : STANDARD_HEADER_ICON_ACTION_CLASS_NAME;
@@ -668,7 +664,7 @@ function ChatHeaderDevServerButton({
     setDisabledTooltipOpen(false);
   };
 
-  if (links.length > 1) {
+  if (buttonEnabled) {
     return (
       <Tooltip>
         <Menu>
@@ -677,7 +673,7 @@ function ChatHeaderDevServerButton({
               <MenuTrigger
                 render={
                   <Button
-                    aria-label="Open detected dev server"
+                    aria-label="Select dev server"
                     className={buttonClassName}
                     size="icon-xs"
                     variant="subtle-outline"
@@ -706,55 +702,33 @@ function ChatHeaderDevServerButton({
     );
   }
 
-  const link = links[0] ?? null;
-  if (!link) {
-    return (
-      <Tooltip open={disabledTooltipOpen}>
-        <TooltipTrigger
-          render={
-            <span
-              aria-disabled="true"
-              aria-label="No running dev servers"
-              className="inline-flex shrink-0 cursor-default"
-              onBlur={hideDisabledTooltip}
-              onFocus={showDisabledTooltipImmediately}
-              onPointerDown={showDisabledTooltipImmediately}
-              onPointerEnter={showDisabledTooltipAfterHoverDelay}
-              onPointerLeave={hideDisabledTooltip}
-              role="button"
-              tabIndex={0}
-            >
-              <Button
-                aria-hidden="true"
-                className={buttonClassName}
-                disabled
-                size="icon-xs"
-                tabIndex={-1}
-                variant="subtle-outline"
-              >
-                <DevServerBrowserIcon className={iconClassName} status={headerProbeStatus} />
-              </Button>
-            </span>
-          }
-        />
-        <TooltipPopup side="bottom">{tooltipLabel}</TooltipPopup>
-      </Tooltip>
-    );
-  }
-
   return (
-    <Tooltip>
+    <Tooltip open={disabledTooltipOpen}>
       <TooltipTrigger
         render={
-          <Button
-            aria-label={`Open ${link.displayUrl}`}
-            className={buttonClassName}
-            onClick={() => openDevServerLink(link.url)}
-            size="icon-xs"
-            variant="subtle-outline"
+          <span
+            aria-disabled="true"
+            aria-label="No running dev servers"
+            className="inline-flex shrink-0 cursor-default"
+            onBlur={hideDisabledTooltip}
+            onFocus={showDisabledTooltipImmediately}
+            onPointerDown={showDisabledTooltipImmediately}
+            onPointerEnter={showDisabledTooltipAfterHoverDelay}
+            onPointerLeave={hideDisabledTooltip}
+            role="button"
+            tabIndex={0}
           >
-            <DevServerBrowserIcon className={iconClassName} status={headerProbeStatus} />
-          </Button>
+            <Button
+              aria-hidden="true"
+              className={buttonClassName}
+              disabled
+              size="icon-xs"
+              tabIndex={-1}
+              variant="subtle-outline"
+            >
+              <DevServerBrowserIcon className={iconClassName} status={headerProbeStatus} />
+            </Button>
+          </span>
         }
       />
       <TooltipPopup side="bottom">{tooltipLabel}</TooltipPopup>

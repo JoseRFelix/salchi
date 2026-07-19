@@ -7,6 +7,7 @@ import {
   selectTerminalDevServerLinks,
   selectTerminalEventEntries,
   selectTerminalSessionSnapshot,
+  selectThreadDevServerLinks,
   selectThreadTerminalState,
   useTerminalStateStore,
 } from "./terminalStateStore";
@@ -391,6 +392,59 @@ describe("terminalStateStore actions", () => {
         "default",
       ),
     ).toEqual([]);
+  });
+
+  it("collects dev server links from every split terminal before activity polling catches up", () => {
+    const store = useTerminalStateStore.getState();
+    store.applyTerminalEvent(
+      THREAD_REF,
+      makeTerminalEvent("started", {
+        snapshot: {
+          threadId: THREAD_ID,
+          terminalId: "default",
+          cwd: "/tmp/workspace",
+          worktreePath: null,
+          status: "running",
+          pid: 123,
+          history: "Local: http://localhost:5173/\n",
+          exitCode: null,
+          exitSignal: null,
+          updatedAt: "2026-04-02T20:00:00.000Z",
+        },
+      }),
+    );
+    store.applyTerminalEvent(THREAD_REF, makeTerminalEvent("activity"));
+    store.splitTerminal(THREAD_REF, "terminal-2");
+    store.applyTerminalEvent(
+      THREAD_REF,
+      makeTerminalEvent("started", {
+        terminalId: "terminal-2",
+        snapshot: {
+          threadId: THREAD_ID,
+          terminalId: "terminal-2",
+          cwd: "/tmp/workspace",
+          worktreePath: null,
+          status: "running",
+          pid: 456,
+          history: "Mobius OpenTUI bridge listening on ws://localhost:3001/terminal\n",
+          exitCode: null,
+          exitSignal: null,
+          updatedAt: "2026-04-02T20:00:01.000Z",
+        },
+      }),
+    );
+
+    const state = useTerminalStateStore.getState();
+    expect(
+      selectThreadTerminalState(state.terminalStateByThreadKey, THREAD_REF).runningTerminalIds,
+    ).toEqual(["default"]);
+    expect(
+      selectThreadDevServerLinks(
+        state.terminalDevServerLinksByKey,
+        THREAD_REF,
+        selectThreadTerminalState(state.terminalStateByThreadKey, THREAD_REF).terminalIds,
+      ).map((link) => link.url),
+    ).toEqual(["http://localhost:5173/", "ws://localhost:3001/terminal"]);
   });
 
   it("keeps dev server links separate from capped terminal snapshot history", () => {

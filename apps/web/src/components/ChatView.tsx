@@ -174,7 +174,7 @@ import {
   type TerminalContextSelection,
 } from "../lib/terminalContext";
 import {
-  selectTerminalDevServerLinks,
+  selectThreadDevServerLinks,
   selectThreadTerminalState,
   useTerminalStateStore,
 } from "../terminalStateStore";
@@ -251,7 +251,6 @@ import {
 import { retainActiveThreadDetailSubscription } from "../environments/runtime/service";
 import { Button } from "./ui/button";
 import {
-  mergeDevServerLinks,
   resolveDevServerReachabilityHostname,
   rewriteDevServerLinksForTailscale,
 } from "../devServerLinks";
@@ -1128,15 +1127,10 @@ export default function ChatView(props: ChatViewProps) {
   const activeRunningTerminalIdKey = terminalState.runningTerminalIds.join("\u0000");
   const detectedDevServerLinks = useTerminalStateStore(
     useShallow((state) => {
-      if (!activeThreadRef) return [];
-      return mergeDevServerLinks(
-        terminalState.runningTerminalIds.flatMap((terminalId) =>
-          selectTerminalDevServerLinks(
-            state.terminalDevServerLinksByKey,
-            activeThreadRef,
-            terminalId,
-          ),
-        ),
+      return selectThreadDevServerLinks(
+        state.terminalDevServerLinksByKey,
+        activeThreadRef,
+        terminalState.terminalIds,
       );
     }),
   );

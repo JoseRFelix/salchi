@@ -43,7 +43,7 @@ interface TailscaleDevServerHostAlias {
 
 const DEV_SERVER_CONTEXT_PATTERN =
   /\b(?:astro|available|development|expo|local|listening|metro|network|next(?:\.js)?|nuxt|parcel|ready|remix|rspack|rsbuild|running|serv(?:er|ing)|started|svelte(?:kit)?|turbopack|vite|webpack)\b/i;
-const URL_TOKEN_PATTERN = /https?:\/\/[^\s"'`<>]+/gi;
+const URL_TOKEN_PATTERN = /(?:https?|wss?):\/\/[^\s"'`<>]+/gi;
 // eslint-disable-next-line no-control-regex
 const ANSI_ESCAPE_PATTERN = /\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]/g;
 // eslint-disable-next-line no-control-regex
@@ -139,10 +139,15 @@ function isBrowserLoopbackHost(hostname: string): boolean {
   );
 }
 
-function parseHttpUrl(value: string): URL | null {
+function parseDevServerUrl(value: string): URL | null {
   try {
     const url = new URL(value);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
+    if (
+      url.protocol !== "http:" &&
+      url.protocol !== "https:" &&
+      url.protocol !== "ws:" &&
+      url.protocol !== "wss:"
+    ) {
       return null;
     }
     return url;
@@ -163,19 +168,19 @@ function tailscaleAliasFromHostname(hostname: string): TailscaleDevServerHostAli
 }
 
 function tailscaleAliasFromUrl(value: string): TailscaleDevServerHostAlias | null {
-  const url = parseHttpUrl(value);
+  const url = parseDevServerUrl(value);
   return url ? tailscaleAliasFromHostname(url.hostname) : null;
 }
 
 function normalizeDevServerUrl(value: string): string | null {
-  const url = parseHttpUrl(value);
+  const url = parseDevServerUrl(value);
   if (!url) return null;
   url.hash = "";
   return url.href;
 }
 
 function displayUrlFor(value: string): string {
-  const url = parseHttpUrl(value);
+  const url = parseDevServerUrl(value);
   if (!url) return value;
   if (url.pathname === "/" && url.search.length === 0 && url.hash.length === 0) {
     return url.href.slice(0, -1);
@@ -260,7 +265,7 @@ function rewriteDevServerLinkHost(
   link: DevServerLink,
   alias: TailscaleDevServerHostAlias,
 ): DevServerLink | null {
-  const url = parseHttpUrl(link.url);
+  const url = parseDevServerUrl(link.url);
   if (!url) return null;
   url.hostname = alias.hostname;
 
@@ -284,7 +289,7 @@ export function rewriteDevServerLinksForTailscale(
   }
 
   const rewrittenLinks = links.flatMap((link) => {
-    const url = parseHttpUrl(link.url);
+    const url = parseDevServerUrl(link.url);
     if (!url || !isLoopbackDevHost(url.hostname)) {
       return [link];
     }
@@ -317,7 +322,7 @@ export function detectDevServerLinksFromText(text: string): DevServerLink[] {
       const normalizedUrl = normalizeDevServerUrl(link.text);
       if (!normalizedUrl) continue;
 
-      const parsed = parseHttpUrl(normalizedUrl);
+      const parsed = parseDevServerUrl(normalizedUrl);
       if (!parsed || !isDevServerCandidate(parsed, context)) continue;
 
       candidatesByUrl.set(normalizedUrl, {
@@ -405,7 +410,7 @@ export function canCurrentBrowserReachDevServerUrl(input: {
   readonly browserHostname: string;
   readonly url: string;
 }): boolean {
-  const parsed = parseHttpUrl(input.url);
+  const parsed = parseDevServerUrl(input.url);
   if (!parsed) return false;
 
   const urlHost = normalizeHostname(parsed.hostname);

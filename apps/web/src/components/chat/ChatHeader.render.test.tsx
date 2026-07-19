@@ -72,10 +72,11 @@ describe("ChatHeader", () => {
     useMediaQueryMock.mockReturnValue(false);
   });
 
-  it("renders the dev server action in the desktop header", () => {
+  it("renders a dev server selector for a single detected link", () => {
     const markup = renderHeader([DEV_SERVER_LINK]);
 
-    expect(markup).toContain('aria-label="Open http://localhost:5173"');
+    expect(markup).toContain('aria-label="Select dev server"');
+    expect(markup).toContain('aria-haspopup="menu"');
   });
 
   it("uses non-overlapping 44px subtle outline controls in the compact header", () => {
