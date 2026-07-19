@@ -29,6 +29,11 @@ import {
 const WHISPER_REQUEST_TIMEOUT = "2 minutes";
 const WHISPER_PROMPT =
   "Salchi, Codex, Claude, Effect, TypeScript, JavaScript, Bun, React, WebSocket, GitHub, worktree.";
+const WHISPER_AUDIO_CONTEXT_MAX = 1_500;
+const WHISPER_AUDIO_CONTEXT_MIN = 256;
+const WHISPER_AUDIO_CONTEXT_STEP = 256;
+const WHISPER_AUDIO_CONTEXT_PADDING_FRAMES = 50;
+const WHISPER_SAMPLES_PER_AUDIO_CONTEXT_FRAME = 320;
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 
 export type LocalTranscriptionErrorReason =
@@ -104,6 +109,96 @@ function audioFileExtension(contentType: string): string {
     default:
       return "webm";
   }
+}
+
+function bytesMatchAscii(bytes: Uint8Array, offset: number, value: string): boolean {
+  if (offset < 0 || offset + value.length > bytes.length) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    if (bytes[offset + index] !== value.charCodeAt(index)) return false;
+  }
+  return true;
+}
+
+export function resolveWhisperAudioContext(input: LocalTranscriptionInput): number | null {
+  const contentType = input.contentType.split(";", 1)[0]?.trim().toLowerCase();
+  if (contentType !== "audio/wav" && contentType !== "audio/x-wav") return null;
+
+  const bytes = input.audio;
+  if (
+    bytes.length < 44 ||
+    !bytesMatchAscii(bytes, 0, "RIFF") ||
+    !bytesMatchAscii(bytes, 8, "WAVE")
+  ) {
+    return null;
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let blockAlign: number | null = null;
+  let dataBytes: number | null = null;
+  let offset = 12;
+
+  while (offset + 8 <= bytes.length) {
+    const chunkBytes = view.getUint32(offset + 4, true);
+    const chunkStart = offset + 8;
+    const chunkEnd = chunkStart + chunkBytes;
+    if (!Number.isSafeInteger(chunkEnd) || chunkEnd > bytes.length) return null;
+
+    if (bytesMatchAscii(bytes, offset, "fmt ") && chunkBytes >= 16) {
+      const audioFormat = view.getUint16(chunkStart, true);
+      const channels = view.getUint16(chunkStart + 2, true);
+      const sampleRate = view.getUint32(chunkStart + 4, true);
+      const formatBlockAlign = view.getUint16(chunkStart + 12, true);
+      const bitsPerSample = view.getUint16(chunkStart + 14, true);
+      if (
+        audioFormat !== 1 ||
+        channels !== 1 ||
+        sampleRate !== 16_000 ||
+        formatBlockAlign !== 2 ||
+        bitsPerSample !== 16
+      ) {
+        return null;
+      }
+      blockAlign = formatBlockAlign;
+    } else if (bytesMatchAscii(bytes, offset, "data")) {
+      dataBytes = chunkBytes;
+    }
+
+    offset = chunkEnd + (chunkBytes % 2);
+  }
+
+  if (
+    blockAlign === null ||
+    dataBytes === null ||
+    dataBytes === 0 ||
+    dataBytes % blockAlign !== 0
+  ) {
+    return null;
+  }
+  const sampleCount = Math.floor(dataBytes / blockAlign);
+  const audioFrames = Math.ceil(sampleCount / WHISPER_SAMPLES_PER_AUDIO_CONTEXT_FRAME);
+  const paddedFrames = audioFrames + WHISPER_AUDIO_CONTEXT_PADDING_FRAMES;
+  const audioContext = Math.max(
+    WHISPER_AUDIO_CONTEXT_MIN,
+    Math.ceil(paddedFrames / WHISPER_AUDIO_CONTEXT_STEP) * WHISPER_AUDIO_CONTEXT_STEP,
+  );
+  return audioContext < WHISPER_AUDIO_CONTEXT_MAX ? audioContext : null;
+}
+
+export function makeWhisperInferenceFormData(input: LocalTranscriptionInput): FormData {
+  const formData = new FormData();
+  formData.append(
+    "file",
+    new Blob([input.audio], { type: input.contentType }),
+    `recording.${audioFileExtension(input.contentType)}`,
+  );
+  formData.append("response_format", "json");
+  formData.append("language", "en");
+  formData.append("prompt", WHISPER_PROMPT);
+  const audioContext = resolveWhisperAudioContext(input);
+  if (audioContext !== null) {
+    formData.append("audio_ctx", String(audioContext));
+  }
+  return formData;
 }
 
 export function makeLocalTranscription<R = never>(input: {
@@ -377,15 +472,7 @@ export const LocalTranscriptionLive = Layer.effect(
       targetUrl: URL,
       input: LocalTranscriptionInput,
     ): Effect.Effect<TranscriptionResult, LocalTranscriptionError> => {
-      const formData = new FormData();
-      formData.append(
-        "file",
-        new Blob([input.audio], { type: input.contentType }),
-        `recording.${audioFileExtension(input.contentType)}`,
-      );
-      formData.append("response_format", "json");
-      formData.append("language", "en");
-      formData.append("prompt", WHISPER_PROMPT);
+      const formData = makeWhisperInferenceFormData(input);
 
       return httpClient
         .post(targetUrl, {

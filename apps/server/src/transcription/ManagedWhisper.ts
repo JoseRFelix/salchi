@@ -44,10 +44,10 @@ const MANAGED_WHISPER_MODEL_ASSETS: Readonly<Record<TranscriptionModel, ManagedW
       url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
     },
     "small.en": {
-      fileName: "ggml-small.en.bin",
+      fileName: "ggml-small.en-q8_0.bin",
       bytes: findTranscriptionModel("small.en").downloadBytes,
-      sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
-      url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
+      sha256: "67a179f608ea6114bd3fdb9060e762b588a3fb3bd00c4387971be4d177958067",
+      url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q8_0.bin",
     },
   };
 

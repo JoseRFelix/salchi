@@ -7,9 +7,38 @@ import {
   extractWhisperTranscriptionText,
   makeLocalTranscription,
   makeManagedLocalTranscription,
+  makeWhisperInferenceFormData,
+  resolveWhisperAudioContext,
   resolveWhisperInferenceUrl,
 } from "./LocalTranscription.ts";
 import { resolveManagedWhisperRuntimeAsset } from "./ManagedWhisper.ts";
+
+function makeMonoPcm16Wav(durationSeconds: number): Uint8Array {
+  const sampleCount = Math.round(durationSeconds * 16_000);
+  const headerBytes = 44;
+  const bytes = new Uint8Array(headerBytes + sampleCount * 2);
+  const view = new DataView(bytes.buffer);
+  const writeAscii = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index));
+    }
+  };
+
+  writeAscii(0, "RIFF");
+  view.setUint32(4, bytes.length - 8, true);
+  writeAscii(8, "WAVE");
+  writeAscii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 16_000, true);
+  view.setUint32(28, 32_000, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(36, "data");
+  view.setUint32(40, sampleCount * 2, true);
+  return bytes;
+}
 
 describe("resolveWhisperInferenceUrl", () => {
   it("uses the standard whisper-server inference route for a loopback base URL", () => {
@@ -38,6 +67,47 @@ describe("extractWhisperTranscriptionText", () => {
 
   it("rejects an unexpected upstream response", () => {
     expect(extractWhisperTranscriptionText({ result: "missing text" })).toBeNull();
+  });
+});
+
+describe("Whisper inference audio context", () => {
+  it("sizes the encoder context to short canonical recordings with padding", () => {
+    const resolve = (durationSeconds: number) =>
+      resolveWhisperAudioContext({
+        audio: makeMonoPcm16Wav(durationSeconds),
+        contentType: "audio/wav",
+      });
+
+    expect(resolve(1.2)).toBe(256);
+    expect(resolve(11)).toBe(768);
+    expect(resolve(15.5)).toBe(1_024);
+    expect(resolve(24)).toBe(1_280);
+  });
+
+  it("uses the full default context for long or unrecognized recordings", () => {
+    const longRecording = {
+      audio: makeMonoPcm16Wav(25),
+      contentType: "audio/wav",
+    };
+    expect(resolveWhisperAudioContext(longRecording)).toBeNull();
+    expect(makeWhisperInferenceFormData(longRecording).get("audio_ctx")).toBeNull();
+    expect(
+      resolveWhisperAudioContext({
+        audio: new Uint8Array([1, 2, 3]),
+        contentType: "audio/webm",
+      }),
+    ).toBeNull();
+  });
+
+  it("adds the adaptive context to the whisper-server request", () => {
+    const formData = makeWhisperInferenceFormData({
+      audio: makeMonoPcm16Wav(1.2),
+      contentType: "audio/wav",
+    });
+
+    expect(formData.get("audio_ctx")).toBe("256");
+    expect(formData.get("language")).toBe("en");
+    expect(formData.get("response_format")).toBe("json");
   });
 });
 

@@ -46,9 +46,10 @@ it("pins every selectable Whisper model to its verified artifact", () => {
     bytes: 147_964_211,
   });
   expect(resolveManagedWhisperModelAsset("small.en")).toMatchObject({
-    fileName: "ggml-small.en.bin",
-    bytes: 487_614_201,
-    sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+    fileName: "ggml-small.en-q8_0.bin",
+    bytes: 264_477_561,
+    sha256: "67a179f608ea6114bd3fdb9060e762b588a3fb3bd00c4387971be4d177958067",
+    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q8_0.bin",
   });
 });
 
