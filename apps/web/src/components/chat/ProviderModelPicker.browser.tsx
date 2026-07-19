@@ -20,6 +20,7 @@ import {
   DEFAULT_UNIFIED_SETTINGS,
   type UnifiedSettings,
 } from "@t3tools/contracts/settings";
+import { CLIENT_SETTINGS_STORAGE_KEY } from "../../clientPersistenceStorage";
 import { __resetLocalApiForTests } from "../../localApi";
 
 // Mock the environments/runtime module to provide a mock primary environment connection
@@ -383,7 +384,7 @@ describe("ProviderModelPicker", () => {
 
   it("centers the selected provider indicator on its rail button at mobile width", async () => {
     localStorage.setItem(
-      "t3code:client-settings:v1",
+      CLIENT_SETTINGS_STORAGE_KEY,
       JSON.stringify({
         ...DEFAULT_CLIENT_SETTINGS,
         favorites: [],
@@ -424,7 +425,7 @@ describe("ProviderModelPicker", () => {
       });
     } finally {
       await mounted.cleanup();
-      localStorage.removeItem("t3code:client-settings:v1");
+      localStorage.removeItem(CLIENT_SETTINGS_STORAGE_KEY);
       await page.viewport(1024, 768);
     }
   });

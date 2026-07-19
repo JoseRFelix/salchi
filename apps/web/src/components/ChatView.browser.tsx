@@ -2128,20 +2128,21 @@ async function expectComposerActionsContained(): Promise<void> {
       expect(actionButtons.length).toBeGreaterThanOrEqual(1);
 
       const buttonRects = actionButtons.map((button) => button.getBoundingClientRect());
-      const firstTop = buttonRects[0]?.top ?? 0;
+      const firstCenterY = (buttonRects[0]?.top ?? 0) + (buttonRects[0]?.height ?? 0) / 2;
       const actionGeometry = actionButtons.map((button, index) => ({
         label: button.ariaLabel || button.textContent?.trim() || "unlabeled",
         top: buttonRects[index]?.top,
         height: buttonRects[index]?.height,
+        centerY: (buttonRects[index]?.top ?? 0) + (buttonRects[index]?.height ?? 0) / 2,
       }));
 
       for (const rect of buttonRects) {
         expect(rect.right).toBeLessThanOrEqual(footerRect.right + 0.5);
         expect(rect.bottom).toBeLessThanOrEqual(footerRect.bottom + 0.5);
         expect(
-          Math.abs(rect.top - firstTop),
+          Math.abs(rect.top + rect.height / 2 - firstCenterY),
           `Composer action buttons are misaligned: ${JSON.stringify(actionGeometry)}`,
-        ).toBeLessThanOrEqual(1.5);
+        ).toBeLessThanOrEqual(0.5);
       }
     },
     { timeout: 8_000, interval: 16 },
