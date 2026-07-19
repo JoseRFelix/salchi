@@ -623,7 +623,7 @@ export function WorkspaceFileExplorerPanel(props: {
           {onBack ? (
             <Button
               size="icon-xs"
-              variant="outline"
+              variant="subtle-outline"
               aria-label={backButtonLabel ?? "Back"}
               title={backButtonLabel ?? "Back"}
               onClick={onBack}
@@ -642,7 +642,7 @@ export function WorkspaceFileExplorerPanel(props: {
         <div className="flex shrink-0 items-center gap-1">
           <Button
             size="icon-xs"
-            variant="outline"
+            variant="subtle-outline"
             aria-label="Refresh file explorer"
             title="Refresh file explorer"
             onClick={refresh}
@@ -651,7 +651,7 @@ export function WorkspaceFileExplorerPanel(props: {
           </Button>
           <Button
             size="icon-xs"
-            variant="outline"
+            variant="subtle-outline"
             aria-label="Close file explorer"
             title="Close file explorer"
             onClick={onClose}

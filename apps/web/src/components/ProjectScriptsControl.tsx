@@ -374,7 +374,7 @@ export default function ProjectScriptsControl({
                       render={
                         <Button
                           type="button"
-                          variant="outline"
+                          variant="subtle-outline"
                           className="size-9 shrink-0 hover:bg-popover active:bg-popover data-pressed:bg-popover data-pressed:shadow-xs/5 data-pressed:before:shadow-[0_1px_--theme(--color-black/4%)] dark:data-pressed:before:shadow-[0_-1px_--theme(--color-white/6%)]"
                           aria-label="Choose icon"
                         />

@@ -716,7 +716,7 @@ function ThemePreviewRouteView() {
               className="shrink-0 md:hidden"
               onClick={() => void navigate({ to: "/settings/general" })}
               size="icon-sm"
-              variant="outline"
+              variant="subtle-outline"
             >
               <ArrowLeftIcon className="size-3.5" />
             </Button>

@@ -67,6 +67,10 @@ interface ChatHeaderProps {
   onNavigateToParentThread?: () => void;
 }
 
+const COMPACT_HEADER_ICON_ACTION_CLASS_NAME =
+  "size-11 min-w-11 shrink-0 rounded-xl px-0 before:rounded-[calc(var(--radius-xl)-1px)] pointer-coarse:after:hidden sm:size-11 sm:min-w-11";
+const STANDARD_HEADER_ICON_ACTION_CLASS_NAME = "shrink-0";
+
 export function shouldShowOpenInPicker(input: {
   readonly activeProjectName: string | undefined;
   readonly activeThreadEnvironmentId: EnvironmentId;
@@ -148,11 +152,20 @@ export const ChatHeader = memo(function ChatHeader({
   const hasProjectScriptsControl = activeProjectScripts !== undefined;
   const hasSourceControl = Boolean(activeProjectName && gitCwd);
   const showCompactOverflowActions = isCompactHeader && hasProjectScriptsControl;
+  const headerIconActionClassName = isCompactHeader
+    ? COMPACT_HEADER_ICON_ACTION_CLASS_NAME
+    : STANDARD_HEADER_ICON_ACTION_CLASS_NAME;
+  const headerToggleIconClassName = isCompactHeader ? "size-4.5" : "size-3";
 
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
       <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden sm:gap-3">
-        <SidebarTrigger className="size-7 shrink-0 md:hidden" />
+        <div
+          className="flex size-11 shrink-0 items-center justify-center md:hidden"
+          data-slot="compact-sidebar-trigger-slot"
+        >
+          <SidebarTrigger className="size-7 shrink-0 pointer-coarse:after:left-1/2 pointer-coarse:after:top-1/2 pointer-coarse:after:-translate-x-1/2 pointer-coarse:after:-translate-y-1/2" />
+        </div>
         <div className="flex min-w-0 flex-col justify-center">
           <h2
             className="min-w-0 truncate text-sm font-medium leading-tight text-foreground"
@@ -215,9 +228,10 @@ export const ChatHeader = memo(function ChatHeader({
             />
           </>
         )}
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1" data-slot="chat-header-icon-actions">
           <ChatHeaderDevServerButton
             browserHostname={devServerProbeBrowserHostname}
+            compact={isCompactHeader}
             links={devServerLinks}
             probe={probeDevServerUrl}
           />
@@ -225,15 +239,15 @@ export const ChatHeader = memo(function ChatHeader({
             <TooltipTrigger
               render={
                 <Toggle
-                  className="shrink-0"
+                  className={headerIconActionClassName}
                   pressed={sourceControlOpen}
                   onPressedChange={onToggleSourceControl}
                   aria-label="Toggle source control"
-                  variant="outline"
+                  variant="subtle-outline"
                   size="xs"
                   disabled={!hasSourceControl}
                 >
-                  <GitBranchIcon className="size-4.5 sm:size-3" />
+                  <GitBranchIcon className={headerToggleIconClassName} />
                 </Toggle>
               }
             />
@@ -249,15 +263,15 @@ export const ChatHeader = memo(function ChatHeader({
             <TooltipTrigger
               render={
                 <Toggle
-                  className="shrink-0"
+                  className={headerIconActionClassName}
                   pressed={terminalOpen}
                   onPressedChange={onToggleTerminal}
                   aria-label="Toggle terminal drawer"
-                  variant="outline"
+                  variant="subtle-outline"
                   size="xs"
                   disabled={!terminalAvailable}
                 >
-                  <TerminalSquareIcon className="size-4.5 sm:size-3" />
+                  <TerminalSquareIcon className={headerToggleIconClassName} />
                 </Toggle>
               }
             />
@@ -274,11 +288,11 @@ export const ChatHeader = memo(function ChatHeader({
               <TooltipTrigger
                 render={
                   <Toggle
-                    className="shrink-0"
+                    className={headerIconActionClassName}
                     pressed={fileExplorerOpen}
                     onPressedChange={onToggleFileExplorer}
                     aria-label="Toggle file explorer"
-                    variant="outline"
+                    variant="subtle-outline"
                     size="xs"
                     disabled={!fileExplorerAvailable}
                   >
@@ -298,11 +312,11 @@ export const ChatHeader = memo(function ChatHeader({
               <TooltipTrigger
                 render={
                   <Toggle
-                    className="shrink-0"
+                    className={headerIconActionClassName}
                     pressed={diffOpen}
                     onPressedChange={onToggleDiff}
                     aria-label="Toggle diff panel"
-                    variant="outline"
+                    variant="subtle-outline"
                     size="xs"
                     disabled={!isGitRepo && !diffOpen}
                   >
@@ -323,10 +337,15 @@ export const ChatHeader = memo(function ChatHeader({
             <Menu>
               <MenuTrigger
                 render={
-                  <Button size="icon-xs" variant="outline" aria-label="More thread actions" />
+                  <Button
+                    className={headerIconActionClassName}
+                    size="icon-xs"
+                    variant="subtle-outline"
+                    aria-label="More thread actions"
+                  />
                 }
               >
-                <EllipsisIcon className="size-4.5 sm:size-4" />
+                <EllipsisIcon className="size-4.5" />
               </MenuTrigger>
               <MenuPopup align="end" side="bottom" className="min-w-48">
                 <MenuItem onClick={() => onToggleDiff()} disabled={!isGitRepo && !diffOpen}>
@@ -555,10 +574,12 @@ function DevServerBrowserIcon({
 
 function ChatHeaderDevServerButton({
   browserHostname,
+  compact,
   links,
   probe,
 }: {
   readonly browserHostname: string | null;
+  readonly compact: boolean;
   readonly links: ReadonlyArray<DevServerLink>;
   readonly probe: (url: string) => Promise<boolean>;
 }) {
@@ -573,12 +594,16 @@ function ChatHeaderDevServerButton({
       ? (links[0]?.displayUrl ?? "Open dev server")
       : "Open dev server"
     : "No running dev servers";
+  const buttonSizeClassName = compact
+    ? COMPACT_HEADER_ICON_ACTION_CLASS_NAME
+    : STANDARD_HEADER_ICON_ACTION_CLASS_NAME;
   const buttonClassName = buttonEnabled
-    ? "shrink-0 text-foreground hover:text-foreground"
-    : "shrink-0";
+    ? `${buttonSizeClassName} text-foreground hover:text-foreground`
+    : buttonSizeClassName;
+  const iconSizeClassName = compact ? "size-4.5" : buttonEnabled ? "size-3" : "size-3.5";
   const iconClassName = buttonEnabled
-    ? "size-4.5 text-foreground sm:size-3"
-    : "size-4.5 text-muted-foreground opacity-80 sm:size-3.5";
+    ? `${iconSizeClassName} text-foreground`
+    : `${iconSizeClassName} text-muted-foreground opacity-80`;
 
   useEffect(() => {
     if (!buttonEnabled) return;
@@ -655,7 +680,7 @@ function ChatHeaderDevServerButton({
                     aria-label="Open detected dev server"
                     className={buttonClassName}
                     size="icon-xs"
-                    variant="outline"
+                    variant="subtle-outline"
                   />
                 }
               >
@@ -705,7 +730,7 @@ function ChatHeaderDevServerButton({
                 disabled
                 size="icon-xs"
                 tabIndex={-1}
-                variant="outline"
+                variant="subtle-outline"
               >
                 <DevServerBrowserIcon className={iconClassName} status={headerProbeStatus} />
               </Button>
@@ -726,7 +751,7 @@ function ChatHeaderDevServerButton({
             className={buttonClassName}
             onClick={() => openDevServerLink(link.url)}
             size="icon-xs"
-            variant="outline"
+            variant="subtle-outline"
           >
             <DevServerBrowserIcon className={iconClassName} status={headerProbeStatus} />
           </Button>
