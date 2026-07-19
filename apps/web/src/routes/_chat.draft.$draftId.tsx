@@ -13,6 +13,7 @@ import {
 } from "../diffRouteSearch";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useMobileEdgeSwipe } from "../hooks/useMobileEdgeSwipe";
+import { useWorkspaceFilePanelRouteSync } from "../hooks/useWorkspaceFilePanelRouteSync";
 import {
   resolveRightPanelSurfaceView,
   RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY,
@@ -26,11 +27,10 @@ import { createThreadSelectorAcrossEnvironments } from "../storeSelectors";
 import { useStore } from "../store";
 import { buildThreadRouteParams } from "../threadRoutes";
 import {
+  buildWorkspaceFilePanelDraftOwnerKey,
   closeWorkspaceFilePreview,
   hasWorkspaceDiffPanelInStack,
-  openWorkspaceDiffPanel,
   reopenWorkspaceFilePanel,
-  syncWorkspaceDiffPanelRoute,
   type WorkspaceFilePreviewDiffReturnTarget,
   useWorkspaceFilePanelState,
 } from "../workspaceFilePreview";
@@ -52,6 +52,14 @@ function DraftChatThreadRouteView() {
   const serverThreadStarted = threadHasStarted(serverThread);
   const serverThreadHasSubmittedMessage = Boolean(serverThread && serverThread.messages.length > 0);
   const diffOpen = search.diff === "1";
+  const workspaceFilePanelOwnerKey = buildWorkspaceFilePanelDraftOwnerKey(draftId);
+  useWorkspaceFilePanelRouteSync({
+    ownerKey: workspaceFilePanelOwnerKey,
+    diffOpen,
+    ...(search.diffSource ? { diffSource: search.diffSource } : {}),
+    ...(search.diffTurnId ? { diffTurnId: search.diffTurnId } : {}),
+    ...(search.diffFilePath ? { diffFilePath: search.diffFilePath } : {}),
+  });
   const filePanel = useWorkspaceFilePanelState();
   const sourceControlOpen = filePanel.open && filePanel.view === "source-control";
   const shouldUseRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
@@ -113,7 +121,6 @@ function DraftChatThreadRouteView() {
     if (!draftSession) {
       return;
     }
-    openWorkspaceDiffPanel({ kind: "diff", diffSource: "unstaged" }, { navigation: "replace" });
     markDiffOpened();
     void navigate({
       to: "/draft/$draftId",
@@ -160,19 +167,6 @@ function DraftChatThreadRouteView() {
     },
     [draftId, draftSession, navigate],
   );
-
-  useEffect(() => {
-    syncWorkspaceDiffPanelRoute(
-      diffOpen
-        ? {
-            kind: "diff",
-            ...(search.diffSource ? { diffSource: search.diffSource } : {}),
-            ...(search.diffTurnId ? { diffTurnId: search.diffTurnId } : {}),
-            ...(search.diffFilePath ? { diffFilePath: search.diffFilePath } : {}),
-          }
-        : null,
-    );
-  }, [diffOpen, search.diffFilePath, search.diffSource, search.diffTurnId]);
 
   useEffect(() => {
     if (!canonicalThreadRef || !shouldNavigateToCanonicalThread) {

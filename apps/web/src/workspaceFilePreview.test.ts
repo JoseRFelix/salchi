@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { EnvironmentId, TurnId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, TurnId } from "@t3tools/contracts";
 
 import {
   __readWorkspaceFilePanelStateForTests,
   __resetWorkspaceFilePanelStateForTests,
+  buildWorkspaceFilePanelDraftOwnerKey,
+  buildWorkspaceFilePanelThreadOwnerKey,
+  claimWorkspaceFilePanelOwner,
   closeWorkspaceFilePreview,
   closeWorkspaceSourceControlPanel,
   isWorkspaceFileExplorerOpen,
@@ -13,6 +16,7 @@ import {
   openWorkspaceFilePreview,
   openWorkspaceSourceControlPanel,
   reopenWorkspaceFilePanel,
+  releaseWorkspaceFilePanelOwner,
   resolveWorkspaceFilePreviewTarget,
   returnWorkspaceFilePanelBack,
   returnWorkspaceFileExplorerToPreview,
@@ -24,6 +28,10 @@ import {
 } from "./workspaceFilePreview";
 
 const environmentId = EnvironmentId.make("env-preview-test");
+const threadOwnerKey = buildWorkspaceFilePanelThreadOwnerKey({
+  environmentId,
+  threadId: ThreadId.make("thread-preview-test"),
+});
 const diffReturnTarget = {
   kind: "diff",
   diffTurnId: TurnId.make("turn-preview-test"),
@@ -268,15 +276,113 @@ describe("workspace file panel state", () => {
   });
 
   it("synchronizes browser diff-route back navigation with the panel stack", () => {
+    claimWorkspaceFilePanelOwner(threadOwnerKey);
     openWorkspaceSourceControlPanel();
     openWorkspaceDiffPanel(diffReturnTarget, { navigation: "push" });
 
-    syncWorkspaceDiffPanelRoute(null);
+    syncWorkspaceDiffPanelRoute(threadOwnerKey, null);
 
     expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
       open: true,
       view: "source-control",
       history: [],
+    });
+  });
+
+  it("clears the complete navigation stack before syncing a different route owner", () => {
+    const draftOwnerKey = buildWorkspaceFilePanelDraftOwnerKey("draft-preview-test");
+    claimWorkspaceFilePanelOwner(threadOwnerKey);
+    setActiveWorkspaceFileExplorerContext({
+      environmentId,
+      cwd: "/repo/project",
+      projectName: "project",
+    });
+    openWorkspaceSourceControlPanel();
+    openWorkspaceFilePreview(createPreviewTarget("src/from-first-thread.ts"));
+
+    syncWorkspaceDiffPanelRoute(draftOwnerKey, {
+      kind: "diff",
+      diffSource: "unstaged",
+      diffFilePath: "src/from-draft.ts",
+    });
+
+    expect(__readWorkspaceFilePanelStateForTests()).toEqual({
+      ownerKey: draftOwnerKey,
+      open: true,
+      view: "diff",
+      diffTarget: {
+        kind: "diff",
+        diffSource: "unstaged",
+        diffFilePath: "src/from-draft.ts",
+      },
+      target: null,
+      activeExplorerContext: null,
+      explorerContext: null,
+      explorerReturnPreview: null,
+      history: [],
+      returnTarget: null,
+    });
+  });
+
+  it("clears a previous owner's closed preview and registry state when claiming a route", () => {
+    const nextOwnerKey = buildWorkspaceFilePanelDraftOwnerKey("draft-next");
+    claimWorkspaceFilePanelOwner(threadOwnerKey);
+    setActiveWorkspaceFileExplorerContext({
+      environmentId,
+      cwd: "/repo/project",
+      projectName: "project",
+    });
+    openWorkspaceFilePreview(createPreviewTarget());
+    closeWorkspaceFilePreview();
+
+    claimWorkspaceFilePanelOwner(nextOwnerKey);
+
+    expect(__readWorkspaceFilePanelStateForTests()).toEqual({
+      ownerKey: nextOwnerKey,
+      open: false,
+      view: "preview",
+      diffTarget: null,
+      target: null,
+      activeExplorerContext: null,
+      explorerContext: null,
+      explorerReturnPreview: null,
+      history: [],
+      returnTarget: null,
+    });
+  });
+
+  it("ignores stale owner cleanup after a new route has claimed the panel", () => {
+    const nextOwnerKey = buildWorkspaceFilePanelDraftOwnerKey("draft-next");
+    claimWorkspaceFilePanelOwner(threadOwnerKey);
+    claimWorkspaceFilePanelOwner(nextOwnerKey);
+    openWorkspaceSourceControlPanel();
+
+    releaseWorkspaceFilePanelOwner(threadOwnerKey);
+
+    expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+      ownerKey: nextOwnerKey,
+      open: true,
+      view: "source-control",
+    });
+  });
+
+  it("releases all owner-bound state when the current route unmounts", () => {
+    claimWorkspaceFilePanelOwner(threadOwnerKey);
+    openWorkspaceFilePreview(createPreviewTarget());
+
+    releaseWorkspaceFilePanelOwner(threadOwnerKey);
+
+    expect(__readWorkspaceFilePanelStateForTests()).toEqual({
+      ownerKey: null,
+      open: false,
+      view: "preview",
+      diffTarget: null,
+      target: null,
+      activeExplorerContext: null,
+      explorerContext: null,
+      explorerReturnPreview: null,
+      history: [],
+      returnTarget: null,
     });
   });
 

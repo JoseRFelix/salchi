@@ -31,7 +31,7 @@ import {
   useState,
 } from "react";
 
-import { openWorkspaceDiffPanel, openWorkspaceFilePreview } from "../workspaceFilePreview";
+import { openWorkspaceFilePreview } from "../workspaceFilePreview";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { buildOpenDiffSearch } from "../diffRouteSearch";
 import { useStore, selectProjectByRef } from "../store";
@@ -848,15 +848,6 @@ export default function SourceControlPanel({ mode = "sidebar", onClose }: Source
         );
         return;
       }
-
-      openWorkspaceDiffPanel(
-        {
-          kind: "diff",
-          diffSource: section,
-          diffFilePath: filePath,
-        },
-        { navigation: "push" },
-      );
 
       if (routeTarget.kind === "draft") {
         void navigate({

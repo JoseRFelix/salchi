@@ -15,6 +15,7 @@ import {
 } from "../diffRouteSearch";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useMobileEdgeSwipe } from "../hooks/useMobileEdgeSwipe";
+import { useWorkspaceFilePanelRouteSync } from "../hooks/useWorkspaceFilePanelRouteSync";
 import {
   resolveRightPanelSurfaceView,
   RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY,
@@ -39,11 +40,10 @@ import {
 } from "../startupNavigation";
 import { SidebarInset, useSidebar } from "~/components/ui/sidebar";
 import {
+  buildWorkspaceFilePanelThreadOwnerKey,
   closeWorkspaceFilePreview,
   hasWorkspaceDiffPanelInStack,
-  openWorkspaceDiffPanel,
   reopenWorkspaceFilePanel,
-  syncWorkspaceDiffPanelRoute,
   type WorkspaceFilePreviewDiffReturnTarget,
   useWorkspaceFilePanelState,
 } from "../workspaceFilePreview";
@@ -84,6 +84,17 @@ function ChatThreadRouteView() {
     panelView: filePanel.view,
   });
   const currentThreadKey = threadRef ? `${threadRef.environmentId}:${threadRef.threadId}` : null;
+  const workspaceFilePanelOwnerKey = useMemo(
+    () => (threadRef ? buildWorkspaceFilePanelThreadOwnerKey(threadRef) : null),
+    [threadRef],
+  );
+  useWorkspaceFilePanelRouteSync({
+    ownerKey: workspaceFilePanelOwnerKey,
+    diffOpen,
+    ...(search.diffSource ? { diffSource: search.diffSource } : {}),
+    ...(search.diffTurnId ? { diffTurnId: search.diffTurnId } : {}),
+    ...(search.diffFilePath ? { diffFilePath: search.diffFilePath } : {}),
+  });
   const [diffPanelMountState, setDiffPanelMountState] = useState(() => ({
     threadKey: currentThreadKey,
     hasOpenedDiff: diffOpen,
@@ -123,13 +134,6 @@ function ChatThreadRouteView() {
       return;
     }
     const source = serverThread && !serverThreadStarted ? "unstaged" : undefined;
-    openWorkspaceDiffPanel(
-      {
-        kind: "diff",
-        ...(source ? { diffSource: source } : {}),
-      },
-      { navigation: "replace" },
-    );
     markRightPanelUsed("diff");
     markDiffOpened();
     void navigate({
@@ -177,19 +181,6 @@ function ChatThreadRouteView() {
     },
     [navigate, threadRef],
   );
-
-  useEffect(() => {
-    syncWorkspaceDiffPanelRoute(
-      diffOpen
-        ? {
-            kind: "diff",
-            ...(search.diffSource ? { diffSource: search.diffSource } : {}),
-            ...(search.diffTurnId ? { diffTurnId: search.diffTurnId } : {}),
-            ...(search.diffFilePath ? { diffFilePath: search.diffFilePath } : {}),
-          }
-        : null,
-    );
-  }, [diffOpen, search.diffFilePath, search.diffSource, search.diffTurnId]);
 
   useEffect(() => {
     if (diffOpen) {

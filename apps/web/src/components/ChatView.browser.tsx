@@ -36,6 +36,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { render } from "vitest-browser-react";
 
 import { useCommandPaletteStore } from "../commandPaletteStore";
+import { CLIENT_SETTINGS_STORAGE_KEY } from "../clientPersistenceStorage";
 import { useComposerDraftStore, DraftId } from "../composerDraftStore";
 import {
   __resetEnvironmentApiOverridesForTests,
@@ -1363,6 +1364,56 @@ function createSnapshotWithPendingUserInput(): OrchestrationReadModel {
         : thread,
     ),
   };
+}
+
+function createSnapshotWithActivePlan(): OrchestrationReadModel {
+  const snapshot = createSnapshotForTargetUser({
+    targetMessageId: "msg-user-active-plan-target" as MessageId,
+    targetText: "active plan thread",
+    sessionStatus: "running",
+  });
+  const activeTurnId = snapshot.threads[0]?.latestTurn?.turnId;
+  if (!activeTurnId) {
+    throw new Error("Expected an active turn in the plan fixture.");
+  }
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            messages: [],
+            activities: [
+              {
+                id: EventId.make("activity-active-plan"),
+                tone: "info",
+                kind: "turn.plan.updated",
+                summary: "Plan updated",
+                payload: {
+                  explanation: "Active plan explanation",
+                  plan: [{ step: "Keep the selected workspace panel open", status: "inProgress" }],
+                },
+                turnId: activeTurnId,
+                sequence: 1,
+                createdAt: isoAt(1_000),
+              },
+            ],
+            updatedAt: isoAt(1_000),
+          }
+        : thread,
+    ),
+  };
+}
+
+function enableAutoOpenPlanSidebarForTest(): void {
+  localStorage.setItem(
+    CLIENT_SETTINGS_STORAGE_KEY,
+    JSON.stringify({
+      ...DEFAULT_CLIENT_SETTINGS,
+      autoOpenPlanSidebar: true,
+    }),
+  );
 }
 
 function createSnapshotWithPlanFollowUpPrompt(options?: {
@@ -7493,6 +7544,104 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it.each([
+    {
+      buttonLabel: "Toggle source control",
+      expectedView: "source-control" as const,
+      panelName: "source control",
+    },
+    {
+      buttonLabel: "Toggle file explorer",
+      expectedView: "explorer" as const,
+      panelName: "file explorer",
+    },
+    {
+      buttonLabel: "Toggle diff panel",
+      expectedView: "diff" as const,
+      panelName: "diff",
+    },
+  ])(
+    "keeps $panelName open after dismissing an auto-opened plan for the active turn",
+    async ({ buttonLabel, expectedView }) => {
+      enableAutoOpenPlanSidebarForTest();
+      const mounted = await mountChatView({
+        viewport: WIDE_FOOTER_VIEWPORT,
+        snapshot: createSnapshotWithActivePlan(),
+      });
+
+      try {
+        await expect
+          .element(page.getByText("Keep the selected workspace panel open"))
+          .toBeVisible();
+
+        await page.getByRole("button", { name: buttonLabel }).click();
+        await vi.waitFor(
+          () => {
+            expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+              open: true,
+              view: expectedView,
+            });
+            expect(document.body.textContent).not.toContain(
+              "Keep the selected workspace panel open",
+            );
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        await waitForLayout();
+
+        expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+          open: true,
+          view: expectedView,
+        });
+        expect(document.body.textContent).not.toContain("Keep the selected workspace panel open");
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it("keeps the selected workspace panel open when the active turn's first plan arrives", async () => {
+    enableAutoOpenPlanSidebarForTest();
+    const plannedSnapshot = createSnapshotWithActivePlan();
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: {
+        ...plannedSnapshot,
+        threads: plannedSnapshot.threads.map((thread) => ({ ...thread, activities: [] })),
+      },
+    });
+
+    try {
+      await page.getByRole("button", { name: "Toggle source control" }).click();
+      await vi.waitFor(() => {
+        expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+          open: true,
+          view: "source-control",
+        });
+      });
+
+      fixture.snapshot = { ...plannedSnapshot, snapshotSequence: 2 };
+      emitThreadDetailSnapshot(THREAD_ID);
+      await vi.waitFor(() => {
+        expect(
+          selectThreadByRef(useStore.getState(), THREAD_REF)?.activities.some(
+            (activity) => activity.kind === "turn.plan.updated",
+          ),
+        ).toBe(true);
+      });
+      await waitForLayout();
+
+      expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+        open: true,
+        view: "source-control",
+      });
+      expect(document.body.textContent).not.toContain("Keep the selected workspace panel open");
     } finally {
       await mounted.cleanup();
     }

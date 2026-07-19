@@ -667,7 +667,7 @@ describe("SourceControlPanel git action runner", () => {
     }
   });
 
-  it("pushes staged and unstaged file rows onto the shared panel stack", async () => {
+  it("routes staged and unstaged file rows without mutating the panel before route commit", async () => {
     currentGitStatusRef.current = createPanelStatus({
       stagedFiles: [{ path: "staged-only.ts", status: "modified", insertions: 1, deletions: 0 }],
       unstagedFiles: [
@@ -709,8 +709,8 @@ describe("SourceControlPanel git action runner", () => {
       });
       expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
         open: true,
-        view: "diff",
-        history: [{ kind: "source-control" }],
+        view: "source-control",
+        history: [],
       });
 
       openWorkspaceSourceControlPanel();
@@ -731,8 +731,8 @@ describe("SourceControlPanel git action runner", () => {
       });
       expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
         open: true,
-        view: "diff",
-        history: [{ kind: "source-control" }],
+        view: "source-control",
+        history: [],
       });
     } finally {
       await screen.unmount();
@@ -770,8 +770,8 @@ describe("SourceControlPanel git action runner", () => {
       });
       expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
         open: true,
-        view: "diff",
-        history: [{ kind: "source-control" }],
+        view: "source-control",
+        history: [],
       });
     } finally {
       await firstRender.screen.unmount();

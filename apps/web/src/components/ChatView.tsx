@@ -1787,9 +1787,17 @@ export default function ChatView(props: ChatViewProps) {
   );
   const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
   const currentPlanSidebarDismissalKey = useMemo(() => {
-    const key = activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
+    const key =
+      activeLatestTurn?.turnId ??
+      activePlan?.turnId ??
+      sidebarProposedPlan?.turnId ??
+      "__dismissed__";
     return String(key);
-  }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
+  }, [activeLatestTurn?.turnId, activePlan?.turnId, sidebarProposedPlan?.turnId]);
+  const dismissPlanSidebarForCurrentTurn = useCallback(() => {
+    planSidebarDismissedForTurnRef.current = currentPlanSidebarDismissalKey;
+    setPlanSidebarOpen(false);
+  }, [currentPlanSidebarDismissalKey]);
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -2271,10 +2279,11 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeFileExplorerContext) {
       return;
     }
-    setPlanSidebarOpen(false);
+    dismissPlanSidebarForCurrentTurn();
     openWorkspaceFileExplorer(activeFileExplorerContext, { navigation: "replace" });
   }, [
     activeFileExplorerContext,
+    dismissPlanSidebarForCurrentTurn,
     diffOpen,
     draftId,
     environmentId,
@@ -2334,9 +2343,9 @@ export default function ChatView(props: ChatViewProps) {
   );
   const openDiffPanelExclusive = useCallback(() => {
     closeWorkspaceFilePreview();
-    setPlanSidebarOpen(false);
+    dismissPlanSidebarForCurrentTurn();
     onDiffPanelOpen?.();
-  }, [onDiffPanelOpen]);
+  }, [dismissPlanSidebarForCurrentTurn, onDiffPanelOpen]);
   const onToggleDiff = useCallback(() => {
     if (routeKind === "server" && !isServerThread) {
       return;
@@ -2418,10 +2427,10 @@ export default function ChatView(props: ChatViewProps) {
       closeSourceControlPanel();
       return;
     }
-    setPlanSidebarOpen(false);
+    dismissPlanSidebarForCurrentTurn();
     // Opens the source control panel and closes any other registered right panel.
     openRightPanel("source-control");
-  }, [sourceControlOpen]);
+  }, [dismissPlanSidebarForCurrentTurn, sourceControlOpen]);
 
   const envLocked = Boolean(
     activeThread &&
@@ -2910,9 +2919,6 @@ export default function ChatView(props: ChatViewProps) {
   const toggleInteractionMode = useCallback(() => {
     handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
   }, [handleInteractionModeChange, interactionMode]);
-  const hidePlanSidebar = useCallback(() => {
-    setPlanSidebarOpen(false);
-  }, []);
   const openPlanSidebar = useCallback(() => {
     planSidebarDismissedForTurnRef.current = null;
     closeWorkspaceFilePreview();
@@ -2921,21 +2927,16 @@ export default function ChatView(props: ChatViewProps) {
   }, []);
   const togglePlanSidebar = useCallback(() => {
     if (planSidebarOpen) {
-      planSidebarDismissedForTurnRef.current = currentPlanSidebarDismissalKey;
-      setPlanSidebarOpen(false);
+      dismissPlanSidebarForCurrentTurn();
       return;
     }
     planSidebarDismissedForTurnRef.current = null;
     openRightPanel("plan");
-  }, [currentPlanSidebarDismissalKey, planSidebarOpen]);
-  const closePlanSidebar = useCallback(() => {
-    setPlanSidebarOpen(false);
-    planSidebarDismissedForTurnRef.current = currentPlanSidebarDismissalKey;
-  }, [currentPlanSidebarDismissalKey]);
+  }, [dismissPlanSidebarForCurrentTurn, planSidebarOpen]);
   const planRightPanelContent = useMemo(
     () => ({
       open: planSidebarOpen,
-      onClose: closePlanSidebar,
+      onClose: dismissPlanSidebarForCurrentTurn,
       render: (mode: "sheet" | "sidebar") => (
         <PlanSidebar
           activePlan={activePlan}
@@ -2946,14 +2947,14 @@ export default function ChatView(props: ChatViewProps) {
           workspaceRoot={activeWorkspaceRoot}
           timestampFormat={timestampFormat}
           mode={mode}
-          onClose={closePlanSidebar}
+          onClose={dismissPlanSidebarForCurrentTurn}
         />
       ),
     }),
     [
       activePlan,
       activeWorkspaceRoot,
-      closePlanSidebar,
+      dismissPlanSidebarForCurrentTurn,
       environmentId,
       gitCwd,
       planSidebarLabel,
@@ -2965,7 +2966,7 @@ export default function ChatView(props: ChatViewProps) {
   useRegisterPlanRightPanelContent(planRightPanelContent);
 
   useRegisterRightPanel({
-    close: hidePlanSidebar,
+    close: dismissPlanSidebarForCurrentTurn,
     kind: "plan",
     open: openPlanSidebar,
   });
@@ -2974,7 +2975,7 @@ export default function ChatView(props: ChatViewProps) {
     action: "close",
     enabled: shouldUsePlanSidebarSheet && planSidebarOpen,
     horizontalScrollOwnerScope: "all",
-    onSwipe: closePlanSidebar,
+    onSwipe: dismissPlanSidebarForCurrentTurn,
     side: "right",
     startArea: "screen",
     startSurface: "panel",
