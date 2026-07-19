@@ -58,6 +58,23 @@ export function isReasoningDescriptor(descriptor: ProviderOptionDescriptor): boo
   return REASONING_OPTION_IDS.has(descriptor.id);
 }
 
+const COMPACT_REASONING_LEVEL_LABELS: Readonly<Record<string, string>> = {
+  "extra high": "xhigh",
+  "extra-high": "xhigh",
+  extra_high: "xhigh",
+  medium: "med",
+  minimal: "min",
+  ultrathink: "ultra",
+  xhigh: "xhigh",
+};
+
+/** Formats a reasoning level for the compact, standalone picker trigger. */
+export function formatCompactReasoningLevelLabel(label: string): string {
+  const normalized = label.trim().toLowerCase();
+  const compactLabel = COMPACT_REASONING_LEVEL_LABELS[normalized] ?? normalized.replace(/\s+/g, "");
+  return Array.from(compactLabel).slice(0, 5).join("");
+}
+
 export type DescriptorFilter = (descriptor: ProviderOptionDescriptor) => boolean;
 
 function replaceDescriptorCurrentValue(
@@ -238,6 +255,8 @@ export interface TraitsMenuContentProps {
   descriptorFilter?: DescriptorFilter;
   triggerVariant?: VariantProps<typeof buttonVariants>["variant"];
   triggerClassName?: string;
+  /** Uses compact reasoning-level labels in a standalone picker trigger. */
+  compactReasoningTriggerLabel?: boolean;
 }
 
 export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
@@ -395,6 +414,7 @@ export const TraitsPicker = memo(function TraitsPicker({
   descriptorFilter,
   triggerVariant,
   triggerClassName,
+  compactReasoningTriggerLabel = false,
   ...persistence
 }: TraitsMenuContentProps & TraitsPersistence) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -435,7 +455,9 @@ export const TraitsPicker = memo(function TraitsPicker({
             : `${descriptor.label} ${descriptor.currentValue === true ? "On" : "Off"}`
           : getProviderOptionCurrentLabel(descriptor);
     if (typeof label === "string" && label.length > 0) {
-      triggerLabels.push(label);
+      triggerLabels.push(
+        compactReasoningTriggerLabel ? formatCompactReasoningLevelLabel(label) : label,
+      );
     }
   }
   const triggerLabel = triggerLabels.join(" · ");

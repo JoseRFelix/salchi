@@ -2597,6 +2597,35 @@ function applyEnvironmentOrchestrationEventUnchecked(
         options,
       );
 
+    case "thread.queued-turn-updated":
+      return updateThreadState(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          let changed = false;
+          const queuedTurns = thread.queuedTurns.map((queuedTurn) => {
+            if (queuedTurn.messageId !== event.payload.messageId) {
+              return queuedTurn;
+            }
+            changed = true;
+            return {
+              ...queuedTurn,
+              text: event.payload.text,
+              updatedAt: event.payload.updatedAt,
+            };
+          });
+          if (!changed) {
+            return thread;
+          }
+          return {
+            ...thread,
+            queuedTurns,
+            updatedAt: event.occurredAt,
+          };
+        },
+        options,
+      );
+
     case "thread.queued-turn-cancelled":
       return updateThreadState(
         state,

@@ -2314,6 +2314,34 @@ describe("incremental orchestration updates", () => {
     expect(threadsOf(sent)[0]?.messages).toHaveLength(1);
   });
 
+  it("updates queued message text without changing its identity or order", () => {
+    const firstQueuedTurn = makeQueuedTurn(1);
+    const secondQueuedTurn = makeQueuedTurn(2);
+    const thread = makeThread({ queuedTurns: [firstQueuedTurn, secondQueuedTurn] });
+    const state = makeState(thread);
+
+    const updated = applyOrchestrationEvent(
+      state,
+      makeEvent("thread.queued-turn-updated", {
+        threadId: thread.id,
+        messageId: firstQueuedTurn.messageId,
+        text: "edited queued message",
+        updatedAt: "2026-02-13T00:03:00.000Z",
+      }),
+      localEnvironmentId,
+    );
+
+    expect(threadsOf(updated)[0]?.queuedTurns.map((turn) => turn.messageId)).toEqual([
+      firstQueuedTurn.messageId,
+      secondQueuedTurn.messageId,
+    ]);
+    expect(threadsOf(updated)[0]?.queuedTurns[0]).toMatchObject({
+      text: "edited queued message",
+      createdAt: firstQueuedTurn.createdAt,
+      updatedAt: "2026-02-13T00:03:00.000Z",
+    });
+  });
+
   it("orders synthesized queued messages by dispatch time", () => {
     const queuedTurn = makeQueuedTurn(1);
     const existingMessage = makeMessage(2);

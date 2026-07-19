@@ -401,6 +401,7 @@ function createSnapshotForTargetUser(options: {
   targetText: string;
   targetAttachmentCount?: number;
   sessionStatus?: OrchestrationSessionStatus;
+  queuedTurns?: OrchestrationReadModel["threads"][number]["queuedTurns"];
 }): OrchestrationReadModel {
   const messages: Array<OrchestrationReadModel["threads"][number]["messages"][number]> = [];
   const runningTurnId =
@@ -484,7 +485,7 @@ function createSnapshotForTargetUser(options: {
         archivedAt: null,
         deletedAt: null,
         messages,
-        queuedTurns: [],
+        queuedTurns: options.queuedTurns ?? [],
         activities: [],
         proposedPlans: [],
         checkpoints: [],
@@ -2128,11 +2129,19 @@ async function expectComposerActionsContained(): Promise<void> {
 
       const buttonRects = actionButtons.map((button) => button.getBoundingClientRect());
       const firstTop = buttonRects[0]?.top ?? 0;
+      const actionGeometry = actionButtons.map((button, index) => ({
+        label: button.ariaLabel || button.textContent?.trim() || "unlabeled",
+        top: buttonRects[index]?.top,
+        height: buttonRects[index]?.height,
+      }));
 
       for (const rect of buttonRects) {
         expect(rect.right).toBeLessThanOrEqual(footerRect.right + 0.5);
         expect(rect.bottom).toBeLessThanOrEqual(footerRect.bottom + 0.5);
-        expect(Math.abs(rect.top - firstTop)).toBeLessThanOrEqual(1.5);
+        expect(
+          Math.abs(rect.top - firstTop),
+          `Composer action buttons are misaligned: ${JSON.stringify(actionGeometry)}`,
+        ).toBeLessThanOrEqual(1.5);
       }
     },
     { timeout: 8_000, interval: 16 },
@@ -4121,6 +4130,78 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("collapses the mobile composer as soon as a new thread send is in flight", async () => {
+    useTerminalStateStore.setState({
+      terminalStateByThreadKey: {},
+      terminalDevServerLinksByKey: {},
+    });
+    useComposerDraftStore.setState({
+      draftThreadsByThreadKey: {
+        [THREAD_KEY]: {
+          threadId: THREAD_ID,
+          environmentId: LOCAL_ENVIRONMENT_ID,
+          projectId: PROJECT_ID,
+          logicalProjectKey: PROJECT_DRAFT_KEY,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: "main",
+          worktreePath: null,
+          envMode: "local",
+        },
+      },
+      logicalProjectDraftThreadKeyByLogicalProjectKey: {
+        [PROJECT_DRAFT_KEY]: THREAD_KEY,
+      },
+    });
+
+    let resolveDispatch!: (value: { sequence: number }) => void;
+    const dispatchPromise = new Promise<{ sequence: number }>((resolve) => {
+      resolveDispatch = resolve;
+    });
+
+    const mounted = await mountChatView({
+      viewport: COMPACT_FOOTER_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+      resolveRpc: (body) => {
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return dispatchPromise;
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const prompt = "Show this message while the thread starts";
+      useComposerDraftStore.getState().setPrompt(THREAD_REF, prompt);
+      await waitForLayout();
+
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(
+            wsRequests.some((request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand),
+          ).toBe(true);
+          expect(document.activeElement).not.toBe(composerEditor);
+          expect(
+            document.querySelector<HTMLElement>("[data-chat-composer-mobile-collapsed]")?.dataset
+              .chatComposerMobileCollapsed,
+          ).toBe("true");
+          expect(document.body.textContent).toContain(prompt);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      resolveDispatch({ sequence: fixture.snapshot.snapshotSequence + 1 });
+      await mounted.cleanup();
+    }
+  });
+
   it("toggles plan mode with Shift+Tab only while the composer is focused", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -5071,6 +5152,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         "Unable to find queue message button.",
       );
       expect(queueButton.disabled).toBe(false);
+      expect(document.querySelector('button[aria-label="Stop generation"]')).toBeNull();
       await queueButton.click();
 
       await vi.waitFor(
@@ -5094,11 +5176,39 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await expect.element(page.getByText("1 Queued")).toBeInTheDocument();
       await expect.element(page.getByText("Run this after the current turn")).toBeInTheDocument();
 
+      const steerDisabledReason = "Waiting for queued message to sync";
+      const steerButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            'button[aria-label="Steer queued message into the current turn"]',
+          ),
+        "Unable to find steer queued message button.",
+      );
+      expect(steerButton.disabled).toBe(true);
+      expect(steerButton.querySelector(".opacity-25 svg")).not.toBeNull();
+      expect(steerButton.querySelector("svg.animate-spin")).not.toBeNull();
+      expect(getComputedStyle(steerButton).borderTopColor).not.toBe("rgba(0, 0, 0, 0)");
+
+      const editButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Edit queued message"]'),
+        "Unable to find queued message edit button.",
+      );
+      expect(editButton.disabled).toBe(true);
+      expect(editButton.querySelector(".opacity-25 svg")).not.toBeNull();
+      expect(editButton.querySelector("svg.animate-spin")).not.toBeNull();
+
+      await page
+        .getByLabelText(`Steer unavailable: ${steerDisabledReason}`, { exact: true })
+        .hover();
+      await expect.element(page.getByText(steerDisabledReason, { exact: true })).toBeVisible();
+
       const cancelButton = await waitForElement(
         () =>
           document.querySelector<HTMLButtonElement>('button[aria-label="Cancel queued message"]'),
         "Unable to find queued message cancel button.",
       );
+      expect(cancelButton.querySelector(".opacity-25 svg")).not.toBeNull();
+      expect(cancelButton.querySelector("svg.animate-spin")).not.toBeNull();
       await cancelButton.click();
 
       await vi.waitFor(
@@ -5112,6 +5222,81 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("edits a queued message without changing its identity", async () => {
+    const queuedMessageId = "msg-queued-edit-test" as MessageId;
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-running-edit-test" as MessageId,
+        targetText: "running edit target",
+        sessionStatus: "running",
+        queuedTurns: [
+          {
+            threadId: THREAD_ID,
+            messageId: queuedMessageId,
+            role: "user",
+            text: "Original queued message",
+            attachments: [],
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5",
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: NOW_ISO,
+            updatedAt: NOW_ISO,
+          },
+        ],
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return { sequence: fixture.snapshot.snapshotSequence + 1 };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      await expect.element(page.getByText("Original queued message")).toBeInTheDocument();
+      await expect.element(page.getByText("Steer", { exact: true })).toBeVisible();
+
+      const editButton = page.getByRole("button", { name: "Edit queued message" });
+      const cancelButton = page.getByRole("button", { name: "Cancel queued message" });
+      const editElement = editButton.element();
+      const cancelElement = cancelButton.element();
+      expect(
+        editElement.compareDocumentPosition(cancelElement) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).not.toBe(0);
+
+      await editButton.click();
+
+      const editor = page.getByLabelText("Edit queued message");
+      await editor.fill("Edited queued message");
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+
+      await vi.waitFor(
+        () => {
+          const updateRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.queued-turn.update",
+          );
+          expect(updateRequest).toMatchObject({
+            threadId: THREAD_ID,
+            messageId: queuedMessageId,
+            text: "Edited queued message",
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await expect.element(page.getByText("Edited queued message")).toBeInTheDocument();
+      await expect.element(page.getByText("Original queued message")).not.toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }
@@ -9241,6 +9426,17 @@ describe("ChatView timeline estimator parity (full app)", () => {
         expect(document.activeElement).toBe(composerEditor);
       }
 
+      const primaryActions = document.querySelector<HTMLElement>(
+        '[data-chat-composer-actions="right"]',
+      );
+      const primaryActionButtons = Array.from(
+        primaryActions?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+      );
+      expect(primaryActionButtons.slice(-2).map((button) => button.ariaLabel)).toEqual([
+        "Dictate",
+        "Send message",
+      ]);
+
       await waitForLayout();
       const composerSurface = document.querySelector<HTMLElement>(
         "[data-chat-composer-mobile-collapsed]",
@@ -9251,10 +9447,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("replaces footer controls with live dictation feedback while recording", async () => {
+  it("keeps the stop action stable while dictation is processed", async () => {
     const originalMediaRecorder = globalThis.MediaRecorder;
     const originalGetUserMedia = navigator.mediaDevices.getUserMedia;
     let activeRecorderState: "inactive" | "recording" = "inactive";
+    const recorders: MockMediaRecorder[] = [];
 
     class MockMediaRecorder extends EventTarget {
       static isTypeSupported(): boolean {
@@ -9264,6 +9461,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
       readonly mimeType = "audio/webm;codecs=opus";
       state: "inactive" | "recording" | "paused" = "inactive";
 
+      constructor() {
+        super();
+        recorders.push(this);
+      }
+
       start(): void {
         this.state = "recording";
         activeRecorderState = "recording";
@@ -9272,6 +9474,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       stop(): void {
         this.state = "inactive";
         activeRecorderState = "inactive";
+      }
+
+      finishStop(): void {
         this.dispatchEvent(new Event("stop"));
       }
     }
@@ -9317,6 +9522,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(() => {
         expect(findComposerProviderModelPicker()).toBeNull();
         expect(
+          document.querySelector<HTMLButtonElement>('button[aria-label="Attach files"]'),
+        ).toBeNull();
+        expect(
           document.querySelector<HTMLElement>('[data-chat-composer-footer="true"]')?.dataset
             .chatComposerDictationActive,
         ).toBe("true");
@@ -9338,8 +9546,35 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop and transcribe"]'),
         "Unable to find dictation stop control.",
       );
+      const stopButtonRect = stopButton.getBoundingClientRect();
       stopButton.click();
 
+      const transcribingButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Transcribing"]'),
+        "Unable to find dictation processing state in the stop control.",
+      );
+      const transcribingButtonRect = transcribingButton.getBoundingClientRect();
+      expect(transcribingButton).toBe(stopButton);
+      expect(transcribingButton.disabled).toBe(true);
+      expect(
+        transcribingButton.querySelector('[data-chat-composer-dictation-spinner="true"]'),
+      ).not.toBeNull();
+      expect({
+        x: transcribingButtonRect.x,
+        y: transcribingButtonRect.y,
+        width: transcribingButtonRect.width,
+        height: transcribingButtonRect.height,
+      }).toEqual({
+        x: stopButtonRect.x,
+        y: stopButtonRect.y,
+        width: stopButtonRect.width,
+        height: stopButtonRect.height,
+      });
+      expect(
+        document.querySelector<HTMLButtonElement>('button[aria-label="Attach files"]'),
+      ).toBeNull();
+
+      recorders.at(-1)?.finishStop();
       const expandAfterRecordingButton = await waitForElement(
         () => document.querySelector<HTMLButtonElement>('button[aria-label="Expand composer"]'),
         "Composer did not return to its normal collapsed state after dictation finished.",

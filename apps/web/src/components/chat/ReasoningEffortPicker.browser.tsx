@@ -13,7 +13,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 import { createModelCapabilities, createModelSelection } from "@t3tools/shared/model";
 
-import { isReasoningDescriptor, TraitsPicker } from "./TraitsPicker";
+import {
+  formatCompactReasoningLevelLabel,
+  isReasoningDescriptor,
+  TraitsPicker,
+} from "./TraitsPicker";
 import { useComposerDraftStore } from "../../composerDraftStore";
 
 const LOCAL_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
@@ -55,6 +59,7 @@ const MODELS = [
             { id: "low", label: "Low" },
             { id: "medium", label: "Medium" },
             { id: "high", label: "High", isDefault: true },
+            { id: "xhigh", label: "Extra High" },
             { id: "ultrathink", label: "Ultrathink" },
           ],
           ["ultrathink"],
@@ -110,6 +115,7 @@ async function mountReasoningPicker(props?: {
       modelOptions={props?.options}
       onPromptChange={onPromptChange}
       descriptorFilter={reasoningOnly}
+      compactReasoningTriggerLabel
     />,
     { container: host },
   );
@@ -130,6 +136,23 @@ describe("reasoning effort picker", () => {
       draftThreadsByThreadKey: {},
       logicalProjectDraftThreadKeyByLogicalProjectKey: {},
       stickyModelSelectionByProvider: {},
+    });
+  });
+
+  it("uses a maximum of five characters for the standalone trigger", async () => {
+    await using _ = await mountReasoningPicker({
+      options: [{ id: "effort", value: "xhigh" }],
+    });
+
+    const triggerText = page.getByRole("button").element().textContent?.trim() ?? "";
+    expect(triggerText).toBe("xhigh");
+    expect(Array.from(triggerText)).toHaveLength(5);
+    expect(formatCompactReasoningLevelLabel("Medium")).toBe("med");
+    expect(formatCompactReasoningLevelLabel("Ultrathink")).toBe("ultra");
+
+    await page.getByRole("button").click();
+    await vi.waitFor(() => {
+      expect(document.body.textContent ?? "").toContain("Extra High");
     });
   });
 

@@ -546,6 +546,50 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.queued-turn.update": {
+      const targetThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const queuedTurn = targetThread.queuedTurns.find(
+        (entry) => entry.messageId === command.messageId,
+      );
+      if (!queuedTurn) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued turn '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      if (queuedTurn.steering !== undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued turn '${command.messageId}' is already being steered into turn '${queuedTurn.steering.expectedTurnId}'.`,
+        });
+      }
+      if (command.text.trim().length === 0 && queuedTurn.attachments.length === 0) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued turn '${command.messageId}' must include text or an attachment.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.queued-turn-updated",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          text: command.text,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.queued-turn.cancel": {
       const targetThread = yield* requireThread({
         readModel,

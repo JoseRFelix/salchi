@@ -1,5 +1,5 @@
 import { type ProviderInstanceId } from "@t3tools/contracts";
-import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { Clock3Icon, SparklesIcon, StarIcon } from "lucide-react";
 import { Gemini, GithubCopilotIcon } from "../Icons";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
@@ -71,8 +71,6 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
   const showFavorites = props.showFavorites ?? true;
   const showComingSoon = props.showComingSoon ?? true;
   const [hoveredInstanceId, setHoveredInstanceId] = useState<ProviderInstanceId | null>(null);
-  const sidebarContentRef = useRef<HTMLDivElement>(null);
-  const [selectedIndicatorTop, setSelectedIndicatorTop] = useState<number | null>(null);
   const duplicateDriverCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const entry of props.instanceEntries) {
@@ -81,53 +79,23 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
     return counts;
   }, [props.instanceEntries]);
 
-  useLayoutEffect(() => {
-    const content = sidebarContentRef.current;
-    if (!content) {
-      return;
-    }
-    const selectedButton = Array.from(
-      content.querySelectorAll<HTMLElement>("[data-model-picker-provider]"),
-    ).find((button) => button.dataset.modelPickerProvider === props.selectedInstanceId);
-    if (!selectedButton) {
-      setSelectedIndicatorTop(null);
-      return;
-    }
-    const contentRect = content.getBoundingClientRect();
-    const selectedButtonRect = selectedButton.getBoundingClientRect();
-    setSelectedIndicatorTop(
-      selectedButtonRect.top -
-        contentRect.top +
-        content.scrollTop +
-        selectedButtonRect.height / 2 -
-        10,
-    );
-  }, [props.instanceEntries, props.selectedInstanceId, showFavorites]);
-
   return (
     <div
       className="w-12 shrink-0 overflow-hidden border-r bg-muted/30"
       data-model-picker-sidebar="true"
     >
       <div className="h-full overflow-y-auto overscroll-contain [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <div
-          ref={sidebarContentRef}
-          className="relative flex min-h-full flex-col gap-1 px-1 pb-1 pt-0.5"
-        >
-          {selectedIndicatorTop !== null ? (
-            <div
-              data-model-picker-selected-indicator="true"
-              className={cn(
-                SELECTED_INDICATOR_CLASS,
-                "right-0 translate-y-0 transition-[top] duration-200 ease-out",
-              )}
-              style={{ top: selectedIndicatorTop }}
-            />
-          ) : null}
+        <div className="relative flex min-h-full flex-col gap-1 px-1 pb-1 pt-0.5">
           {/* Favorites section */}
           {showFavorites ? (
             <div className="mb-1 border-b pb-1">
               <div className="relative w-full">
+                {props.selectedInstanceId === "favorites" ? (
+                  <div
+                    data-model-picker-selected-indicator="true"
+                    className={SELECTED_INDICATOR_CLASS}
+                  />
+                ) : null}
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -237,6 +205,12 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
 
             return (
               <div key={entry.instanceId} className="relative w-full">
+                {isSelected ? (
+                  <div
+                    data-model-picker-selected-indicator="true"
+                    className={SELECTED_INDICATOR_CLASS}
+                  />
+                ) : null}
                 <Tooltip>
                   <TooltipTrigger render={trigger} />
                   <TooltipPopup

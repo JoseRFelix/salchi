@@ -434,18 +434,32 @@ describe("OrchestrationEngine", () => {
       }),
     );
 
+    await system.run(
+      engine.dispatch({
+        type: "thread.queued-turn.update",
+        commandId: CommandId.make("cmd-turn-queue-update"),
+        threadId,
+        messageId: asMessageId("msg-queued-cancel"),
+        text: "edited before cancel",
+        createdAt: "2026-01-01T00:00:01.500Z",
+      }),
+    );
+
     const queuedReadModel = await system.readModel();
     const queuedThread = queuedReadModel.threads.find((thread) => thread.id === threadId);
     expect(queuedThread?.messages).toEqual([]);
-    expect(queuedThread?.queuedTurns.map((queuedTurn) => queuedTurn.text)).toEqual(["cancel me"]);
+    expect(queuedThread?.queuedTurns.map((queuedTurn) => queuedTurn.text)).toEqual([
+      "edited before cancel",
+    ]);
     expect(queuedThread?.queuedTurns[0]?.createdAt).toBe("2026-01-01T00:00:01.000Z");
+    expect(queuedThread?.queuedTurns[0]?.updatedAt).toBe("2026-01-01T00:00:01.500Z");
 
     const queuedDetail = await system.readThreadDetail(threadId);
     expect(Option.isSome(queuedDetail)).toBe(true);
     if (Option.isSome(queuedDetail)) {
       expect(queuedDetail.value.thread.messages).toEqual([]);
       expect(queuedDetail.value.thread.queuedTurns.map((queuedTurn) => queuedTurn.text)).toEqual([
-        "cancel me",
+        "edited before cancel",
       ]);
     }
 
@@ -489,6 +503,17 @@ describe("OrchestrationEngine", () => {
 
     await system.run(
       engine.dispatch({
+        type: "thread.queued-turn.update",
+        commandId: CommandId.make("cmd-turn-queue-dispatch-update"),
+        threadId,
+        messageId: asMessageId("msg-queued-dispatch"),
+        text: "edited dispatch me",
+        createdAt: "2026-01-01T00:00:03.500Z",
+      }),
+    );
+
+    await system.run(
+      engine.dispatch({
         type: "thread.queued-turn.dispatch",
         commandId: CommandId.make("cmd-turn-queue-dispatch-dispatch"),
         threadId,
@@ -500,7 +525,9 @@ describe("OrchestrationEngine", () => {
     const dispatchedReadModel = await system.readModel();
     const dispatchedThread = dispatchedReadModel.threads.find((thread) => thread.id === threadId);
     expect(dispatchedThread?.queuedTurns).toEqual([]);
-    expect(dispatchedThread?.messages.map((message) => message.text)).toEqual(["dispatch me"]);
+    expect(dispatchedThread?.messages.map((message) => message.text)).toEqual([
+      "edited dispatch me",
+    ]);
     expect(dispatchedThread?.messages[0]?.createdAt).toBe("2026-01-01T00:00:04.000Z");
 
     const dispatchEvents = (await system.readEvents()).filter(

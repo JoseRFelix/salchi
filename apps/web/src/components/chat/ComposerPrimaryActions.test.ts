@@ -4,20 +4,24 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { ComposerPrimaryActions, formatPendingPrimaryActionLabel } from "./ComposerPrimaryActions";
 
-const renderRunningPrimaryActions = (isInterrupting: boolean) =>
+const renderRunningPrimaryActions = (input: {
+  isInterrupting?: boolean;
+  hasSendableContent?: boolean;
+  isSendBusy?: boolean;
+}) =>
   renderToStaticMarkup(
     createElement(ComposerPrimaryActions, {
       compact: false,
       pendingAction: null,
       isRunning: true,
-      isInterrupting,
+      isInterrupting: input.isInterrupting ?? false,
       showPlanFollowUpPrompt: false,
       promptHasText: false,
-      isSendBusy: false,
+      isSendBusy: input.isSendBusy ?? false,
       isConnecting: false,
       isEnvironmentUnavailable: false,
       isPreparingWorktree: false,
-      hasSendableContent: false,
+      hasSendableContent: input.hasSendableContent ?? false,
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
       onImplementPlanInNewThread: () => {},
@@ -116,7 +120,7 @@ describe("formatPendingPrimaryActionLabel", () => {
 
 describe("ComposerPrimaryActions stop button", () => {
   it("renders a disabled stopping affordance while interrupting", () => {
-    const markup = renderRunningPrimaryActions(true);
+    const markup = renderRunningPrimaryActions({ isInterrupting: true });
 
     expect(markup).toContain('aria-label="Stopping generation"');
     expect(markup).toContain("disabled=");
@@ -124,10 +128,29 @@ describe("ComposerPrimaryActions stop button", () => {
   });
 
   it("keeps the normal stop action enabled before interruption is in flight", () => {
-    const markup = renderRunningPrimaryActions(false);
+    const markup = renderRunningPrimaryActions({});
 
     expect(markup).toContain('aria-label="Stop generation"');
     expect(markup).not.toContain("disabled=");
     expect(markup).not.toContain("animate-spin");
+  });
+
+  it("replaces stop with the queue action when the composer has content", () => {
+    const markup = renderRunningPrimaryActions({ hasSendableContent: true });
+
+    expect(markup).toContain('aria-label="Queue message"');
+    expect(markup).not.toContain('aria-label="Stop generation"');
+    expect(markup.match(/<button/g)).toHaveLength(1);
+  });
+
+  it("shows queueing progress in the same primary action", () => {
+    const markup = renderRunningPrimaryActions({
+      hasSendableContent: true,
+      isSendBusy: true,
+    });
+
+    expect(markup).toContain('aria-label="Queueing message"');
+    expect(markup).not.toContain('aria-label="Stopping generation"');
+    expect(markup).toContain("animate-spin");
   });
 });

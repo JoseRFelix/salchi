@@ -10,6 +10,7 @@ import {
   transcribeEnvironmentAudio,
 } from "../../dictation";
 import { Button } from "../ui/button";
+import { Spinner } from "../ui/spinner";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { preserveComposerFocusOnPointerDown } from "./composerFocus";
@@ -71,6 +72,7 @@ export function ComposerDictationButton(props: {
     clearStopTimer();
     const recorder = recorderRef.current;
     if (recorder && recorder.state !== "inactive") {
+      setState("transcribing");
       recorder.stop();
     }
   }, [clearStopTimer]);
@@ -219,13 +221,17 @@ export function ComposerDictationButton(props: {
       : transcribing
         ? "Transcribing"
         : "Dictate";
-  if (recording && streamRef.current) {
+  if ((recording && streamRef.current) || transcribing) {
     return (
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        <ComposerDictationVisualizer
-          stream={streamRef.current}
-          startedAtMs={recordingStartedAtRef.current}
-        />
+        {recording && streamRef.current ? (
+          <ComposerDictationVisualizer
+            stream={streamRef.current}
+            startedAtMs={recordingStartedAtRef.current}
+          />
+        ) : (
+          <ComposerDictationProcessingIndicator status={statusQuery.data} />
+        )}
         <Tooltip>
           <TooltipTrigger
             render={
@@ -234,23 +240,28 @@ export function ComposerDictationButton(props: {
                 variant="secondary"
                 size="icon-sm"
                 aria-label={label}
-                aria-pressed="true"
-                className="shrink-0 rounded-full"
+                aria-pressed={recording}
+                disabled={transcribing}
+                className="size-8 shrink-0 rounded-full sm:size-8"
                 onPointerDown={preserveComposerFocusOnPointerDown}
                 onClick={stopRecording}
               />
             }
           >
-            <SquareIcon className="size-3 fill-current" aria-hidden="true" />
+            {transcribing ? (
+              <Spinner
+                data-chat-composer-dictation-spinner="true"
+                className="size-4"
+                aria-hidden="true"
+              />
+            ) : (
+              <SquareIcon className="size-3 fill-current" aria-hidden="true" />
+            )}
           </TooltipTrigger>
           <TooltipPopup side="top">{label}</TooltipPopup>
         </Tooltip>
       </div>
     );
-  }
-
-  if (transcribing) {
-    return <ComposerDictationProcessingIndicator status={statusQuery.data} />;
   }
 
   return (
@@ -265,6 +276,7 @@ export function ComposerDictationButton(props: {
               disabled={busy || (!recording && props.disabled)}
               aria-label={label}
               aria-pressed={recording}
+              className="size-8 sm:size-8"
               onPointerDown={preserveComposerFocusOnPointerDown}
               onClick={recording ? stopRecording : () => void startRecording()}
             />
