@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { ComposerDictationButton } from "./ComposerDictationButton";
+import { installDictationMediaMocks } from "./dictationMediaTestUtils";
 
 const harness = vi.hoisted(() => ({
   model: "base.en" as TranscriptionModel,
@@ -32,27 +33,20 @@ vi.mock("../../environments/runtime", () => {
 });
 
 describe("ComposerDictationButton status lifecycle", () => {
-  const originalMediaRecorder = globalThis.MediaRecorder;
-  const originalMediaDevices = navigator.mediaDevices;
+  let restoreMediaMocks: (() => void) | null = null;
 
   afterEach(() => {
     harness.model = "base.en";
     harness.fetchStatus.mockClear();
-    vi.stubGlobal("MediaRecorder", originalMediaRecorder);
-    Object.defineProperty(navigator, "mediaDevices", {
-      configurable: true,
-      value: originalMediaDevices,
-    });
+    restoreMediaMocks?.();
+    restoreMediaMocks = null;
     document.body.innerHTML = "";
   });
 
   it("fetches a fresh status when the selected local model changes", async () => {
-    class MockMediaRecorder extends EventTarget {}
-    vi.stubGlobal("MediaRecorder", MockMediaRecorder);
-    Object.defineProperty(navigator, "mediaDevices", {
-      configurable: true,
-      value: { getUserMedia: vi.fn() },
-    });
+    ({ restore: restoreMediaMocks } = installDictationMediaMocks({
+      getUserMedia: vi.fn(async () => new MediaStream()),
+    }));
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });

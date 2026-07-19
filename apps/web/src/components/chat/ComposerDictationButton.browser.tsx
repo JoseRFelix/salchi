@@ -33,6 +33,7 @@ import {
 } from "../../retainedDictationRecordingStore";
 import { toastManager } from "../ui/toast";
 import { ComposerDictationButton } from "./ComposerDictationButton";
+import { installDictationMediaMocks, overrideTestProperty } from "./dictationMediaTestUtils";
 
 class MockWakeLockSentinel extends EventTarget {
   released = false;
@@ -56,35 +57,6 @@ function deferred<A>() {
 const IOS_WEBKIT_USER_AGENT =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148";
 
-class MockMediaRecorder extends EventTarget {
-  static isTypeSupported(): boolean {
-    return true;
-  }
-
-  readonly mimeType = "audio/webm;codecs=opus";
-  state: "inactive" | "recording" | "paused" = "inactive";
-
-  start(): void {
-    this.state = "recording";
-  }
-
-  stop(): void {
-    this.state = "inactive";
-  }
-}
-
-function overrideProperty(target: object, key: PropertyKey, value: unknown): () => void {
-  const original = Object.getOwnPropertyDescriptor(target, key);
-  Object.defineProperty(target, key, { configurable: true, value });
-  return () => {
-    if (original) {
-      Object.defineProperty(target, key, original);
-    } else {
-      Reflect.deleteProperty(target, key);
-    }
-  };
-}
-
 async function renderPcmLifecycleButton(options: {
   readonly pcmStart: (
     stream: MediaStream,
@@ -95,14 +67,13 @@ async function renderPcmLifecycleButton(options: {
   readonly ownerKey?: string;
   readonly transcribe?: (...args: unknown[]) => Promise<{ readonly text: string }>;
 }) {
-  vi.stubGlobal("MediaRecorder", MockMediaRecorder);
   const wakeLockSentinel = new MockWakeLockSentinel();
   const wakeLockRequest = vi.fn(async () => wakeLockSentinel as unknown as WakeLockSentinel);
   const getUserMedia = vi.fn(options.getUserMedia ?? (async () => options.stream!));
+  const mediaMocks = installDictationMediaMocks({ getUserMedia });
   const restoreProperties = [
-    overrideProperty(navigator, "userAgent", IOS_WEBKIT_USER_AGENT),
-    overrideProperty(navigator.mediaDevices, "getUserMedia", getUserMedia),
-    overrideProperty(navigator, "wakeLock", { request: wakeLockRequest }),
+    overrideTestProperty(navigator, "userAgent", IOS_WEBKIT_USER_AGENT),
+    overrideTestProperty(navigator, "wakeLock", { request: wakeLockRequest }),
   ];
   const disposePcmRecorder = vi.fn();
   const disposeStartSound = vi.fn();
@@ -158,6 +129,7 @@ async function renderPcmLifecycleButton(options: {
       await unmount();
       queryClient.clear();
       for (const restore of restoreProperties.toReversed()) restore();
+      mediaMocks.restore();
     },
   };
 }
@@ -454,13 +426,13 @@ describe("ComposerDictationButton", () => {
     }) as unknown as MediaStream;
     const wakeLock = new MockWakeLockSentinel();
     const restoreProperties = [
-      overrideProperty(navigator, "userAgent", "Mozilla/5.0 Chrome/140.0"),
-      overrideProperty(
+      overrideTestProperty(navigator, "userAgent", "Mozilla/5.0 Chrome/140.0"),
+      overrideTestProperty(
         navigator.mediaDevices,
         "getUserMedia",
         vi.fn(async () => stream),
       ),
-      overrideProperty(navigator, "wakeLock", {
+      overrideTestProperty(navigator, "wakeLock", {
         request: vi.fn(async () => wakeLock as unknown as WakeLockSentinel),
       }),
     ];
