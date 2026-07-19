@@ -67,6 +67,9 @@ interface ChatHeaderProps {
   onNavigateToParentThread?: () => void;
 }
 
+const COMPACT_HEADER_ICON_ACTION_CLASS_NAME =
+  "shrink-0 max-[760px]:size-11 max-[760px]:min-w-11 max-[760px]:rounded-xl max-[760px]:px-0 max-[760px]:before:rounded-[calc(var(--radius-xl)-1px)] max-[760px]:pointer-coarse:after:hidden";
+
 export function shouldShowOpenInPicker(input: {
   readonly activeProjectName: string | undefined;
   readonly activeThreadEnvironmentId: EnvironmentId;
@@ -152,7 +155,12 @@ export const ChatHeader = memo(function ChatHeader({
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
       <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden sm:gap-3">
-        <SidebarTrigger className="size-7 shrink-0 md:hidden" />
+        <div
+          className="flex size-11 shrink-0 items-center justify-center md:hidden"
+          data-slot="compact-sidebar-trigger-slot"
+        >
+          <SidebarTrigger className="size-7 shrink-0 pointer-coarse:after:left-1/2 pointer-coarse:after:top-1/2 pointer-coarse:after:-translate-x-1/2 pointer-coarse:after:-translate-y-1/2" />
+        </div>
         <div className="flex min-w-0 flex-col justify-center">
           <h2
             className="min-w-0 truncate text-sm font-medium leading-tight text-foreground"
@@ -225,11 +233,11 @@ export const ChatHeader = memo(function ChatHeader({
             <TooltipTrigger
               render={
                 <Toggle
-                  className="shrink-0"
+                  className={COMPACT_HEADER_ICON_ACTION_CLASS_NAME}
                   pressed={sourceControlOpen}
                   onPressedChange={onToggleSourceControl}
                   aria-label="Toggle source control"
-                  variant="outline"
+                  variant="subtle-outline"
                   size="xs"
                   disabled={!hasSourceControl}
                 >
@@ -249,11 +257,11 @@ export const ChatHeader = memo(function ChatHeader({
             <TooltipTrigger
               render={
                 <Toggle
-                  className="shrink-0"
+                  className={COMPACT_HEADER_ICON_ACTION_CLASS_NAME}
                   pressed={terminalOpen}
                   onPressedChange={onToggleTerminal}
                   aria-label="Toggle terminal drawer"
-                  variant="outline"
+                  variant="subtle-outline"
                   size="xs"
                   disabled={!terminalAvailable}
                 >
@@ -274,11 +282,11 @@ export const ChatHeader = memo(function ChatHeader({
               <TooltipTrigger
                 render={
                   <Toggle
-                    className="shrink-0"
+                    className={COMPACT_HEADER_ICON_ACTION_CLASS_NAME}
                     pressed={fileExplorerOpen}
                     onPressedChange={onToggleFileExplorer}
                     aria-label="Toggle file explorer"
-                    variant="outline"
+                    variant="subtle-outline"
                     size="xs"
                     disabled={!fileExplorerAvailable}
                   >
@@ -298,11 +306,11 @@ export const ChatHeader = memo(function ChatHeader({
               <TooltipTrigger
                 render={
                   <Toggle
-                    className="shrink-0"
+                    className={COMPACT_HEADER_ICON_ACTION_CLASS_NAME}
                     pressed={diffOpen}
                     onPressedChange={onToggleDiff}
                     aria-label="Toggle diff panel"
-                    variant="outline"
+                    variant="subtle-outline"
                     size="xs"
                     disabled={!isGitRepo && !diffOpen}
                   >
@@ -323,7 +331,12 @@ export const ChatHeader = memo(function ChatHeader({
             <Menu>
               <MenuTrigger
                 render={
-                  <Button size="icon-xs" variant="outline" aria-label="More thread actions" />
+                  <Button
+                    className={COMPACT_HEADER_ICON_ACTION_CLASS_NAME}
+                    size="icon-xs"
+                    variant="subtle-outline"
+                    aria-label="More thread actions"
+                  />
                 }
               >
                 <EllipsisIcon className="size-4.5 sm:size-4" />
@@ -574,8 +587,8 @@ function ChatHeaderDevServerButton({
       : "Open dev server"
     : "No running dev servers";
   const buttonClassName = buttonEnabled
-    ? "shrink-0 text-foreground hover:text-foreground"
-    : "shrink-0";
+    ? `${COMPACT_HEADER_ICON_ACTION_CLASS_NAME} text-foreground hover:text-foreground`
+    : COMPACT_HEADER_ICON_ACTION_CLASS_NAME;
   const iconClassName = buttonEnabled
     ? "size-4.5 text-foreground sm:size-3"
     : "size-4.5 text-muted-foreground opacity-80 sm:size-3.5";
@@ -655,7 +668,7 @@ function ChatHeaderDevServerButton({
                     aria-label="Open detected dev server"
                     className={buttonClassName}
                     size="icon-xs"
-                    variant="outline"
+                    variant="subtle-outline"
                   />
                 }
               >
@@ -705,7 +718,7 @@ function ChatHeaderDevServerButton({
                 disabled
                 size="icon-xs"
                 tabIndex={-1}
-                variant="outline"
+                variant="subtle-outline"
               >
                 <DevServerBrowserIcon className={iconClassName} status={headerProbeStatus} />
               </Button>
@@ -726,7 +739,7 @@ function ChatHeaderDevServerButton({
             className={buttonClassName}
             onClick={() => openDevServerLink(link.url)}
             size="icon-xs"
-            variant="outline"
+            variant="subtle-outline"
           >
             <DevServerBrowserIcon className={iconClassName} status={headerProbeStatus} />
           </Button>

@@ -75,7 +75,7 @@ function WorkspaceFilesUnavailablePanel(props: { mode: DiffPanelMode }) {
           </div>
           <Button
             size="icon-xs"
-            variant="outline"
+            variant="subtle-outline"
             aria-label="Close files panel"
             title="Close files panel"
             onClick={closeWorkspaceFilePreview}

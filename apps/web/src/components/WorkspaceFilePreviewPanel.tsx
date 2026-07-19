@@ -1305,7 +1305,7 @@ export function WorkspaceFilePreviewPanel(props: {
         {props.backTarget && props.onBack ? (
           <Button
             size="icon-xs"
-            variant="outline"
+            variant="subtle-outline"
             aria-label={returnButtonLabel}
             title={returnButtonLabel}
             onClick={props.onBack}
@@ -1343,7 +1343,7 @@ export function WorkspaceFilePreviewPanel(props: {
         {props.showExplorerButton && props.onShowExplorer ? (
           <Button
             size="icon-xs"
-            variant="outline"
+            variant="subtle-outline"
             aria-label="Show file explorer"
             title="Show file explorer"
             onClick={props.onShowExplorer}
@@ -1354,7 +1354,7 @@ export function WorkspaceFilePreviewPanel(props: {
         {props.target && props.onAddFileToInput ? (
           <Button
             size="icon-xs"
-            variant="outline"
+            variant="subtle-outline"
             aria-label={`Add ${props.target.relativePath} to chat input`}
             title={`Add ${props.target.relativePath} to chat input`}
             onClick={() => {
@@ -1370,7 +1370,7 @@ export function WorkspaceFilePreviewPanel(props: {
           <>
             <Toggle
               size="xs"
-              variant="outline"
+              variant="subtle-outline"
               aria-label={wordWrap ? "Disable word wrap" : "Enable word wrap"}
               title={wordWrap ? "Disable word wrap" : "Enable word wrap"}
               pressed={wordWrap}
@@ -1380,7 +1380,7 @@ export function WorkspaceFilePreviewPanel(props: {
             </Toggle>
             <Button
               size="icon-xs"
-              variant="outline"
+              variant="subtle-outline"
               disabled={!query.data}
               aria-label={isCopied ? "Copied file" : "Copy file"}
               title={isCopied ? "Copied" : "Copy file"}
@@ -1392,7 +1392,7 @@ export function WorkspaceFilePreviewPanel(props: {
         ) : null}
         <Button
           size="icon-xs"
-          variant="outline"
+          variant="subtle-outline"
           aria-label="Close file preview"
           title="Close file preview"
           onClick={closeWorkspaceFilePreview}

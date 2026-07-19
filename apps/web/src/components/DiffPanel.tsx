@@ -913,7 +913,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       <div className="relative min-w-0 flex-1 [-webkit-app-region:no-drag] max-[760px]:hidden">
         <Button
           size="icon-xs"
-          variant="outline"
+          variant="subtle-outline"
           className={cn(
             "absolute left-0 top-1/2 z-20 -translate-y-1/2 bg-background/90 text-muted-foreground",
             canScrollTurnStripLeft
@@ -928,7 +928,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
         </Button>
         <Button
           size="icon-xs"
-          variant="outline"
+          variant="subtle-outline"
           className={cn(
             "absolute right-0 top-1/2 z-20 -translate-y-1/2 bg-background/90 text-muted-foreground",
             canScrollTurnStripRight
@@ -1046,7 +1046,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
         <ToggleGroup
           className="shrink-0"
-          variant="outline"
+          variant="subtle-outline"
           size="xs"
           value={[diffRenderMode]}
           onValueChange={(value) => {
@@ -1070,7 +1070,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                 aria-label={
                   diffWordWrap ? "Disable diff line wrapping" : "Enable diff line wrapping"
                 }
-                variant="outline"
+                variant="subtle-outline"
                 size="xs"
                 pressed={diffWordWrap}
                 onPressedChange={(pressed) => {
@@ -1092,7 +1092,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                 aria-label={
                   diffIgnoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"
                 }
-                variant="outline"
+                variant="subtle-outline"
                 size="xs"
                 pressed={diffIgnoreWhitespace}
                 onPressedChange={(pressed) => {
@@ -1110,7 +1110,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
         {mode === "sheet" ? (
           <Button
             size="icon-xs"
-            variant="outline"
+            variant="subtle-outline"
             aria-label="Close diff"
             title="Close diff"
             onClick={closeDiffPanel}

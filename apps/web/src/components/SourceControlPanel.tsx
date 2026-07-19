@@ -1017,7 +1017,7 @@ export default function SourceControlPanel({ mode = "sidebar", onClose }: Source
                 render={
                   <Button
                     size="icon-xs"
-                    variant="outline"
+                    variant="subtle-outline"
                     aria-label={viewModeToggleLabel}
                     title={viewModeToggleLabel}
                     onClick={() =>
@@ -1038,7 +1038,7 @@ export default function SourceControlPanel({ mode = "sidebar", onClose }: Source
                 render={
                   <Button
                     size="icon-xs"
-                    variant="outline"
+                    variant="subtle-outline"
                     aria-label="Refresh"
                     title="Refresh"
                     onClick={handleRefresh}
@@ -1051,7 +1051,7 @@ export default function SourceControlPanel({ mode = "sidebar", onClose }: Source
             </Tooltip>
             <Button
               size="icon-xs"
-              variant="outline"
+              variant="subtle-outline"
               onClick={onClose}
               aria-label="Close source control panel"
               title="Close source control panel"

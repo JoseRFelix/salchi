@@ -552,7 +552,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           <span className="text-[15px] font-medium leading-5">Select a model</span>
           <Button
             size="icon-xs"
-            variant="outline"
+            variant="subtle-outline"
             aria-label="Close model picker"
             onClick={() => props.onRequestClose?.()}
           >

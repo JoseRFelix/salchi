@@ -81,7 +81,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           compact ? (
             <Button
               size="icon-sm"
-              variant="outline"
+              variant="subtle-outline"
               className="rounded-full"
               {...pointerFocusProps}
               onClick={onPreviousPendingQuestion}

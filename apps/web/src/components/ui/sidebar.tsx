@@ -370,12 +370,14 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
         <span
           aria-hidden
           className="absolute right-0.5 top-0.5 size-2 rounded-full bg-blue-500 ring-2 ring-background dark:bg-blue-400"
+          data-slot="sidebar-trigger-update-indicator"
         />
       )}
       {showCheckingIndicator && (
         <Loader2Icon
           aria-hidden
           className="absolute right-0 top-0 size-2.5 animate-spin text-muted-foreground"
+          data-slot="sidebar-trigger-loading-indicator"
         />
       )}
       <span className="sr-only">Toggle Sidebar{updateAvailable ? " (update available)" : ""}</span>
