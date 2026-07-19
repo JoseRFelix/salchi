@@ -62,6 +62,7 @@ import {
 import { deriveComposerSendState, readFileAsDataUrl, threadHasStarted } from "../ChatView.logic";
 import {
   type ComposerImageAttachment,
+  composerTargetKey,
   type DraftId,
   type PersistedComposerAttachment,
   useComposerDraftStore,
@@ -676,6 +677,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Store subscriptions (prompt / images / terminal contexts)
   // ------------------------------------------------------------------
   const composerDraft = useComposerThreadDraft(composerDraftTarget);
+  const composerEditorIdentity = `${typeof composerDraftTarget === "string" ? "draft" : "thread"}:${composerTargetKey(composerDraftTarget)}`;
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
   const composerTerminalContexts = composerDraft.terminalContexts;
@@ -2607,6 +2609,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             <div className="relative">
               <ComposerPromptEditor
                 editorRef={composerEditorRef}
+                editorIdentity={composerEditorIdentity}
                 value={
                   isComposerApprovalState
                     ? ""

@@ -2,7 +2,11 @@ import { LexicalComposer, type InitialConfigType } from "@lexical/react/LexicalC
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
-import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
+import {
+  createEmptyHistoryState,
+  HistoryPlugin,
+  type HistoryState,
+} from "@lexical/react/LexicalHistoryPlugin";
 import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
 import { type ServerProviderSkill } from "@t3tools/contracts";
@@ -28,8 +32,10 @@ import {
   COMMAND_PRIORITY_HIGH,
   KEY_BACKSPACE_COMMAND,
   DELETE_CHARACTER_COMMAND,
+  CLEAR_HISTORY_COMMAND,
   $getRoot,
   HISTORY_MERGE_TAG,
+  SKIP_DOM_SELECTION_TAG,
   DecoratorNode,
   type ElementNode,
   type LexicalNode,
@@ -887,6 +893,8 @@ export interface ComposerPromptEditorHandle {
 }
 
 interface ComposerPromptEditorProps {
+  /** Stable draft/thread owner. Changing it resets native-input state and undo history. */
+  editorIdentity: string;
   value: string;
   cursor: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
@@ -1510,6 +1518,7 @@ function ComposerSurroundSelectionPlugin(props: {
 }
 
 function ComposerPromptEditorInner({
+  editorIdentity,
   value,
   cursor,
   terminalContexts,
@@ -1538,7 +1547,10 @@ function ComposerPromptEditorInner({
     expandedCursor: expandCollapsedComposerCursor(value, initialCursor),
     terminalContextIds: terminalContexts.map((context) => context.id),
   });
+  const controlledCursorRef = useRef(initialCursor);
   const nativeInputTrackerRef = useRef(createComposerNativeInputTracker());
+  const editorIdentityRef = useRef(editorIdentity);
+  const historyState = useMemo<HistoryState>(() => createEmptyHistoryState(), []);
   const isApplyingControlledUpdateRef = useRef(false);
   const terminalContextActions = useMemo(
     () => ({ onRemoveTerminalContext }),
@@ -1553,18 +1565,38 @@ function ComposerPromptEditorInner({
     skillMetadataRef.current = skillMetadataByName(skills);
   }, [skills]);
 
+  useLayoutEffect(() => {
+    // Lexical initializes a function-based editor state through an update queued during render.
+    // Queue baseline capture after it so the first browser-owned edit is safely undoable.
+    editor.update(() => undefined, {
+      onUpdate: () => {
+        if (historyState.current === null) {
+          historyState.current = { editor, editorState: editor.getEditorState() };
+        }
+      },
+    });
+  }, [editor, historyState]);
+
   useEffect(() => {
     editor.setEditable(!disabled);
   }, [disabled, editor]);
 
   useLayoutEffect(() => {
     const normalizedCursor = clampCollapsedComposerCursor(value, cursor);
+    const controlledCursorChanged = controlledCursorRef.current !== normalizedCursor;
+    controlledCursorRef.current = normalizedCursor;
+    const editorIdentityChanged = editorIdentityRef.current !== editorIdentity;
+    editorIdentityRef.current = editorIdentity;
+    if (editorIdentityChanged) {
+      nativeInputTrackerRef.current = createComposerNativeInputTracker();
+    }
     const previousSnapshot = snapshotRef.current;
     const contextsChanged = terminalContextsSignatureRef.current !== terminalContextsSignature;
     const skillsChanged = skillsSignatureRef.current !== skillsSignature;
     if (
       previousSnapshot.value === value &&
       previousSnapshot.cursor === normalizedCursor &&
+      !editorIdentityChanged &&
       !contextsChanged &&
       !skillsChanged
     ) {
@@ -1574,9 +1606,15 @@ function ComposerPromptEditorInner({
     const rootElement = editor.getRootElement();
     const isFocused = Boolean(rootElement && document.activeElement === rootElement);
     const shouldRewriteEditorState =
-      previousSnapshot.value !== value || contextsChanged || skillsChanged;
+      editorIdentityChanged || previousSnapshot.value !== value || contextsChanged || skillsChanged;
     const isSelectionOnlyUpdate = !shouldRewriteEditorState && isFocused;
-    if (isSelectionOnlyUpdate && isComposerNativeInputSettling(nativeInputTrackerRef.current)) {
+    // A browser-owned edit can publish value before its controlled cursor catches up. Ignore only
+    // that unchanged cursor echo; a changed cursor prop is an authoritative external selection.
+    if (
+      isSelectionOnlyUpdate &&
+      !controlledCursorChanged &&
+      isComposerNativeInputSettling(nativeInputTrackerRef.current)
+    ) {
       return;
     }
 
@@ -1589,23 +1627,49 @@ function ComposerPromptEditorInner({
     terminalContextsSignatureRef.current = terminalContextsSignature;
     skillsSignatureRef.current = skillsSignature;
 
-    if (previousSnapshot.value === value && !contextsChanged && !skillsChanged && !isFocused) {
+    if (
+      !editorIdentityChanged &&
+      previousSnapshot.value === value &&
+      !contextsChanged &&
+      !skillsChanged &&
+      !isFocused
+    ) {
       return;
     }
 
     isApplyingControlledUpdateRef.current = true;
-    editor.update(() => {
-      if (shouldRewriteEditorState) {
-        $setComposerEditorPrompt(value, terminalContexts, skillMetadataRef.current);
-      }
-      if (shouldRewriteEditorState || isFocused) {
-        $setSelectionAtComposerOffset(normalizedCursor);
-      }
-    });
+    editor.update(
+      () => {
+        if (shouldRewriteEditorState) {
+          $setComposerEditorPrompt(value, terminalContexts, skillMetadataRef.current);
+        }
+        if (shouldRewriteEditorState || isFocused) {
+          $setSelectionAtComposerOffset(normalizedCursor);
+        }
+      },
+      editorIdentityChanged
+        ? {
+            ...(!isFocused ? { tag: SKIP_DOM_SELECTION_TAG } : {}),
+            onUpdate: () => {
+              editor.dispatchCommand(CLEAR_HISTORY_COMMAND, undefined);
+              historyState.current = { editor, editorState: editor.getEditorState() };
+            },
+          }
+        : undefined,
+    );
     queueMicrotask(() => {
       isApplyingControlledUpdateRef.current = false;
     });
-  }, [cursor, editor, skillsSignature, terminalContexts, terminalContextsSignature, value]);
+  }, [
+    cursor,
+    editor,
+    editorIdentity,
+    historyState,
+    skillsSignature,
+    terminalContexts,
+    terminalContextsSignature,
+    value,
+  ]);
 
   const focusAt = useCallback(
     (nextCursor: number) => {
@@ -1776,13 +1840,14 @@ function ComposerPromptEditorInner({
         <ComposerInlineTokenArrowPlugin />
         <ComposerInlineTokenSelectionNormalizePlugin />
         <ComposerBackspacePlugin />
-        <HistoryPlugin />
+        <HistoryPlugin externalHistoryState={historyState} />
       </div>
     </ComposerTerminalContextActionsContext>
   );
 }
 
 export function ComposerPromptEditor({
+  editorIdentity,
   value,
   cursor,
   terminalContexts,
@@ -1822,6 +1887,7 @@ export function ComposerPromptEditor({
   return (
     <LexicalComposer key={COMPOSER_EDITOR_HMR_KEY} initialConfig={initialConfig}>
       <ComposerPromptEditorInner
+        editorIdentity={editorIdentity}
         value={value}
         cursor={cursor}
         terminalContexts={terminalContexts}

@@ -86,6 +86,15 @@ describe("composerNativeInput", () => {
     ).toBe(false);
   });
 
+  it("keeps Lexical in control of an untyped iOS event with an expanded selection", () => {
+    expect(
+      shouldLetBrowserHandleComposerBeforeInput("", {
+        isIosWebkit: true,
+        isSelectionCollapsed: false,
+      }),
+    ).toBe(false);
+  });
+
   it("treats composing keydown events as ineligible for command handling", () => {
     expect(isComposerNativeComposingKeyEvent({ isComposing: true, key: "a" })).toBe(true);
     expect(isComposerNativeComposingKeyEvent({ isComposing: false, key: "Process" })).toBe(true);
