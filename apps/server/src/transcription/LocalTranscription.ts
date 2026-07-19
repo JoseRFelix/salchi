@@ -8,8 +8,10 @@ import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -22,6 +24,7 @@ import { ServerConfig } from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import {
   ManagedWhisperError,
+  type ManagedWhisperProcess,
   provisionManagedWhisper,
   resolveManagedWhisperRuntimeAsset,
 } from "./ManagedWhisper.ts";
@@ -288,7 +291,17 @@ export function makeLocalTranscription<R = never>(input: {
 interface ActiveManagedWhisper {
   readonly model: TranscriptionModel;
   readonly scope: Scope.Closeable;
+  readonly process: ManagedWhisperProcess;
+  readonly generation: number;
 }
+
+interface PendingManagedWhisper {
+  readonly model: TranscriptionModel;
+  readonly generation: number;
+  readonly fiber: Fiber.Fiber<void, never>;
+}
+
+const MANAGED_WHISPER_RETRY_DELAYS = ["1 second", "5 seconds"] as const;
 
 function managedWhisperErrorFromCause(
   cause: Cause.Cause<ManagedWhisperError>,
@@ -307,16 +320,17 @@ export function makeManagedLocalTranscription<R>(input: {
   readonly provision: (
     model: TranscriptionModel,
     onStatus: (status: TranscriptionStatus) => Effect.Effect<void>,
-  ) => Effect.Effect<URL, ManagedWhisperError, R | Scope.Scope>;
+  ) => Effect.Effect<ManagedWhisperProcess, ManagedWhisperError, R | Scope.Scope>;
   readonly transcribeAt: (
     inferenceUrl: URL,
     request: LocalTranscriptionInput,
   ) => Effect.Effect<TranscriptionResult, LocalTranscriptionError>;
+  readonly retryDelays?: ReadonlyArray<Duration.Input> | undefined;
 }) {
   return Effect.gen(function* () {
     const parentScope = yield* Scope.Scope;
     const provisionContext = yield* Effect.context<R>();
-    const initialReadiness = yield* Deferred.make<URL, LocalTranscriptionError>();
+    const initialReadiness = yield* Deferred.make<URL | null, LocalTranscriptionError>();
     const readinessRef = yield* Ref.make(initialReadiness);
     const statusRef = yield* Ref.make<TranscriptionStatus>({
       configured: true,
@@ -326,49 +340,127 @@ export function makeManagedLocalTranscription<R>(input: {
       message: null,
     });
     const activeRef = yield* Ref.make<ActiveManagedWhisper | null>(null);
-    const selectedModelRef = yield* Ref.make<TranscriptionModel | null>(null);
+    const desiredModelRef = yield* Ref.make<TranscriptionModel | null>(null);
+    const generationRef = yield* Ref.make(0);
+    const pendingRef = yield* Ref.make<PendingManagedWhisper | null>(null);
     const switchSemaphore = yield* Semaphore.make(1);
     const transcriptionSemaphore = yield* Semaphore.make(1);
+    const retryDelays = input.retryDelays ?? MANAGED_WHISPER_RETRY_DELAYS;
 
-    const selectModel = (model: TranscriptionModel): Effect.Effect<void> =>
-      switchSemaphore.withPermits(1)(
-        Effect.gen(function* () {
-          if ((yield* Ref.get(selectedModelRef)) === model) return;
-          yield* Ref.set(selectedModelRef, model);
+    const replaceReadiness = (
+      readiness: Deferred.Deferred<URL | null, LocalTranscriptionError>,
+    ): Effect.Effect<void> =>
+      Ref.getAndSet(readinessRef, readiness).pipe(
+        Effect.flatMap((previous) => Deferred.succeed(previous, null)),
+        Effect.asVoid,
+      );
 
-          const readiness = yield* Deferred.make<URL, LocalTranscriptionError>();
-          yield* Ref.set(readinessRef, readiness);
-          yield* Ref.set(statusRef, {
-            configured: true,
-            state: "checking",
-            downloadedBytes: null,
-            totalBytes: null,
-            message: null,
-          });
+    const setStatusForGeneration = (
+      generation: number,
+      status: TranscriptionStatus,
+    ): Effect.Effect<void> =>
+      Ref.get(generationRef).pipe(
+        Effect.flatMap((currentGeneration) =>
+          currentGeneration === generation ? Ref.set(statusRef, status) : Effect.void,
+        ),
+      );
 
-          const childScope = yield* Scope.make();
-          yield* Scope.addFinalizer(
-            parentScope,
-            Scope.close(childScope, Exit.void).pipe(Effect.ignore),
+    const closeActive = (active: ActiveManagedWhisper): Effect.Effect<void> =>
+      Scope.close(active.scope, Exit.void).pipe(Effect.ignore);
+
+    let launchModel: (
+      model: TranscriptionModel,
+      failedActive?: ActiveManagedWhisper,
+    ) => Effect.Effect<void>;
+
+    const monitorActive = (active: ActiveManagedWhisper): Effect.Effect<void> =>
+      active.process.awaitTermination.pipe(
+        Effect.catch((error) =>
+          Effect.logError("Managed local dictation sidecar stopped", {
+            model: active.model,
+            cause: error,
+          }).pipe(
+            Effect.andThen(
+              Ref.get(desiredModelRef).pipe(
+                Effect.flatMap((desiredModel) =>
+                  desiredModel ? launchModel(desiredModel, active) : Effect.void,
+                ),
+              ),
+            ),
+          ),
+        ),
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.interrupt
+            : Effect.logError("Managed local dictation sidecar monitor failed", { cause }).pipe(
+                Effect.andThen(
+                  Ref.get(desiredModelRef).pipe(
+                    Effect.flatMap((desiredModel) =>
+                      desiredModel ? launchModel(desiredModel, active) : Effect.void,
+                    ),
+                  ),
+                ),
+              ),
+        ),
+      );
+
+    const runCandidate = (
+      model: TranscriptionModel,
+      generation: number,
+      readiness: Deferred.Deferred<URL | null, LocalTranscriptionError>,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        let lastError: ManagedWhisperError | null = null;
+        for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+          if ((yield* Ref.get(generationRef)) !== generation) return;
+          if (attempt > 0) {
+            yield* setStatusForGeneration(generation, {
+              configured: true,
+              state: "checking",
+              downloadedBytes: null,
+              totalBytes: null,
+              message: `Retrying local dictation setup (${attempt + 1}/${retryDelays.length + 1})…`,
+            });
+          }
+
+          const { childScope, provisionExit } = yield* Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const childScope = yield* Scope.fork(parentScope);
+              const provisionExit = yield* restore(
+                input
+                  .provision(model, (status) => setStatusForGeneration(generation, status))
+                  .pipe(
+                    Effect.provideService(Scope.Scope, childScope),
+                    Effect.provideContext(provisionContext),
+                  ),
+              ).pipe(Effect.exit);
+              if (Exit.isFailure(provisionExit)) {
+                yield* Scope.close(childScope, Exit.void).pipe(Effect.ignore);
+              }
+              return { childScope, provisionExit };
+            }),
           );
-          const provisionExit = yield* input
-            .provision(model, (status) => Ref.set(statusRef, status))
-            .pipe(
-              Effect.provideService(Scope.Scope, childScope),
-              Effect.provideContext(provisionContext),
-              Effect.exit,
-            );
 
           if (Exit.isSuccess(provisionExit)) {
-            yield* transcriptionSemaphore.withPermits(1)(
+            if ((yield* Ref.get(generationRef)) !== generation) {
+              yield* Scope.close(childScope, Exit.void).pipe(Effect.ignore);
+              return;
+            }
+
+            const active: ActiveManagedWhisper = {
+              model,
+              scope: childScope,
+              process: provisionExit.value,
+              generation,
+            };
+            yield* Scope.addFinalizer(
+              childScope,
+              Ref.update(activeRef, (current) => (current === active ? null : current)),
+            );
+            const committed = yield* transcriptionSemaphore.withPermits(1)(
               Effect.gen(function* () {
-                const previous = yield* Ref.getAndSet(activeRef, {
-                  model,
-                  scope: childScope,
-                });
-                if (previous) {
-                  yield* Scope.close(previous.scope, Exit.void).pipe(Effect.ignore);
-                }
+                if ((yield* Ref.get(generationRef)) !== generation) return false;
+                const previous = yield* Ref.getAndSet(activeRef, active);
                 yield* Ref.set(statusRef, {
                   configured: true,
                   state: "ready",
@@ -376,43 +468,146 @@ export function makeManagedLocalTranscription<R>(input: {
                   totalBytes: null,
                   message: null,
                 });
-                yield* Deferred.succeed(readiness, provisionExit.value);
+                yield* Deferred.succeed(readiness, provisionExit.value.inferenceUrl);
+                if (previous) yield* closeActive(previous);
+                return true;
               }),
+            );
+            if (!committed) {
+              yield* Scope.close(childScope, Exit.void).pipe(Effect.ignore);
+              return;
+            }
+            yield* monitorActive(active).pipe(
+              Effect.forkIn(parentScope, { startImmediately: true }),
             );
             return;
           }
 
-          const error = managedWhisperErrorFromCause(provisionExit.cause);
-          yield* Effect.logError("Local dictation model provisioning failed", {
-            model,
-            cause: provisionExit.cause,
-          });
-          yield* Scope.close(childScope, Exit.void).pipe(Effect.ignore);
-          yield* transcriptionSemaphore.withPermits(1)(
-            Effect.gen(function* () {
-              const previous = yield* Ref.getAndSet(activeRef, null);
-              if (previous) {
-                yield* Scope.close(previous.scope, Exit.void).pipe(Effect.ignore);
-              }
-              yield* Ref.set(selectedModelRef, null);
-              yield* Ref.set(statusRef, {
-                configured: true,
-                state: "error",
-                downloadedBytes: null,
-                totalBytes: null,
-                message: error.detail,
-              });
-              yield* Deferred.fail(
-                readiness,
-                new LocalTranscriptionError({
-                  reason: "provisioning_failed",
-                  cause: error,
-                }),
-              );
+          if (Cause.hasInterruptsOnly(provisionExit.cause)) {
+            return yield* Effect.interrupt;
+          }
+          lastError = managedWhisperErrorFromCause(provisionExit.cause);
+          if ((yield* Ref.get(generationRef)) !== generation) return;
+          if (attempt < retryDelays.length) {
+            yield* Effect.sleep(retryDelays[attempt]!);
+          }
+        }
+
+        const error =
+          lastError ??
+          new ManagedWhisperError({ detail: "Unexpected local dictation setup failure." });
+        yield* Effect.logError("Local dictation model provisioning failed", {
+          model,
+          cause: error,
+        });
+        if ((yield* Ref.get(generationRef)) !== generation) return;
+        const fallback = yield* Ref.get(activeRef);
+        yield* Ref.set(statusRef, {
+          configured: true,
+          state: "error",
+          downloadedBytes: null,
+          totalBytes: null,
+          message: error.detail,
+        });
+        if (fallback) {
+          yield* Deferred.succeed(readiness, fallback.process.inferenceUrl);
+        } else {
+          yield* Deferred.fail(
+            readiness,
+            new LocalTranscriptionError({
+              reason: "provisioning_failed",
+              cause: error,
             }),
           );
+        }
+      });
+
+    launchModel = (model, failedActive) =>
+      switchSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const currentActive = yield* Ref.get(activeRef);
+          if (failedActive && currentActive !== failedActive) return;
+
+          let pending = yield* Ref.get(pendingRef);
+          if (pending && pending.fiber.pollUnsafe() !== undefined) {
+            yield* Ref.update(pendingRef, (current) => (current === pending ? null : current));
+            pending = null;
+          }
+          if (
+            !failedActive &&
+            pending?.model === model &&
+            (yield* Ref.get(statusRef)).state !== "error"
+          ) {
+            return;
+          }
+
+          if (!failedActive && currentActive?.model === model) {
+            const generation = (yield* Ref.get(generationRef)) + 1;
+            yield* Ref.set(generationRef, generation);
+            yield* Ref.set(desiredModelRef, model);
+            if (pending) yield* Fiber.interrupt(pending.fiber);
+            const readiness = yield* Deferred.make<URL | null, LocalTranscriptionError>();
+            yield* Deferred.succeed(readiness, currentActive.process.inferenceUrl);
+            yield* replaceReadiness(readiness);
+            yield* Ref.set(statusRef, {
+              configured: true,
+              state: "ready",
+              downloadedBytes: null,
+              totalBytes: null,
+              message: null,
+            });
+            return;
+          }
+
+          const generation = (yield* Ref.get(generationRef)) + 1;
+          yield* Ref.set(generationRef, generation);
+          yield* Ref.set(desiredModelRef, model);
+          if (pending) {
+            yield* Fiber.interrupt(pending.fiber);
+          }
+
+          const readiness = yield* Deferred.make<URL | null, LocalTranscriptionError>();
+          yield* replaceReadiness(readiness);
+          yield* Ref.set(statusRef, {
+            configured: true,
+            state: "checking",
+            downloadedBytes: null,
+            totalBytes: null,
+            message: failedActive ? "Restarting local dictation…" : null,
+          });
+
+          if (failedActive) {
+            yield* transcriptionSemaphore.withPermits(1)(
+              Ref.get(activeRef).pipe(
+                Effect.flatMap((active) =>
+                  active === failedActive
+                    ? Ref.set(activeRef, null).pipe(Effect.andThen(closeActive(failedActive)))
+                    : Effect.void,
+                ),
+              ),
+            );
+          }
+
+          const candidate = runCandidate(model, generation, readiness).pipe(
+            Effect.ensuring(
+              Ref.update(pendingRef, (current) =>
+                current?.generation === generation ? null : current,
+              ),
+            ),
+          );
+          const fiber = yield* candidate.pipe(
+            Effect.forkIn(parentScope, { startImmediately: false }),
+          );
+          yield* Ref.set(pendingRef, { model, generation, fiber });
+          if (fiber.pollUnsafe() !== undefined) {
+            yield* Ref.update(pendingRef, (current) =>
+              current?.generation === generation ? null : current,
+            );
+          }
         }),
       );
+
+    const selectModel = (model: TranscriptionModel): Effect.Effect<void> => launchModel(model);
 
     const transcribe = (
       request: LocalTranscriptionInput,
@@ -422,24 +617,26 @@ export function makeManagedLocalTranscription<R>(input: {
           Effect.flatMap((readiness) =>
             Deferred.await(readiness).pipe(
               Effect.flatMap((inferenceUrl) =>
-                transcriptionSemaphore.withPermits(1)(
-                  Ref.get(readinessRef).pipe(
-                    Effect.flatMap(
-                      (
-                        currentReadiness,
-                      ): Effect.Effect<
-                        | { readonly retry: true }
-                        | { readonly retry: false; readonly result: TranscriptionResult },
-                        LocalTranscriptionError
-                      > =>
-                        currentReadiness === readiness
-                          ? input
-                              .transcribeAt(inferenceUrl, request)
-                              .pipe(Effect.map((result) => ({ retry: false as const, result })))
-                          : Effect.succeed({ retry: true as const }),
+                inferenceUrl === null
+                  ? Effect.succeed({ retry: true as const })
+                  : transcriptionSemaphore.withPermits(1)(
+                      Ref.get(readinessRef).pipe(
+                        Effect.flatMap(
+                          (
+                            currentReadiness,
+                          ): Effect.Effect<
+                            | { readonly retry: true }
+                            | { readonly retry: false; readonly result: TranscriptionResult },
+                            LocalTranscriptionError
+                          > =>
+                            currentReadiness === readiness
+                              ? input
+                                  .transcribeAt(inferenceUrl, request)
+                                  .pipe(Effect.map((result) => ({ retry: false as const, result })))
+                              : Effect.succeed({ retry: true as const }),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
               ),
             ),
           ),
@@ -449,7 +646,7 @@ export function makeManagedLocalTranscription<R>(input: {
         ),
       );
 
-    yield* selectModel(input.initialModel).pipe(Effect.forkScoped({ startImmediately: true }));
+    yield* selectModel(input.initialModel);
 
     return {
       service: LocalTranscription.of({

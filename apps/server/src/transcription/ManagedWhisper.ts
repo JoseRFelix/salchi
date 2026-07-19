@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { availableParallelism } from "node:os";
 
 import * as NetService from "@t3tools/shared/Net";
@@ -8,8 +8,11 @@ import { findTranscriptionModel } from "@t3tools/shared/transcriptionModel";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -21,6 +24,11 @@ const MANAGED_WHISPER_DOWNLOAD_TIMEOUT = "15 minutes";
 const MANAGED_WHISPER_EXTRACTION_TIMEOUT = "1 minute";
 const MANAGED_WHISPER_HEALTH_REQUEST_TIMEOUT = "2 seconds";
 const MANAGED_WHISPER_START_TIMEOUT = "30 seconds";
+const MANAGED_WHISPER_PROCESS_TERMINATE_GRACE = "2 seconds";
+const MANAGED_WHISPER_LOCK_TIMEOUT = "15 minutes";
+const MANAGED_WHISPER_LOCK_TIMEOUT_MS = 15 * 60 * 1_000;
+const MANAGED_WHISPER_LOCK_RETRY_DELAY = "200 millis";
+const MANAGED_WHISPER_STALE_LOCK_MS = 5 * 60 * 1_000;
 
 interface ManagedWhisperModelAsset {
   readonly fileName: string;
@@ -84,6 +92,37 @@ export class ManagedWhisperError extends Data.TaggedError("ManagedWhisperError")
   readonly cause?: unknown;
 }> {}
 
+export interface ManagedWhisperProcess {
+  readonly inferenceUrl: URL;
+  readonly awaitTermination: Effect.Effect<never, ManagedWhisperError>;
+}
+
+const ManagedRuntimeMarkerSchema = Schema.Struct({
+  version: Schema.String,
+  archiveSha256: Schema.String,
+  binaryBytes: Schema.Int,
+  binarySha256: Schema.String,
+});
+type ManagedRuntimeMarker = typeof ManagedRuntimeMarkerSchema.Type;
+
+const ManagedFileLockOwnerSchema = Schema.Struct({
+  pid: Schema.Int,
+  token: Schema.String,
+});
+
+const decodeManagedRuntimeMarker = Schema.decodeUnknownOption(
+  Schema.fromJsonString(ManagedRuntimeMarkerSchema),
+);
+const encodeManagedRuntimeMarker = Schema.encodeUnknownEffect(
+  Schema.fromJsonString(ManagedRuntimeMarkerSchema),
+);
+const decodeManagedFileLockOwner = Schema.decodeUnknownOption(
+  Schema.fromJsonString(ManagedFileLockOwnerSchema),
+);
+const encodeManagedFileLockOwner = Schema.encodeUnknownEffect(
+  Schema.fromJsonString(ManagedFileLockOwnerSchema),
+);
+
 export function resolveManagedWhisperRuntimeAsset(
   platform: NodeJS.Platform,
   architecture: string,
@@ -121,6 +160,197 @@ const verifiedFileExists = Effect.fn("managedWhisper.verifiedFileExists")(functi
   return digest === input.sha256;
 });
 
+function parseManagedRuntimeMarker(raw: string): ManagedRuntimeMarker | null {
+  const marker = Option.getOrNull(decodeManagedRuntimeMarker(raw));
+  if (marker === null || marker.binaryBytes < 1 || !/^[a-f0-9]{64}$/.test(marker.binarySha256)) {
+    return null;
+  }
+  return marker;
+}
+
+export const validateManagedRuntime = Effect.fn("managedWhisper.validateRuntime")(
+  function* (input: {
+    readonly binaryPath: string;
+    readonly markerPath: string;
+    readonly version: string;
+    readonly archiveSha256: string;
+  }) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const markerRaw = yield* fileSystem
+      .readFileString(input.markerPath)
+      .pipe(Effect.catch(() => Effect.succeed("")));
+    const marker = parseManagedRuntimeMarker(markerRaw);
+    if (
+      marker === null ||
+      marker.version !== input.version ||
+      marker.archiveSha256 !== input.archiveSha256
+    ) {
+      return false;
+    }
+
+    const info = yield* fileSystem
+      .stat(input.binaryPath)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (
+      !info ||
+      info.type !== "File" ||
+      Number(info.size) !== marker.binaryBytes ||
+      (info.mode & 0o111) === 0
+    ) {
+      return false;
+    }
+    const digest = yield* sha256File(input.binaryPath).pipe(
+      Effect.catch(() => Effect.succeed(null)),
+    );
+    return digest === marker.binarySha256;
+  },
+);
+
+function isAlreadyExists(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "reason" in error &&
+    typeof error.reason === "object" &&
+    error.reason !== null &&
+    "_tag" in error.reason &&
+    error.reason._tag === "AlreadyExists"
+  );
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function parseLockOwner(raw: string): { readonly pid: number; readonly token: string } | null {
+  const value = Option.getOrNull(decodeManagedFileLockOwner(raw));
+  return value && value.pid > 0 ? value : null;
+}
+
+const removeStaleLock = Effect.fn("managedWhisper.removeStaleLock")(function* (lockPath: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const [raw, info] = yield* Effect.all([
+    fileSystem.readFileString(lockPath).pipe(Effect.catch(() => Effect.succeed(""))),
+    fileSystem.stat(lockPath).pipe(Effect.catch(() => Effect.succeed(null))),
+  ]);
+  if (!info) return true;
+  const owner = parseLockOwner(raw);
+  if (owner && processExists(owner.pid)) return false;
+  const modifiedAt = Option.match(info.mtime, {
+    onNone: () => 0,
+    onSome: (value) => value.getTime(),
+  });
+  const now = yield* Clock.currentTimeMillis;
+  if (owner || now - modifiedAt >= MANAGED_WHISPER_STALE_LOCK_MS) {
+    yield* fileSystem.remove(lockPath, { force: true }).pipe(Effect.ignore);
+    return true;
+  }
+  return false;
+});
+
+interface ManagedFileLockOwner {
+  readonly contents: string;
+}
+
+const releaseManagedFileLock = Effect.fn("managedWhisper.releaseFileLock")(function* (input: {
+  readonly lockPath: string;
+  readonly owner: ManagedFileLockOwner;
+  readonly fileSystem: FileSystem.FileSystem;
+}) {
+  const raw = yield* input.fileSystem
+    .readFileString(input.lockPath)
+    .pipe(Effect.catch(() => Effect.succeed("")));
+  if (raw === input.owner.contents) {
+    yield* input.fileSystem.remove(input.lockPath, { force: true }).pipe(Effect.ignore);
+  }
+});
+
+const acquireManagedFileLock = Effect.fn("managedWhisper.acquireFileLock")(function* (
+  lockPath: string,
+  interruptibleSleep: () => Effect.Effect<void>,
+) {
+  const startedAt = yield* Clock.currentTimeMillis;
+  while (true) {
+    const owner = yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const contents = yield* encodeManagedFileLockOwner({
+          pid: process.pid,
+          token: randomUUID(),
+        });
+        const created = yield* Effect.scoped(
+          fileSystem.open(lockPath, { flag: "wx", mode: 0o600 }).pipe(
+            Effect.map(Option.some),
+            Effect.catch((error) =>
+              isAlreadyExists(error)
+                ? Effect.succeed(Option.none<FileSystem.File>())
+                : Effect.fail(error),
+            ),
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.succeed(false),
+                onSome: (file) =>
+                  file.writeAll(new TextEncoder().encode(contents)).pipe(
+                    Effect.andThen(file.sync),
+                    Effect.as(true),
+                    Effect.onError(() =>
+                      fileSystem.remove(lockPath, { force: true }).pipe(Effect.ignore),
+                    ),
+                  ),
+              }),
+            ),
+          ),
+        );
+        if (!created) return Option.none<ManagedFileLockOwner>();
+
+        return Option.some({ contents } satisfies ManagedFileLockOwner);
+      }),
+    );
+    if (Option.isSome(owner)) return owner.value;
+    if ((yield* Clock.currentTimeMillis) - startedAt >= MANAGED_WHISPER_LOCK_TIMEOUT_MS) {
+      return yield* managedWhisperError(
+        `Timed out waiting for the managed dictation cache lock ${lockPath} after ${MANAGED_WHISPER_LOCK_TIMEOUT}.`,
+      );
+    }
+    if (!(yield* removeStaleLock(lockPath))) {
+      yield* interruptibleSleep();
+    }
+  }
+});
+
+export function withManagedFileLock<A, E, R>(input: {
+  readonly lockPath: string;
+  readonly use: Effect.Effect<A, E, R>;
+}) {
+  return Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    return yield* Effect.uninterruptibleMask((restore) =>
+      acquireManagedFileLock(input.lockPath, () =>
+        restore(Effect.sleep(MANAGED_WHISPER_LOCK_RETRY_DELAY)),
+      ).pipe(
+        Effect.flatMap((owner) =>
+          restore(input.use).pipe(
+            // In the pinned Effect beta an interrupted restored region can skip its generic
+            // onExit cleanup. The ownership check makes this explicit interruption hook and
+            // the normal exit hook safely idempotent.
+            Effect.onInterrupt(() =>
+              releaseManagedFileLock({ lockPath: input.lockPath, owner, fileSystem }),
+            ),
+            Effect.onExit(() =>
+              releaseManagedFileLock({ lockPath: input.lockPath, owner, fileSystem }),
+            ),
+          ),
+        ),
+      ),
+    );
+  });
+}
+
 export function withManagedTemporaryDirectory<A, E, R>(input: {
   readonly directory: string;
   readonly prefix: string;
@@ -128,14 +358,24 @@ export function withManagedTemporaryDirectory<A, E, R>(input: {
 }) {
   return Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
-    return yield* Effect.acquireUseRelease(
-      fileSystem.makeTempDirectory({
-        directory: input.directory,
-        prefix: input.prefix,
-      }),
-      input.use,
-      (temporaryDirectory) =>
-        fileSystem.remove(temporaryDirectory, { recursive: true, force: true }).pipe(Effect.ignore),
+    return yield* Effect.uninterruptibleMask((restore) =>
+      fileSystem
+        .makeTempDirectory({
+          directory: input.directory,
+          prefix: input.prefix,
+        })
+        .pipe(
+          Effect.flatMap((temporaryDirectory) => {
+            const cleanup = fileSystem
+              .remove(temporaryDirectory, { recursive: true, force: true })
+              .pipe(Effect.ignore);
+            return restore(input.use(temporaryDirectory)).pipe(
+              // See withManagedFileLock: keep interruption cleanup explicit for this Effect beta.
+              Effect.onInterrupt(() => cleanup),
+              Effect.onExit(() => cleanup),
+            );
+          }),
+        ),
     );
   });
 }
@@ -152,69 +392,117 @@ const downloadVerifiedFile = Effect.fn("managedWhisper.downloadVerifiedFile")(fu
   const path = yield* Path.Path;
   const httpClient = yield* HttpClient.HttpClient;
 
-  if (yield* verifiedFileExists(input)) {
-    yield* input.onStatus({
-      configured: true,
-      state: input.state,
-      downloadedBytes: input.bytes,
-      totalBytes: input.bytes,
-      message: null,
-    });
-    return;
-  }
-
   yield* fileSystem.makeDirectory(path.dirname(input.filePath), { recursive: true });
-  yield* fileSystem.remove(input.filePath, { force: true });
-  const partialPath = `${input.filePath}.part`;
-  yield* fileSystem.remove(partialPath, { force: true });
-  yield* input.onStatus({
-    configured: true,
-    state: input.state,
-    downloadedBytes: 0,
-    totalBytes: input.bytes,
-    message: null,
+  yield* withManagedFileLock({
+    lockPath: `${input.filePath}.lock`,
+    use: Effect.gen(function* () {
+      if (yield* verifiedFileExists(input)) {
+        yield* input.onStatus({
+          configured: true,
+          state: input.state,
+          downloadedBytes: input.bytes,
+          totalBytes: input.bytes,
+          message: null,
+        });
+        return;
+      }
+
+      const partialPath = `${input.filePath}.${process.pid}.${randomUUID()}.part`;
+      yield* input.onStatus({
+        configured: true,
+        state: input.state,
+        downloadedBytes: 0,
+        totalBytes: input.bytes,
+        message: null,
+      });
+
+      const cleanupPartial = fileSystem.remove(partialPath, { force: true }).pipe(Effect.ignore);
+      yield* Effect.gen(function* () {
+        let downloadedBytes = 0;
+        yield* httpClient.get(input.url).pipe(
+          Effect.flatMap(HttpClientResponse.filterStatusOk),
+          Effect.flatMap((response) =>
+            response.stream.pipe(
+              Stream.tap((bytes) => {
+                downloadedBytes += bytes.length;
+                if (downloadedBytes > input.bytes) {
+                  return Effect.fail(
+                    managedWhisperError("Downloaded artifact exceeded expected size."),
+                  );
+                }
+                return input.onStatus({
+                  configured: true,
+                  state: input.state,
+                  downloadedBytes,
+                  totalBytes: input.bytes,
+                  message: null,
+                });
+              }),
+              Stream.run(fileSystem.sink(partialPath, { flag: "wx" })),
+            ),
+          ),
+          Effect.timeout(MANAGED_WHISPER_DOWNLOAD_TIMEOUT),
+          Effect.mapError((cause) =>
+            cause instanceof ManagedWhisperError
+              ? cause
+              : managedWhisperError(`Failed to download ${path.basename(input.filePath)}.`, cause),
+          ),
+        );
+
+        const valid = yield* verifiedFileExists({ ...input, filePath: partialPath });
+        if (!valid) {
+          return yield* managedWhisperError(
+            `Downloaded ${path.basename(input.filePath)} failed integrity verification.`,
+          );
+        }
+        yield* fileSystem.rename(partialPath, input.filePath);
+      }).pipe(
+        Effect.onInterrupt(() => cleanupPartial),
+        Effect.ensuring(cleanupPartial),
+      );
+    }),
   });
-
-  let downloadedBytes = 0;
-  const download = httpClient.get(input.url).pipe(
-    Effect.flatMap(HttpClientResponse.filterStatusOk),
-    Effect.flatMap((response) =>
-      response.stream.pipe(
-        Stream.tap((bytes) => {
-          downloadedBytes += bytes.length;
-          if (downloadedBytes > input.bytes) {
-            return Effect.fail(managedWhisperError("Downloaded artifact exceeded expected size."));
-          }
-          return input.onStatus({
-            configured: true,
-            state: input.state,
-            downloadedBytes,
-            totalBytes: input.bytes,
-            message: null,
-          });
-        }),
-        Stream.run(fileSystem.sink(partialPath, { flag: "w" })),
-      ),
-    ),
-    Effect.timeout(MANAGED_WHISPER_DOWNLOAD_TIMEOUT),
-    Effect.mapError((cause) =>
-      cause instanceof ManagedWhisperError
-        ? cause
-        : managedWhisperError(`Failed to download ${path.basename(input.filePath)}.`, cause),
-    ),
-    Effect.onError(() => fileSystem.remove(partialPath, { force: true }).pipe(Effect.ignore)),
-  );
-  yield* download;
-
-  const valid = yield* verifiedFileExists({ ...input, filePath: partialPath });
-  if (!valid) {
-    yield* fileSystem.remove(partialPath, { force: true }).pipe(Effect.ignore);
-    return yield* managedWhisperError(
-      `Downloaded ${path.basename(input.filePath)} failed integrity verification.`,
-    );
-  }
-  yield* fileSystem.rename(partialPath, input.filePath);
 });
+
+export const terminateManagedChildProcess = Effect.fn("managedWhisper.terminateChild")(function* (
+  child: ChildProcessSpawner.ChildProcessHandle,
+) {
+  const running = yield* child.isRunning.pipe(Effect.catchCause(() => Effect.succeed(true)));
+  if (!running) return;
+
+  const terminated = yield* child.kill({ killSignal: "SIGTERM" }).pipe(
+    Effect.exit,
+    Effect.timeoutOption(MANAGED_WHISPER_PROCESS_TERMINATE_GRACE),
+    Effect.map(
+      Option.match({
+        onNone: () => false,
+        onSome: Exit.isSuccess,
+      }),
+    ),
+  );
+  if (terminated) return;
+
+  const killed = yield* child.kill({ killSignal: "SIGKILL" }).pipe(
+    Effect.exit,
+    Effect.timeoutOption(MANAGED_WHISPER_PROCESS_TERMINATE_GRACE),
+    Effect.map(
+      Option.match({
+        onNone: () => false,
+        onSome: Exit.isSuccess,
+      }),
+    ),
+  );
+  if (!killed) {
+    // The pinned Effect spawner otherwise waits forever in its own scope finalizer.
+    // Unreferencing makes that later finalizer non-blocking after our bounded kill attempt.
+    yield* child.unref.pipe(Effect.ignore);
+  }
+});
+
+const addManagedChildProcessFinalizer = (
+  child: ChildProcessSpawner.ChildProcessHandle,
+): Effect.Effect<void, never, import("effect/Scope").Scope> =>
+  Effect.addFinalizer(() => terminateManagedChildProcess(child).pipe(Effect.ignore));
 
 export const runTarExtraction = Effect.fn("managedWhisper.runTarExtraction")(function* (input: {
   readonly archivePath: string;
@@ -223,17 +511,23 @@ export const runTarExtraction = Effect.fn("managedWhisper.runTarExtraction")(fun
   yield* Effect.scoped(
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const child = yield* spawner.spawn(
-        ChildProcess.make(
-          "tar",
-          ["-xzf", input.archivePath, "-C", input.destination, "--strip-components=1"],
-          {
-            detached: false,
-            stdin: "ignore",
-            stdout: "ignore",
-            stderr: "inherit",
-          },
-        ),
+      const child = yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const child = yield* spawner.spawn(
+            ChildProcess.make(
+              "tar",
+              ["-xzf", input.archivePath, "-C", input.destination, "--strip-components=1"],
+              {
+                detached: false,
+                stdin: "ignore",
+                stdout: "ignore",
+                stderr: "inherit",
+              },
+            ),
+          );
+          yield* addManagedChildProcessFinalizer(child);
+          return child;
+        }),
       );
       const exitCode = yield* child.exitCode.pipe(
         Effect.timeoutOrElse({
@@ -266,50 +560,80 @@ const ensureManagedRuntime = Effect.fn("managedWhisper.ensureRuntime")(function*
   );
   const binaryPath = path.join(runtimeDir, "whisper-server");
   const markerPath = path.join(runtimeDir, ".salchi-managed-runtime");
-  const expectedMarker = `${MANAGED_WHISPER_VERSION}:${input.asset.sha256}`;
-  const marker = yield* fileSystem
-    .readFileString(markerPath)
-    .pipe(Effect.catch(() => Effect.succeed("")));
-  if (marker === expectedMarker && (yield* fileSystem.exists(binaryPath))) {
-    return binaryPath;
-  }
-
-  const archivePath = path.join(input.cacheDir, input.asset.archiveName);
-  yield* downloadVerifiedFile({
-    ...input.asset,
-    filePath: archivePath,
-    state: "downloading-runtime",
-    onStatus: input.onStatus,
-  });
-  yield* input.onStatus({
-    configured: true,
-    state: "starting",
-    downloadedBytes: null,
-    totalBytes: null,
-    message: "Installing the local dictation runtime…",
-  });
-
   yield* fileSystem.makeDirectory(input.cacheDir, { recursive: true });
-  yield* withManagedTemporaryDirectory({
-    directory: input.cacheDir,
-    prefix: "whisper-runtime-",
-    use: (temporaryDirectory) =>
-      Effect.gen(function* () {
-        yield* runTarExtraction({ archivePath, destination: temporaryDirectory });
-        const temporaryBinary = path.join(temporaryDirectory, "whisper-server");
-        if (!(yield* fileSystem.exists(temporaryBinary))) {
-          return yield* managedWhisperError(
-            "The whisper.cpp archive did not contain whisper-server.",
-          );
-        }
-        yield* fileSystem.chmod(temporaryBinary, 0o755);
-        yield* fileSystem.writeFileString(
-          path.join(temporaryDirectory, ".salchi-managed-runtime"),
-          expectedMarker,
-        );
-        yield* fileSystem.remove(runtimeDir, { recursive: true, force: true });
-        yield* fileSystem.rename(temporaryDirectory, runtimeDir);
-      }),
+  yield* withManagedFileLock({
+    lockPath: `${runtimeDir}.lock`,
+    use: Effect.gen(function* () {
+      if (
+        yield* validateManagedRuntime({
+          binaryPath,
+          markerPath,
+          version: MANAGED_WHISPER_VERSION,
+          archiveSha256: input.asset.sha256,
+        })
+      ) {
+        return;
+      }
+
+      const archivePath = path.join(input.cacheDir, input.asset.archiveName);
+      yield* downloadVerifiedFile({
+        ...input.asset,
+        filePath: archivePath,
+        state: "downloading-runtime",
+        onStatus: input.onStatus,
+      });
+      yield* input.onStatus({
+        configured: true,
+        state: "starting",
+        downloadedBytes: null,
+        totalBytes: null,
+        message: "Installing the local dictation runtime…",
+      });
+
+      yield* withManagedTemporaryDirectory({
+        directory: input.cacheDir,
+        prefix: "whisper-runtime-",
+        use: (temporaryDirectory) =>
+          Effect.gen(function* () {
+            yield* runTarExtraction({ archivePath, destination: temporaryDirectory });
+            const temporaryBinary = path.join(temporaryDirectory, "whisper-server");
+            const temporaryMarker = path.join(temporaryDirectory, ".salchi-managed-runtime");
+            const binaryInfo = yield* fileSystem
+              .stat(temporaryBinary)
+              .pipe(Effect.catch(() => Effect.succeed(null)));
+            if (!binaryInfo || binaryInfo.type !== "File" || Number(binaryInfo.size) < 1) {
+              return yield* managedWhisperError(
+                "The whisper.cpp archive did not contain a valid whisper-server executable.",
+              );
+            }
+            yield* fileSystem.chmod(temporaryBinary, 0o755);
+            const marker: ManagedRuntimeMarker = {
+              version: MANAGED_WHISPER_VERSION,
+              archiveSha256: input.asset.sha256,
+              binaryBytes: Number(binaryInfo.size),
+              binarySha256: yield* sha256File(temporaryBinary),
+            };
+            yield* fileSystem.writeFileString(
+              temporaryMarker,
+              `${yield* encodeManagedRuntimeMarker(marker)}\n`,
+            );
+            if (
+              !(yield* validateManagedRuntime({
+                binaryPath: temporaryBinary,
+                markerPath: temporaryMarker,
+                version: MANAGED_WHISPER_VERSION,
+                archiveSha256: input.asset.sha256,
+              }))
+            ) {
+              return yield* managedWhisperError(
+                "The installed whisper-server executable failed validation.",
+              );
+            }
+            yield* fileSystem.remove(runtimeDir, { recursive: true, force: true });
+            yield* fileSystem.rename(temporaryDirectory, runtimeDir);
+          }),
+      });
+    }),
   });
   return binaryPath;
 });
@@ -364,29 +688,35 @@ const startManagedSidecar = Effect.fn("managedWhisper.startSidecar")(function* (
   const temporaryDirectory = path.join(input.cacheDir, "tmp");
   yield* fileSystem.makeDirectory(temporaryDirectory, { recursive: true });
   const threads = Math.max(1, Math.min(4, availableParallelism()));
-  const child = yield* spawner.spawn(
-    ChildProcess.make(
-      input.binaryPath,
-      [
-        "--host",
-        "127.0.0.1",
-        "--port",
-        String(port),
-        "--threads",
-        String(threads),
-        "--model",
-        input.modelPath,
-        "--tmp-dir",
-        temporaryDirectory,
-        "--no-gpu",
-      ],
-      {
-        detached: false,
-        stdin: "ignore",
-        stdout: "ignore",
-        stderr: "inherit",
-      },
-    ),
+  const child = yield* Effect.uninterruptible(
+    Effect.gen(function* () {
+      const child = yield* spawner.spawn(
+        ChildProcess.make(
+          input.binaryPath,
+          [
+            "--host",
+            "127.0.0.1",
+            "--port",
+            String(port),
+            "--threads",
+            String(threads),
+            "--model",
+            input.modelPath,
+            "--tmp-dir",
+            temporaryDirectory,
+            "--no-gpu",
+          ],
+          {
+            detached: false,
+            stdin: "ignore",
+            stdout: "ignore",
+            stderr: "inherit",
+          },
+        ),
+      );
+      yield* addManagedChildProcessFinalizer(child);
+      return child;
+    }),
   );
 
   const baseUrl = new URL(`http://127.0.0.1:${port}`);
@@ -399,7 +729,19 @@ const startManagedSidecar = Effect.fn("managedWhisper.startSidecar")(function* (
       ),
     ),
   );
-  return new URL("/inference", baseUrl);
+  return {
+    inferenceUrl: new URL("/inference", baseUrl),
+    awaitTermination: child.exitCode.pipe(
+      Effect.flatMap((exitCode) =>
+        Effect.fail(managedWhisperError(`whisper-server exited with code ${exitCode}.`)),
+      ),
+      Effect.mapError((cause) =>
+        cause instanceof ManagedWhisperError
+          ? cause
+          : managedWhisperError("Failed while monitoring whisper-server.", cause),
+      ),
+    ),
+  } satisfies ManagedWhisperProcess;
 });
 
 const provisionManagedWhisperInternal = Effect.fn("managedWhisper.provision")(function* (input: {

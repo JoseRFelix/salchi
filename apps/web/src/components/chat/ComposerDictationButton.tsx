@@ -5,10 +5,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   getEnvironmentTranscriptionStatus,
+  localTranscriptionStatusQueryKey,
+  localTranscriptionStatusRefetchInterval,
   normalizeDictationAudioToWav,
   selectDictationAudioMimeType,
   transcribeEnvironmentAudio,
 } from "../../dictation";
+import { useSettings } from "~/hooks/useSettings";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -25,6 +28,7 @@ export function ComposerDictationButton(props: {
   readonly onActiveChange?: (active: boolean) => void;
 }) {
   const [state, setState] = useState<DictationState>("idle");
+  const transcriptionModel = useSettings((settings) => settings.transcriptionModel);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recordingStartedAtRef = useRef(0);
@@ -38,19 +42,16 @@ export function ComposerDictationButton(props: {
     typeof MediaRecorder !== "undefined";
 
   const statusQuery = useQuery({
-    queryKey: ["local-transcription-status", props.environmentId],
+    queryKey: localTranscriptionStatusQueryKey(props.environmentId, transcriptionModel),
     queryFn: () => getEnvironmentTranscriptionStatus(props.environmentId),
     enabled: browserSupportsRecording,
     retry: false,
-    staleTime: 60_000,
-    refetchInterval: (query) => {
-      const status = query.state.data;
-      return status?.state === "ready" ||
-        status?.state === "error" ||
-        status?.state === "unavailable"
-        ? false
-        : 750;
-    },
+    staleTime: 0,
+    refetchInterval: (query) =>
+      localTranscriptionStatusRefetchInterval({
+        transcribing: state === "transcribing",
+        status: query.state.data,
+      }),
   });
 
   const clearStopTimer = useCallback(() => {
