@@ -1108,6 +1108,84 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("materializes subAgentActivity children immediately", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const parentThreadId = asThreadId("thread-live-subagent-activity-parent");
+      const providerParentThreadId = "provider-parent-live-subagent-activity";
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: parentThreadId,
+        resumeCursor: { threadId: providerParentThreadId },
+        runtimeMode: "full-access",
+      });
+      const runtime = lifecycleRuntimeFactory.lastRuntime;
+      assert.ok(runtime);
+
+      const providerChildThreadId = "provider-child-subagent-activity";
+      const childThreadId = codexChildThreadId(
+        ProviderInstanceId.make("codex"),
+        providerChildThreadId,
+      );
+      runtime.listSpawnedChildThreadsImpl.mockResolvedValue([]);
+
+      const threadStartedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "thread.started" &&
+            event.payload.providerThreadId === providerChildThreadId,
+        ),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit({
+        id: asEventId("evt-subagent-activity-started"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "item/completed",
+        threadId: parentThreadId,
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("activity_started"),
+        payload: {
+          completedAtMs: 1_778_000_000_000,
+          threadId: providerParentThreadId,
+          turnId: "turn-1",
+          item: {
+            type: "subAgentActivity",
+            id: "activity_started",
+            agentPath: "/root/monitor_reviews",
+            agentThreadId: providerChildThreadId,
+            kind: "started",
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const threadStartedOption = yield* Fiber.join(threadStartedFiber);
+      assert.equal(threadStartedOption._tag, "Some");
+      const threadStarted = threadStartedOption._tag === "Some" ? threadStartedOption.value : null;
+      assert.ok(threadStarted);
+      assert.equal(threadStarted.threadId, childThreadId);
+      if (threadStarted.type === "thread.started") {
+        assert.equal(threadStarted.payload.parentThreadId, parentThreadId);
+        assert.equal(threadStarted.payload.providerThreadId, providerChildThreadId);
+        assert.equal(threadStarted.payload.providerParentThreadId, providerParentThreadId);
+        assert.equal(threadStarted.payload.subagentNickname, "monitor_reviews");
+        assert.equal(threadStarted.payload.subagentRole, "/root/monitor_reviews");
+        assert.equal(threadStarted.payload.subagentPath, "/root/monitor_reviews");
+      }
+
+      assert.deepStrictEqual(
+        runtime.registerProviderThreadBindingImpl.mock.calls
+          .map(([input]) => input.providerThreadId)
+          .filter((providerThreadId) => providerThreadId === providerChildThreadId),
+        [providerChildThreadId],
+      );
+    }),
+  );
+
   it.effect("retries collab-agent child hydration from wait events", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
