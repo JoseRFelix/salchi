@@ -426,7 +426,7 @@ describe("terminalStateStore actions", () => {
           worktreePath: null,
           status: "running",
           pid: 456,
-          history: "Local: http://localhost:4173/\n",
+          history: "Mobius OpenTUI bridge listening on ws://localhost:3001/terminal\n",
           exitCode: null,
           exitSignal: null,
           updatedAt: "2026-04-02T20:00:01.000Z",
@@ -444,7 +444,7 @@ describe("terminalStateStore actions", () => {
         THREAD_REF,
         selectThreadTerminalState(state.terminalStateByThreadKey, THREAD_REF).terminalIds,
       ).map((link) => link.url),
-    ).toEqual(["http://localhost:5173/", "http://localhost:4173/"]);
+    ).toEqual(["http://localhost:5173/", "ws://localhost:3001/terminal"]);
   });
 
   it("keeps dev server links separate from capped terminal snapshot history", () => {

@@ -7,8 +7,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { usePwaServiceWorkerUpdateStore } from "../../pwa/serviceWorkerUpdateState";
+import type { DevServerLink } from "../../devServerLinks";
 import { SidebarProvider } from "../ui/sidebar";
-import { ChatHeader } from "./ChatHeader";
+import { __resetDevServerWindowForTests, ChatHeader } from "./ChatHeader";
 
 vi.mock("@tanstack/react-router", () => ({
   useParams: (options?: { select?: (params: Record<string, string | undefined>) => unknown }) =>
@@ -17,8 +18,19 @@ vi.mock("@tanstack/react-router", () => ({
 
 const LOCAL_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
+const DEV_SERVER_LINK: DevServerLink = {
+  url: "http://localhost:5173/",
+  displayUrl: "http://localhost:5173",
+  label: "Local localhost:5173",
+  host: "localhost:5173",
+  port: "5173",
+};
 
-function ChatHeaderHarness() {
+function ChatHeaderHarness({
+  devServerLinks = [],
+}: {
+  readonly devServerLinks?: ReadonlyArray<DevServerLink>;
+}) {
   const [diffOpen, setDiffOpen] = useState(false);
   const [fileExplorerOpen, setFileExplorerOpen] = useState(false);
   const [sourceControlOpen, setSourceControlOpen] = useState(false);
@@ -45,7 +57,7 @@ function ChatHeaderHarness() {
           gitCwd="/repo/salchi"
           diffOpen={diffOpen}
           sourceControlOpen={sourceControlOpen}
-          devServerLinks={[]}
+          devServerLinks={devServerLinks}
           devServerProbeBrowserHostname={null}
           probeDevServerUrl={async () => true}
           fileExplorerAvailable={true}
@@ -98,9 +110,29 @@ function expectControlsDoNotOverlap(controls: ReadonlyArray<HTMLElement>) {
 
 describe("ChatHeader responsive controls", () => {
   afterEach(async () => {
+    __resetDevServerWindowForTests();
+    vi.restoreAllMocks();
     usePwaServiceWorkerUpdateStore.setState(usePwaServiceWorkerUpdateStore.getInitialState(), true);
     document.body.innerHTML = "";
     await page.viewport(1024, 768);
+  });
+
+  it("opens the selector before navigating when only one dev server is detected", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const screen = await render(<ChatHeaderHarness devServerLinks={[DEV_SERVER_LINK]} />);
+
+    try {
+      await page.getByRole("button", { name: "Select dev server" }).click();
+
+      expect(open).not.toHaveBeenCalled();
+      const menuItem = page.getByRole("menuitem", { name: DEV_SERVER_LINK.displayUrl });
+      await expect.element(menuItem).toBeVisible();
+
+      await menuItem.click();
+      expect(open).toHaveBeenCalledWith(DEV_SERVER_LINK.url, "salchi-dev-server-preview");
+    } finally {
+      await screen.unmount();
+    }
   });
 
   it("keeps every compact action square and non-overlapping through the inclusive breakpoint", async () => {

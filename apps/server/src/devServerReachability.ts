@@ -64,7 +64,7 @@ function isAllowedProbeHostname(hostname: string): boolean {
 
 /**
  * Validate and normalize a dev-server URL into a TCP connect target, or return
- * `null` when the URL is malformed, uses a non-HTTP scheme, targets a host
+ * `null` when the URL is malformed, uses a non-web scheme, targets a host
  * outside the local/private allowlist, or lacks a usable port.
  */
 export function resolveProbeTarget(url: string): ProbeTarget | null {
@@ -75,7 +75,12 @@ export function resolveProbeTarget(url: string): ProbeTarget | null {
     return null;
   }
 
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+  if (
+    parsed.protocol !== "http:" &&
+    parsed.protocol !== "https:" &&
+    parsed.protocol !== "ws:" &&
+    parsed.protocol !== "wss:"
+  ) {
     return null;
   }
 
@@ -84,8 +89,8 @@ export function resolveProbeTarget(url: string): ProbeTarget | null {
     return null;
   }
 
-  const portText =
-    parsed.port.length > 0 ? parsed.port : parsed.protocol === "https:" ? "443" : "80";
+  const isSecureProtocol = parsed.protocol === "https:" || parsed.protocol === "wss:";
+  const portText = parsed.port.length > 0 ? parsed.port : isSecureProtocol ? "443" : "80";
   const port = Number(portText);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     return null;
