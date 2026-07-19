@@ -41,6 +41,7 @@ import {
   computeOrchestrationThreadDetailFingerprint,
   orchestrationThreadDetailFingerprintsEqual,
 } from "@t3tools/shared/orchestrationThreadDetailFingerprint";
+import { isOrchestrationThreadDetailEvent } from "@t3tools/shared/orchestrationThreadDetailEvents";
 import { clamp } from "effect/Number";
 import { HttpClient, HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
@@ -107,28 +108,6 @@ const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError)
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const THREAD_DETAIL_RECONCILE_EVENT_LIMIT = 500;
-
-function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
-  OrchestrationEvent,
-  {
-    type:
-      | "thread.message-sent"
-      | "thread.proposed-plan-upserted"
-      | "thread.activity-appended"
-      | "thread.turn-diff-completed"
-      | "thread.reverted"
-      | "thread.session-set";
-  }
-> {
-  return (
-    event.type === "thread.message-sent" ||
-    event.type === "thread.proposed-plan-upserted" ||
-    event.type === "thread.activity-appended" ||
-    event.type === "thread.turn-diff-completed" ||
-    event.type === "thread.reverted" ||
-    event.type === "thread.session-set"
-  );
-}
 
 type OrderedCatchupInput =
   | {
@@ -972,7 +951,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                 (event) =>
                   event.aggregateKind === "thread" &&
                   event.aggregateId === input.threadId &&
-                  isThreadDetailEvent(event),
+                  isOrchestrationThreadDetailEvent(event),
               );
 
               if (threadDetailEvents.length > THREAD_DETAIL_RECONCILE_EVENT_LIMIT) {
@@ -1116,7 +1095,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               const isSubscribedThreadDetailEvent = (event: OrchestrationEvent) =>
                 event.aggregateKind === "thread" &&
                 event.aggregateId === input.threadId &&
-                isThreadDetailEvent(event);
+                isOrchestrationThreadDetailEvent(event);
               const toThreadItemStream = <E, R>(events: Stream.Stream<OrchestrationEvent, E, R>) =>
                 events.pipe(
                   Stream.filter(isSubscribedThreadDetailEvent),

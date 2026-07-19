@@ -251,6 +251,32 @@ function isoAt(offsetSeconds: number): string {
   return new Date(BASE_TIME_MS + offsetSeconds * 1_000).toISOString();
 }
 
+function makeQueuedTurnUpdatedEvent(input: {
+  sequence: number;
+  messageId: MessageId;
+  text: string;
+  updatedAt: string;
+}): Extract<OrchestrationEvent, { type: "thread.queued-turn-updated" }> {
+  return {
+    sequence: input.sequence,
+    eventId: EventId.make(`event-queued-turn-updated-${input.sequence}`),
+    aggregateKind: "thread",
+    aggregateId: THREAD_ID,
+    type: "thread.queued-turn-updated",
+    occurredAt: input.updatedAt,
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    payload: {
+      threadId: THREAD_ID,
+      messageId: input.messageId,
+      text: input.text,
+      updatedAt: input.updatedAt,
+    },
+  };
+}
+
 function createBaseServerConfig(): ServerConfig {
   return {
     environment: {
@@ -5129,7 +5155,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("queues a prompt from the composer while the current turn is running", async () => {
-    useComposerDraftStore.getState().setPrompt(THREAD_REF, "Run this after the current turn");
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -5148,12 +5173,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
+      useComposerDraftStore.getState().setPrompt(THREAD_REF, "Run this after the current turn");
       const queueButton = await waitForElement(
         () => document.querySelector<HTMLButtonElement>('button[aria-label="Queue message"]'),
         "Unable to find queue message button.",
       );
       expect(queueButton.disabled).toBe(false);
-      expect(document.querySelector('button[aria-label="Stop generation"]')).toBeNull();
+      expect(document.querySelector('button[aria-label="Stop generation"]')).not.toBeNull();
       await queueButton.click();
 
       await vi.waitFor(
@@ -5208,21 +5234,17 @@ describe("ChatView timeline estimator parity (full app)", () => {
           document.querySelector<HTMLButtonElement>('button[aria-label="Cancel queued message"]'),
         "Unable to find queued message cancel button.",
       );
+      expect(cancelButton.disabled).toBe(true);
       expect(cancelButton.querySelector(".opacity-25 svg")).not.toBeNull();
       expect(cancelButton.querySelector("svg.animate-spin")).not.toBeNull();
       await cancelButton.click();
-
-      await vi.waitFor(
-        () => {
-          const cancelRequest = wsRequests.find(
-            (request) =>
-              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
-              request.type === "thread.queued-turn.cancel",
-          );
-          expect(cancelRequest).toBeTruthy();
-        },
-        { timeout: 8_000, interval: 16 },
-      );
+      expect(
+        wsRequests.some(
+          (request) =>
+            request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+            request.type === "thread.queued-turn.cancel",
+        ),
+      ).toBe(false);
     } finally {
       await mounted.cleanup();
     }
@@ -5296,8 +5318,145 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
+      useStore.getState().applyOrchestrationEvent(
+        makeQueuedTurnUpdatedEvent({
+          sequence: fixture.snapshot.snapshotSequence + 1,
+          messageId: queuedMessageId,
+          text: "Edited queued message",
+          updatedAt: isoAt(1),
+        }),
+        LOCAL_ENVIRONMENT_ID,
+      );
+
       await expect.element(page.getByText("Edited queued message")).toBeInTheDocument();
       await expect.element(page.getByText("Original queued message")).not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("reveals a newer authoritative queued edit after an optimistic edit completes", async () => {
+    const queuedMessageId = "msg-queued-edit-reconcile-test" as MessageId;
+    let resolveUpdate!: (result: { sequence: number }) => void;
+    const updatePromise = new Promise<{ sequence: number }>((resolve) => {
+      resolveUpdate = resolve;
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-running-edit-reconcile-test" as MessageId,
+        targetText: "running edit reconcile target",
+        sessionStatus: "running",
+        queuedTurns: [
+          {
+            threadId: THREAD_ID,
+            messageId: queuedMessageId,
+            role: "user",
+            text: "Original queued message",
+            attachments: [],
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5",
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: NOW_ISO,
+            updatedAt: NOW_ISO,
+          },
+        ],
+      }),
+      resolveRpc: (body) => {
+        if (
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+          body.type === "thread.queued-turn.update"
+        ) {
+          return updatePromise;
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      await page.getByRole("button", { name: "Edit queued message" }).click();
+      await page.getByLabelText("Edit queued message").fill("First local edit");
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await expect.element(page.getByText("First local edit")).toBeInTheDocument();
+
+      useStore.getState().applyOrchestrationEvents(
+        [
+          makeQueuedTurnUpdatedEvent({
+            sequence: fixture.snapshot.snapshotSequence + 1,
+            messageId: queuedMessageId,
+            text: "First local edit",
+            updatedAt: isoAt(1),
+          }),
+          makeQueuedTurnUpdatedEvent({
+            sequence: fixture.snapshot.snapshotSequence + 2,
+            messageId: queuedMessageId,
+            text: "Newer remote edit",
+            updatedAt: isoAt(2),
+          }),
+        ],
+        LOCAL_ENVIRONMENT_ID,
+      );
+
+      await expect.element(page.getByText("First local edit")).toBeInTheDocument();
+      resolveUpdate({ sequence: fixture.snapshot.snapshotSequence + 1 });
+
+      await expect.element(page.getByText("Newer remote edit")).toBeInTheDocument();
+      await expect.element(page.getByText("First local edit")).not.toBeInTheDocument();
+    } finally {
+      resolveUpdate({ sequence: fixture.snapshot.snapshotSequence + 1 });
+      await mounted.cleanup();
+    }
+  });
+
+  it("allows cancel after a queued message is present in authoritative detail state", async () => {
+    const queuedMessageId = "msg-queued-cancel-persisted-test" as MessageId;
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-running-cancel-persisted-test" as MessageId,
+        targetText: "running cancel persisted target",
+        sessionStatus: "running",
+        queuedTurns: [
+          {
+            threadId: THREAD_ID,
+            messageId: queuedMessageId,
+            role: "user",
+            text: "Cancel persisted queued message",
+            attachments: [],
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: NOW_ISO,
+            updatedAt: NOW_ISO,
+          },
+        ],
+      }),
+      resolveRpc: (body) =>
+        body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand
+          ? { sequence: fixture.snapshot.snapshotSequence + 1 }
+          : undefined,
+    });
+
+    try {
+      const cancelButton = page.getByRole("button", { name: "Cancel queued message" });
+      expect((cancelButton.element() as HTMLButtonElement).disabled).toBe(false);
+      await cancelButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(
+            wsRequests.some(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                request.type === "thread.queued-turn.cancel" &&
+                request.messageId === queuedMessageId,
+            ),
+          ).toBe(true);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
     } finally {
       await mounted.cleanup();
     }

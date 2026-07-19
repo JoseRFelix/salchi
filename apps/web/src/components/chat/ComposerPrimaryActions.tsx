@@ -126,54 +126,53 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   }
 
   if (isRunning) {
-    if (hasSendableContent) {
-      return (
+    return (
+      <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
         <button
-          type="submit"
-          className="flex size-8 enabled:cursor-pointer items-center justify-center rounded-full bg-primary/90 text-primary-foreground shadow-xs enabled:shadow-primary/24 enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] transition-all duration-150 hover:bg-primary hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8"
+          type="button"
+          className={cn(
+            "flex size-8 items-center justify-center rounded-full bg-destructive/90 text-white shadow-xs shadow-destructive/24 inset-shadow-[0_1px_--theme(--color-white/16%)] transition-all duration-150 sm:h-8 sm:w-8",
+            isInterrupting
+              ? "cursor-wait opacity-80"
+              : "cursor-pointer hover:bg-destructive hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none",
+          )}
           {...pointerFocusProps}
-          disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
-          aria-label={isSendBusy ? "Queueing message" : "Queue message"}
+          onClick={onInterrupt}
+          disabled={isInterrupting}
+          aria-label={isInterrupting ? "Stopping generation" : "Stop generation"}
         >
-          {isSendBusy ? (
+          {isInterrupting ? (
             <Spinner className="size-3.5" aria-hidden="true" />
           ) : (
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-              <path
-                d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+              <rect x="2" y="2" width="8" height="8" rx="1.5" />
             </svg>
           )}
         </button>
-      );
-    }
-
-    return (
-      <button
-        type="button"
-        className={cn(
-          "flex size-8 items-center justify-center rounded-full bg-destructive/90 text-white shadow-xs shadow-destructive/24 inset-shadow-[0_1px_--theme(--color-white/16%)] transition-all duration-150 sm:h-8 sm:w-8",
-          isInterrupting
-            ? "cursor-wait opacity-80"
-            : "cursor-pointer hover:bg-destructive hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none",
-        )}
-        {...pointerFocusProps}
-        onClick={onInterrupt}
-        disabled={isInterrupting}
-        aria-label={isInterrupting ? "Stopping generation" : "Stop generation"}
-      >
-        {isInterrupting ? (
-          <Spinner className="size-3.5" aria-hidden="true" />
-        ) : (
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-            <rect x="2" y="2" width="8" height="8" rx="1.5" />
-          </svg>
-        )}
-      </button>
+        {hasSendableContent ? (
+          <button
+            type="submit"
+            className="flex size-8 enabled:cursor-pointer items-center justify-center rounded-full bg-primary/90 text-primary-foreground shadow-xs enabled:shadow-primary/24 enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] transition-all duration-150 hover:bg-primary hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8"
+            {...pointerFocusProps}
+            disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
+            aria-label={isSendBusy ? "Queueing message" : "Queue message"}
+          >
+            {isSendBusy ? (
+              <Spinner className="size-3.5" aria-hidden="true" />
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <path
+                  d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
+          </button>
+        ) : null}
+      </div>
     );
   }
 

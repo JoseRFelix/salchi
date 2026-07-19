@@ -4118,6 +4118,14 @@ export default function ChatView(props: ChatViewProps) {
           text,
           createdAt: new Date().toISOString(),
         });
+        setQueuedTurnTextOverrides((existing) => {
+          if (existing[messageId] !== text) {
+            return existing;
+          }
+          const next = { ...existing };
+          delete next[messageId];
+          return next;
+        });
         return true;
       } catch (err) {
         setQueuedTurnTextOverrides((existing) => {

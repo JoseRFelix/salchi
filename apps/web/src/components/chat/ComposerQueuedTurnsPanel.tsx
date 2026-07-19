@@ -342,7 +342,7 @@ export const ComposerQueuedTurnsPanel = memo(function ComposerQueuedTurnsPanel(
                         variant="ghost"
                         size="icon-sm"
                         className="shrink-0 text-muted-foreground hover:text-destructive"
-                        disabled={isCanceling || isSteering || isUpdating}
+                        disabled={!isPersisted || isCanceling || isSteering || isUpdating}
                         aria-label="Cancel queued message"
                         title="Cancel queued message"
                         onClick={() => onCancelQueuedTurn(queuedTurn.messageId)}

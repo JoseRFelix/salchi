@@ -135,12 +135,12 @@ describe("ComposerPrimaryActions stop button", () => {
     expect(markup).not.toContain("animate-spin");
   });
 
-  it("replaces stop with the queue action when the composer has content", () => {
+  it("keeps stop available alongside the queue action when the composer has content", () => {
     const markup = renderRunningPrimaryActions({ hasSendableContent: true });
 
     expect(markup).toContain('aria-label="Queue message"');
-    expect(markup).not.toContain('aria-label="Stop generation"');
-    expect(markup.match(/<button/g)).toHaveLength(1);
+    expect(markup).toContain('aria-label="Stop generation"');
+    expect(markup.match(/<button/g)).toHaveLength(2);
   });
 
   it("shows queueing progress in the same primary action", () => {
@@ -150,7 +150,7 @@ describe("ComposerPrimaryActions stop button", () => {
     });
 
     expect(markup).toContain('aria-label="Queueing message"');
-    expect(markup).not.toContain('aria-label="Stopping generation"');
+    expect(markup).toContain('aria-label="Stop generation"');
     expect(markup).toContain("animate-spin");
   });
 });
