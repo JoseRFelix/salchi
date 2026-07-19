@@ -7498,6 +7498,90 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it.each([
+    { label: "web", standalone: false, viewport: WIDE_FOOTER_VIEWPORT },
+    { label: "installed PWA", standalone: true, viewport: COMPACT_FOOTER_VIEWPORT },
+  ])(
+    "navigates the shared right-panel stack on $label",
+    async ({ standalone, viewport }) => {
+      if (standalone) {
+        emulateStandalonePwa();
+      }
+      const changedFile = {
+        path: "README.md",
+        status: "modified" as const,
+        insertions: 1,
+        deletions: 1,
+      };
+      useGitStatusMock.mockReturnValue({
+        ...repositoryGitStatusState,
+        data: {
+          ...repositoryGitStatusState.data,
+          hasWorkingTreeChanges: true,
+          workingTree: {
+            files: [changedFile],
+            insertions: 1,
+            deletions: 1,
+            staged: { files: [], insertions: 0, deletions: 0 },
+            unstaged: { files: [changedFile], insertions: 1, deletions: 1 },
+          },
+        },
+      });
+      const mounted = await mountChatView({
+        viewport,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: `msg-user-right-panel-${standalone ? "pwa" : "web"}` as MessageId,
+          targetText: "right panel stack target",
+        }),
+        resolveRpc: (body) =>
+          body._tag === WS_METHODS.vcsGetWorkingTreeDiff ? { diff: README_FILE_DIFF } : undefined,
+      });
+
+      try {
+        await page.getByRole("button", { name: "Toggle source control" }).click();
+        await expect.element(page.getByText("README.md")).toBeVisible();
+        await page.getByText("README.md").click();
+
+        await vi.waitFor(() => {
+          expect(mounted.router.state.location.search).toMatchObject({
+            diff: "1",
+            diffSource: "unstaged",
+            diffFilePath: "README.md",
+          });
+          expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+            open: true,
+            view: "diff",
+            history: [{ kind: "source-control" }],
+          });
+        });
+        await expect
+          .element(page.getByRole("button", { name: "Back to source control" }))
+          .toBeVisible();
+
+        if (standalone) {
+          expect(document.querySelectorAll('[data-right-panel-sheet="true"]')).toHaveLength(1);
+        } else {
+          const rightPanel = document.querySelector('[data-chat-right-panel-primary="true"]');
+          expect(rightPanel?.querySelectorAll('[data-slot="sidebar"]')).toHaveLength(1);
+        }
+
+        await page.getByRole("button", { name: "Back to source control" }).click();
+        await vi.waitFor(() => {
+          expect(mounted.router.state.location.search.diff).toBeUndefined();
+          expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+            open: true,
+            view: "source-control",
+            history: [],
+          });
+        });
+        await expect.element(page.getByText("Changes", { exact: true })).toBeVisible();
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+    60_000,
+  );
+
   it("uses the configured diff toggle binding without discarding the selected diff target", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { RIGHT_PANEL_SHEET_CLASS_NAME } from "../rightPanelLayout";
 import { Sheet, SheetPopup } from "./ui/sheet";
@@ -9,10 +9,35 @@ export function RightPanelSheet(props: {
   open: boolean;
   onClose: () => void;
 }) {
+  // Route state drops expensive panel content as soon as a gesture closes the
+  // controlled sheet. Retain the last open tree until Base UI reports that the
+  // exit animation finished, then release its workers and subscriptions.
+  const retainedOpenChildrenRef = useRef(props.children);
+  const [closeAnimationComplete, setCloseAnimationComplete] = useState(!props.open);
+
+  useLayoutEffect(() => {
+    if (!props.open) {
+      return;
+    }
+    retainedOpenChildrenRef.current = props.children;
+    setCloseAnimationComplete(false);
+  }, [props.children, props.open]);
+
+  const renderedChildren = props.open
+    ? props.children
+    : closeAnimationComplete
+      ? null
+      : retainedOpenChildrenRef.current;
+
   return (
     <Sheet
       modal={false}
       open={props.open}
+      onOpenChangeComplete={(open) => {
+        if (!open) {
+          setCloseAnimationComplete(true);
+        }
+      }}
       onOpenChange={(open, eventDetails) => {
         if (!open) {
           if (isToastPortalDismissalRequest(eventDetails)) {
@@ -34,7 +59,7 @@ export function RightPanelSheet(props: {
         className={RIGHT_PANEL_SHEET_CLASS_NAME}
       >
         <div className="flex h-full min-h-0 w-full flex-col max-[760px]:pb-safe max-[760px]:pr-safe max-[760px]:pt-safe">
-          {props.children}
+          {renderedChildren}
         </div>
       </SheetPopup>
     </Sheet>

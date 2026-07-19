@@ -896,6 +896,7 @@ export function WorkspaceFilePreviewPanel(props: {
   target: WorkspaceFilePreviewTarget | null;
   onAddFileToInput?: (relativePath: string) => void;
   onBack?: (() => void) | undefined;
+  onClose?: () => void;
   onShowExplorer?: () => void;
   showExplorerButton?: boolean;
 }) {
@@ -1395,7 +1396,7 @@ export function WorkspaceFilePreviewPanel(props: {
           variant="outline"
           aria-label="Close file preview"
           title="Close file preview"
-          onClick={closeWorkspaceFilePreview}
+          onClick={props.onClose ?? closeWorkspaceFilePreview}
         >
           <PanelRightCloseIcon className="size-3.5" />
         </Button>

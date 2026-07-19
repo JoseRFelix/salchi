@@ -1,59 +1,32 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveRightFilePanelVisibility } from "./rightPanelLayout";
+import { resolveRightPanelSurfaceView } from "./rightPanelLayout";
 
-describe("resolveRightFilePanelVisibility", () => {
-  it("hides source control behind an open diff without clearing its open state", () => {
+describe("resolveRightPanelSurfaceView", () => {
+  it("uses the active stack entry instead of opening discrete panels", () => {
     expect(
-      resolveRightFilePanelVisibility({
-        diffOpen: true,
-        filePanelOpen: true,
-        hasStoredFilePanelContext: false,
-        sourceControlOpen: true,
-        useSheet: false,
+      resolveRightPanelSurfaceView({
+        diffRouteOpen: true,
+        panelOpen: true,
+        panelView: "preview",
       }),
-    ).toEqual({
-      open: false,
-      renderContent: false,
-      sourceControlHiddenByDiff: true,
-    });
+    ).toBe("files");
+    expect(
+      resolveRightPanelSurfaceView({
+        diffRouteOpen: true,
+        panelOpen: true,
+        panelView: "diff",
+      }),
+    ).toBe("diff");
   });
 
-  it("keeps ordinary file preview visible while diff is open", () => {
+  it("falls back to a deep-linked diff until the stack synchronizes", () => {
     expect(
-      resolveRightFilePanelVisibility({
-        diffOpen: true,
-        filePanelOpen: true,
-        hasStoredFilePanelContext: true,
-        sourceControlOpen: false,
-        useSheet: false,
+      resolveRightPanelSurfaceView({
+        diffRouteOpen: true,
+        panelOpen: false,
+        panelView: "preview",
       }),
-    ).toEqual({
-      open: true,
-      renderContent: true,
-      sourceControlHiddenByDiff: false,
-    });
-  });
-
-  it("keeps cached file content mounted while closed only in inline layout", () => {
-    expect(
-      resolveRightFilePanelVisibility({
-        diffOpen: false,
-        filePanelOpen: false,
-        hasStoredFilePanelContext: true,
-        sourceControlOpen: false,
-        useSheet: false,
-      }).renderContent,
-    ).toBe(true);
-
-    expect(
-      resolveRightFilePanelVisibility({
-        diffOpen: false,
-        filePanelOpen: false,
-        hasStoredFilePanelContext: true,
-        sourceControlOpen: false,
-        useSheet: true,
-      }).renderContent,
-    ).toBe(false);
+    ).toBe("diff");
   });
 });

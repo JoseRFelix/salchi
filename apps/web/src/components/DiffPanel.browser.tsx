@@ -8,14 +8,18 @@ const ENVIRONMENT_ID = "environment-diff-browser";
 const THREAD_ID = "thread-diff-browser";
 
 const {
+  closeWorkspaceFilePreviewSpy,
   fileDiffRenderCalls,
   navigateSpy,
   openWorkspaceFilePreviewSpy,
   parsePatchFilesMock,
   parsedFilesRef,
+  returnWorkspaceFilePanelBackSpy,
+  sourceControlOpenRef,
   virtualizerRenderCalls,
   workingTreeDiffRef,
 } = vi.hoisted(() => ({
+  closeWorkspaceFilePreviewSpy: vi.fn(),
   fileDiffRenderCalls: [] as Array<{
     fileDiff: { name: string };
     options: { collapsed?: boolean; theme?: string; themeType?: string } | undefined;
@@ -32,6 +36,8 @@ const {
       unifiedLineCount: number;
     }>,
   },
+  returnWorkspaceFilePanelBackSpy: vi.fn(),
+  sourceControlOpenRef: { current: false },
   virtualizerRenderCalls: [] as Array<{
     className: string | undefined;
     config:
@@ -206,8 +212,16 @@ vi.mock("../rightPanelGesture", () => ({
 }));
 
 vi.mock("../workspaceFilePreview", () => ({
+  closeWorkspaceFilePreview: closeWorkspaceFilePreviewSpy,
   openPathInPreferredEditorOrFilePreview: vi.fn(async () => undefined),
   openWorkspaceFilePreview: openWorkspaceFilePreviewSpy,
+  returnWorkspaceFilePanelBack: returnWorkspaceFilePanelBackSpy,
+  useWorkspaceFilePanelState: vi.fn(() => ({
+    history: sourceControlOpenRef.current ? [{ kind: "source-control" }] : [],
+    open: true,
+    view: "diff",
+  })),
+  workspaceFilePanelBackButtonLabel: vi.fn(() => "Back to source control"),
 }));
 
 vi.mock("../workspaceImagePreview", () => ({
@@ -240,6 +254,7 @@ describe("DiffPanel", () => {
     openWorkspaceFilePreviewSpy.mockClear();
     parsePatchFilesMock.mockReset();
     parsedFilesRef.current = [];
+    sourceControlOpenRef.current = false;
     workingTreeDiffRef.current = "diff --git a/src/App.tsx b/src/App.tsx";
     resetColorTheme();
     localStorage.clear();
@@ -344,15 +359,67 @@ describe("DiffPanel", () => {
     }
   });
 
-  it("does not expose source control as an underlying diff layer", async () => {
+  it("returns to source control from the diff header without dismissing it", async () => {
+    sourceControlOpenRef.current = true;
     parsedFilesRef.current = [fileDiff("src/App.tsx")];
     const screen = await render(<DiffPanel mode="sidebar" />);
 
     try {
       await vi.waitFor(() => {
-        expect(document.querySelector('[data-testid="diff-file-render"]')).not.toBeNull();
+        expect(
+          document.querySelector('button[aria-label="Back to source control"]'),
+        ).not.toBeNull();
       });
-      expect(document.querySelector('button[aria-label="Back to source control"]')).toBeNull();
+
+      document
+        .querySelector<HTMLButtonElement>('button[aria-label="Back to source control"]')
+        ?.click();
+
+      expect(returnWorkspaceFilePanelBackSpy).toHaveBeenCalledOnce();
+      expect(closeWorkspaceFilePreviewSpy).not.toHaveBeenCalled();
+      const navigateInput = navigateSpy.mock.calls.at(-1)?.[0] as
+        | {
+            search: (previous: Record<string, unknown>) => Record<string, unknown>;
+            to: string;
+          }
+        | undefined;
+      expect(navigateInput).toMatchObject({ to: "/$environmentId/$threadId" });
+      expect(
+        navigateInput?.search({
+          diff: "1",
+          diffSource: "unstaged",
+          diffFilePath: "src/App.tsx",
+          panel: "activity",
+        }),
+      ).toEqual({
+        diff: undefined,
+        diffSource: undefined,
+        diffTurnId: undefined,
+        diffFilePath: undefined,
+        panel: "activity",
+      });
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("clears hidden source control before dismissing the diff from its header", async () => {
+    sourceControlOpenRef.current = true;
+    parsedFilesRef.current = [fileDiff("src/App.tsx")];
+    const screen = await render(<DiffPanel mode="sheet" />);
+
+    try {
+      await vi.waitFor(() => {
+        expect(document.querySelector('button[aria-label="Close diff"]')).not.toBeNull();
+      });
+
+      document.querySelector<HTMLButtonElement>('button[aria-label="Close diff"]')?.click();
+
+      expect(closeWorkspaceFilePreviewSpy).toHaveBeenCalledOnce();
+      expect(navigateSpy).toHaveBeenCalledOnce();
+      expect(closeWorkspaceFilePreviewSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        navigateSpy.mock.invocationCallOrder[0]!,
+      );
     } finally {
       await screen.unmount();
     }

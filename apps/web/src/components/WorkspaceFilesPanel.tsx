@@ -4,7 +4,6 @@ import { Suspense, lazy, useCallback, useMemo, useRef, useState } from "react";
 
 import { useComposerHandleContext } from "../composerHandleContext";
 import { formatWorkspaceRelativePath } from "../filePathDisplay";
-import { closeSourceControlPanel } from "../sourceControlPanelState";
 import type { WorkspaceFilePreviewDiffReturnTarget } from "../workspaceFilePreview";
 import {
   closeWorkspaceFilePreview,
@@ -58,7 +57,7 @@ function explorerContextFromPreview(
   };
 }
 
-function WorkspaceFilesUnavailablePanel(props: { mode: DiffPanelMode }) {
+function WorkspaceFilesUnavailablePanel(props: { mode: DiffPanelMode; onClose: () => void }) {
   return (
     <DiffPanelShell
       mode={props.mode}
@@ -78,7 +77,7 @@ function WorkspaceFilesUnavailablePanel(props: { mode: DiffPanelMode }) {
             variant="outline"
             aria-label="Close files panel"
             title="Close files panel"
-            onClick={closeWorkspaceFilePreview}
+            onClick={props.onClose}
           >
             <PanelRightCloseIcon className="size-3.5" />
           </Button>
@@ -100,21 +99,22 @@ function SourceControlLoadingFallback(props: { mode: DiffPanelMode }) {
   );
 }
 
-function LazySourceControlPanel(props: { mode: DiffPanelMode }) {
+function LazySourceControlPanel(props: { mode: DiffPanelMode; onClose: () => void }) {
   const sourceControlMode = props.mode === "sheet" ? "sheet" : "sidebar";
   return (
     <Suspense fallback={<SourceControlLoadingFallback mode={props.mode} />}>
-      <SourceControlPanel mode={sourceControlMode} onClose={closeSourceControlPanel} />
+      <SourceControlPanel mode={sourceControlMode} onClose={props.onClose} />
     </Suspense>
   );
 }
 
 export function WorkspaceFilesPanel(props: {
   mode: DiffPanelMode;
+  onClose?: () => void;
   onReturnToDiff: (target: WorkspaceFilePreviewDiffReturnTarget) => void;
   panelOpen: boolean;
 }) {
-  const { mode, onReturnToDiff, panelOpen } = props;
+  const { mode, onClose = closeWorkspaceFilePreview, onReturnToDiff, panelOpen } = props;
   const filePanel = useWorkspaceFilePanelState();
   const composerRef = useComposerHandleContext();
   const explorerContext = explorerContextFromPreview(filePanel.explorerContext, filePanel.target);
@@ -226,6 +226,7 @@ export function WorkspaceFilesPanel(props: {
       return;
     }
     if (backTarget.kind === "diff") {
+      returnWorkspaceFilePanelBack();
       onReturnToDiff(backTarget);
       return;
     }
@@ -233,12 +234,12 @@ export function WorkspaceFilesPanel(props: {
   }, [backTarget, onReturnToDiff]);
 
   if (filePanel.view === "source-control") {
-    return <LazySourceControlPanel mode={mode} />;
+    return <LazySourceControlPanel mode={mode} onClose={onClose} />;
   }
 
   if (filePanel.view === "explorer") {
     if (!explorerContext) {
-      return <WorkspaceFilesUnavailablePanel mode={mode} />;
+      return <WorkspaceFilesUnavailablePanel mode={mode} onClose={onClose} />;
     }
     return (
       <WorkspaceFileExplorerPanel
@@ -248,7 +249,7 @@ export function WorkspaceFilesPanel(props: {
         onAddFileToInput={addExplorerFileToInput}
         backButtonLabel={backTarget ? workspaceFilePanelBackButtonLabel(backTarget) : undefined}
         onBack={backTarget ? handleBack : undefined}
-        onClose={closeWorkspaceFilePreview}
+        onClose={onClose}
         onExpandedDirectoryPathsChange={setExpandedDirectoryPaths}
         onOpenFile={openExplorerFile}
         onSearchQueryChange={setSearchQuery}
@@ -274,6 +275,7 @@ export function WorkspaceFilesPanel(props: {
       target={filePanel.target}
       onAddFileToInput={addPathToInput}
       onBack={backTarget ? handleBack : undefined}
+      onClose={onClose}
       onShowExplorer={showExplorer}
       showExplorerButton={explorerContext !== null && !previewOpenedFromExplorer}
     />

@@ -9,12 +9,10 @@ export interface RightPanelRegistration {
 
 const registeredPanels = new Map<RightPanelKind, RightPanelRegistration>();
 let lastUsedRightPanel: RightPanelKind = "file";
+const WORKSPACE_PANEL_KINDS = new Set<RightPanelKind>(["diff", "file", "source-control"]);
 
-function shareFilePanelState(left: RightPanelKind, right: RightPanelKind): boolean {
-  return (
-    (left === "file" && right === "source-control") ||
-    (left === "source-control" && right === "file")
-  );
+function shareWorkspacePanelStack(left: RightPanelKind, right: RightPanelKind): boolean {
+  return WORKSPACE_PANEL_KINDS.has(left) && WORKSPACE_PANEL_KINDS.has(right);
 }
 
 export function markRightPanelUsed(kind: RightPanelKind): void {
@@ -28,9 +26,17 @@ export function openRightPanel(kind: RightPanelKind): boolean {
   }
 
   markRightPanelUsed(kind);
+  const invokedCloseCallbacks = new Set<() => void>();
   for (const [registeredKind, registeredPanel] of registeredPanels) {
-    if (registeredKind !== kind && !shareFilePanelState(kind, registeredKind)) {
-      registeredPanel.close?.();
+    const close = registeredPanel.close;
+    if (
+      registeredKind !== kind &&
+      !shareWorkspacePanelStack(kind, registeredKind) &&
+      close &&
+      !invokedCloseCallbacks.has(close)
+    ) {
+      invokedCloseCallbacks.add(close);
+      close();
     }
   }
   registration.open();

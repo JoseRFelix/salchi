@@ -31,7 +31,7 @@ import {
   useState,
 } from "react";
 
-import { openWorkspaceFilePreview } from "../workspaceFilePreview";
+import { openWorkspaceDiffPanel, openWorkspaceFilePreview } from "../workspaceFilePreview";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { buildOpenDiffSearch } from "../diffRouteSearch";
 import { useStore, selectProjectByRef } from "../store";
@@ -48,7 +48,6 @@ import {
   recordSourceControlPanelScrollTop,
   recordSourceControlPanelViewMode,
   sourceControlPanelScrollKey,
-  closeSourceControlPanel,
   useSetSourceControlCommitMessage,
   useSourceControlPanelState,
   useSourceControlPanelWorkspaceViewState,
@@ -850,12 +849,21 @@ export default function SourceControlPanel({ mode = "sidebar", onClose }: Source
         return;
       }
 
+      openWorkspaceDiffPanel(
+        {
+          kind: "diff",
+          diffSource: section,
+          diffFilePath: filePath,
+        },
+        { navigation: "push" },
+      );
+
       if (routeTarget.kind === "draft") {
         void navigate({
           to: "/draft/$draftId",
           params: buildDraftThreadRouteParams(routeTarget.draftId),
           search: (previous) => buildOpenDiffSearch(previous, { source: section, filePath }),
-        }).then(closeSourceControlPanel);
+        });
         return;
       }
 
@@ -863,7 +871,7 @@ export default function SourceControlPanel({ mode = "sidebar", onClose }: Source
         to: "/$environmentId/$threadId",
         params: buildThreadRouteParams(routeTarget.threadRef),
         search: (previous) => buildOpenDiffSearch(previous, { source: section, filePath }),
-      }).then(closeSourceControlPanel);
+      });
     },
     [cwd, environmentId, navigate, routeTarget],
   );

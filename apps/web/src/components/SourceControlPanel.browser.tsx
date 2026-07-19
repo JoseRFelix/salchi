@@ -667,7 +667,7 @@ describe("SourceControlPanel git action runner", () => {
     }
   });
 
-  it("moves staged and unstaged file rows exclusively into the matching diff sidebar", async () => {
+  it("pushes staged and unstaged file rows onto the shared panel stack", async () => {
     currentGitStatusRef.current = createPanelStatus({
       stagedFiles: [{ path: "staged-only.ts", status: "modified", insertions: 1, deletions: 0 }],
       unstagedFiles: [
@@ -707,11 +707,10 @@ describe("SourceControlPanel git action runner", () => {
         diffFilePath: "staged-only.ts",
         panel: "activity",
       });
-      await vi.waitFor(() => {
-        expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
-          open: false,
-          view: "source-control",
-        });
+      expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+        open: true,
+        view: "diff",
+        history: [{ kind: "source-control" }],
       });
 
       openWorkspaceSourceControlPanel();
@@ -730,11 +729,10 @@ describe("SourceControlPanel git action runner", () => {
         diffFilePath: "unstaged-only.ts",
         panel: "activity",
       });
-      await vi.waitFor(() => {
-        expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
-          open: false,
-          view: "source-control",
-        });
+      expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+        open: true,
+        view: "diff",
+        history: [{ kind: "source-control" }],
       });
     } finally {
       await screen.unmount();
@@ -770,11 +768,10 @@ describe("SourceControlPanel git action runner", () => {
       await vi.waitFor(() => {
         expect(navigateSpy).toHaveBeenCalled();
       });
-      await vi.waitFor(() => {
-        expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
-          open: false,
-          view: "source-control",
-        });
+      expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+        open: true,
+        view: "diff",
+        history: [{ kind: "source-control" }],
       });
     } finally {
       await firstRender.screen.unmount();

@@ -3,7 +3,7 @@ import "../index.css";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { RightPanelSheet } from "./RightPanelSheet";
 import { ToastProvider, toastManager } from "./ui/toast";
@@ -48,6 +48,33 @@ function RightPanelSheetHarness(props: { onClose: () => void }) {
   );
 }
 
+function SheetContentLifecycle(props: { onDismiss: () => void; onUnmount: () => void }) {
+  useEffect(() => props.onUnmount, [props.onUnmount]);
+  return (
+    <div data-testid="gesture-sheet-content">
+      <p>Gesture sheet content</p>
+      <button type="button" onClick={props.onDismiss}>
+        Simulate gesture dismissal
+      </button>
+    </div>
+  );
+}
+
+function GestureDismissalHarness(props: { onContentUnmount: () => void }) {
+  const [open, setOpen] = useState(true);
+
+  return (
+    <RightPanelSheet open={open} onClose={() => setOpen(false)}>
+      {open ? (
+        <SheetContentLifecycle
+          onDismiss={() => setOpen(false)}
+          onUnmount={props.onContentUnmount}
+        />
+      ) : null}
+    </RightPanelSheet>
+  );
+}
+
 describe("RightPanelSheet", () => {
   afterEach(() => {
     toastManager.close();
@@ -86,6 +113,29 @@ describe("RightPanelSheet", () => {
       await vi.waitFor(() => {
         expect(onClose).toHaveBeenCalledOnce();
       });
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps mobile content mounted until a gesture-driven close animation finishes", async () => {
+    await page.viewport(390, 844);
+    const onContentUnmount = vi.fn();
+    const screen = await render(<GestureDismissalHarness onContentUnmount={onContentUnmount} />);
+
+    try {
+      await page.getByRole("button", { name: "Simulate gesture dismissal" }).click();
+
+      expect(onContentUnmount).not.toHaveBeenCalled();
+      expect(document.querySelector('[data-testid="gesture-sheet-content"]')).not.toBeNull();
+
+      await vi.waitFor(
+        () => {
+          expect(onContentUnmount).toHaveBeenCalledOnce();
+          expect(document.querySelector('[data-testid="gesture-sheet-content"]')).toBeNull();
+        },
+        { timeout: 2_000 },
+      );
     } finally {
       await screen.unmount();
     }

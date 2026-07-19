@@ -8,6 +8,7 @@ import {
   closeWorkspaceSourceControlPanel,
   isWorkspaceFileExplorerOpen,
   openPathInWorkspaceFilePreview,
+  openWorkspaceDiffPanel,
   openWorkspaceFileExplorer,
   openWorkspaceFilePreview,
   openWorkspaceSourceControlPanel,
@@ -17,6 +18,7 @@ import {
   returnWorkspaceFileExplorerToPreview,
   returnWorkspaceFilePreviewToExplorer,
   setActiveWorkspaceFileExplorerContext,
+  syncWorkspaceDiffPanelRoute,
   type WorkspaceFilePreviewReturnTarget,
   type WorkspaceFilePreviewTarget,
 } from "./workspaceFilePreview";
@@ -234,6 +236,47 @@ describe("workspace file panel state", () => {
       target: previewTarget,
       history: [{ kind: "source-control" }, diffReturnTarget],
       returnTarget: diffReturnTarget,
+    });
+  });
+
+  it("uses one stack across source control, diff, and file preview", () => {
+    const previewTarget = createPreviewTarget("src/from-diff.ts");
+    openWorkspaceSourceControlPanel();
+    openWorkspaceDiffPanel(diffReturnTarget, { navigation: "push" });
+    openWorkspaceFilePreview(previewTarget);
+
+    expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+      open: true,
+      view: "preview",
+      history: [{ kind: "source-control" }, diffReturnTarget],
+    });
+
+    returnWorkspaceFilePanelBack();
+    expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+      open: true,
+      view: "diff",
+      diffTarget: diffReturnTarget,
+      history: [{ kind: "source-control" }],
+    });
+
+    returnWorkspaceFilePanelBack();
+    expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+      open: true,
+      view: "source-control",
+      history: [],
+    });
+  });
+
+  it("synchronizes browser diff-route back navigation with the panel stack", () => {
+    openWorkspaceSourceControlPanel();
+    openWorkspaceDiffPanel(diffReturnTarget, { navigation: "push" });
+
+    syncWorkspaceDiffPanelRoute(null);
+
+    expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+      open: true,
+      view: "source-control",
+      history: [],
     });
   });
 

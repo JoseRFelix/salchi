@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import type { TurnId } from "@t3tools/contracts";
 import {
+  ArrowLeftIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -53,8 +54,12 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./u
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
 import {
+  closeWorkspaceFilePreview,
   openPathInPreferredEditorOrFilePreview,
   openWorkspaceFilePreview,
+  returnWorkspaceFilePanelBack,
+  useWorkspaceFilePanelState,
+  workspaceFilePanelBackButtonLabel,
   type WorkspaceFilePreviewDiffReturnTarget,
 } from "../workspaceFilePreview";
 import {
@@ -363,6 +368,11 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   });
   const diffSearch = useSearch({ strict: false, select: (search) => parseDiffRouteSearch(search) });
   const diffOpen = diffSearch.diff === "1";
+  const rightPanel = useWorkspaceFilePanelState();
+  const backTarget =
+    rightPanel.open && rightPanel.view === "diff"
+      ? (rightPanel.history[rightPanel.history.length - 1] ?? null)
+      : null;
   const routeThreadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
   const routeDraftId = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
   const serverThread = useStore(
@@ -771,7 +781,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       search: (previous) => buildOpenDiffSearch(previous, { source: target }),
     });
   };
-  const closeDiffPanel = () => {
+  const navigateToClosedDiff = () => {
     if (!activeDiffContext) return;
     if (activeDiffContext.routeTarget.kind === "draft") {
       void navigate({
@@ -786,6 +796,14 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       params: buildThreadRouteParams(activeDiffContext.routeTarget.threadRef),
       search: (previous) => buildClosedDiffSearch(previous),
     });
+  };
+  const returnFromDiffPanel = () => {
+    returnWorkspaceFilePanelBack();
+    navigateToClosedDiff();
+  };
+  const dismissDiffPanel = () => {
+    closeWorkspaceFilePreview();
+    navigateToClosedDiff();
   };
   const updateTurnStripScrollState = useCallback(() => {
     const element = turnStripRef.current;
@@ -865,6 +883,18 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   })();
   const headerRow = (
     <>
+      {backTarget ? (
+        <Button
+          size="icon-xs"
+          variant="subtle-outline"
+          aria-label={workspaceFilePanelBackButtonLabel(backTarget)}
+          title={workspaceFilePanelBackButtonLabel(backTarget)}
+          className="shrink-0 [-webkit-app-region:no-drag]"
+          onClick={returnFromDiffPanel}
+        >
+          <ArrowLeftIcon className="size-3.5" />
+        </Button>
+      ) : null}
       <div className="hidden min-w-0 flex-1 [-webkit-app-region:no-drag] max-[760px]:block">
         <Select
           value={diffSelectionValue}
@@ -1113,7 +1143,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
             variant="outline"
             aria-label="Close diff"
             title="Close diff"
-            onClick={closeDiffPanel}
+            onClick={dismissDiffPanel}
           >
             <PanelRightCloseIcon className="size-3.5" />
           </Button>
