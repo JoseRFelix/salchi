@@ -817,7 +817,18 @@ function shouldHydrateSpawnedChildrenFromCollabTool(item: unknown): boolean {
   }
 }
 
-function collabAgentChildHydrationInputFromEvent(
+function subAgentActivityThreadId(item: unknown): string | undefined {
+  if (
+    !isRecord(item) ||
+    readString(item.type) !== "subAgentActivity" ||
+    readString(item.kind) !== "started"
+  ) {
+    return undefined;
+  }
+  return readString(item.agentThreadId);
+}
+
+function codexChildHydrationInputFromEvent(
   event: ProviderEvent,
 ): { readonly candidateProviderThreadIds: ReadonlySet<string>; readonly reason: string } | null {
   if (event.method !== "item/completed") {
@@ -827,6 +838,13 @@ function collabAgentChildHydrationInputFromEvent(
     return null;
   }
   const item = event.payload.item;
+  const activityThreadId = subAgentActivityThreadId(item);
+  if (activityThreadId) {
+    return {
+      candidateProviderThreadIds: new Set([activityThreadId]),
+      reason: "subagent-activity:started",
+    };
+  }
   if (!shouldHydrateSpawnedChildrenFromCollabTool(item)) {
     return null;
   }
@@ -841,7 +859,7 @@ function collabAgentChildHydrationInputFromEvent(
   };
 }
 
-function collabAgentThreadSpawnMetadataFromEvent(
+function childThreadSpawnMetadataFromEvent(
   event: ProviderEvent,
   providerThreadId: string,
 ): {
@@ -852,7 +870,25 @@ function collabAgentThreadSpawnMetadataFromEvent(
   if (!isRecord(event.payload) || !isRecord(event.payload.item)) {
     return {};
   }
-  const metadata = collabAgentMetadataFromState(event.payload.item, providerThreadId);
+  const item = event.payload.item;
+  if (
+    readString(item.type) === "subAgentActivity" &&
+    readString(item.agentThreadId) === providerThreadId
+  ) {
+    const path = readString(item.agentPath) ?? readString(item.agent_path);
+    const role = readString(item.agentRole) ?? readString(item.agent_role) ?? path;
+    const nickname =
+      readString(item.agentNickname) ??
+      readString(item.agent_nickname) ??
+      subagentNicknameFromPath(path);
+    return {
+      ...(nickname ? { subagentNickname: nickname } : {}),
+      ...(role ? { subagentRole: role } : {}),
+      ...(path ? { subagentPath: path } : {}),
+    };
+  }
+
+  const metadata = collabAgentMetadataFromState(item, providerThreadId);
   return {
     ...(metadata.nickname ? { subagentNickname: metadata.nickname } : {}),
     ...(metadata.role ? { subagentRole: metadata.role } : {}),
@@ -2176,8 +2212,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     },
   );
 
-  const ensureMaterializedReceiverChildSessions = Effect.fn(
-    "ensureMaterializedReceiverChildSessions",
+  const ensureMaterializedCandidateChildSessions = Effect.fn(
+    "ensureMaterializedCandidateChildSessions",
   )(function* (
     root: CodexAdapterRootSessionContext,
     event: ProviderEvent,
@@ -2215,7 +2251,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             });
           }
 
-          const metadata = collabAgentThreadSpawnMetadataFromEvent(event, providerThreadId);
+          const metadata = childThreadSpawnMetadataFromEvent(event, providerThreadId);
           yield* emitMaterializedChildThreadStarted({
             root,
             threadId,
@@ -2407,7 +2443,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               Effect.logWarning("failed to hydrate Codex spawned child threads", {
                 threadId: work.root.threadId,
                 reason: hydration.reason,
-                receiverThreadIds: hydration.candidateProviderThreadIds
+                candidateProviderThreadIds: hydration.candidateProviderThreadIds
                   ? [...hydration.candidateProviderThreadIds]
                   : undefined,
                 cause,
@@ -2519,9 +2555,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             if (root) {
               yield* registerVirtualChildFromThreadStartedEvent(root, event);
             }
-            const hydrationInput = root ? collabAgentChildHydrationInputFromEvent(event) : null;
+            const hydrationInput = root ? codexChildHydrationInputFromEvent(event) : null;
             if (root && hydrationInput) {
-              yield* ensureMaterializedReceiverChildSessions(root, event, hydrationInput);
+              yield* ensureMaterializedCandidateChildSessions(root, event, hydrationInput);
             }
             const runtimeEvents = mapToRuntimeEvents(event, event.threadId);
             if (runtimeEvents.length === 0) {
