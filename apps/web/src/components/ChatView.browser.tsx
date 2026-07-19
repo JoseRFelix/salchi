@@ -7301,7 +7301,16 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(search.diff).toBe("1");
           expect(search.diffTurnId).toBe(checkpointTurnId);
           expect(search.diffFilePath).toBe("README.md");
-          expect(__readWorkspaceFilePanelStateForTests().open).toBe(false);
+          expect(__readWorkspaceFilePanelStateForTests()).toMatchObject({
+            open: true,
+            view: "diff",
+            diffTarget: {
+              kind: "diff",
+              diffTurnId: checkpointTurnId,
+              diffFilePath: "README.md",
+            },
+            history: [],
+          });
         },
         { timeout: 8_000, interval: 16 },
       );
