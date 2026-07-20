@@ -6,6 +6,7 @@ import {
 } from "@salchi/contracts";
 import { makeKeyedCoalescingWorker } from "@salchi/shared/KeyedCoalescingWorker";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Equal from "effect/Equal";
@@ -875,49 +876,57 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
       threadId: string,
       terminalId: string,
     ) {
-      const terminated = yield* Effect.try({
-        try: () => process.kill("SIGTERM"),
-        catch: (cause) =>
-          new TerminalProcessSignalError({
-            message: "Failed to send SIGTERM to terminal process.",
-            cause,
-            signal: "SIGTERM",
-          }),
-      }).pipe(
-        Effect.as(true),
-        Effect.catch((error) =>
-          Effect.logWarning("failed to kill terminal process", {
-            threadId,
-            terminalId,
-            signal: "SIGTERM",
-            error: error.message,
-          }).pipe(Effect.as(false)),
-        ),
-      );
-      if (!terminated) {
-        return;
-      }
+      const exited = yield* Deferred.make<void>();
+      const unsubscribeExit = process.onExit(() => {
+        Deferred.doneUnsafe(exited, Effect.void);
+      });
+      yield* Effect.gen(function* () {
+        const terminated = yield* Effect.try({
+          try: () => process.kill("SIGTERM"),
+          catch: (cause) =>
+            new TerminalProcessSignalError({
+              message: "Failed to send SIGTERM to terminal process.",
+              cause,
+              signal: "SIGTERM",
+            }),
+        }).pipe(
+          Effect.as(true),
+          Effect.catch((error) =>
+            Effect.logWarning("failed to kill terminal process", {
+              threadId,
+              terminalId,
+              signal: "SIGTERM",
+              error: error.message,
+            }).pipe(Effect.as(false)),
+          ),
+        );
+        if (!terminated) return;
 
-      yield* Effect.sleep(processKillGraceMs);
+        const exitedBeforeGrace = yield* Effect.raceFirst(
+          Deferred.await(exited).pipe(Effect.as(true)),
+          Effect.sleep(processKillGraceMs).pipe(Effect.as(false)),
+        );
+        if (exitedBeforeGrace) return;
 
-      yield* Effect.try({
-        try: () => process.kill("SIGKILL"),
-        catch: (cause) =>
-          new TerminalProcessSignalError({
-            message: "Failed to send SIGKILL to terminal process.",
-            cause,
-            signal: "SIGKILL",
-          }),
-      }).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("failed to force-kill terminal process", {
-            threadId,
-            terminalId,
-            signal: "SIGKILL",
-            error: error.message,
-          }),
-        ),
-      );
+        yield* Effect.try({
+          try: () => process.kill("SIGKILL"),
+          catch: (cause) =>
+            new TerminalProcessSignalError({
+              message: "Failed to send SIGKILL to terminal process.",
+              cause,
+              signal: "SIGKILL",
+            }),
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("failed to force-kill terminal process", {
+              threadId,
+              terminalId,
+              signal: "SIGKILL",
+              error: error.message,
+            }),
+          ),
+        );
+      }).pipe(Effect.ensuring(Effect.sync(unsubscribeExit)));
     });
 
     const startKillEscalation = Effect.fn("terminal.startKillEscalation")(function* (

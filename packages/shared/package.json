@@ -39,6 +39,10 @@
       "types": "./src/hostProcess.ts",
       "import": "./src/hostProcess.ts"
     },
+    "./childProcess": {
+      "types": "./src/childProcess.ts",
+      "import": "./src/childProcess.ts"
+    },
     "./semver": {
       "types": "./src/semver.ts",
       "import": "./src/semver.ts"

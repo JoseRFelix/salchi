@@ -6,6 +6,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@salchi/shared/Net";
 import { resolveSpawnCommand } from "@salchi/shared/shell";
+import { terminateChildProcess } from "@salchi/shared/childProcess";
 import * as Config from "effect/Config";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -457,8 +458,13 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       // reach it directly. Effect defaults to detached: true on non-Windows,
       // which would put Vite+ in a new group and require manual forwarding.
       detached: false,
-      forceKillAfter: "1500 millis",
     });
+    yield* Effect.addFinalizer(() =>
+      terminateChildProcess(child, {
+        gracefulTimeout: "1500 millis",
+        forceTimeout: "1500 millis",
+      }).pipe(Effect.ignore),
+    );
 
     const exitCode = yield* child.exitCode;
     if (exitCode !== 0) {

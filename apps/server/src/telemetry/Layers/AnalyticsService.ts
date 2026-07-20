@@ -26,6 +26,9 @@ interface BufferedAnalyticsEvent {
   readonly capturedAt: string;
 }
 
+const ANALYTICS_REQUEST_TIMEOUT = "5 seconds";
+export const ANALYTICS_SHUTDOWN_TIMEOUT = "1 second";
+
 const TelemetryEnvConfig = Config.all({
   posthogKey: Config.string("SALCHI_POSTHOG_KEY").pipe(
     Config.option,
@@ -104,6 +107,7 @@ const makeAnalyticsService = Effect.gen(function* () {
       HttpClientRequest.bodyJson(payload),
       Effect.flatMap(httpClient.execute),
       Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.timeout(ANALYTICS_REQUEST_TIMEOUT),
     );
   });
 
@@ -150,7 +154,18 @@ const makeAnalyticsService = Effect.gen(function* () {
     disableYield: true,
   }).pipe(Effect.forkScoped);
 
-  yield* Effect.addFinalizer(() => flush);
+  yield* Effect.addFinalizer(() =>
+    flush.pipe(
+      Effect.interruptible,
+      Effect.timeoutOption(ANALYTICS_SHUTDOWN_TIMEOUT),
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.logWarning("Telemetry flush timed out during shutdown"),
+          onSome: () => Effect.void,
+        }),
+      ),
+    ),
+  );
 
   return {
     record,

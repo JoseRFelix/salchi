@@ -5,10 +5,10 @@ import { availableParallelism } from "node:os";
 import * as NetService from "@salchi/shared/Net";
 import type { TranscriptionModel, TranscriptionStatus } from "@salchi/contracts";
 import { findTranscriptionModel } from "@salchi/shared/transcriptionModel";
+import { terminateChildProcess } from "@salchi/shared/childProcess";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -467,36 +467,10 @@ const downloadVerifiedFile = Effect.fn("managedWhisper.downloadVerifiedFile")(fu
 export const terminateManagedChildProcess = Effect.fn("managedWhisper.terminateChild")(function* (
   child: ChildProcessSpawner.ChildProcessHandle,
 ) {
-  const running = yield* child.isRunning.pipe(Effect.catchCause(() => Effect.succeed(true)));
-  if (!running) return;
-
-  const terminated = yield* child.kill({ killSignal: "SIGTERM" }).pipe(
-    Effect.exit,
-    Effect.timeoutOption(MANAGED_WHISPER_PROCESS_TERMINATE_GRACE),
-    Effect.map(
-      Option.match({
-        onNone: () => false,
-        onSome: Exit.isSuccess,
-      }),
-    ),
-  );
-  if (terminated) return;
-
-  const killed = yield* child.kill({ killSignal: "SIGKILL" }).pipe(
-    Effect.exit,
-    Effect.timeoutOption(MANAGED_WHISPER_PROCESS_TERMINATE_GRACE),
-    Effect.map(
-      Option.match({
-        onNone: () => false,
-        onSome: Exit.isSuccess,
-      }),
-    ),
-  );
-  if (!killed) {
-    // The pinned Effect spawner otherwise waits forever in its own scope finalizer.
-    // Unreferencing makes that later finalizer non-blocking after our bounded kill attempt.
-    yield* child.unref.pipe(Effect.ignore);
-  }
+  yield* terminateChildProcess(child, {
+    gracefulTimeout: MANAGED_WHISPER_PROCESS_TERMINATE_GRACE,
+    forceTimeout: MANAGED_WHISPER_PROCESS_TERMINATE_GRACE,
+  });
 });
 
 const addManagedChildProcessFinalizer = (
@@ -675,6 +649,40 @@ export const awaitSidecarHealth = Effect.fn("managedWhisper.awaitHealth")(functi
   );
 });
 
+export function makeManagedWhisperSidecarCommand(input: {
+  readonly binaryPath: string;
+  readonly modelPath: string;
+  readonly port: number;
+  readonly threads: number;
+  readonly temporaryDirectory: string;
+}) {
+  return ChildProcess.make(
+    input.binaryPath,
+    [
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(input.port),
+      "--threads",
+      String(input.threads),
+      "--model",
+      input.modelPath,
+      "--tmp-dir",
+      input.temporaryDirectory,
+      "--no-gpu",
+    ],
+    {
+      // Keep terminal Ctrl+C scoped to the Salchi process. The sidecar is
+      // terminated by its owning Effect scope instead of receiving SIGINT
+      // concurrently and being mistaken for an unexpected crash.
+      detached: true,
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "inherit",
+    },
+  );
+}
+
 const startManagedSidecar = Effect.fn("managedWhisper.startSidecar")(function* (input: {
   readonly binaryPath: string;
   readonly modelPath: string;
@@ -691,28 +699,13 @@ const startManagedSidecar = Effect.fn("managedWhisper.startSidecar")(function* (
   const child = yield* Effect.uninterruptible(
     Effect.gen(function* () {
       const child = yield* spawner.spawn(
-        ChildProcess.make(
-          input.binaryPath,
-          [
-            "--host",
-            "127.0.0.1",
-            "--port",
-            String(port),
-            "--threads",
-            String(threads),
-            "--model",
-            input.modelPath,
-            "--tmp-dir",
-            temporaryDirectory,
-            "--no-gpu",
-          ],
-          {
-            detached: false,
-            stdin: "ignore",
-            stdout: "ignore",
-            stderr: "inherit",
-          },
-        ),
+        makeManagedWhisperSidecarCommand({
+          binaryPath: input.binaryPath,
+          modelPath: input.modelPath,
+          port,
+          threads,
+          temporaryDirectory,
+        }),
       );
       yield* addManagedChildProcessFinalizer(child);
       return child;

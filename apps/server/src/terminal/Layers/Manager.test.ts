@@ -83,6 +83,10 @@ class FakePtyProcess implements PtyProcess {
     };
   }
 
+  get exitListenerCount(): number {
+    return this.exitListeners.size;
+  }
+
   emitData(data: string): void {
     for (const listener of this.dataListeners) {
       listener(data);
@@ -905,6 +909,56 @@ it.layer(
 
       assert.equal(process.killSignals[0], "SIGTERM");
       expect(process.killSignals).toContain("SIGKILL");
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("finishes terminal shutdown without waiting for grace when TERM exits", () =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make("sequential");
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        processKillGraceMs: 10,
+      }).pipe(Effect.provideService(Scope.Scope, scope));
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      const closeFiber = yield* Scope.close(scope, Exit.void).pipe(Effect.forkScoped);
+      yield* TestClock.adjust("1 milli");
+      assert.equal(process.killSignals[0], "SIGTERM");
+      process.emitExit({ exitCode: 0, signal: 15 });
+      for (let index = 0; index < 10; index += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      yield* TestClock.adjust("9 millis");
+      yield* Fiber.join(closeFiber);
+      assert.deepEqual(process.killSignals, ["SIGTERM"]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("removes the terminal exit listener when kill escalation is interrupted", () =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make("sequential");
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        processKillGraceMs: 10,
+      }).pipe(Effect.provideService(Scope.Scope, scope));
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      yield* manager.close({ threadId: "thread-1" });
+      yield* Effect.yieldNow;
+      assert.deepEqual(process.killSignals, ["SIGTERM"]);
+      assert.equal(process.exitListenerCount, 1);
+
+      yield* Scope.close(scope, Exit.void);
+      assert.equal(process.exitListenerCount, 0);
+
+      process.emitExit({ exitCode: 0, signal: 15 });
+      yield* TestClock.adjust("10 millis");
+      assert.deepEqual(process.killSignals, ["SIGTERM"]);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
