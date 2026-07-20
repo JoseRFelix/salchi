@@ -11,6 +11,7 @@ import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
@@ -24,6 +25,9 @@ interface BufferedAnalyticsEvent {
   readonly properties?: Readonly<Record<string, unknown>>;
   readonly capturedAt: string;
 }
+
+const ANALYTICS_REQUEST_TIMEOUT = "5 seconds";
+export const ANALYTICS_SHUTDOWN_TIMEOUT = "1 second";
 
 const TelemetryEnvConfig = Config.all({
   posthogKey: Config.string("T3CODE_POSTHOG_KEY").pipe(
@@ -101,6 +105,7 @@ const makeAnalyticsService = Effect.gen(function* () {
       HttpClientRequest.bodyJson(payload),
       Effect.flatMap(httpClient.execute),
       Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.timeout(ANALYTICS_REQUEST_TIMEOUT),
     );
   });
 
@@ -147,7 +152,18 @@ const makeAnalyticsService = Effect.gen(function* () {
     disableYield: true,
   }).pipe(Effect.forkScoped);
 
-  yield* Effect.addFinalizer(() => flush);
+  yield* Effect.addFinalizer(() =>
+    flush.pipe(
+      Effect.interruptible,
+      Effect.timeoutOption(ANALYTICS_SHUTDOWN_TIMEOUT),
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.logWarning("Telemetry flush timed out during shutdown"),
+          onSome: () => Effect.void,
+        }),
+      ),
+    ),
+  );
 
   return {
     record,

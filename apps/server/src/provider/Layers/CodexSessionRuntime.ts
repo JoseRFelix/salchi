@@ -38,6 +38,7 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { terminateChildProcess } from "@t3tools/shared/childProcess";
 
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
@@ -921,7 +922,6 @@ export const makeCodexAppServerClient = (
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
           cwd: options.cwd,
           env,
-          forceKillAfter: CODEX_APP_SERVER_FORCE_KILL_AFTER,
           shell: spawnCommand.shell,
         }),
       )
@@ -935,6 +935,14 @@ export const makeCodexAppServerClient = (
             }),
         ),
       );
+
+    yield* Scope.addFinalizer(
+      clientScope,
+      terminateChildProcess(child, {
+        gracefulTimeout: CODEX_APP_SERVER_FORCE_KILL_AFTER,
+        forceTimeout: CODEX_APP_SERVER_FORCE_KILL_AFTER,
+      }).pipe(Effect.ignore),
+    );
 
     const clientContext = yield* CodexClient.layerChildProcess(child).pipe(
       Layer.build,

@@ -908,6 +908,31 @@ it.layer(
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
+  it.effect("finishes terminal shutdown without waiting for grace when TERM exits", () =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make("sequential");
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        processKillGraceMs: 10,
+      }).pipe(Effect.provideService(Scope.Scope, scope));
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      const closeFiber = yield* Scope.close(scope, Exit.void).pipe(Effect.forkScoped);
+      yield* TestClock.adjust("1 milli");
+      assert.equal(process.killSignals[0], "SIGTERM");
+      process.emitExit({ exitCode: 0, signal: 15 });
+      for (let index = 0; index < 10; index += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      yield* TestClock.adjust("9 millis");
+      yield* Fiber.join(closeFiber);
+      assert.deepEqual(process.killSignals, ["SIGTERM"]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
   it.effect("evicts oldest inactive terminal sessions when retention limit is exceeded", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter, logsDir, getEvents } = yield* createManager(5, {

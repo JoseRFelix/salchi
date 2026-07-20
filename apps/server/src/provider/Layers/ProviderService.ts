@@ -1213,7 +1213,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     yield* analytics.record("provider.sessions.stopped_all", {
       sessionCount: threadIds.length,
     });
-    yield* analytics.flush;
   });
 
   yield* Effect.addFinalizer(() =>

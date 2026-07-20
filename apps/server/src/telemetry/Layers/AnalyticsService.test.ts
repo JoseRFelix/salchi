@@ -2,8 +2,15 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
+import * as TestClock from "effect/testing/TestClock";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
@@ -37,6 +44,51 @@ interface RecordedBatchBody {
 }
 
 it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
+  it.effect("bounds shutdown when the telemetry endpoint stalls", () =>
+    Effect.gen(function* () {
+      const releaseRequest = yield* Deferred.make<void>();
+      let requestCount = 0;
+      const httpClient = HttpClient.make((request) =>
+        Effect.sync(() => {
+          requestCount += 1;
+        }).pipe(
+          Effect.andThen(Deferred.await(releaseRequest)),
+          Effect.as(HttpClientResponse.fromWeb(request, new Response(null, { status: 200 }))),
+        ),
+      );
+      const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
+        prefix: "t3-telemetry-shutdown-",
+      });
+      const configLayer = ConfigProvider.layer(
+        ConfigProvider.fromUnknown({
+          T3CODE_TELEMETRY_ENABLED: true,
+          T3CODE_POSTHOG_KEY: "phc_test_key",
+          T3CODE_POSTHOG_HOST: "http://telemetry.test",
+        }),
+      );
+      const telemetryLayer = AnalyticsServiceLayerLive.pipe(
+        Layer.provide(serverConfigLayer),
+        Layer.provide(configLayer),
+        Layer.provide(Layer.succeed(HttpClient.HttpClient, httpClient)),
+      );
+      const scope = yield* Scope.make();
+      const context = yield* Layer.buildWithScope(telemetryLayer, scope);
+      const analytics = yield* Effect.service(AnalyticsService).pipe(Effect.provide(context));
+
+      yield* analytics.record("test.shutdown.stalled");
+      const releaseFiber = yield* Effect.sleep("2 seconds").pipe(
+        Effect.andThen(Deferred.succeed(releaseRequest, undefined)),
+        Effect.forkChild,
+      );
+      const startedAt = yield* Clock.currentTimeMillis;
+      yield* Scope.close(scope, Exit.void);
+      const elapsedMs = (yield* Clock.currentTimeMillis) - startedAt;
+      yield* Fiber.interrupt(releaseFiber);
+      assert.equal(requestCount, 1);
+      assert.isBelow(elapsedMs, 1_500);
+    }).pipe(TestClock.withLive),
+  );
+
   it.effect("flush drains all buffered events across multiple batches", () =>
     Effect.gen(function* () {
       const capturedRequests: Array<RecordedBatchRequest> = [];

@@ -13,6 +13,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   awaitSidecarHealth,
+  makeManagedWhisperSidecarCommand,
   ManagedWhisperError,
   resolveManagedWhisperModelAsset,
   runTarExtraction,
@@ -21,6 +22,18 @@ import {
   withManagedFileLock,
   withManagedTemporaryDirectory,
 } from "./ManagedWhisper.ts";
+
+it("isolates the managed sidecar from terminal signals sent to the server process group", () => {
+  const command = makeManagedWhisperSidecarCommand({
+    binaryPath: "/tmp/whisper-server",
+    modelPath: "/tmp/model.bin",
+    port: 8080,
+    threads: 4,
+    temporaryDirectory: "/tmp/whisper",
+  });
+
+  expect(command.options.detached).toBe(true);
+});
 
 function makeProcessHandle(
   exitCode: ChildProcessSpawner.ChildProcessHandle["exitCode"],
