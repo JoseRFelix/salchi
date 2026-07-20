@@ -1,4 +1,4 @@
-import { scopeThreadRef } from "@t3tools/client-runtime";
+import { scopeThreadRef } from "@salchi/client-runtime";
 import {
   EMPTY_ORCHESTRATION_THREAD_DETAIL_PAGE_INFO,
   EnvironmentId,
@@ -9,7 +9,7 @@ import {
   type ServerProvider,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type EnvironmentState, useStore } from "../store";
 import { type ChatMessage, type Thread } from "../types";

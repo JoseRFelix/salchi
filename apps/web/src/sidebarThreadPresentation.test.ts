@@ -1,11 +1,11 @@
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
+import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
 import {
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
   type ModelSelection,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { DraftThreadState } from "./composerDraftStore";

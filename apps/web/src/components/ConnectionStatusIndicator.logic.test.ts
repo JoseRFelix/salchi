@@ -70,7 +70,7 @@ describe("deriveConnectionIndicator", () => {
     );
     expect(view.tone).toBe("syncing");
     expect(view.label).toBe("Reconnecting");
-    expect(view.detail).toBe("Reconnecting to T3 Server in 6s… Attempt 2/8");
+    expect(view.detail).toBe("Reconnecting to Salchi Server in 6s… Attempt 2/8");
   });
 
   it("is red without a retry affordance while the browser is offline", () => {
@@ -98,7 +98,7 @@ describe("deriveConnectionIndicator", () => {
     );
     expect(view.tone).toBe("offline");
     expect(view.label).toBe("Disconnected");
-    expect(view.detail).toBe("Couldn't reconnect to T3 Server. Retries exhausted.");
+    expect(view.detail).toBe("Couldn't reconnect to Salchi Server. Retries exhausted.");
   });
 
   it("surfaces the underlying error message on a failed initial connection", () => {
@@ -108,6 +108,6 @@ describe("deriveConnectionIndicator", () => {
     );
     expect(view.tone).toBe("offline");
     expect(view.label).toBe("Connection error");
-    expect(view.detail).toBe("Can't reach T3 Server: handshake rejected");
+    expect(view.detail).toBe("Can't reach Salchi Server: handshake rejected");
   });
 });

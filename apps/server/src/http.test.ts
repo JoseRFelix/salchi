@@ -40,8 +40,8 @@ describe("static cache control", () => {
 
   it("requires revalidation for unhashed static outputs", () => {
     expect(cacheControlForStaticPath("index.html")).toBe("no-cache");
-    expect(cacheControlForStaticPath("t3-service-worker.js")).toBe("no-cache");
-    expect(cacheControlForStaticPath("t3-push-service-worker.js")).toBe("no-cache");
+    expect(cacheControlForStaticPath("salchi-service-worker.js")).toBe("no-cache");
+    expect(cacheControlForStaticPath("salchi-push-service-worker.js")).toBe("no-cache");
     expect(cacheControlForStaticPath("manifest.webmanifest")).toBe("no-cache");
   });
 

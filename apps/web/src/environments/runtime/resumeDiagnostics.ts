@@ -14,7 +14,7 @@ interface ResumeDiagnosticPayload {
   readonly data?: ResumeDiagnosticData;
 }
 
-const RESUME_DIAGNOSTICS_STORAGE_KEY = "t3.resume-diagnostics";
+const RESUME_DIAGNOSTICS_STORAGE_KEY = "salchi.resume-diagnostics";
 const RESUME_DIAGNOSTICS_ENDPOINT = "/diagnostics/web-resume";
 const RESUME_DIAGNOSTICS_LIMIT = 500;
 const RESUME_DIAGNOSTICS_MAX_STORAGE_BYTES = 512 * 1024;

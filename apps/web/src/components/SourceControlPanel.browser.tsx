@@ -1,7 +1,7 @@
 import "../index.css";
 
-import { scopeThreadRef } from "@t3tools/client-runtime";
-import { ThreadId, type GitRunStackedActionResult, type VcsStatusResult } from "@t3tools/contracts";
+import { scopeThreadRef } from "@salchi/client-runtime";
+import { ThreadId, type GitRunStackedActionResult, type VcsStatusResult } from "@salchi/contracts";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";

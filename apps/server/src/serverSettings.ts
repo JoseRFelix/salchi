@@ -24,7 +24,7 @@ import {
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import * as Cache from "effect/Cache";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -45,12 +45,12 @@ import * as Cause from "effect/Cause";
 import * as Semaphore from "effect/Semaphore";
 import { writeFileStringAtomically } from "./atomicWrite.ts";
 import { ServerConfig } from "./config.ts";
-import { type DeepPartial, deepMerge } from "@t3tools/shared/Struct";
-import { fromJsonStringPretty, fromLenientJson } from "@t3tools/shared/schemaJson";
+import { type DeepPartial, deepMerge } from "@salchi/shared/Struct";
+import { fromJsonStringPretty, fromLenientJson } from "@salchi/shared/schemaJson";
 import {
   applyServerSettingsPatch,
   normalizeProviderInstanceConfigMapForPersistence,
-} from "@t3tools/shared/serverSettings";
+} from "@salchi/shared/serverSettings";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerSecretStore } from "./auth/Services/ServerSecretStore.ts";
 

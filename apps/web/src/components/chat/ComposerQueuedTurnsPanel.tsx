@@ -10,7 +10,7 @@ import {
   Trash2Icon,
 } from "lucide-react";
 
-import type { MessageId } from "@t3tools/contracts";
+import type { MessageId } from "@salchi/contracts";
 import type { QueuedTurn } from "../../types";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";

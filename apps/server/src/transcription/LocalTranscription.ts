@@ -3,7 +3,7 @@ import {
   type TranscriptionModel,
   type TranscriptionResult,
   type TranscriptionStatus,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -702,7 +702,7 @@ export const LocalTranscriptionLive = Layer.effect(
 
     if (config.whisperServerUrl && !inferenceUrl) {
       yield* Effect.logWarning(
-        "Ignoring T3CODE_WHISPER_SERVER_URL because it is not an HTTP(S) loopback URL.",
+        "Ignoring SALCHI_WHISPER_SERVER_URL because it is not an HTTP(S) loopback URL.",
       );
       return yield* makeLocalTranscription({
         initialStatus: {

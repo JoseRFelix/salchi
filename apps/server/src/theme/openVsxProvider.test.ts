@@ -15,7 +15,7 @@ import {
   setCachedThemeImportForTests,
   setCachedThemePreviewForTests,
 } from "./openVsxProvider.ts";
-import type { ThemeImportResult, ThemePreviewResult } from "@t3tools/contracts";
+import type { ThemeImportResult, ThemePreviewResult } from "@salchi/contracts";
 
 interface TestZipFile {
   readonly contents: string;

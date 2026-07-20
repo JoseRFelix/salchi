@@ -1,4 +1,4 @@
-import { scopeThreadRef } from "@t3tools/client-runtime";
+import { scopeThreadRef } from "@salchi/client-runtime";
 import {
   CheckpointRef,
   DEFAULT_MODEL,
@@ -17,7 +17,7 @@ import {
   type OrchestrationThreadDetailPageInfo,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationEvent,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {

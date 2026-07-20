@@ -2,7 +2,7 @@ import {
   EMPTY_ORCHESTRATION_THREAD_DETAIL_PAGE_INFO,
   type OrchestrationThreadDetailPageCursors,
   type OrchestrationThreadDetailSnapshot,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import { describe, expect, it } from "vitest";
 import { type Thread } from "../../types";
 import { deriveOlderThreadDetailPageIntegrity } from "./olderThreadDetailPageIntegrity";

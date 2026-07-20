@@ -1,5 +1,5 @@
-import { scopeThreadRef } from "@t3tools/client-runtime";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import { scopeThreadRef } from "@salchi/client-runtime";
+import type { ScopedThreadRef } from "@salchi/contracts";
 
 import { threadHasStarted } from "./threadLifecycle";
 import { DraftId, type DraftThreadState, useComposerDraftStore } from "./composerDraftStore";

@@ -1,4 +1,4 @@
-import { type OrchestrationCheckpointAttribution, type TurnId } from "@t3tools/contracts";
+import { type OrchestrationCheckpointAttribution, type TurnId } from "@salchi/contracts";
 import { memo, useCallback, useMemo, useState } from "react";
 import { type TurnDiffFileChange } from "../../types";
 import {

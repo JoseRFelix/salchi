@@ -3,7 +3,7 @@ import {
   type MessageId,
   type ThreadId,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import type { EnvironmentState } from "./store";
 import type {
   ChatMessage,

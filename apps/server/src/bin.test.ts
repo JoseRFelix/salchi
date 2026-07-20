@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as NetService from "@t3tools/shared/Net";
+import * as NetService from "@salchi/shared/Net";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -62,7 +62,7 @@ const makeCliTestServerConfig = (baseDir: string) =>
       otlpTracesUrl: undefined,
       otlpMetricsUrl: undefined,
       otlpExportIntervalMs: 10_000,
-      otlpServiceName: "t3-server",
+      otlpServiceName: "salchi-server",
       mode: "web",
       port: 0,
       host: "127.0.0.1",
@@ -177,7 +177,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
 
   it.effect("executes auth pairing subcommands and redacts secrets from list output", () =>
     Effect.gen(function* () {
-      const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-auth-pairing-test-"));
+      const baseDir = mkdtempSync(join(tmpdir(), "salchi-cli-auth-pairing-test-"));
 
       const createdOutput = yield* captureStdout(
         runCli(["auth", "pairing", "create", "--base-dir", baseDir, "--json"]),
@@ -207,7 +207,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
 
   it.effect("executes auth session subcommands and redacts secrets from list output", () =>
     Effect.gen(function* () {
-      const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-auth-session-test-"));
+      const baseDir = mkdtempSync(join(tmpdir(), "salchi-cli-auth-session-test-"));
 
       const issuedOutput = yield* captureStdout(
         runCli(["auth", "session", "issue", "--base-dir", baseDir, "--json"]),
@@ -264,8 +264,8 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
 
   it.effect("adds, renames, and removes projects offline through the orchestration engine", () =>
     Effect.gen(function* () {
-      const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-projects-offline-test-"));
-      const workspaceRoot = mkdtempSync(join(tmpdir(), "t3-cli-projects-workspace-"));
+      const baseDir = mkdtempSync(join(tmpdir(), "salchi-cli-projects-offline-test-"));
+      const workspaceRoot = mkdtempSync(join(tmpdir(), "salchi-cli-projects-workspace-"));
 
       yield* runCliWithRuntime([
         "project",
@@ -308,8 +308,8 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
 
   it.effect("routes project commands through a running server when runtime state is present", () =>
     Effect.gen(function* () {
-      const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-projects-live-test-"));
-      const workspaceRoot = mkdtempSync(join(tmpdir(), "t3-cli-projects-live-workspace-"));
+      const baseDir = mkdtempSync(join(tmpdir(), "salchi-cli-projects-live-test-"));
+      const workspaceRoot = mkdtempSync(join(tmpdir(), "salchi-cli-projects-live-workspace-"));
 
       yield* withLiveProjectCliServer(baseDir, () =>
         Effect.gen(function* () {
@@ -337,7 +337,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
   it.effect("rejects dev-url on project commands", () =>
     Effect.gen(function* () {
       const workspaceRoot = mkdtempSync(
-        join(tmpdir(), "t3-cli-projects-unknown-option-workspace-"),
+        join(tmpdir(), "salchi-cli-projects-unknown-option-workspace-"),
       );
       const error = yield* runCliWithRuntime([
         "project",

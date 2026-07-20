@@ -1,6 +1,6 @@
-import type { ServerPushSendResult, ServerPushSubscriptionRecord } from "@t3tools/contracts";
-import { ServerPushNotificationError, ServerPushNotificationPayload } from "@t3tools/contracts";
-import { resolveTailscaleHttpsBaseUrl } from "@t3tools/tailscale";
+import type { ServerPushSendResult, ServerPushSubscriptionRecord } from "@salchi/contracts";
+import { ServerPushNotificationError, ServerPushNotificationPayload } from "@salchi/contracts";
+import { resolveTailscaleHttpsBaseUrl } from "@salchi/tailscale";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -398,7 +398,7 @@ export const makeWebPushService = Effect.gen(function* () {
         title: "Salchi notifications are enabled",
         body: "You will receive alerts when an agent needs attention or finishes a turn.",
         url: "/",
-        tag: "t3code:test",
+        tag: "salchi:test",
       });
       if (result.sentCount === 0) {
         return yield* makePushError({

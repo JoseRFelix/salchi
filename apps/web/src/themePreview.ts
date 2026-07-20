@@ -4,7 +4,7 @@ import {
   THEME_PREVIEW_SWATCH_COLOR_KEYS,
   THEME_PREVIEW_TOKEN_SCOPES,
   scoreThemePreviewScopeMatch,
-} from "@t3tools/shared/themePreview";
+} from "@salchi/shared/themePreview";
 
 import { resolveThemeType, type ResolvedThemeType } from "./themeMapping";
 

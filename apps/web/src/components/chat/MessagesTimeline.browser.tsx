@@ -1,6 +1,6 @@
 import "../../index.css";
 
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId } from "@salchi/contracts";
 import { createRef } from "react";
 import type { LegendListRef } from "@legendapp/list/react";
 import type { VirtualizedListHandle } from "../virtualization/VirtualizedList";
@@ -434,7 +434,7 @@ describe("MessagesTimeline", () => {
       expect(assistantFileLink?.textContent).toContain("package.json");
       expect(assistantFileLink?.textContent).toContain("L25");
       expect(assistantFileLink?.getAttribute("href")).toBe("/repo/project/path/to/package.json:25");
-      expect(icon?.getAttribute("data-pierre-icon")).toBe("t3-file-icon-package-json");
+      expect(icon?.getAttribute("data-pierre-icon")).toBe("salchi-file-icon-package-json");
     } finally {
       await screen.unmount();
     }

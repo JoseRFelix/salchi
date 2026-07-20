@@ -10,7 +10,7 @@ import {
   TurnId,
   type OrchestrationProposedPlanId,
   type OrchestrationThreadDetailPageInfo,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {

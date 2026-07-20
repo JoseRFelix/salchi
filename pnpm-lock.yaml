@@ -88,19 +88,19 @@ importers:
       '@effect/platform-node':
         specifier: 4.0.0-beta.73
         version: 4.0.0-beta.73(effect@4.0.0-beta.73(patch_hash=a28d840fa97ffebabe628e5562837c537d83c40cfdad8049de73c38086f2fb01))(ioredis@5.11.1)
-      '@t3tools/client-runtime':
+      '@salchi/client-runtime':
         specifier: workspace:*
         version: link:../../packages/client-runtime
-      '@t3tools/contracts':
+      '@salchi/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@t3tools/shared':
+      '@salchi/shared':
         specifier: workspace:*
         version: link:../../packages/shared
-      '@t3tools/ssh':
+      '@salchi/ssh':
         specifier: workspace:*
         version: link:../../packages/ssh
-      '@t3tools/tailscale':
+      '@salchi/tailscale':
         specifier: workspace:*
         version: link:../../packages/tailscale
       effect:
@@ -184,16 +184,16 @@ importers:
       '@effect/vitest':
         specifier: 4.0.0-beta.73
         version: 4.0.0-beta.73(@voidzero-dev/vite-plus-test@0.1.24(@types/node@24.12.4)(@voidzero-dev/vite-plus-core@0.1.24(@types/node@24.12.4)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.48.0)(typescript@6.0.3)(yaml@2.9.0))(esbuild@0.27.7)(jiti@2.7.0)(terser@5.48.0)(typescript@6.0.3)(yaml@2.9.0))(effect@4.0.0-beta.73(patch_hash=a28d840fa97ffebabe628e5562837c537d83c40cfdad8049de73c38086f2fb01))
-      '@t3tools/contracts':
+      '@salchi/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@t3tools/shared':
+      '@salchi/shared':
         specifier: workspace:*
         version: link:../../packages/shared
-      '@t3tools/tailscale':
+      '@salchi/tailscale':
         specifier: workspace:*
         version: link:../../packages/tailscale
-      '@t3tools/web':
+      '@salchi/web':
         specifier: workspace:*
         version: link:../web
       '@types/bun':
@@ -262,13 +262,13 @@ importers:
       '@shikijs/themes':
         specifier: 4.2.0
         version: 4.2.0
-      '@t3tools/client-runtime':
+      '@salchi/client-runtime':
         specifier: workspace:*
         version: link:../../packages/client-runtime
-      '@t3tools/contracts':
+      '@salchi/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@t3tools/shared':
+      '@salchi/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       '@tanstack/react-pacer':
@@ -384,7 +384,7 @@ importers:
         specifier: ^7.4.1
         version: 7.4.1
 
-  oxlint-plugin-t3code:
+  oxlint-plugin-salchi:
     dependencies:
       '@effect/platform-node':
         specifier: 4.0.0-beta.73
@@ -411,10 +411,10 @@ importers:
 
   packages/client-runtime:
     dependencies:
-      '@t3tools/contracts':
+      '@salchi/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@t3tools/shared':
+      '@salchi/shared':
         specifier: workspace:*
         version: link:../shared
       effect:
@@ -474,7 +474,7 @@ importers:
 
   packages/effect-codex-app-server:
     dependencies:
-      '@t3tools/shared':
+      '@salchi/shared':
         specifier: workspace:*
         version: link:../shared
       effect:
@@ -502,7 +502,7 @@ importers:
 
   packages/shared:
     dependencies:
-      '@t3tools/contracts':
+      '@salchi/contracts':
         specifier: workspace:*
         version: link:../contracts
       effect:
@@ -530,10 +530,10 @@ importers:
 
   packages/ssh:
     dependencies:
-      '@t3tools/contracts':
+      '@salchi/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@t3tools/shared':
+      '@salchi/shared':
         specifier: workspace:*
         version: link:../shared
       effect:
@@ -561,7 +561,7 @@ importers:
       '@effect/platform-node':
         specifier: 4.0.0-beta.73
         version: 4.0.0-beta.73(effect@4.0.0-beta.73(patch_hash=a28d840fa97ffebabe628e5562837c537d83c40cfdad8049de73c38086f2fb01))(ioredis@5.11.1)
-      '@t3tools/shared':
+      '@salchi/shared':
         specifier: workspace:*
         version: link:../shared
       effect:
@@ -589,10 +589,10 @@ importers:
       '@effect/platform-node':
         specifier: 4.0.0-beta.73
         version: 4.0.0-beta.73(effect@4.0.0-beta.73(patch_hash=a28d840fa97ffebabe628e5562837c537d83c40cfdad8049de73c38086f2fb01))(ioredis@5.11.1)
-      '@t3tools/contracts':
+      '@salchi/contracts':
         specifier: workspace:*
         version: link:../packages/contracts
-      '@t3tools/shared':
+      '@salchi/shared':
         specifier: workspace:*
         version: link:../packages/shared
       effect:

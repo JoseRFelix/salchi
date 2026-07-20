@@ -5,7 +5,7 @@ import {
   TranscriptionStatus,
   type EnvironmentId,
   type TranscriptionModel,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import * as Schema from "effect/Schema";
 
 import { fetchEnvironmentHttp } from "./environments/runtime";

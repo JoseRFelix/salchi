@@ -1,6 +1,6 @@
 import { defineConfig } from "vite-plus";
 
-const shouldLaunchElectronAfterPack = process.env.T3CODE_DESKTOP_DEV === "1";
+const shouldLaunchElectronAfterPack = process.env.SALCHI_DESKTOP_DEV === "1";
 
 export default defineConfig({
   run: {
@@ -11,7 +11,7 @@ export default defineConfig({
         cache: false,
       },
       dev: {
-        command: "cross-env T3CODE_DESKTOP_DEV=1 vp pack --watch",
+        command: "cross-env SALCHI_DESKTOP_DEV=1 vp pack --watch",
         dependsOn: ["salchi#build"],
         cache: false,
       },
@@ -35,7 +35,7 @@ export default defineConfig({
       entry: ["src/main.ts"],
       clean: true,
       deps: {
-        alwaysBundle: (id) => id.startsWith("@t3tools/"),
+        alwaysBundle: (id) => id.startsWith("@salchi/"),
       },
       ...(shouldLaunchElectronAfterPack ? { onSuccess: "node scripts/dev-electron.mjs" } : {}),
     },

@@ -1,5 +1,5 @@
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
-import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@t3tools/contracts/settings";
+import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@salchi/contracts";
+import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@salchi/contracts/settings";
 import { describe, expect, it } from "vitest";
 import { deriveProviderInstanceEntries } from "./providerInstances";
 import {

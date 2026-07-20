@@ -1,4 +1,4 @@
-import type { ProviderRuntimeEvent } from "@t3tools/contracts";
+import type { ProviderRuntimeEvent } from "@salchi/contracts";
 
 import { parseTurnDiffFilesFromUnifiedDiff } from "./Diffs.ts";
 

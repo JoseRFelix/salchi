@@ -1,4 +1,4 @@
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId } from "@salchi/contracts";
 
 import { reconcileAfterNotificationClick } from "../environments/runtime/service";
 import { recordResumeDiagnostic } from "../environments/runtime/resumeDiagnostics";

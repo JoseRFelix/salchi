@@ -1,5 +1,5 @@
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
-import type { ScopedProjectRef, ScopedThreadRef } from "@t3tools/contracts";
+import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
+import type { ScopedProjectRef, ScopedThreadRef } from "@salchi/contracts";
 
 import type { DraftThreadState } from "./composerDraftStore";
 import type { LocalDispatchSnapshot } from "./components/ChatView.logic";

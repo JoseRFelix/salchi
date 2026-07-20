@@ -1,4 +1,4 @@
-import { DEFAULT_TRANSCRIPTION_MODEL, type TranscriptionModel } from "@t3tools/contracts";
+import { DEFAULT_TRANSCRIPTION_MODEL, type TranscriptionModel } from "@salchi/contracts";
 
 export interface TranscriptionModelMetadata {
   readonly id: TranscriptionModel;

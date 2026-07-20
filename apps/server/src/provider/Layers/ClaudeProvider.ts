@@ -7,7 +7,7 @@ import {
   type ServerProviderModel,
   type ServerProviderSlashCommand,
   type ServerProviderState,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -19,9 +19,9 @@ import {
   getModelSelectionStringOptionValue,
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
-} from "@t3tools/shared/model";
-import { compareSemverVersions } from "@t3tools/shared/semver";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
+} from "@salchi/shared/model";
+import { compareSemverVersions } from "@salchi/shared/semver";
+import { resolveSpawnCommand } from "@salchi/shared/shell";
 import {
   query as claudeQuery,
   type AccountInfo as ClaudeAccountInfo,

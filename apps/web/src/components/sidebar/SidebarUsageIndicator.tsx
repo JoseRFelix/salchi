@@ -29,7 +29,7 @@ import {
   type SidebarUsageWindow,
 } from "./SidebarUsageIndicator.logic";
 
-const SIDEBAR_USAGE_EXPANDED_STORAGE_KEY = "t3code:sidebar-usage-expanded:v1";
+const SIDEBAR_USAGE_EXPANDED_STORAGE_KEY = "salchi:sidebar-usage-expanded:v1";
 const SIDEBAR_USAGE_POLL_INTERVAL_MS = 30_000;
 
 function collectSidebarUsageThreads(

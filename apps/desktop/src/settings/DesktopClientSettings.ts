@@ -1,5 +1,5 @@
-import { ClientSettingsSchema, type ClientSettings } from "@t3tools/contracts";
-import { fromLenientJson } from "@t3tools/shared/schemaJson";
+import { ClientSettingsSchema, type ClientSettings } from "@salchi/contracts";
+import { fromLenientJson } from "@salchi/shared/schemaJson";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -49,7 +49,7 @@ export interface DesktopClientSettingsShape {
 export class DesktopClientSettings extends Context.Service<
   DesktopClientSettings,
   DesktopClientSettingsShape
->()("@t3tools/desktop/settings/DesktopClientSettings") {}
+>()("@salchi/desktop/settings/DesktopClientSettings") {}
 
 const readClientSettings = (
   fileSystem: FileSystem.FileSystem,

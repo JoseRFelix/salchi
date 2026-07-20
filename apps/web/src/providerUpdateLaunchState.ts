@@ -1,4 +1,4 @@
-import type { ProviderInstanceId, ServerProvider } from "@t3tools/contracts";
+import type { ProviderInstanceId, ServerProvider } from "@salchi/contracts";
 
 export const PROVIDER_UPDATE_LAUNCH_TIMEOUT_MS = 10_000;
 

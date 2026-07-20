@@ -22,20 +22,20 @@ import type {
   ProjectId,
   ScopedProjectRef,
   ScopedThreadRef,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import {
   isTurnStillRunningForPacking,
   resolveEffectiveMessageTurnId,
   settledTurnStateForSessionStatus,
-} from "@t3tools/client-runtime";
+} from "@salchi/client-runtime";
 import {
   EMPTY_ORCHESTRATION_THREAD_DETAIL_PAGE_INFO,
   isProviderDriverKind,
   ProviderDriverKind,
-} from "@t3tools/contracts";
-import type { ThreadId, TurnId } from "@t3tools/contracts";
+} from "@salchi/contracts";
+import type { ThreadId, TurnId } from "@salchi/contracts";
 import * as Schema from "effect/Schema";
-import { resolveModelSlugForProvider } from "@t3tools/shared/model";
+import { resolveModelSlugForProvider } from "@salchi/shared/model";
 import { create } from "zustand";
 import {
   type ChatMessage,

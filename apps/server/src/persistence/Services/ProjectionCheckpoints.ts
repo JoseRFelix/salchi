@@ -16,7 +16,7 @@ import {
   OrchestrationCheckpointStatus,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import * as Option from "effect/Option";
 import * as Context from "effect/Context";
 import * as Schema from "effect/Schema";

@@ -3,7 +3,7 @@ import {
   type OrchestrationThreadDetailPageInfo,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadDetailPageCursors,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import { type Thread } from "../../types";
 import { buildOlderThreadDetailPageCursors } from "../ChatView.logic";
 

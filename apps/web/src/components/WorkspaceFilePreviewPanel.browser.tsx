@@ -1,7 +1,7 @@
 import "../index.css";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { EnvironmentId, TurnId, type EnvironmentApi } from "@t3tools/contracts";
+import { EnvironmentId, TurnId, type EnvironmentApi } from "@salchi/contracts";
 import { page } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -660,8 +660,8 @@ describe("WorkspaceFilePreviewPanel", () => {
     resolveEnvironmentHttpUrlMock.mockClear();
     resetColorTheme();
     window.localStorage.removeItem(FILE_PREVIEW_WORD_WRAP_STORAGE_KEY);
-    window.localStorage.removeItem("t3code:colorTheme");
-    window.localStorage.removeItem("t3code:theme");
+    window.localStorage.removeItem("salchi:colorTheme");
+    window.localStorage.removeItem("salchi:theme");
     document.body.innerHTML = "";
     vi.restoreAllMocks();
   });
@@ -680,7 +680,7 @@ describe("WorkspaceFilePreviewPanel", () => {
   });
 
   it("uses the selected syntax theme in file preview cache keys and render options", async () => {
-    localStorage.setItem("t3code:theme", "dark");
+    localStorage.setItem("salchi:theme", "dark");
     setColorThemeSelection("default", "github-dark-default");
 
     const mounted = await renderPreview({});

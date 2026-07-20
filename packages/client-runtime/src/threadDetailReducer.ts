@@ -10,7 +10,7 @@ import type {
   OrchestrationThread,
   OrchestrationThreadActivity,
   TurnId,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import {
   isTurnStillRunningForPacking,
   resolveEffectiveMessageTurnId,

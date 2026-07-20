@@ -11,7 +11,7 @@ import {
   type UserInputQuestion,
   ThreadId,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 
 import type {
   ChatMessage,

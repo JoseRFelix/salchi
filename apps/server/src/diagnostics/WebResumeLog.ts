@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import path from "node:path";
 
-import { RotatingFileSink } from "@t3tools/shared/logging";
+import { RotatingFileSink } from "@salchi/shared/logging";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";

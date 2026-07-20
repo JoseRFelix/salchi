@@ -1,4 +1,4 @@
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@salchi/contracts";
 
 import type { EnvironmentState } from "./store";
 

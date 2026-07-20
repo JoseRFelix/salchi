@@ -1,7 +1,7 @@
 import "../index.css";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { EnvironmentId, type EnvironmentApi } from "@t3tools/contracts";
+import { EnvironmentId, type EnvironmentApi } from "@salchi/contracts";
 import { createElement } from "react";
 import { userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

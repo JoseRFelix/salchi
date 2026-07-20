@@ -1,7 +1,7 @@
 import { networkInterfaces } from "node:os";
 
-import { QrCode } from "@t3tools/shared/qrCode";
-import { resolveTailscaleHttpsBaseUrl } from "@t3tools/tailscale";
+import { QrCode } from "@salchi/shared/qrCode";
+import { resolveTailscaleHttpsBaseUrl } from "@salchi/tailscale";
 import * as Effect from "effect/Effect";
 import { HttpServer } from "effect/unstable/http";
 

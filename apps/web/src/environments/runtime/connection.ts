@@ -5,8 +5,8 @@ import type {
   ServerConfig,
   ServerLifecycleWelcomePayload,
   TerminalEvent,
-} from "@t3tools/contracts";
-import type { KnownEnvironment } from "@t3tools/client-runtime";
+} from "@salchi/contracts";
+import type { KnownEnvironment } from "@salchi/client-runtime";
 
 import type { WsRpcClient } from "~/rpc/wsRpcClient";
 import { recordResumeDiagnostic } from "./resumeDiagnostics";

@@ -1,9 +1,9 @@
 // Production CSS is part of the provider rail geometry under test.
 import "../../index.css";
 
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
-import { EnvironmentId } from "@t3tools/contracts";
-import { createModelCapabilities } from "@t3tools/shared/model";
+import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@salchi/contracts";
+import { EnvironmentId } from "@salchi/contracts";
+import { createModelCapabilities } from "@salchi/shared/model";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -19,7 +19,7 @@ import {
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_UNIFIED_SETTINGS,
   type UnifiedSettings,
-} from "@t3tools/contracts/settings";
+} from "@salchi/contracts/settings";
 import { CLIENT_SETTINGS_STORAGE_KEY } from "../../clientPersistenceStorage";
 import { __resetLocalApiForTests } from "../../localApi";
 
@@ -465,7 +465,7 @@ describe("ProviderModelPicker", () => {
   });
 
   it("resets a stale sidebar selection when the picker becomes locked", async () => {
-    localStorage.removeItem("t3code:client-settings:v1");
+    localStorage.removeItem("salchi:client-settings:v1");
 
     const host = document.createElement("div");
     document.body.append(host);
@@ -514,7 +514,7 @@ describe("ProviderModelPicker", () => {
     } finally {
       await screen.unmount();
       host.remove();
-      localStorage.removeItem("t3code:client-settings:v1");
+      localStorage.removeItem("salchi:client-settings:v1");
     }
   });
 
@@ -575,7 +575,7 @@ describe("ProviderModelPicker", () => {
 
   it("keeps the full provider rail in locked mode and only lists compatible models", async () => {
     localStorage.setItem(
-      "t3code:client-settings:v1",
+      "salchi:client-settings:v1",
       JSON.stringify({
         ...DEFAULT_CLIENT_SETTINGS,
         favorites: [
@@ -618,7 +618,7 @@ describe("ProviderModelPicker", () => {
         ]);
       });
     } finally {
-      localStorage.removeItem("t3code:client-settings:v1");
+      localStorage.removeItem("salchi:client-settings:v1");
       await mounted.cleanup();
     }
   });
@@ -1156,7 +1156,7 @@ describe("ProviderModelPicker", () => {
   });
 
   it("toggles favorite stars when clicked", async () => {
-    localStorage.removeItem("t3code:client-settings:v1");
+    localStorage.removeItem("salchi:client-settings:v1");
 
     const mounted = await mountPicker({
       activeInstanceId: CLAUDE_INSTANCE_ID,
@@ -1199,12 +1199,12 @@ describe("ProviderModelPicker", () => {
       });
     } finally {
       await mounted.cleanup();
-      localStorage.removeItem("t3code:client-settings:v1");
+      localStorage.removeItem("salchi:client-settings:v1");
     }
   });
 
   it("does not duplicate favorited models across favorites and all models sections", async () => {
-    localStorage.removeItem("t3code:client-settings:v1");
+    localStorage.removeItem("salchi:client-settings:v1");
 
     const mounted = await mountPicker({
       activeInstanceId: CLAUDE_INSTANCE_ID,
@@ -1233,13 +1233,13 @@ describe("ProviderModelPicker", () => {
       });
     } finally {
       await mounted.cleanup();
-      localStorage.removeItem("t3code:client-settings:v1");
+      localStorage.removeItem("salchi:client-settings:v1");
     }
   });
 
   it("shows favorited models first within the selected provider list", async () => {
     localStorage.setItem(
-      "t3code:client-settings:v1",
+      "salchi:client-settings:v1",
       JSON.stringify({
         ...DEFAULT_CLIENT_SETTINGS,
         favorites: [{ provider: "codex", model: "gpt-5.3-codex" }],
@@ -1260,13 +1260,13 @@ describe("ProviderModelPicker", () => {
       });
     } finally {
       await mounted.cleanup();
-      localStorage.removeItem("t3code:client-settings:v1");
+      localStorage.removeItem("salchi:client-settings:v1");
     }
   });
 
   it("filters favorites to compatible models in locked mode", async () => {
     localStorage.setItem(
-      "t3code:client-settings:v1",
+      "salchi:client-settings:v1",
       JSON.stringify({
         ...DEFAULT_CLIENT_SETTINGS,
         favorites: [
@@ -1292,7 +1292,7 @@ describe("ProviderModelPicker", () => {
       });
     } finally {
       await mounted.cleanup();
-      localStorage.removeItem("t3code:client-settings:v1");
+      localStorage.removeItem("salchi:client-settings:v1");
     }
   });
 
@@ -1349,7 +1349,7 @@ describe("ProviderModelPicker", () => {
   });
 
   it("allows favoriting models blocked by the provider", async () => {
-    localStorage.removeItem("t3code:client-settings:v1");
+    localStorage.removeItem("salchi:client-settings:v1");
     const disabledReason =
       "This provider does not allow switching models after a conversation has started. Start a new thread to use this model.";
     const mounted = await mountPicker({
@@ -1386,7 +1386,7 @@ describe("ProviderModelPicker", () => {
       expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
     } finally {
       await mounted.cleanup();
-      localStorage.removeItem("t3code:client-settings:v1");
+      localStorage.removeItem("salchi:client-settings:v1");
     }
   });
 

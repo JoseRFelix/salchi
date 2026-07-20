@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@salchi/contracts";
 import { FolderIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { resolveEnvironmentHttpUrl } from "../environments/runtime";

@@ -1,4 +1,4 @@
-import type { AdvertisedEndpoint, TerminalSessionSnapshot } from "@t3tools/contracts";
+import type { AdvertisedEndpoint, TerminalSessionSnapshot } from "@salchi/contracts";
 import type { TerminalEventEntry } from "./terminalStateStore";
 import { extractTerminalLinks } from "./terminal-links";
 

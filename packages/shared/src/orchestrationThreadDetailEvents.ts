@@ -1,4 +1,4 @@
-import type { OrchestrationEvent } from "@t3tools/contracts";
+import type { OrchestrationEvent } from "@salchi/contracts";
 
 export const ORCHESTRATION_THREAD_DETAIL_EVENT_TYPES = [
   "thread.message-sent",

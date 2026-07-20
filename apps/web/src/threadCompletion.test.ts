@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { EnvironmentId, ThreadId, type OrchestrationLatestTurn } from "@t3tools/contracts";
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
+import { EnvironmentId, ThreadId, type OrchestrationLatestTurn } from "@salchi/contracts";
+import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
 
 import {
   countUnseenCompletedThreads,

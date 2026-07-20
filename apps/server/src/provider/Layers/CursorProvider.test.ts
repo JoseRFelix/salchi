@@ -6,8 +6,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { describe, expect, it } from "vitest";
 import type * as EffectAcpSchema from "effect-acp/schema";
-import type { CursorSettings } from "@t3tools/contracts";
-import { createModelCapabilities } from "@t3tools/shared/model";
+import type { CursorSettings } from "@salchi/contracts";
+import { createModelCapabilities } from "@salchi/shared/model";
 
 import {
   buildCursorProviderSnapshot,
@@ -156,7 +156,7 @@ const makeExitLogFixture = Effect.fn("makeExitLogFixture")(function* (prefix: st
   return {
     exitLogPath,
     wrapperPath: yield* makeMockAgentWrapper({
-      T3_ACP_EXIT_LOG_PATH: exitLogPath,
+      SALCHI_ACP_EXIT_LOG_PATH: exitLogPath,
     }),
   };
 });
@@ -675,7 +675,7 @@ describe("checkCursorProviderStatus", () => {
         },
         {
           ...process.env,
-          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+          SALCHI_ACP_REQUEST_LOG_PATH: requestLogPath,
         },
       ).pipe(Effect.provide(NodeServices.layer)),
     );
@@ -704,8 +704,8 @@ describe("checkCursorProviderStatus", () => {
         },
         {
           ...process.env,
-          T3_ACP_FAIL_LIST_AVAILABLE_MODELS: "1",
-          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+          SALCHI_ACP_FAIL_LIST_AVAILABLE_MODELS: "1",
+          SALCHI_ACP_REQUEST_LOG_PATH: requestLogPath,
         },
       ).pipe(Effect.provide(NodeServices.layer)),
     );
@@ -763,7 +763,7 @@ describe("discoverCursorModelsViaAcp", () => {
 
   it("returns session model state when Cursor list_available_models fails", async () => {
     const wrapperPath = await runNode(
-      makeMockAgentWrapper({ T3_ACP_FAIL_LIST_AVAILABLE_MODELS: "1" }),
+      makeMockAgentWrapper({ SALCHI_ACP_FAIL_LIST_AVAILABLE_MODELS: "1" }),
     );
 
     const models = await Effect.runPromise(

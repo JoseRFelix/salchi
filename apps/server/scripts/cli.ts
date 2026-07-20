@@ -14,9 +14,9 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { BRAND_ASSET_PATHS, PUBLISH_ICON_OVERRIDES } from "../../../scripts/lib/brand-assets.ts";
 import { verifyClientBuildVersion } from "../../../scripts/lib/client-build-metadata.ts";
 import { resolveCatalogDependencies } from "../../../scripts/lib/resolve-catalog.ts";
-import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
-import { fromYaml } from "@t3tools/shared/schemaYaml";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { fromJsonStringPretty } from "@salchi/shared/schemaJson";
+import { fromYaml } from "@salchi/shared/schemaYaml";
+import { resolveSpawnCommand } from "@salchi/shared/shell";
 import serverPackageJson from "../package.json" with { type: "json" };
 
 interface PackageJson {
@@ -402,7 +402,7 @@ const publishCmd = Command.make(
 // ---------------------------------------------------------------------------
 
 const cli = Command.make("cli").pipe(
-  Command.withDescription("T3 server build & publish CLI."),
+  Command.withDescription("Salchi server build & publish CLI."),
   Command.withSubcommands([buildCmd, publishCmd]),
 );
 

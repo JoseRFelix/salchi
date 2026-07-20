@@ -1,4 +1,4 @@
-import type { RuntimeMode } from "@t3tools/contracts";
+import type { RuntimeMode } from "@salchi/contracts";
 import {
   LockIcon,
   LockOpenIcon,

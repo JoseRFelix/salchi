@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CURRENT_CLIENT_SETTINGS_VERSION,
   DEFAULT_CLIENT_SETTINGS,
-} from "@t3tools/contracts/settings";
+} from "@salchi/contracts/settings";
 
 import { migrateClientSettings } from "./clientSettingsMigration";
 

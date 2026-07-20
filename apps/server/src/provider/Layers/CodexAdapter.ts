@@ -27,7 +27,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
   ProviderSendTurnInput,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import * as Effect from "effect/Effect";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -46,12 +46,12 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import {
   makeKeyedCoalescingWorker,
   type KeyedCoalescingWorker,
-} from "@t3tools/shared/KeyedCoalescingWorker";
+} from "@salchi/shared/KeyedCoalescingWorker";
 
 import {
   getModelSelectionBooleanOptionValue,
   getModelSelectionStringOptionValue,
-} from "@t3tools/shared/model";
+} from "@salchi/shared/model";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 
 import {

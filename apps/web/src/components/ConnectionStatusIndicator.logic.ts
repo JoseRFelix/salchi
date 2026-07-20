@@ -15,7 +15,7 @@ export interface ConnectionIndicatorView {
   readonly detail: string;
 }
 
-const DEFAULT_CONNECTION_NAME = "T3 Server";
+const DEFAULT_CONNECTION_NAME = "Salchi Server";
 
 export function getConnectionDisplayName(status: WsConnectionStatus): string {
   return status.connectionLabel?.trim() || DEFAULT_CONNECTION_NAME;

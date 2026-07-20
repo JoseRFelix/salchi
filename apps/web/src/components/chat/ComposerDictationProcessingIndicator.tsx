@@ -1,4 +1,4 @@
-import type { TranscriptionStatus } from "@t3tools/contracts";
+import type { TranscriptionStatus } from "@salchi/contracts";
 
 import { resolveDictationInstallationState } from "../../dictation";
 

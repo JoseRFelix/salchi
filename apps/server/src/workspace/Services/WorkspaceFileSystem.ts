@@ -17,7 +17,7 @@ import type {
   ProjectWriteFileResult,
   ProjectDeleteEntryInput,
   ProjectDeleteEntryResult,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import { WorkspacePathOutsideRootError } from "./WorkspacePaths.ts";
 
 export class WorkspaceFileSystemError extends Schema.TaggedErrorClass<WorkspaceFileSystemError>()(

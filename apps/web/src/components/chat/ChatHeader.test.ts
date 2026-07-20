@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId } from "@salchi/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {

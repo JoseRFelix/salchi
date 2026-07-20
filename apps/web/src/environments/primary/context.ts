@@ -2,12 +2,12 @@ import {
   attachEnvironmentDescriptor,
   createKnownEnvironment,
   type KnownEnvironment,
-} from "@t3tools/client-runtime";
+} from "@salchi/client-runtime";
 import {
   ExecutionEnvironmentDescriptor as ExecutionEnvironmentDescriptorSchema,
   type EnvironmentId,
   type ExecutionEnvironmentDescriptor,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import * as Schema from "effect/Schema";
 import { create } from "zustand";
 
@@ -15,8 +15,8 @@ import { BootstrapHttpError, retryTransientBootstrap } from "./auth";
 
 import { readPrimaryEnvironmentTarget, resolvePrimaryEnvironmentHttpUrl } from "./target";
 
-const SERVER_ENVIRONMENT_DESCRIPTOR_PATH = "/.well-known/t3/environment";
-const PRIMARY_ENVIRONMENT_DESCRIPTOR_STORAGE_KEY = "t3code:primary-environment-descriptor:v1";
+const SERVER_ENVIRONMENT_DESCRIPTOR_PATH = "/.well-known/salchi/environment";
+const PRIMARY_ENVIRONMENT_DESCRIPTOR_STORAGE_KEY = "salchi:primary-environment-descriptor:v1";
 const decodeEnvironmentDescriptor = Schema.decodeUnknownSync(ExecutionEnvironmentDescriptorSchema);
 
 interface PrimaryEnvironmentBootstrapState {

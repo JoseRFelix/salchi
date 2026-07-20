@@ -4,7 +4,7 @@ import {
   EnvironmentId,
   MessageId,
   type EnvironmentId as EnvironmentIdType,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import { createRef, forwardRef, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import type { VirtualizedListHandle } from "../virtualization/VirtualizedList";

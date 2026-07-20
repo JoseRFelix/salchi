@@ -9,7 +9,7 @@ import {
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   type VcsStatusStreamEvent,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WsRpcProtocolClient } from "./protocol";

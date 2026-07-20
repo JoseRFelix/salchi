@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 
-import type { ChatAttachment } from "@t3tools/contracts";
+import type { ChatAttachment } from "@salchi/contracts";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as EffectAcpSchema from "effect-acp/schema";

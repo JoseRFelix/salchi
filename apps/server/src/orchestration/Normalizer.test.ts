@@ -5,7 +5,7 @@ import {
   PROVIDER_SEND_TURN_MAX_PDF_BYTES,
   ThreadId,
   type ClientOrchestrationCommand,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
@@ -20,7 +20,7 @@ import { WorkspacePathsLive } from "../workspace/Layers/WorkspacePaths.ts";
 import { normalizeDispatchCommand } from "./Normalizer.ts";
 
 const TestLayer = ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3-normalizer-attachments-",
+  prefix: "salchi-normalizer-attachments-",
 }).pipe(Layer.provideMerge(WorkspacePathsLive), Layer.provideMerge(NodeServices.layer));
 
 function assertFailureMessage(exit: Exit.Exit<unknown, unknown>, expectedMessage: string): void {

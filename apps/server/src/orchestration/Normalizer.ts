@@ -7,8 +7,8 @@ import {
   OrchestrationDispatchCommandError,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   PROVIDER_SEND_TURN_MAX_PDF_BYTES,
-} from "@t3tools/contracts";
-import { PDF_MIME_TYPE } from "@t3tools/shared/attachmentMime";
+} from "@salchi/contracts";
+import { PDF_MIME_TYPE } from "@salchi/shared/attachmentMime";
 
 import { createAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";

@@ -1,6 +1,6 @@
 import "../index.css";
 
-import { ThreadId, type VcsStatusResult } from "@t3tools/contracts";
+import { ThreadId, type VcsStatusResult } from "@salchi/contracts";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";

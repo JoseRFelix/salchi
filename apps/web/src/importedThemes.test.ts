@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const STORAGE_KEY = "t3code:colorTheme:imported";
+const STORAGE_KEY = "salchi:colorTheme:imported";
 
 function createStorage(): Storage {
   const store = new Map<string, string>();

@@ -1,5 +1,5 @@
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
-import type { EnvironmentId, OrchestrationLatestTurn, ThreadId } from "@t3tools/contracts";
+import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
+import type { EnvironmentId, OrchestrationLatestTurn, ThreadId } from "@salchi/contracts";
 
 export interface ThreadCompletionStatusInput {
   latestTurn: Pick<OrchestrationLatestTurn, "completedAt"> | null;

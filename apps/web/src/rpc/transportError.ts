@@ -1,7 +1,7 @@
 const TRANSPORT_ERROR_PATTERNS = [
   /\bSocketCloseError\b/i,
   /\bSocketOpenError\b/i,
-  /Unable to connect to the T3 server WebSocket\./i,
+  /Unable to connect to the Salchi server WebSocket\./i,
   /\bAll fibers interrupted without error\b/i,
   /\bping timeout\b/i,
 ] as const;

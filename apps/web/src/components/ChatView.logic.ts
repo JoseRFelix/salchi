@@ -12,8 +12,8 @@ import {
   type ThreadId,
   type TurnId,
   type UploadChatAttachment,
-} from "@t3tools/contracts";
-import { PDF_MIME_TYPE } from "@t3tools/shared/attachmentMime";
+} from "@salchi/contracts";
+import { PDF_MIME_TYPE } from "@salchi/shared/attachmentMime";
 import { type ChatAttachment, type ChatMessage, type SessionPhase, type Thread } from "../types";
 import { type ComposerAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
@@ -28,7 +28,7 @@ import { threadHasStarted } from "../threadLifecycle";
 
 export { threadHasStarted } from "../threadLifecycle";
 
-export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
+export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "salchi:last-invoked-script-by-project";
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);

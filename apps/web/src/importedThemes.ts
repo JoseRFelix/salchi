@@ -1,4 +1,4 @@
-import type { ImportedTheme as ContractImportedTheme, ThemeImportResult } from "@t3tools/contracts";
+import type { ImportedTheme as ContractImportedTheme, ThemeImportResult } from "@salchi/contracts";
 
 import type { ResolvedThemeType } from "./themeMapping";
 
@@ -30,7 +30,7 @@ export interface ImportedThemeReference {
   readonly version: string;
 }
 
-const STORAGE_KEY = "t3code:colorTheme:imported";
+const STORAGE_KEY = "salchi:colorTheme:imported";
 
 let listeners: Array<() => void> = [];
 let snapshot: ReadonlyArray<ImportedThemeRecord> | null = null;

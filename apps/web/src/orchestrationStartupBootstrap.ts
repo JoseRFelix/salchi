@@ -1,5 +1,5 @@
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
+import type { EnvironmentId, ThreadId } from "@salchi/contracts";
 
 import { getClientSettings } from "./hooks/useSettings";
 import { deriveLogicalProjectKeyFromSettings, derivePhysicalProjectKey } from "./logicalProject";

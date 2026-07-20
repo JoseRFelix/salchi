@@ -143,7 +143,7 @@ it.effect("decodes historical turn diff completed payloads as unattributed", () 
       threadId: "thread-1",
       turnId: "turn-1",
       checkpointTurnCount: 1,
-      checkpointRef: "refs/t3/checkpoints/thread-1/turn/1",
+      checkpointRef: "refs/salchi/checkpoints/thread-1/turn/1",
       status: "ready",
       files: [],
       assistantMessageId: null,
@@ -590,7 +590,7 @@ it.effect("accepts bootstrap metadata in thread.turn.start", () =>
         prepareWorktree: {
           projectCwd: "/tmp/workspace",
           baseBranch: "main",
-          branch: "t3code/example",
+          branch: "salchi/example",
         },
         runSetupScript: true,
       },

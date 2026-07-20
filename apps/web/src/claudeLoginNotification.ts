@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 
 import { getLocalStorageItem, setLocalStorageItem } from "./hooks/useLocalStorage";
 
-export const CLAUDE_LOGIN_NOTIFICATION_STORAGE_KEY = "t3code:claude-login-notification-shown:v1";
+export const CLAUDE_LOGIN_NOTIFICATION_STORAGE_KEY = "salchi:claude-login-notification-shown:v1";
 
 function persistClaudeLoginNotificationClaim(): true {
   try {

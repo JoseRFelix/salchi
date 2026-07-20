@@ -4,7 +4,7 @@ import {
   MIME_TYPE_BY_IMAGE_EXTENSION,
   SAFE_IMAGE_FILE_EXTENSIONS,
   imageExtensionFromFileName as sharedImageExtensionFromFileName,
-} from "@t3tools/shared/imageMime";
+} from "@salchi/shared/imageMime";
 
 export { IMAGE_EXTENSION_BY_MIME_TYPE, MIME_TYPE_BY_IMAGE_EXTENSION, SAFE_IMAGE_FILE_EXTENSIONS };
 

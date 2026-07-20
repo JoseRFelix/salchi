@@ -41,10 +41,10 @@ salchi serve --host 127.0.0.1 --port 3773 --tailscale-serve --tailscale-serve-po
 Equivalent environment variables:
 
 ```bash
-T3CODE_HOST=127.0.0.1
-T3CODE_PORT=3773
-T3CODE_TAILSCALE_SERVE=true
-T3CODE_TAILSCALE_SERVE_PORT=443
+SALCHI_HOST=127.0.0.1
+SALCHI_PORT=3773
+SALCHI_TAILSCALE_SERVE=true
+SALCHI_TAILSCALE_SERVE_PORT=443
 salchi serve
 ```
 

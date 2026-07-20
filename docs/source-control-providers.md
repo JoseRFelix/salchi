@@ -86,8 +86,8 @@ Bitbucket uses API tokens instead of a CLI tool:
 1. Create an API token in your Atlassian account with read/write access to pull requests and repositories
 2. Add these environment variables to the environment running Salchi:
    ```bash
-   export T3CODE_BITBUCKET_EMAIL="you@example.com"
-   export T3CODE_BITBUCKET_API_TOKEN="your-token"
+   export SALCHI_BITBUCKET_EMAIL="you@example.com"
+   export SALCHI_BITBUCKET_API_TOKEN="your-token"
    ```
 3. Restart Salchi and verify the connection in **Source Control settings**
 

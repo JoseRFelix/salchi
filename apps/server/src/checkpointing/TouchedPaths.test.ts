@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { EventId, ProviderDriverKind, ThreadId, TurnId } from "@t3tools/contracts";
-import type { ProviderRuntimeEvent } from "@t3tools/contracts";
+import { EventId, ProviderDriverKind, ThreadId, TurnId } from "@salchi/contracts";
+import type { ProviderRuntimeEvent } from "@salchi/contracts";
 
 import { extractTouchedPathsFromRuntimeEvent, normalizeTouchedPath } from "./TouchedPaths.ts";
 

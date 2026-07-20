@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { EventId, ProviderDriverKind, ThreadId } from "@t3tools/contracts";
+import { EventId, ProviderDriverKind, ThreadId } from "@salchi/contracts";
 import { describe, it } from "vitest";
 
 import {

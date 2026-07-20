@@ -6,8 +6,8 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
-} from "@t3tools/contracts";
-import { resolveTailscaleHttpsBaseUrl } from "@t3tools/tailscale";
+} from "@salchi/contracts";
+import { resolveTailscaleHttpsBaseUrl } from "@salchi/tailscale";
 import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";

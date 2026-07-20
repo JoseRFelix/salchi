@@ -20,8 +20,8 @@ import type {
   ThemePreviewTheme,
   ThemeSearchItem,
   ThemeSortBy,
-} from "@t3tools/contracts";
-import type { UnifiedSettings } from "@t3tools/contracts/settings";
+} from "@salchi/contracts";
+import type { UnifiedSettings } from "@salchi/contracts/settings";
 
 import { Button } from "../components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../components/ui/input-group";
@@ -1216,7 +1216,7 @@ const PREVIEW_THREAD_ROWS: ReadonlyArray<{
 }> = [
   { id: "t1", title: "Fix diff theme", active: true },
   { id: "t2", title: "Theme previews" },
-  { id: "t3", title: "Usage polling" },
+  { id: "salchi", title: "Usage polling" },
   { id: "t4", title: "Rename UI" },
 ];
 

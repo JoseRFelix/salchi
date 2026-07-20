@@ -3,7 +3,7 @@ import type {
   AuthSessionState,
   AuthWebSocketTicketResult,
   ExecutionEnvironmentDescriptor,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 
 class RemoteEnvironmentAuthHttpError extends Error {
   readonly status: number;
@@ -108,7 +108,7 @@ export async function bootstrapRemoteBearerSession(input: {
     body: new URLSearchParams({
       grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
       subject_token: input.credential,
-      subject_token_type: "urn:t3:params:oauth:token-type:environment-bootstrap",
+      subject_token_type: "urn:salchi:params:oauth:token-type:environment-bootstrap",
       requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
     }),
   });
@@ -130,7 +130,7 @@ export async function fetchRemoteEnvironmentDescriptor(input: {
 }): Promise<ExecutionEnvironmentDescriptor> {
   return fetchRemoteJson<ExecutionEnvironmentDescriptor>({
     httpBaseUrl: input.httpBaseUrl,
-    pathname: "/.well-known/t3/environment",
+    pathname: "/.well-known/salchi/environment",
   });
 }
 

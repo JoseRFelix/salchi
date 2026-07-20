@@ -23,9 +23,9 @@ import {
   DEFAULT_SERVER_SETTINGS,
   EMPTY_ORCHESTRATION_THREAD_DETAIL_PAGE_INFO,
   ServerConfig as ServerConfigSchema,
-} from "@t3tools/contracts";
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
-import { createModelCapabilities, createModelSelection } from "@t3tools/shared/model";
+} from "@salchi/contracts";
+import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
+import { createModelCapabilities, createModelSelection } from "@salchi/shared/model";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -104,7 +104,7 @@ import {
   writePersistedStartupThreadTarget,
 } from "../startupNavigation";
 
-import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
+import { DEFAULT_CLIENT_SETTINGS } from "@salchi/contracts/settings";
 import { isStandalonePwa } from "../env";
 
 const { repositoryGitStatusState, useGitStatusMock } = vi.hoisted(() => {
@@ -291,10 +291,10 @@ function createBaseServerConfig(): ServerConfig {
       policy: "loopback-browser",
       bootstrapMethods: ["one-time-token"],
       sessionMethods: ["browser-session-cookie", "bearer-access-token"],
-      sessionCookieName: "t3_session",
+      sessionCookieName: "salchi_session",
     },
     cwd: "/repo/project",
-    keybindingsConfigPath: "/repo/project/.t3code-keybindings.json",
+    keybindingsConfigPath: "/repo/project/.salchi-keybindings.json",
     keybindings: [],
     issues: [],
     providers: [
@@ -314,7 +314,7 @@ function createBaseServerConfig(): ServerConfig {
     ],
     availableEditors: [],
     observability: {
-      logsDirectoryPath: "/repo/project/.t3/logs",
+      logsDirectoryPath: "/repo/project/.salchi/logs",
       localTracingEnabled: true,
       otlpTracesEnabled: false,
       otlpMetricsEnabled: false,
@@ -1570,7 +1570,7 @@ function resolveWsRpc(body: NormalizedWsRpcRequestBody): unknown {
           detail: Option.none(),
           auth: {
             status: "authenticated",
-            account: Option.some("t3-oss"),
+            account: Option.some("salchi-oss"),
             host: Option.some("github.com"),
             detail: Option.none(),
           },
@@ -1585,7 +1585,7 @@ function resolveWsRpc(body: NormalizedWsRpcRequestBody): unknown {
           detail: Option.none(),
           auth: {
             status: "authenticated",
-            account: Option.some("t3-oss"),
+            account: Option.some("salchi-oss"),
             host: Option.some("gitlab.com"),
             detail: Option.none(),
           },
@@ -1600,7 +1600,7 @@ function resolveWsRpc(body: NormalizedWsRpcRequestBody): unknown {
           detail: Option.none(),
           auth: {
             status: "authenticated",
-            account: Option.some("t3-oss"),
+            account: Option.some("salchi-oss"),
             host: Option.some("bitbucket.org"),
             detail: Option.none(),
           },
@@ -1615,7 +1615,7 @@ function resolveWsRpc(body: NormalizedWsRpcRequestBody): unknown {
           detail: Option.none(),
           auth: {
             status: "authenticated",
-            account: Option.some("t3-oss"),
+            account: Option.some("salchi-oss"),
             host: Option.some("dev.azure.com"),
             detail: Option.none(),
           },
@@ -3075,10 +3075,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
             cwd: "/repo/project",
             worktreePath: null,
             env: {
-              T3CODE_PROJECT_ROOT: "/repo/project",
+              SALCHI_PROJECT_ROOT: "/repo/project",
             },
           });
-          expect(openRequest?.env?.T3CODE_WORKTREE_PATH).toBeUndefined();
+          expect(openRequest?.env?.SALCHI_WORKTREE_PATH).toBeUndefined();
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -3292,7 +3292,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("falls back to the first installed editor when the stored favorite is unavailable", async () => {
-    localStorage.setItem("t3code:last-editor", JSON.stringify("vscodium"));
+    localStorage.setItem("salchi:last-editor", JSON.stringify("vscodium"));
     setDraftThreadWithoutWorktree();
 
     const mounted = await mountChatView({
@@ -3392,7 +3392,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             threadId: THREAD_ID,
             cwd: "/repo/project",
             env: {
-              T3CODE_PROJECT_ROOT: "/repo/project",
+              SALCHI_PROJECT_ROOT: "/repo/project",
             },
           });
         },
@@ -3471,8 +3471,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
             threadId: THREAD_ID,
             cwd: "/repo/worktrees/feature-draft",
             env: {
-              T3CODE_PROJECT_ROOT: "/repo/project",
-              T3CODE_WORKTREE_PATH: "/repo/worktrees/feature-draft",
+              SALCHI_PROJECT_ROOT: "/repo/project",
+              SALCHI_WORKTREE_PATH: "/repo/worktrees/feature-draft",
             },
           });
         },
@@ -3521,7 +3521,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             pullRequest: {
               number: 1359,
               title: "Add thread archiving and settings navigation",
-              url: "https://github.com/pingdotgg/t3code/pull/1359",
+              url: "https://github.com/JoseRFelix/salchi/pull/1359",
               baseBranch: "main",
               headBranch: "archive-settings-overhaul",
               state: "open",
@@ -3533,7 +3533,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             pullRequest: {
               number: 1359,
               title: "Add thread archiving and settings navigation",
-              url: "https://github.com/pingdotgg/t3code/pull/1359",
+              url: "https://github.com/JoseRFelix/salchi/pull/1359",
               baseBranch: "main",
               headBranch: "archive-settings-overhaul",
               state: "open",
@@ -3644,7 +3644,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             pullRequest: {
               number: 1359,
               title: "Add thread archiving and settings navigation",
-              url: "https://github.com/pingdotgg/t3code/pull/1359",
+              url: "https://github.com/JoseRFelix/salchi/pull/1359",
               baseBranch: "main",
               headBranch: "archive-settings-overhaul",
               state: "open",
@@ -3656,7 +3656,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             pullRequest: {
               number: 1359,
               title: "Add thread archiving and settings navigation",
-              url: "https://github.com/pingdotgg/t3code/pull/1359",
+              url: "https://github.com/JoseRFelix/salchi/pull/1359",
               baseBranch: "main",
               headBranch: "archive-settings-overhaul",
               state: "open",
@@ -5680,7 +5680,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
   it("shows the confirm archive action after clicking the archive button", async () => {
     localStorage.setItem(
-      "t3code:client-settings:v1",
+      "salchi:client-settings:v1",
       JSON.stringify({
         ...DEFAULT_CLIENT_SETTINGS,
         confirmThreadArchive: true,
@@ -5709,7 +5709,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await expect.element(confirmButton).toBeInTheDocument();
       await expect.element(confirmButton).toBeVisible();
     } finally {
-      localStorage.removeItem("t3code:client-settings:v1");
+      localStorage.removeItem("salchi:client-settings:v1");
       await mounted.cleanup();
     }
   });
@@ -7341,7 +7341,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           thread.id === THREAD_ID
             ? Object.assign({}, thread, {
                 branch: "feature/existing",
-                worktreePath: "/repo/.t3/worktrees/existing",
+                worktreePath: "/repo/.salchi/worktrees/existing",
               })
             : thread,
         ),
@@ -8677,9 +8677,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
         if (body._tag === WS_METHODS.sourceControlLookupRepository) {
           return {
             provider: "github",
-            nameWithOwner: "t3-oss/t3-env",
-            url: "https://github.com/t3-oss/t3-env",
-            sshUrl: "git@github.com:t3-oss/t3-env.git",
+            nameWithOwner: "salchi-oss/salchi-env",
+            url: "https://github.com/salchi-oss/salchi-env",
+            sshUrl: "git@github.com:salchi-oss/salchi-env.git",
           };
         }
 
@@ -8713,7 +8713,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const repositoryInput = await waitForCommandPaletteInput(
         "Enter GitHub repository (owner/repo)",
       );
-      await page.getByPlaceholder("Enter GitHub repository (owner/repo)").fill("t3-oss/t3-env");
+      await page
+        .getByPlaceholder("Enter GitHub repository (owner/repo)")
+        .fill("salchi-oss/salchi-env");
       await dispatchInputKey(repositoryInput, { key: "Enter" });
 
       await vi.waitFor(
@@ -8723,8 +8725,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
           );
           expect(clonePathInput?.value).toBe("~/");
           expect(document.body.textContent).toContain("Repository");
-          expect(document.body.textContent).toContain("t3-oss/t3-env");
-          expect(document.body.textContent).toContain("https://github.com/t3-oss/t3-env");
+          expect(document.body.textContent).toContain("salchi-oss/salchi-env");
+          expect(document.body.textContent).toContain("https://github.com/salchi-oss/salchi-env");
           expect(document.body.textContent).toContain("Select where to clone");
           expect(document.body.textContent).toContain("Development");
           expect(document.body.textContent).toContain("Clone");
@@ -8746,7 +8748,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             (request) => request._tag === WS_METHODS.sourceControlCloneRepository,
           ) as { destinationPath?: string; remoteUrl?: string } | undefined;
           expect(cloneRequest).toMatchObject({
-            remoteUrl: "git@github.com:t3-oss/t3-env.git",
+            remoteUrl: "git@github.com:salchi-oss/salchi-env.git",
             destinationPath: "~/Development/t3env",
           });
         },

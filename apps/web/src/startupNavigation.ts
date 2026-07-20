@@ -1,10 +1,10 @@
-import { parseScopedThreadKey } from "@t3tools/client-runtime";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { parseScopedThreadKey } from "@salchi/client-runtime";
+import type { EnvironmentId, ThreadId } from "@salchi/contracts";
 
 import type { NotificationNavigationTarget } from "./push/notificationNavigation";
 
 export const STARTUP_BOOTSTRAP_THREAD_STALE_AFTER_MS = 8 * 60 * 60 * 1000;
-const STARTUP_THREAD_STORAGE_KEY = "t3code:startup-thread:v1";
+const STARTUP_THREAD_STORAGE_KEY = "salchi:startup-thread:v1";
 const STARTUP_THREAD_DOCUMENT_VERSION = 1;
 
 export interface StartupRestoreTarget {

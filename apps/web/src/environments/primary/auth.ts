@@ -8,7 +8,7 @@ import type {
   AuthRevokePairingLinkInput,
   AuthSessionId,
   AuthSessionState,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 
 import {
   getPairingTokenFromUrl,
@@ -61,7 +61,7 @@ let bootstrapPromise: Promise<ServerAuthGateState> | null = null;
 let resolvedAuthenticatedGateState: ServerAuthGateState | null = null;
 const AUTH_SESSION_ESTABLISH_TIMEOUT_MS = 2_000;
 const AUTH_SESSION_ESTABLISH_STEP_MS = 100;
-const PRIMARY_AUTH_LAST_KNOWN_STATUS_STORAGE_KEY = "t3code:primary-auth:last-known-status:v1";
+const PRIMARY_AUTH_LAST_KNOWN_STATUS_STORAGE_KEY = "salchi:primary-auth:last-known-status:v1";
 const PRIMARY_AUTH_LAST_KNOWN_AUTHENTICATED_VALUE = "authenticated";
 
 function authStatusStorage(): Storage | null {

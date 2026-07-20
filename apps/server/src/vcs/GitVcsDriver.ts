@@ -30,7 +30,7 @@ import {
   type VcsUnstageFilesInput,
   type VcsWorkingTreeDiffInput,
   type VcsWorkingTreeDiffResult,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import * as GitVcsDriverCore from "./GitVcsDriverCore.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
@@ -685,14 +685,14 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     captureCheckpoint: Effect.fn("GitVcsDriver.checkpoints.captureCheckpoint")(function* (input) {
       const operation = "GitVcsDriver.checkpoints.captureCheckpoint";
       const gitCommonDir = yield* resolveGitCommonDir(input.cwd);
-      const tempIndexPath = path.join(gitCommonDir, `t3-checkpoint-index-${randomUUID()}`);
+      const tempIndexPath = path.join(gitCommonDir, `salchi-checkpoint-index-${randomUUID()}`);
       const commitEnv: NodeJS.ProcessEnv = {
         ...process.env,
         GIT_INDEX_FILE: tempIndexPath,
         GIT_AUTHOR_NAME: "Salchi",
-        GIT_AUTHOR_EMAIL: "t3code@users.noreply.github.com",
+        GIT_AUTHOR_EMAIL: "salchi@users.noreply.github.com",
         GIT_COMMITTER_NAME: "Salchi",
-        GIT_COMMITTER_EMAIL: "t3code@users.noreply.github.com",
+        GIT_COMMITTER_EMAIL: "salchi@users.noreply.github.com",
       };
 
       const cleanupTempIndex = fileSystem
@@ -734,7 +734,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           });
         }
 
-        const message = `t3 checkpoint ref=${input.checkpointRef}`;
+        const message = `salchi checkpoint ref=${input.checkpointRef}`;
         const commitTreeResult = yield* execute({
           operation,
           cwd: input.cwd,
@@ -764,14 +764,14 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       function* (input) {
         const operation = "GitVcsDriver.checkpoints.captureOverlayCheckpoint";
         const gitCommonDir = yield* resolveGitCommonDir(input.cwd);
-        const tempIndexPath = path.join(gitCommonDir, `t3-checkpoint-index-${randomUUID()}`);
+        const tempIndexPath = path.join(gitCommonDir, `salchi-checkpoint-index-${randomUUID()}`);
         const commitEnv: NodeJS.ProcessEnv = {
           ...process.env,
           GIT_INDEX_FILE: tempIndexPath,
           GIT_AUTHOR_NAME: "Salchi",
-          GIT_AUTHOR_EMAIL: "t3code@users.noreply.github.com",
+          GIT_AUTHOR_EMAIL: "salchi@users.noreply.github.com",
           GIT_COMMITTER_NAME: "Salchi",
-          GIT_COMMITTER_EMAIL: "t3code@users.noreply.github.com",
+          GIT_COMMITTER_EMAIL: "salchi@users.noreply.github.com",
         };
 
         const cleanupTempIndex = fileSystem
@@ -825,7 +825,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             });
           }
 
-          const message = `t3 attributed checkpoint ref=${input.checkpointRef}`;
+          const message = `salchi attributed checkpoint ref=${input.checkpointRef}`;
           const commitTreeResult = yield* execute({
             operation,
             cwd: input.cwd,

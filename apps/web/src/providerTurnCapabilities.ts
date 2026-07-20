@@ -1,4 +1,4 @@
-import type { ProviderDriverKind } from "@t3tools/contracts";
+import type { ProviderDriverKind } from "@salchi/contracts";
 
 const ACTIVE_TURN_STEERING_DRIVERS = new Set(["codex", "claudeAgent", "opencode"]);
 

@@ -1,4 +1,4 @@
-import type { ProjectEntry } from "@t3tools/contracts";
+import type { ProjectEntry } from "@salchi/contracts";
 import { FileIcon, PanelRightCloseIcon } from "lucide-react";
 import { Suspense, lazy, useCallback, useMemo, useRef, useState } from "react";
 

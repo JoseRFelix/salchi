@@ -1,4 +1,4 @@
-import type { VcsStatusResult, VcsWorkingTreeFileStatus } from "@t3tools/contracts";
+import type { VcsStatusResult, VcsWorkingTreeFileStatus } from "@salchi/contracts";
 
 export type SourceControlFile = VcsStatusResult["workingTree"]["files"][number];
 

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ContextMenuItem, EnvironmentId, ProjectEntry } from "@t3tools/contracts";
+import type { ContextMenuItem, EnvironmentId, ProjectEntry } from "@salchi/contracts";
 import {
   ArrowLeftIcon,
   ChevronRightIcon,

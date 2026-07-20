@@ -1,4 +1,4 @@
-import type { DesktopSshPasswordPromptRequest } from "@t3tools/contracts";
+import type { DesktopSshPasswordPromptRequest } from "@salchi/contracts";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { Button } from "../ui/button";
@@ -159,7 +159,7 @@ export function SshPasswordPromptDialog() {
         <DialogHeader>
           <DialogTitle>SSH Password Required</DialogTitle>
           <DialogDescription>
-            T3 needs your SSH password to connect to{" "}
+            Salchi needs your SSH password to connect to{" "}
             {target ? <code>{target}</code> : "the remote host"}. The password is passed to the
             local SSH process for this connection attempt and is not saved by Salchi.
           </DialogDescription>
