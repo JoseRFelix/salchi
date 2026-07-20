@@ -2,15 +2,13 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
-import * as Clock from "effect/Clock";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient } from "effect/unstable/http";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
@@ -18,7 +16,7 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import { ServerConfig } from "../../config.ts";
 import { getTelemetryIdentifier } from "../Identify.ts";
 import { AnalyticsService } from "../Services/AnalyticsService.ts";
-import { AnalyticsServiceLayerLive } from "./AnalyticsService.ts";
+import { ANALYTICS_SHUTDOWN_TIMEOUT, AnalyticsServiceLayerLive } from "./AnalyticsService.ts";
 
 interface RecordedBatchRequest {
   readonly path: string;
@@ -46,15 +44,11 @@ interface RecordedBatchBody {
 it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
   it.effect("bounds shutdown when the telemetry endpoint stalls", () =>
     Effect.gen(function* () {
-      const releaseRequest = yield* Deferred.make<void>();
       let requestCount = 0;
-      const httpClient = HttpClient.make((request) =>
+      const httpClient = HttpClient.make(() =>
         Effect.sync(() => {
           requestCount += 1;
-        }).pipe(
-          Effect.andThen(Deferred.await(releaseRequest)),
-          Effect.as(HttpClientResponse.fromWeb(request, new Response(null, { status: 200 }))),
-        ),
+        }).pipe(Effect.andThen(Effect.never)),
       );
       const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
         prefix: "t3-telemetry-shutdown-",
@@ -76,17 +70,12 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
       const analytics = yield* Effect.service(AnalyticsService).pipe(Effect.provide(context));
 
       yield* analytics.record("test.shutdown.stalled");
-      const releaseFiber = yield* Effect.sleep("2 seconds").pipe(
-        Effect.andThen(Deferred.succeed(releaseRequest, undefined)),
-        Effect.forkChild,
-      );
-      const startedAt = yield* Clock.currentTimeMillis;
-      yield* Scope.close(scope, Exit.void);
-      const elapsedMs = (yield* Clock.currentTimeMillis) - startedAt;
-      yield* Fiber.interrupt(releaseFiber);
+      const closeFiber = yield* Scope.close(scope, Exit.void).pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
       assert.equal(requestCount, 1);
-      assert.isBelow(elapsedMs, 1_500);
-    }).pipe(TestClock.withLive),
+      yield* TestClock.adjust(ANALYTICS_SHUTDOWN_TIMEOUT);
+      yield* Fiber.join(closeFiber);
+    }).pipe(Effect.provide(TestClock.layer())),
   );
 
   it.effect("flush drains all buffered events across multiple batches", () =>
