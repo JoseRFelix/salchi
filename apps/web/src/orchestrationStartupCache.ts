@@ -1,10 +1,10 @@
-import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ThreadId } from "@salchi/contracts";
 
 import type { EnvironmentState } from "./store";
 import { clearPersistedStartupThreadTargetForEnvironment } from "./startupNavigation";
 import { hasEnvironmentThreadDetailContent } from "./threadDetailContent";
 
-const STORAGE_KEY = "t3code:orchestration-startup-cache:v1";
+const STORAGE_KEY = "salchi:orchestration-startup-cache:v1";
 const DOCUMENT_VERSION = 1;
 const MAX_CACHED_ENVIRONMENTS = 8;
 const MAX_CACHED_PROJECTS = 250;

@@ -17,11 +17,11 @@ describe("PierreEntryIcon", () => {
     try {
       const icons = [...screen.container.querySelectorAll<SVGSVGElement>("svg[data-pierre-icon]")];
       expect(icons.map((icon) => icon.getAttribute("data-pierre-icon"))).toEqual([
-        "t3-file-icon-package-json",
+        "salchi-file-icon-package-json",
         "file-tree-builtin-react",
       ]);
       expect(icons[1]?.getAttribute("data-icon-token")).toBe("react");
-      expect(document.querySelectorAll("#t3code-pierre-file-icon-sprite")).toHaveLength(1);
+      expect(document.querySelectorAll("#salchi-pierre-file-icon-sprite")).toHaveLength(1);
     } finally {
       await screen.unmount();
     }

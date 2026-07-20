@@ -2,9 +2,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { availableParallelism } from "node:os";
 
-import * as NetService from "@t3tools/shared/Net";
-import type { TranscriptionModel, TranscriptionStatus } from "@t3tools/contracts";
-import { findTranscriptionModel } from "@t3tools/shared/transcriptionModel";
+import * as NetService from "@salchi/shared/Net";
+import type { TranscriptionModel, TranscriptionStatus } from "@salchi/contracts";
+import { findTranscriptionModel } from "@salchi/shared/transcriptionModel";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -753,7 +753,7 @@ const provisionManagedWhisperInternal = Effect.fn("managedWhisper.provision")(fu
   const asset = resolveManagedWhisperRuntimeAsset(process.platform, process.arch);
   if (!asset) {
     return yield* managedWhisperError(
-      `Automatic dictation installation is not available for ${process.platform}/${process.arch}. Configure T3CODE_WHISPER_SERVER_URL instead.`,
+      `Automatic dictation installation is not available for ${process.platform}/${process.arch}. Configure SALCHI_WHISPER_SERVER_URL instead.`,
     );
   }
 

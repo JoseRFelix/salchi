@@ -5,7 +5,7 @@ import {
   ProviderInstanceId,
   type OrchestrationThreadActivity,
   TurnId,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 
 import {
   deriveSidebarUsageProviderRows,

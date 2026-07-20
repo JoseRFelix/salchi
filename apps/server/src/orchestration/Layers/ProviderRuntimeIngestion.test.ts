@@ -9,7 +9,7 @@ import {
   ProviderRuntimeEvent,
   ProviderSession,
   ProviderInstanceId,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -22,7 +22,7 @@ import {
   type ServerSettings,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -248,8 +248,8 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   async function createHarness(options?: { serverSettings?: Partial<ServerSettings> }) {
-    const workspaceRoot = makeTempDir("t3-provider-project-");
-    const serverBaseDir = makeTempDir("t3-provider-server-");
+    const workspaceRoot = makeTempDir("salchi-provider-project-");
+    const serverBaseDir = makeTempDir("salchi-provider-server-");
     const attachmentsDir = path.join(serverBaseDir, "userdata", "attachments");
     fs.mkdirSync(path.join(workspaceRoot, ".git"));
     const provider = createProviderServiceHarness();
@@ -1147,7 +1147,7 @@ describe("ProviderRuntimeIngestion", () => {
 
   it("materializes provider-created independent threads in another project folder", async () => {
     const harness = await createHarness();
-    const targetWorkspaceRoot = makeTempDir("t3-provider-target-project-");
+    const targetWorkspaceRoot = makeTempDir("salchi-provider-target-project-");
     fs.mkdirSync(path.join(targetWorkspaceRoot, ".git"));
     const createdThreadId = asThreadId("independent-thread-other-project");
     const eventId = asEventId("evt-provider-independent-thread-other-project");
@@ -1197,7 +1197,7 @@ describe("ProviderRuntimeIngestion", () => {
   it("drops provider-created independent threads that collide with unrelated root threads", async () => {
     const harness = await createHarness();
     const existingThreadId = asThreadId("existing-root-thread");
-    const targetWorkspaceRoot = makeTempDir("t3-provider-collision-target-project-");
+    const targetWorkspaceRoot = makeTempDir("salchi-provider-collision-target-project-");
     fs.mkdirSync(path.join(targetWorkspaceRoot, ".git"));
     await Effect.runPromise(
       harness.engine.dispatch({

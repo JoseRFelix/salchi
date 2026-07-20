@@ -23,7 +23,7 @@ import {
   type SDKUserMessage,
   type ModelUsage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { parseCliArgs } from "@t3tools/shared/cliArgs";
+import { parseCliArgs } from "@salchi/shared/cliArgs";
 import {
   ApprovalRequestId,
   type CanonicalItemType,
@@ -49,18 +49,18 @@ import {
   ThreadId,
   TurnId,
   type UserInputQuestion,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import {
   applyClaudePromptEffortPrefix,
   getModelSelectionBooleanOptionValue,
   getModelSelectionStringOptionValue,
   getProviderOptionDescriptors,
   resolvePromptInjectedEffort,
-} from "@t3tools/shared/model";
+} from "@salchi/shared/model";
 import {
   normalizeUsageWindowUsedPercent,
   readFirstPresentValue,
-} from "@t3tools/shared/rateLimitUsage";
+} from "@salchi/shared/rateLimitUsage";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -130,7 +130,7 @@ const CLAUDE_AUTH_FAILURE_MESSAGE =
 // is more aggressively rate-limited for non-Claude-Code user agents.
 const CLAUDE_OAUTH_USAGE_USER_AGENT = "claude-code/2.1.80";
 const CLAUDE_OAUTH_REFRESH_SKEW_MS = 60 * 1000;
-const CLAUDE_STATUSLINE_CAPTURE_ENV = "T3CODE_CLAUDE_STATUSLINE_CAPTURE_PATH";
+const CLAUDE_STATUSLINE_CAPTURE_ENV = "SALCHI_CLAUDE_STATUSLINE_CAPTURE_PATH";
 const CLAUDE_OAUTH_DEFAULT_SCOPES = [
   "user:profile",
   "user:inference",
@@ -4192,7 +4192,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         // `id` MUST equal the full question text — Claude SDK >= 2.1.121 looks
         // up answers by question text in `mapToolResultToToolResultBlockParam`,
         // so the key the UI uses to keep its draft answer must match the SDK's
-        // expected lookup key. See https://github.com/pingdotgg/t3code/issues/2388
+        // expected lookup key. See https://github.com/JoseRFelix/salchi/issues/2388
         const rawQuestions = Array.isArray(toolInput.questions) ? toolInput.questions : [];
         const questions: Array<UserInputQuestion> = rawQuestions.map(
           (q: Record<string, unknown>, idx: number) => ({

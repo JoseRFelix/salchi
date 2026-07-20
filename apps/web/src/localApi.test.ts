@@ -13,10 +13,10 @@ import {
   type ServerProvider,
   type TerminalEvent,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ContextMenuItem } from "@t3tools/contracts";
+import type { ContextMenuItem } from "@salchi/contracts";
 
 const showContextMenuFallbackMock =
   vi.fn<
@@ -289,7 +289,7 @@ const baseServerConfig: ServerConfig = {
     policy: "loopback-browser",
     bootstrapMethods: ["one-time-token"],
     sessionMethods: ["browser-session-cookie", "bearer-access-token"],
-    sessionCookieName: "t3_session",
+    sessionCookieName: "salchi_session",
   },
   cwd: "/tmp/workspace",
   keybindingsConfigPath: "/tmp/workspace/.config/keybindings.json",

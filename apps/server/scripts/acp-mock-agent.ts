@@ -11,35 +11,35 @@ import * as EffectAcpAgent from "effect-acp/agent";
 import * as AcpError from "effect-acp/errors";
 import type * as AcpSchema from "effect-acp/schema";
 
-const requestLogPath = process.env.T3_ACP_REQUEST_LOG_PATH;
-const exitLogPath = process.env.T3_ACP_EXIT_LOG_PATH;
-const emitToolCalls = process.env.T3_ACP_EMIT_TOOL_CALLS === "1";
+const requestLogPath = process.env.SALCHI_ACP_REQUEST_LOG_PATH;
+const exitLogPath = process.env.SALCHI_ACP_EXIT_LOG_PATH;
+const emitToolCalls = process.env.SALCHI_ACP_EMIT_TOOL_CALLS === "1";
 const emitInterleavedAssistantToolCalls =
-  process.env.T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
-const emitGenericToolPlaceholders = process.env.T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
-const emitAskQuestion = process.env.T3_ACP_EMIT_ASK_QUESTION === "1";
-const emitXAiAskUserQuestion = process.env.T3_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
-const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
-const failListAvailableModels = process.env.T3_ACP_FAIL_LIST_AVAILABLE_MODELS === "1";
+  process.env.SALCHI_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
+const emitGenericToolPlaceholders = process.env.SALCHI_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
+const emitAskQuestion = process.env.SALCHI_ACP_EMIT_ASK_QUESTION === "1";
+const emitXAiAskUserQuestion = process.env.SALCHI_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
+const failSetConfigOption = process.env.SALCHI_ACP_FAIL_SET_CONFIG_OPTION === "1";
+const failListAvailableModels = process.env.SALCHI_ACP_FAIL_LIST_AVAILABLE_MODELS === "1";
 const includeSessionModels =
-  failListAvailableModels || process.env.T3_ACP_INCLUDE_SESSION_MODELS === "1";
-const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
-const ignoreCancel = process.env.T3_ACP_IGNORE_CANCEL === "1";
-const hangPromptAfterPermission = process.env.T3_ACP_HANG_PROMPT_AFTER_PERMISSION === "1";
-const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
-const loadReplayHistory = process.env.T3_ACP_LOAD_REPLAY_HISTORY === "1";
-const failLoadSession = process.env.T3_ACP_FAIL_LOAD_SESSION === "1";
-const loadReplayModeId = process.env.T3_ACP_LOAD_REPLAY_MODE_ID;
-const requestedModelFixture = process.env.T3_ACP_MODEL_FIXTURE;
+  failListAvailableModels || process.env.SALCHI_ACP_INCLUDE_SESSION_MODELS === "1";
+const exitOnSetConfigOption = process.env.SALCHI_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
+const ignoreCancel = process.env.SALCHI_ACP_IGNORE_CANCEL === "1";
+const hangPromptAfterPermission = process.env.SALCHI_ACP_HANG_PROMPT_AFTER_PERMISSION === "1";
+const promptResponseText = process.env.SALCHI_ACP_PROMPT_RESPONSE_TEXT;
+const loadReplayHistory = process.env.SALCHI_ACP_LOAD_REPLAY_HISTORY === "1";
+const failLoadSession = process.env.SALCHI_ACP_FAIL_LOAD_SESSION === "1";
+const loadReplayModeId = process.env.SALCHI_ACP_LOAD_REPLAY_MODE_ID;
+const requestedModelFixture = process.env.SALCHI_ACP_MODEL_FIXTURE;
 const modelFixture =
   requestedModelFixture === "grok" || requestedModelFixture === "all"
     ? requestedModelFixture
     : "cursor";
-const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
+const promptDelayMs = Number(process.env.SALCHI_ACP_PROMPT_DELAY_MS ?? "0");
 const permissionOptionIds = {
-  allowOnce: process.env.T3_ACP_ALLOW_ONCE_OPTION_ID ?? "allow-once",
-  allowAlways: process.env.T3_ACP_ALLOW_ALWAYS_OPTION_ID ?? "allow-always",
-  rejectOnce: process.env.T3_ACP_REJECT_ONCE_OPTION_ID ?? "reject-once",
+  allowOnce: process.env.SALCHI_ACP_ALLOW_ONCE_OPTION_ID ?? "allow-once",
+  allowAlways: process.env.SALCHI_ACP_ALLOW_ALWAYS_OPTION_ID ?? "allow-always",
+  rejectOnce: process.env.SALCHI_ACP_REJECT_ONCE_OPTION_ID ?? "reject-once",
 };
 const sessionId = "mock-session-1";
 
@@ -650,7 +650,7 @@ const program = Effect.gen(function* () {
             status: "completed",
             rawOutput: {
               exitCode: 0,
-              stdout: '{ "name": "t3" }',
+              stdout: '{ "name": "salchi" }',
               stderr: "",
             },
           },

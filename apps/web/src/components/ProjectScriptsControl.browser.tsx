@@ -1,4 +1,4 @@
-import { type ProjectScript, type ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import { type ProjectScript, type ResolvedKeybindingsConfig } from "@salchi/contracts";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";

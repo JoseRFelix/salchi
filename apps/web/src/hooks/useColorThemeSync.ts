@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { ImportedColorThemeReference } from "@t3tools/contracts/settings";
+import type { ImportedColorThemeReference } from "@salchi/contracts/settings";
 
 import { ensureLocalApi } from "../localApi";
 import {

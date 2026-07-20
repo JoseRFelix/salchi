@@ -7,14 +7,14 @@ import {
   ProviderInstanceId,
   ProviderDriverKind,
   ThreadId,
-} from "@t3tools/contracts";
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
+} from "@salchi/contracts";
+import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
 import "../../index.css";
 
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
-import { createModelCapabilities, createModelSelection } from "@t3tools/shared/model";
+import { createModelCapabilities, createModelSelection } from "@salchi/shared/model";
 
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { isReasoningDescriptor, TraitsMenuContent } from "./TraitsPicker";

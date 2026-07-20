@@ -3,7 +3,7 @@ import {
   MIME_TYPE_BY_VIDEO_EXTENSION,
   SAFE_VIDEO_FILE_EXTENSIONS,
   videoExtensionFromFileName as sharedVideoExtensionFromFileName,
-} from "@t3tools/shared/videoMime";
+} from "@salchi/shared/videoMime";
 
 export { MIME_TYPE_BY_VIDEO_EXTENSION, SAFE_VIDEO_FILE_EXTENSIONS };
 

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { ThreadId, type ProviderInstanceId } from "@t3tools/contracts";
+import { ThreadId, type ProviderInstanceId } from "@salchi/contracts";
 
 export interface CodexThreadSpawnMetadata {
   readonly providerParentThreadId: string;

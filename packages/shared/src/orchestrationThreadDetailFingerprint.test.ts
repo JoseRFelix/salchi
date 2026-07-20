@@ -7,7 +7,7 @@ import {
   ThreadId,
   TurnId,
   type OrchestrationThreadDetailSnapshot,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 
 import {
   computeOrchestrationThreadDetailFingerprint,

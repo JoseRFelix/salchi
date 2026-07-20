@@ -1,6 +1,6 @@
 import "../../index.css";
 
-import { EnvironmentId, type ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import { EnvironmentId, type ResolvedKeybindingsConfig } from "@salchi/contracts";
 import { useState } from "react";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";

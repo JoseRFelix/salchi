@@ -7,7 +7,7 @@ import {
   Minimize2Icon,
   WrapTextIcon,
 } from "lucide-react";
-import type { EnvironmentId, ServerProviderSkill } from "@t3tools/contracts";
+import type { EnvironmentId, ServerProviderSkill } from "@salchi/contracts";
 import React, {
   Children,
   Suspense,

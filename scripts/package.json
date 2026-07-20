@@ -1,5 +1,5 @@
 {
-  "name": "@t3tools/scripts",
+  "name": "@salchi/scripts",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,8 +9,8 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.77",
     "@effect/platform-node": "catalog:",
-    "@t3tools/contracts": "workspace:*",
-    "@t3tools/shared": "workspace:*",
+    "@salchi/contracts": "workspace:*",
+    "@salchi/shared": "workspace:*",
     "effect": "catalog:",
     "yaml": "catalog:"
   },

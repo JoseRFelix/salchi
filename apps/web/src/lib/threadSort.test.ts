@@ -5,7 +5,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import type { Thread } from "../types";
 import { getLatestThreadForProject, getThreadActivityTimestamp, sortThreads } from "./threadSort";
 

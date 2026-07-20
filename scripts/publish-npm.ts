@@ -6,7 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import process from "node:process";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { resolveSpawnCommand } from "@salchi/shared/shell";
 
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
@@ -483,7 +483,7 @@ async function main() {
   await run("pnpm", ["fmt"]);
   await run("pnpm", ["lint"]);
   await run("pnpm", ["typecheck"]);
-  await run("pnpm", ["--filter", "@t3tools/web", "build"], {
+  await run("pnpm", ["--filter", "@salchi/web", "build"], {
     env: { APP_VERSION: targetVersion },
   });
   await run("node", ["apps/server/scripts/cli.ts", "build", "--verbose"]);

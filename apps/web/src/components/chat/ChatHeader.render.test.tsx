@@ -1,4 +1,4 @@
-import { EnvironmentId, type ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import { EnvironmentId, type ResolvedKeybindingsConfig } from "@salchi/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

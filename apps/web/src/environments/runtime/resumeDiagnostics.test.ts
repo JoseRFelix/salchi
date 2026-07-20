@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const RESUME_DIAGNOSTICS_STORAGE_KEY = "t3.resume-diagnostics";
+const RESUME_DIAGNOSTICS_STORAGE_KEY = "salchi.resume-diagnostics";
 
 function createMemoryStorage(): Storage {
   const values = new Map<string, string>();

@@ -1,5 +1,5 @@
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
+import { EnvironmentId, ThreadId } from "@salchi/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { NotificationNavigationTarget } from "./push/notificationNavigation";

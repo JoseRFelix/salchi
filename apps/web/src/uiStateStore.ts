@@ -1,15 +1,15 @@
 import { Debouncer } from "@tanstack/react-pacer";
-import { parseScopedThreadKey } from "@t3tools/client-runtime";
+import { parseScopedThreadKey } from "@salchi/client-runtime";
 import { create } from "zustand";
 
-export const PERSISTED_STATE_KEY = "t3code:ui-state:v1";
+export const PERSISTED_STATE_KEY = "salchi:ui-state:v1";
 const LEGACY_PERSISTED_STATE_KEYS = [
-  "t3code:renderer-state:v8",
-  "t3code:renderer-state:v7",
-  "t3code:renderer-state:v6",
-  "t3code:renderer-state:v5",
-  "t3code:renderer-state:v4",
-  "t3code:renderer-state:v3",
+  "salchi:renderer-state:v8",
+  "salchi:renderer-state:v7",
+  "salchi:renderer-state:v6",
+  "salchi:renderer-state:v5",
+  "salchi:renderer-state:v4",
+  "salchi:renderer-state:v3",
   "codething:renderer-state:v4",
   "codething:renderer-state:v3",
   "codething:renderer-state:v2",

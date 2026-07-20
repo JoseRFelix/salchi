@@ -43,7 +43,7 @@ const configuredHostedAppUrl = (() => {
   }
   return undefined;
 })();
-const sourcemapEnv = process.env.T3CODE_WEB_SOURCEMAP?.trim().toLowerCase();
+const sourcemapEnv = process.env.SALCHI_WEB_SOURCEMAP?.trim().toLowerCase();
 
 const buildSourcemap =
   sourcemapEnv === "1" || sourcemapEnv === "true"
@@ -123,7 +123,7 @@ const pushServiceWorkerVersion = createHash("sha256")
 
 function webBrandAssetsPlugin(): Plugin {
   return {
-    name: "t3code-web-brand-assets",
+    name: "salchi-web-brand-assets",
     configureServer(server) {
       const devOverrides = new Map(
         resolveWebIconOverrides("development", "").map((override) => [

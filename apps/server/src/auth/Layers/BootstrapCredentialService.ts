@@ -1,4 +1,4 @@
-import type { AuthPairingLink } from "@t3tools/contracts";
+import type { AuthPairingLink } from "@salchi/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";

@@ -1,4 +1,4 @@
-import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
+import { parsePersistedServerObservabilitySettings } from "@salchi/shared/serverSettings";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -24,7 +24,7 @@ export interface DesktopBackendConfigurationShape {
 export class DesktopBackendConfiguration extends Context.Service<
   DesktopBackendConfiguration,
   DesktopBackendConfigurationShape
->()("@t3tools/desktop/backend/DesktopBackendConfiguration") {}
+>()("@salchi/desktop/backend/DesktopBackendConfiguration") {}
 
 interface BackendObservabilitySettings {
   readonly otlpTracesUrl: Option.Option<string>;
@@ -37,16 +37,16 @@ const emptyBackendObservabilitySettings: BackendObservabilitySettings = {
 };
 
 const DESKTOP_BACKEND_ENV_NAMES = [
-  "T3CODE_PORT",
-  "T3CODE_MODE",
-  "T3CODE_NO_BROWSER",
-  "T3CODE_HOST",
-  "T3CODE_DESKTOP_WS_URL",
-  "T3CODE_DESKTOP_LAN_ACCESS",
-  "T3CODE_DESKTOP_LAN_HOST",
-  "T3CODE_DESKTOP_HTTPS_ENDPOINTS",
-  "T3CODE_TAILSCALE_SERVE",
-  "T3CODE_TAILSCALE_SERVE_PORT",
+  "SALCHI_PORT",
+  "SALCHI_MODE",
+  "SALCHI_NO_BROWSER",
+  "SALCHI_HOST",
+  "SALCHI_DESKTOP_WS_URL",
+  "SALCHI_DESKTOP_LAN_ACCESS",
+  "SALCHI_DESKTOP_LAN_HOST",
+  "SALCHI_DESKTOP_HTTPS_ENDPOINTS",
+  "SALCHI_TAILSCALE_SERVE",
+  "SALCHI_TAILSCALE_SERVE_PORT",
 ] as const;
 
 const backendChildEnvPatch = (): Record<string, string | undefined> =>
@@ -110,7 +110,7 @@ const resolveBackendStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         mode: "desktop",
         noBrowser: true,
         port: backendExposure.port,
-        t3Home: environment.baseDir,
+        salchiHome: environment.baseDir,
         host: backendExposure.bindHost,
         desktopBootstrapToken: input.bootstrapToken,
         tailscaleServeEnabled: backendExposure.tailscaleServeEnabled,

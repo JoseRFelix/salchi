@@ -1,4 +1,4 @@
-import { ThreadId, type TerminalEvent } from "@t3tools/contracts";
+import { ThreadId, type TerminalEvent } from "@salchi/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -396,7 +396,7 @@ describe("rewriteDevServerLinksForTailscale", () => {
   it("uses a Tailscale host as the reachability route hint when available", () => {
     expect(
       resolveDevServerReachabilityHostname({
-        browserHostname: "app.t3.codes",
+        browserHostname: "app.salchi.codes",
         environmentHttpBaseUrl: "https://macbook.tail1234.ts.net/",
         advertisedEndpoints: [
           {

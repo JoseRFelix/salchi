@@ -1,4 +1,4 @@
-import { AuthSessionId, NonNegativeInt, ServerPushSubscriptionRecord } from "@t3tools/contracts";
+import { AuthSessionId, NonNegativeInt, ServerPushSubscriptionRecord } from "@salchi/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";

@@ -1,4 +1,4 @@
-import type { ServerPushSendResult, WebPushSubscriptionJson } from "@t3tools/contracts";
+import type { ServerPushSendResult, WebPushSubscriptionJson } from "@salchi/contracts";
 
 import { isElectron } from "../env";
 import { ensureLocalApi } from "../localApi";

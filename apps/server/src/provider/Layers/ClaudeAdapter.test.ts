@@ -22,8 +22,8 @@ import {
   type RuntimeMode,
   ThreadId,
   ProviderInstanceId,
-} from "@t3tools/contracts";
-import { createModelSelection } from "@t3tools/shared/model";
+} from "@salchi/contracts";
+import { createModelSelection } from "@salchi/shared/model";
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -1009,7 +1009,7 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       const capturePath =
-        createInput?.options.env?.T3CODE_CLAUDE_STATUSLINE_CAPTURE_PATH ?? undefined;
+        createInput?.options.env?.SALCHI_CLAUDE_STATUSLINE_CAPTURE_PATH ?? undefined;
       assert.ok(capturePath);
       const settings = createInput?.options.settings as
         | { readonly statusLine?: { readonly command?: unknown } }

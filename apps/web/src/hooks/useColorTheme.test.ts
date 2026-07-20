@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const SELECTION_STORAGE_KEY = "t3code:colorTheme";
+const SELECTION_STORAGE_KEY = "salchi:colorTheme";
 
 function createStyleStub(): CSSStyleDeclaration {
   return {

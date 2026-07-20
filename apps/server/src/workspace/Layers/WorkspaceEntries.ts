@@ -16,14 +16,14 @@ import {
   type ProjectEntry,
   type ProjectListDirectoryEntriesInput,
   type ProjectListDirectoryEntriesResult,
-} from "@t3tools/contracts";
-import { isExplicitRelativePath, isWindowsAbsolutePath } from "@t3tools/shared/path";
+} from "@salchi/contracts";
+import { isExplicitRelativePath, isWindowsAbsolutePath } from "@salchi/shared/path";
 import {
   insertRankedSearchResult,
   normalizeSearchQuery,
   scoreQueryMatch,
   type RankedSearchResult,
-} from "@t3tools/shared/searchRanking";
+} from "@salchi/shared/searchRanking";
 
 import { VcsDriverRegistry } from "../../vcs/VcsDriverRegistry.ts";
 import {

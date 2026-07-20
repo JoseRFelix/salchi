@@ -7,7 +7,7 @@ import {
   RuntimeItemId,
   ThreadId,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import { z } from "zod/v4";
 
 export const INDEPENDENT_THREAD_TOOL_NAMESPACE = "salchi";

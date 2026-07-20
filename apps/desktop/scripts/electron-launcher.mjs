@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const APP_DISPLAY_NAME = isDevelopment ? "Salchi (Dev)" : "Salchi (Alpha)";
-const APP_BUNDLE_ID = isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code";
+const APP_BUNDLE_ID = isDevelopment ? "com.joserfelix.salchi.dev" : "com.joserfelix.salchi";
 const LAUNCHER_VERSION = 3;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

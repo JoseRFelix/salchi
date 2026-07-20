@@ -1,4 +1,4 @@
-import type { EnvironmentId, ThreadId, TurnId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId, TurnId } from "@salchi/contracts";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 

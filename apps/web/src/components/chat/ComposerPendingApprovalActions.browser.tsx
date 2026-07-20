@@ -1,6 +1,6 @@
 import "../../index.css";
 
-import { ApprovalRequestId } from "@t3tools/contracts";
+import { ApprovalRequestId } from "@salchi/contracts";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";

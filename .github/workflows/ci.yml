@@ -31,7 +31,7 @@ jobs:
             ${{ runner.os }}-playwright-
 
       - name: Ensure Electron runtime is installed
-        run: vp run --filter @t3tools/desktop ensure:electron
+        run: vp run --filter @salchi/desktop ensure:electron
 
       - name: Format
         run: vp fmt --check
@@ -46,10 +46,10 @@ jobs:
         run: vp run test
 
       - name: Install browser test runtime
-        run: vp run --filter @t3tools/web test:browser:install
+        run: vp run --filter @salchi/web test:browser:install
 
       - name: Browser test
-        run: vp run --filter @t3tools/web test:browser
+        run: vp run --filter @salchi/web test:browser
 
       - name: Build desktop pipeline
         run: vp run build:desktop

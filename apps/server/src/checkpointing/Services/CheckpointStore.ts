@@ -14,7 +14,7 @@ import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 
 import type { CheckpointStoreError } from "../Errors.ts";
-import { CheckpointRef } from "@t3tools/contracts";
+import { CheckpointRef } from "@salchi/contracts";
 
 export interface CaptureCheckpointInput {
   readonly cwd: string;

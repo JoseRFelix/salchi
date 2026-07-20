@@ -14,7 +14,7 @@ import {
   ThreadId,
   TurnId,
   type OrchestrationShellSnapshot,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockSubscribeThread = vi.fn();
@@ -858,7 +858,7 @@ describe("retainThreadDetailSubscription", () => {
   it("populates sidebar summaries for recovered new-thread domain events", async () => {
     const { startEnvironmentConnectionService, resetEnvironmentServiceForTests } =
       await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectSidebarThreadsAcrossEnvironments, selectThreadByRef, useStore } =
       await import("~/store");
 
@@ -922,7 +922,7 @@ describe("retainThreadDetailSubscription", () => {
       startEnvironmentConnectionService,
       resetEnvironmentServiceForTests,
     } = await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectSidebarThreadSummaryByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());
@@ -1107,7 +1107,7 @@ describe("retainThreadDetailSubscription", () => {
   it("resyncs known threads that were not touched by a completed gap replay", async () => {
     const { startEnvironmentConnectionService, resetEnvironmentServiceForTests } =
       await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectEnvironmentState, selectSidebarThreadSummaryByRef, useStore } =
       await import("~/store");
 
@@ -1251,7 +1251,7 @@ describe("retainThreadDetailSubscription", () => {
       startEnvironmentConnectionService,
       resetEnvironmentServiceForTests,
     } = await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectThreadByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());
@@ -1305,7 +1305,7 @@ describe("retainThreadDetailSubscription", () => {
       startEnvironmentConnectionService,
       resetEnvironmentServiceForTests,
     } = await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectThreadByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());
@@ -1371,7 +1371,7 @@ describe("retainThreadDetailSubscription", () => {
       startEnvironmentConnectionService,
       resetEnvironmentServiceForTests,
     } = await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectThreadByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());
@@ -1438,7 +1438,7 @@ describe("retainThreadDetailSubscription", () => {
       startEnvironmentConnectionService,
       resetEnvironmentServiceForTests,
     } = await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectEnvironmentState, selectThreadByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());
@@ -1503,7 +1503,7 @@ describe("retainThreadDetailSubscription", () => {
       startEnvironmentConnectionService,
       resetEnvironmentServiceForTests,
     } = await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectThreadByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());
@@ -1789,7 +1789,7 @@ describe("retainThreadDetailSubscription", () => {
       startEnvironmentConnectionService,
       resetEnvironmentServiceForTests,
     } = await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectThreadByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());
@@ -2133,7 +2133,7 @@ describe("retainThreadDetailSubscription", () => {
       resetEnvironmentServiceForTests,
       startEnvironmentConnectionService,
     } = await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectSidebarThreadSummaryByRef, selectThreadByRef, useStore } =
       await import("~/store");
 
@@ -2232,7 +2232,7 @@ describe("retainThreadDetailSubscription", () => {
       resetEnvironmentServiceForTests,
       startEnvironmentConnectionService,
     } = await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectThreadByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());
@@ -2303,7 +2303,7 @@ describe("retainThreadDetailSubscription", () => {
       resetEnvironmentServiceForTests,
       startEnvironmentConnectionService,
     } = await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectThreadByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());
@@ -3441,7 +3441,7 @@ describe("retainThreadDetailSubscription", () => {
       resetEnvironmentServiceForTests,
       startEnvironmentConnectionService,
     } = await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectThreadByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());
@@ -3525,7 +3525,7 @@ describe("retainThreadDetailSubscription", () => {
       resetEnvironmentServiceForTests,
       startEnvironmentConnectionService,
     } = await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectThreadByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());
@@ -3615,7 +3615,7 @@ describe("retainThreadDetailSubscription", () => {
       resetEnvironmentServiceForTests,
       startEnvironmentConnectionService,
     } = await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectThreadByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());
@@ -3787,7 +3787,7 @@ describe("retainThreadDetailSubscription", () => {
       resetEnvironmentServiceForTests,
       startEnvironmentConnectionService,
     } = await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectThreadByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());
@@ -4199,7 +4199,7 @@ describe("retainThreadDetailSubscription", () => {
 
     const { resetEnvironmentServiceForTests, startEnvironmentConnectionService } =
       await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectThreadByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());
@@ -4298,7 +4298,7 @@ describe("retainThreadDetailSubscription", () => {
       resetEnvironmentServiceForTests,
       startEnvironmentConnectionService,
     } = await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectThreadByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());
@@ -4449,7 +4449,7 @@ describe("retainThreadDetailSubscription", () => {
       resetEnvironmentServiceForTests,
       startEnvironmentConnectionService,
     } = await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectThreadByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());
@@ -4997,7 +4997,7 @@ describe("retainThreadDetailSubscription", () => {
 
     const { resetEnvironmentServiceForTests, startEnvironmentConnectionService } =
       await import("./service");
-    const { scopeThreadRef } = await import("@t3tools/client-runtime");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
     const { selectSidebarThreadSummaryByRef, useStore } = await import("~/store");
 
     const stop = startEnvironmentConnectionService(new QueryClient());

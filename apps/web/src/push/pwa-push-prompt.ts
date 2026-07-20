@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 
 import { getLocalStorageItem, setLocalStorageItem } from "../hooks/useLocalStorage";
 
-export const PWA_PUSH_PROMPT_HANDLED_STORAGE_KEY = "t3code:pwa-push-prompt-handled:v1";
+export const PWA_PUSH_PROMPT_HANDLED_STORAGE_KEY = "salchi:pwa-push-prompt-handled:v1";
 
 const PwaPushPromptHandledSchema = Schema.Boolean;
 

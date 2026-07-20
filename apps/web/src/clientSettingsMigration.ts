@@ -1,4 +1,4 @@
-import { CURRENT_CLIENT_SETTINGS_VERSION, type ClientSettings } from "@t3tools/contracts/settings";
+import { CURRENT_CLIENT_SETTINGS_VERSION, type ClientSettings } from "@salchi/contracts/settings";
 
 export function migrateClientSettings(settings: ClientSettings): ClientSettings {
   if (settings.clientSettingsVersion >= CURRENT_CLIENT_SETTINGS_VERSION) {

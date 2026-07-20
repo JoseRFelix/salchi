@@ -3,7 +3,7 @@ import type {
   OrchestrationThreadDetailFingerprint,
   OrchestrationThreadDetailPageInfo,
   OrchestrationThreadDetailSnapshot,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 
 const FINGERPRINT_VERSION = 1 as const;
 const TEXT_HASH_SEED = 0x811c9dc5;

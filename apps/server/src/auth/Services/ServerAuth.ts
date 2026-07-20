@@ -15,7 +15,7 @@ import type {
   ServerAuthSessionMethod,
   AuthWebSocketTicketResult,
   AuthWebSocketTokenResult,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";

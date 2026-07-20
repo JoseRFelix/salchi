@@ -7,7 +7,7 @@ import {
   type VcsError,
   type VcsInitInput,
   VcsUnsupportedOperationError,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import * as VcsDriverRegistry from "./VcsDriverRegistry.ts";
 
 export interface VcsProvisioningServiceShape {

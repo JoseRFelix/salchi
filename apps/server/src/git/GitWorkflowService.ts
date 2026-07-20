@@ -33,7 +33,7 @@ import {
   type VcsUnstageFilesInput,
   type VcsWorkingTreeDiffInput,
   type VcsWorkingTreeDiffResult,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 
 import { GitManager, type GitRunStackedActionOptions } from "./GitManager.ts";
 import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";

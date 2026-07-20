@@ -1,4 +1,4 @@
-import type { TurnId } from "@t3tools/contracts";
+import type { TurnId } from "@salchi/contracts";
 import { useLayoutEffect } from "react";
 
 import type { DiffRouteSource } from "../diffRouteSearch";

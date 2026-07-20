@@ -10,8 +10,8 @@ import {
   ORCHESTRATION_WS_METHODS,
   type ServerSettingsPatch,
   WS_METHODS,
-} from "@t3tools/contracts";
-import { applyGitStatusStreamEvent } from "@t3tools/shared/git";
+} from "@salchi/contracts";
+import { applyGitStatusStreamEvent } from "@salchi/shared/git";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 

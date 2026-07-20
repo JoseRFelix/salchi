@@ -2,7 +2,7 @@
 
 Salchi reads keybindings from:
 
-- `~/.t3/keybindings.json`
+- `~/.salchi/keybindings.json`
 
 The file must be a JSON array of rules:
 

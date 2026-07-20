@@ -10,8 +10,8 @@ import {
   AuthRevokePairingLinkInput,
   type AuthWebSocketTicketResult,
   type AuthWebSocketTokenResult,
-} from "@t3tools/contracts";
-import { parseAllowedOAuthScope } from "@t3tools/shared/oauthScope";
+} from "@salchi/contracts";
+import { parseAllowedOAuthScope } from "@salchi/shared/oauthScope";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";

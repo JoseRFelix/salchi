@@ -1,6 +1,6 @@
 import "../../index.css";
 
-import { EnvironmentId, type TranscriptionModel } from "@t3tools/contracts";
+import { EnvironmentId, type TranscriptionModel } from "@salchi/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";

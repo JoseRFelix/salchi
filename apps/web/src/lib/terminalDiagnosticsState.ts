@@ -1,10 +1,10 @@
-import { scopedThreadKey } from "@t3tools/client-runtime";
+import { scopedThreadKey } from "@salchi/client-runtime";
 import {
   EnvironmentId,
   type ScopedThreadRef,
   type TerminalSessionSnapshot,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 
 const MAX_TERMINAL_DIAGNOSTIC_EVENTS = 500;
 const MAX_RECENT_TERMINAL_DIAGNOSTIC_EVENTS = 120;

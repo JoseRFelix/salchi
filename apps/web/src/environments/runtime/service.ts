@@ -13,7 +13,7 @@ import {
   type ServerConfig,
   type TerminalEvent,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import { type QueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 import {
@@ -22,7 +22,7 @@ import {
   scopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
-} from "@t3tools/client-runtime";
+} from "@salchi/client-runtime";
 
 import {
   markPromotedDraftThreadByRef,
@@ -78,8 +78,8 @@ import {
   selectThreadByRef,
   selectThreadsAcrossEnvironments,
 } from "~/store";
-import { computeOrchestrationThreadDetailFingerprint } from "@t3tools/shared/orchestrationThreadDetailFingerprint";
-import { isOrchestrationThreadDetailEvent } from "@t3tools/shared/orchestrationThreadDetailEvents";
+import { computeOrchestrationThreadDetailFingerprint } from "@salchi/shared/orchestrationThreadDetailFingerprint";
+import { isOrchestrationThreadDetailEvent } from "@salchi/shared/orchestrationThreadDetailEvents";
 import { selectThreadTerminalState, useTerminalStateStore } from "~/terminalStateStore";
 import { useUiStateStore } from "~/uiStateStore";
 import type { WsProtocolCloseContext } from "../../rpc/protocol";
@@ -343,7 +343,7 @@ const BROWSER_RESUME_SELF_HEAL_MAX_ATTEMPTS = 5;
 const BROWSER_RESUME_SELF_HEAL_MAX_AGE_MS = 4 * 60_000;
 const RECENT_BROWSER_RESUME_CONTEXT_TTL_MS = 30_000;
 const PENDING_NOTIFICATION_THREAD_RECONCILE_STORAGE_KEY =
-  "t3.pending-notification-thread-reconciles";
+  "salchi.pending-notification-thread-reconciles";
 const PENDING_NOTIFICATION_THREAD_RECONCILE_TTL_MS = 5 * 60_000;
 const PENDING_NOTIFICATION_THREAD_RECONCILE_CONSUME_DIAGNOSTIC_INTERVAL_MS = 5_000;
 const INITIAL_SERVER_CONFIG_SNAPSHOT_WAIT_MS = 150;

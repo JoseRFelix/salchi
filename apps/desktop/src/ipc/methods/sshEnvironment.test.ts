@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { SshHttpBridgeError } from "@t3tools/ssh/errors";
+import { SshHttpBridgeError } from "@salchi/ssh/errors";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -130,7 +130,7 @@ describe("SSH environment IPC", () => {
             policy: "remote-reachable",
             bootstrapMethods: ["one-time-token"],
             sessionMethods: ["browser-session-cookie", "bearer-access-token"],
-            sessionCookieName: "t3_session",
+            sessionCookieName: "salchi_session",
           },
           role: "client",
           sessionMethod: "bearer-access-token",
@@ -149,7 +149,7 @@ describe("SSH environment IPC", () => {
       assert.equal(
         (result as { readonly auth: { readonly sessionCookieName: string } }).auth
           .sessionCookieName,
-        "t3_session",
+        "salchi_session",
       );
     }).pipe(Effect.provide(layer));
   });

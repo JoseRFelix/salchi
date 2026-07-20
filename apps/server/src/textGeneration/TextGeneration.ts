@@ -1,8 +1,8 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type { ChatAttachment, ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
-import { TextGenerationError } from "@t3tools/contracts";
+import type { ChatAttachment, ModelSelection, ProviderInstanceId } from "@salchi/contracts";
+import { TextGenerationError } from "@salchi/contracts";
 
 import {
   ProviderInstanceRegistry,

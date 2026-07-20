@@ -15,7 +15,7 @@ import * as EffectAcpClient from "effect-acp/client";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { resolveSpawnCommand } from "@salchi/shared/shell";
 
 import { ACP_PROCESS_TERMINATE_GRACE, terminateAcpProcessTree } from "./AcpProcessCleanup.ts";
 import {

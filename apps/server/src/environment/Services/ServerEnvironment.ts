@@ -1,4 +1,4 @@
-import type { EnvironmentId, ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
+import type { EnvironmentId, ExecutionEnvironmentDescriptor } from "@salchi/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 

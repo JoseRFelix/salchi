@@ -3,7 +3,7 @@ import type {
   ServerProcessDiagnosticsResult,
   ServerProcessSignal,
   ServerSignalProcessResult,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -12,7 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { resolveSpawnCommand } from "@salchi/shared/shell";
 
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 
@@ -387,7 +387,7 @@ function assertDescendantPid(
   pid: number,
 ): Effect.Effect<void, ProcessDiagnosticsError, ChildProcessSpawner.ChildProcessSpawner> {
   if (pid === process.pid) {
-    return Effect.fail(toProcessDiagnosticsError("Refusing to signal the T3 server process."));
+    return Effect.fail(toProcessDiagnosticsError("Refusing to signal the Salchi server process."));
   }
 
   return readProcessRows().pipe(
@@ -399,7 +399,9 @@ function assertDescendantPid(
       return descendant
         ? Effect.void
         : Effect.fail(
-            toProcessDiagnosticsError(`Process ${pid} is not a live descendant of the T3 server.`),
+            toProcessDiagnosticsError(
+              `Process ${pid} is not a live descendant of the Salchi server.`,
+            ),
           );
     }),
   );

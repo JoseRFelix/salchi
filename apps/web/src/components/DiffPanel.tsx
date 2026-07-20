@@ -2,7 +2,7 @@ import { DEFAULT_VIRTUAL_FILE_METRICS, parsePatchFiles } from "@pierre/diffs";
 import { FileDiff, Virtualizer, type FileDiffMetadata } from "@pierre/diffs/react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import type { TurnId } from "@t3tools/contracts";
+import type { TurnId } from "@salchi/contracts";
 import {
   ArrowLeftIcon,
   ChevronDownIcon,

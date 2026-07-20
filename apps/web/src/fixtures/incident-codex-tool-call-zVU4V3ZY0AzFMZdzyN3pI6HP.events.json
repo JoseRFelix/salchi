@@ -1,6 +1,6 @@
 {
   "streamId": "codex-tool:call_zVU4V3ZY0AzFMZdzyN3pI6HP",
-  "exportedFrom": "/home/ubuntu/.t3/userdata/state.sqlite",
+  "exportedFrom": "/home/ubuntu/.salchi/userdata/state.sqlite",
   "sanitized": true,
   "eventCount": 438,
   "firstSequence": 401509,
@@ -48,7 +48,7 @@
         "subagentRole": null,
         "hiddenFromThreadList": false,
         "branch": "jrf/notification-click-recovery",
-        "worktreePath": "/home/ubuntu/t3code-prs/notification-recovery",
+        "worktreePath": "/home/ubuntu/salchi-prs/notification-recovery",
         "createdAt": "2026-07-07T08:13:42.395Z",
         "updatedAt": "2026-07-07T08:13:42.395Z"
       }
@@ -10227,7 +10227,7 @@
         "threadId": "codex-tool:call_zVU4V3ZY0AzFMZdzyN3pI6HP",
         "turnId": "019f3ba3-e6a4-7b91-863a-b083f837241c",
         "checkpointTurnCount": 1,
-        "checkpointRef": "refs/t3/checkpoints/Y29kZXgtdG9vbDpjYWxsX3pWVTRWM1pZMEF6Rk1aZHp5TjNwSTZIUA/turn/1",
+        "checkpointRef": "refs/salchi/checkpoints/Y29kZXgtdG9vbDpjYWxsX3pWVTRWM1pZMEF6Rk1aZHp5TjNwSTZIUA/turn/1",
         "status": "ready",
         "files": [
           {

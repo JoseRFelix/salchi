@@ -4,9 +4,9 @@ import type {
   ProviderInstanceId,
   ServerSettings,
   UnifiedSettings,
-} from "@t3tools/contracts";
-import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
-import { normalizeProviderInstanceConfigForPersistence } from "@t3tools/shared/serverSettings";
+} from "@salchi/contracts";
+import { DEFAULT_UNIFIED_SETTINGS } from "@salchi/contracts/settings";
+import { normalizeProviderInstanceConfigForPersistence } from "@salchi/shared/serverSettings";
 
 function collapseOtelSignalsUrl(input: {
   readonly tracesUrl: string;

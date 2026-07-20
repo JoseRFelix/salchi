@@ -1,4 +1,4 @@
-import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime";
+import { scopedProjectKey, scopeProjectRef } from "@salchi/client-runtime";
 
 import { getThreadSortTimestamp, sortThreads } from "../lib/threadSort";
 import type { Project, SidebarThreadSummary } from "../types";

@@ -1,4 +1,4 @@
-import type { ProviderDriverKind, ProviderInstanceId, ServerProvider } from "@t3tools/contracts";
+import type { ProviderDriverKind, ProviderInstanceId, ServerProvider } from "@salchi/contracts";
 import type * as Effect from "effect/Effect";
 import type * as PubSub from "effect/PubSub";
 import type * as Scope from "effect/Scope";

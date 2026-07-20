@@ -20,7 +20,7 @@ import {
   ThreadId,
   ProviderInstanceId,
   type ProviderRuntimeEvent,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 
 import { ServerConfig } from "../../config.ts";
 import { makeGrokAdapter } from "./GrokAdapter.ts";
@@ -38,7 +38,7 @@ const realSleepMillis = (millis: number): void => {
 async function makeMockGrokWrapper(extraEnv?: Record<string, string>) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "grok-acp-mock-"));
   const wrapperPath = path.join(dir, "fake-grok.sh");
-  const envExports = Object.entries({ T3_ACP_MODEL_FIXTURE: "grok", ...extraEnv })
+  const envExports = Object.entries({ SALCHI_ACP_MODEL_FIXTURE: "grok", ...extraEnv })
     .map(([key, value]) => `export ${key}=${JSON.stringify(value)}`)
     .join("\n");
   const script = `#!/bin/sh
@@ -106,7 +106,7 @@ function waitForSessionPromptRequestCount(
 }
 
 const grokAdapterTestLayer = ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3code-grok-adapter-test-",
+  prefix: "salchi-grok-adapter-test-",
 }).pipe(Layer.provideMerge(NodeServices.layer));
 
 const makeTestAdapter = (binaryPath: string, options?: Parameters<typeof makeGrokAdapter>[1]) =>
@@ -186,7 +186,7 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       const requestLogPath = path.join(tempDir, "requests.ndjson");
       const wrapperPath = yield* Effect.promise(() =>
         makeMockGrokWrapper({
-          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+          SALCHI_ACP_REQUEST_LOG_PATH: requestLogPath,
         }),
       );
       const adapter = yield* makeTestAdapter(wrapperPath);
@@ -242,7 +242,7 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
 
       const wrapperPath = yield* Effect.promise(() =>
         makeMockGrokWrapper({
-          T3_ACP_EXIT_LOG_PATH: exitLogPath,
+          SALCHI_ACP_EXIT_LOG_PATH: exitLogPath,
         }),
       );
       const adapter = yield* makeTestAdapter(wrapperPath);
@@ -318,8 +318,8 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       const requestLogPath = path.join(tempDir, "requests.ndjson");
       const wrapperPath = yield* Effect.promise(() =>
         makeMockGrokWrapper({
-          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
-          T3_ACP_PROMPT_DELAY_MS: "1000",
+          SALCHI_ACP_REQUEST_LOG_PATH: requestLogPath,
+          SALCHI_ACP_PROMPT_DELAY_MS: "1000",
         }),
       );
       const adapter = yield* makeTestAdapter(wrapperPath);
@@ -359,9 +359,9 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       const requestLogPath = path.join(tempDir, "requests.ndjson");
       const wrapperPath = yield* Effect.promise(() =>
         makeMockGrokWrapper({
-          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
-          T3_ACP_EMIT_TOOL_CALLS: "1",
-          T3_ACP_ALLOW_ONCE_OPTION_ID: "agent-defined-approval-id",
+          SALCHI_ACP_REQUEST_LOG_PATH: requestLogPath,
+          SALCHI_ACP_EMIT_TOOL_CALLS: "1",
+          SALCHI_ACP_ALLOW_ONCE_OPTION_ID: "agent-defined-approval-id",
         }),
       );
       const adapter = yield* makeTestAdapter(wrapperPath);
@@ -407,7 +407,7 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
     Effect.gen(function* () {
       const threadId = ThreadId.make("grok-xai-ask-user-question");
       const wrapperPath = yield* Effect.promise(() =>
-        makeMockGrokWrapper({ T3_ACP_EMIT_XAI_ASK_USER_QUESTION: "1" }),
+        makeMockGrokWrapper({ SALCHI_ACP_EMIT_XAI_ASK_USER_QUESTION: "1" }),
       );
       const adapter = yield* makeTestAdapter(wrapperPath);
       const requested =

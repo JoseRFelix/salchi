@@ -7,7 +7,7 @@ import * as Fiber from "effect/Fiber";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { TestClock } from "effect/testing";
-import { GrokSettings } from "@t3tools/contracts";
+import { GrokSettings } from "@salchi/contracts";
 
 import { buildInitialGrokProviderSnapshot, checkGrokProviderStatus } from "./GrokProvider.ts";
 
@@ -132,7 +132,7 @@ it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
-          const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-grok-version-" });
+          const dir = yield* fs.makeTempDirectoryScoped({ prefix: "salchi-grok-version-" });
           const grokPath = path.join(dir, "grok");
           yield* fs.writeFileString(
             grokPath,
@@ -159,7 +159,7 @@ it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
-          const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-grok-success-" });
+          const dir = yield* fs.makeTempDirectoryScoped({ prefix: "salchi-grok-success-" });
           const grokPath = path.join(dir, "grok");
           yield* fs.writeFileString(
             grokPath,
@@ -186,7 +186,7 @@ it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
-          const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-grok-timeout-" });
+          const dir = yield* fs.makeTempDirectoryScoped({ prefix: "salchi-grok-timeout-" });
           const grokPath = path.join(dir, "grok");
           const pidLogPath = path.join(dir, "pid.log");
           yield* fs.writeFileString(

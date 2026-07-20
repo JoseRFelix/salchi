@@ -21,7 +21,9 @@ const makeServerConfigLayer = (overrides?: Partial<ServerConfigShape>) =>
         ...overrides,
       } satisfies ServerConfigShape;
     }),
-  ).pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-auth-server-test-" })));
+  ).pipe(
+    Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "salchi-auth-server-test-" })),
+  );
 
 const makeServerAuthLayer = (overrides?: Partial<ServerConfigShape>) =>
   ServerAuthLive.pipe(
@@ -35,7 +37,7 @@ const makeCookieRequest = (
 ): Parameters<ServerAuthShape["authenticateHttpRequest"]>[0] =>
   ({
     cookies: {
-      t3_session: sessionToken,
+      salchi_session: sessionToken,
     },
     headers: {},
   }) as unknown as Parameters<ServerAuthShape["authenticateHttpRequest"]>[0];

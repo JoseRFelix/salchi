@@ -1,8 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { execFile } from "node:child_process";
 import Mime from "@effect/platform-node/Mime";
-import { PROVIDER_SEND_TURN_MAX_IMAGE_BYTES } from "@t3tools/contracts";
-import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
+import { PROVIDER_SEND_TURN_MAX_IMAGE_BYTES } from "@salchi/contracts";
+import { decodeOtlpTraceRecords } from "@salchi/shared/observability";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -320,7 +320,7 @@ function serveWorkspaceMediaFile(input: {
 
 export const serverEnvironmentRouteLayer = HttpRouter.add(
   "GET",
-  "/.well-known/t3/environment",
+  "/.well-known/salchi/environment",
   Effect.gen(function* () {
     const descriptor = yield* Effect.service(ServerEnvironment).pipe(
       Effect.flatMap((serverEnvironment) => serverEnvironment.getDescriptor),

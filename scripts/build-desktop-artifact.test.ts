@@ -49,10 +49,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       resolveDesktopRuntimeDependencies(
         {
           "@effect/platform-node": "catalog:",
-          "@t3tools/contracts": "workspace:*",
-          "@t3tools/shared": "workspace:*",
-          "@t3tools/ssh": "workspace:*",
-          "@t3tools/tailscale": "workspace:*",
+          "@salchi/contracts": "workspace:*",
+          "@salchi/shared": "workspace:*",
+          "@salchi/ssh": "workspace:*",
+          "@salchi/tailscale": "workspace:*",
           effect: "catalog:",
           electron: "41.5.0",
         },
@@ -184,11 +184,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           ConfigProvider.layer(
             ConfigProvider.fromEnv({
               env: {
-                T3CODE_DESKTOP_SKIP_BUILD: "true",
-                T3CODE_DESKTOP_KEEP_STAGE: "true",
-                T3CODE_DESKTOP_SIGNED: "true",
-                T3CODE_DESKTOP_VERBOSE: "true",
-                T3CODE_DESKTOP_MOCK_UPDATES: "true",
+                SALCHI_DESKTOP_SKIP_BUILD: "true",
+                SALCHI_DESKTOP_KEEP_STAGE: "true",
+                SALCHI_DESKTOP_SIGNED: "true",
+                SALCHI_DESKTOP_VERBOSE: "true",
+                SALCHI_DESKTOP_MOCK_UPDATES: "true",
               },
             }),
           ),

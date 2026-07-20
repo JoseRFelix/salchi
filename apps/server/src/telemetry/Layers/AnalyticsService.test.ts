@@ -4,6 +4,7 @@ import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { HttpClient } from "effect/unstable/http";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
@@ -37,20 +38,53 @@ interface RecordedBatchBody {
 }
 
 it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
+  it.effect("does not capture telemetry without a PostHog key", () =>
+    Effect.gen(function* () {
+      let requestCount = 0;
+      const httpClient = HttpClient.make(() =>
+        Effect.sync(() => {
+          requestCount += 1;
+        }).pipe(Effect.andThen(Effect.die("unexpected telemetry request"))),
+      );
+      const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
+        prefix: "salchi-telemetry-unconfigured-",
+      });
+      const configLayer = ConfigProvider.layer(
+        ConfigProvider.fromUnknown({
+          SALCHI_TELEMETRY_ENABLED: true,
+          SALCHI_POSTHOG_HOST: "http://telemetry.test",
+        }),
+      );
+      const telemetryLayer = AnalyticsServiceLayerLive.pipe(
+        Layer.provide(serverConfigLayer),
+        Layer.provide(configLayer),
+        Layer.provide(Layer.succeed(HttpClient.HttpClient, httpClient)),
+      );
+
+      yield* Effect.gen(function* () {
+        const analytics = yield* AnalyticsService;
+        yield* analytics.record("test.unconfigured");
+        yield* analytics.flush;
+      }).pipe(Effect.provide(telemetryLayer));
+
+      assert.equal(requestCount, 0);
+    }),
+  );
+
   it.effect("flush drains all buffered events across multiple batches", () =>
     Effect.gen(function* () {
       const capturedRequests: Array<RecordedBatchRequest> = [];
       const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
-        prefix: "t3-telemetry-base-",
+        prefix: "salchi-telemetry-base-",
       });
 
       const telemetryLayer = AnalyticsServiceLayerLive.pipe(Layer.provideMerge(serverConfigLayer));
       const configLayer = ConfigProvider.layer(
         ConfigProvider.fromUnknown({
-          T3CODE_TELEMETRY_ENABLED: true,
-          T3CODE_POSTHOG_KEY: "phc_test_key",
-          T3CODE_POSTHOG_HOST: "",
-          T3CODE_TELEMETRY_FLUSH_BATCH_SIZE: 20,
+          SALCHI_TELEMETRY_ENABLED: true,
+          SALCHI_POSTHOG_KEY: "test-posthog-key",
+          SALCHI_POSTHOG_HOST: "",
+          SALCHI_TELEMETRY_FLUSH_BATCH_SIZE: 20,
         }),
       );
       const batchServerLayer = HttpServer.serve(

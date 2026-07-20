@@ -2,7 +2,7 @@ import {
   AuthAdministrativeScopes,
   type AuthEnvironmentScope,
   AuthStandardClientScopes,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 
 import type { SessionRole } from "./Services/SessionCredentialService.ts";
 

@@ -20,8 +20,8 @@ export interface SelectedSyntaxTheme {
   readonly cacheKey: string;
 }
 
-const IMPORTED_SYNTAX_THEME_PREFIX = "t3code-imported";
-const REGISTERED_IMPORTED_SYNTAX_THEME_NAMES_KEY = "__t3codeRegisteredImportedSyntaxThemeNames";
+const IMPORTED_SYNTAX_THEME_PREFIX = "salchi-imported";
+const REGISTERED_IMPORTED_SYNTAX_THEME_NAMES_KEY = "__salchiRegisteredImportedSyntaxThemeNames";
 
 type RegisteredSyntaxThemeGlobal = typeof globalThis & {
   [REGISTERED_IMPORTED_SYNTAX_THEME_NAMES_KEY]?: Set<string>;

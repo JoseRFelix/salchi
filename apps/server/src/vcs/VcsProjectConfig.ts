@@ -5,7 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import { VcsDriverKind, type VcsDriverKind as VcsDriverKindType } from "@t3tools/contracts";
+import { VcsDriverKind, type VcsDriverKind as VcsDriverKindType } from "@salchi/contracts";
 
 const ProjectVcsConfig = Schema.Struct({
   vcs: Schema.optional(
@@ -61,7 +61,7 @@ export const make = Effect.fn("makeVcsProjectConfig")(function* () {
   const findConfigPath = Effect.fn("VcsProjectConfig.findConfigPath")(function* (cwd: string) {
     let current = cwd;
     while (true) {
-      const candidate = path.join(current, ".t3code", "vcs.json");
+      const candidate = path.join(current, ".salchi", "vcs.json");
       if (yield* fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
         return candidate;
       }

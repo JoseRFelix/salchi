@@ -3,7 +3,7 @@ import {
   type EditorId,
   type ProjectScript,
   type ResolvedKeybindingsConfig,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import { memo, useEffect, useRef, useState } from "react";
 import {
   GlobeIcon,

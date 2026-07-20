@@ -1,4 +1,4 @@
-import type { ThemeTokenColor } from "@t3tools/contracts";
+import type { ThemeTokenColor } from "@salchi/contracts";
 
 export const THEME_PREVIEW_COLOR_KEYS = {
   background: ["editor.background"],

@@ -10,8 +10,8 @@ import {
   type AuthSessionState,
   AuthWebSocketTicketResult,
   type AuthWebSocketTokenResult,
-} from "@t3tools/contracts";
-import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
+} from "@salchi/contracts";
+import { encodeOAuthScope } from "@salchi/shared/oauthScope";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";

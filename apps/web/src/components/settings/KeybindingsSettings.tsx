@@ -26,7 +26,7 @@ import {
   type KeybindingWhenNode,
   type ServerRemoveKeybindingInput,
   type ServerUpsertKeybindingInput,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 
 import { isElectron } from "../../env";
 import { openInPreferredEditor } from "../../editorPreferences";

@@ -1,4 +1,4 @@
-import type { TurnId } from "@t3tools/contracts";
+import type { TurnId } from "@salchi/contracts";
 
 export interface ThreadPackingSessionEvidence {
   readonly status: string;

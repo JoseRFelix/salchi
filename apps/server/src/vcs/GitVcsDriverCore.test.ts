@@ -10,13 +10,13 @@ import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Scope from "effect/Scope";
 
-import { GitCommandError } from "@t3tools/contracts";
+import { GitCommandError } from "@salchi/contracts";
 import { ServerConfig } from "../config.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { statusUpstreamRefreshCacheTimeToLive } from "./GitVcsDriverCore.ts";
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3-git-vcs-driver-test-",
+  prefix: "salchi-git-vcs-driver-test-",
 });
 const TestLayer = GitVcsDriver.layer.pipe(
   Layer.provide(ServerConfigLayer),
@@ -283,13 +283,13 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         const sshWrapperPath = pathService.join(tempDir, "ssh-wrapper.sh");
         const previousGitSsh = process.env.GIT_SSH;
         const previousAskpassRequire = process.env.SSH_ASKPASS_REQUIRE;
-        const previousAskpassLog = process.env.T3_TEST_SSH_ASKPASS_LOG;
+        const previousAskpassLog = process.env.SALCHI_TEST_SSH_ASKPASS_LOG;
 
         yield* fileSystem.writeFileString(
           sshWrapperPath,
           [
             "#!/bin/sh",
-            'printf "%s\\n" "${SSH_ASKPASS_REQUIRE:-}" > "$T3_TEST_SSH_ASKPASS_LOG"',
+            'printf "%s\\n" "${SSH_ASKPASS_REQUIRE:-}" > "$SALCHI_TEST_SSH_ASKPASS_LOG"',
             "exit 1",
             "",
           ].join("\n"),
@@ -302,7 +302,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         yield* Effect.gen(function* () {
           process.env.GIT_SSH = sshWrapperPath;
           process.env.SSH_ASKPASS_REQUIRE = "force";
-          process.env.T3_TEST_SSH_ASKPASS_LOG = sshLogPath;
+          process.env.SALCHI_TEST_SSH_ASKPASS_LOG = sshLogPath;
 
           yield* (yield* GitVcsDriver.GitVcsDriver).statusDetails(cwd);
 
@@ -321,9 +321,9 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
                 process.env.SSH_ASKPASS_REQUIRE = previousAskpassRequire;
               }
               if (previousAskpassLog === undefined) {
-                delete process.env.T3_TEST_SSH_ASKPASS_LOG;
+                delete process.env.SALCHI_TEST_SSH_ASKPASS_LOG;
               } else {
-                process.env.T3_TEST_SSH_ASKPASS_LOG = previousAskpassLog;
+                process.env.SALCHI_TEST_SSH_ASKPASS_LOG = previousAskpassLog;
               }
             }),
           ),
@@ -869,16 +869,16 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         const previousAskpassRequire = process.env.SSH_ASKPASS_REQUIRE;
         const previousTerminalPrompt = process.env.GIT_TERMINAL_PROMPT;
         const previousGcmInteractive = process.env.GCM_INTERACTIVE;
-        const previousAskpassLog = process.env.T3_TEST_SSH_ASKPASS_LOG;
+        const previousAskpassLog = process.env.SALCHI_TEST_SSH_ASKPASS_LOG;
 
         yield* fileSystem.writeFileString(
           sshWrapperPath,
           [
             "#!/bin/sh",
-            'printf "SSH_ASKPASS_REQUIRE=%s\\n" "${SSH_ASKPASS_REQUIRE:-}" >> "$T3_TEST_SSH_ASKPASS_LOG"',
-            'printf "GIT_TERMINAL_PROMPT=%s\\n" "${GIT_TERMINAL_PROMPT:-}" >> "$T3_TEST_SSH_ASKPASS_LOG"',
-            'printf "GCM_INTERACTIVE=%s\\n" "${GCM_INTERACTIVE:-}" >> "$T3_TEST_SSH_ASKPASS_LOG"',
-            'printf "ARGS=%s\\n" "$*" >> "$T3_TEST_SSH_ASKPASS_LOG"',
+            'printf "SSH_ASKPASS_REQUIRE=%s\\n" "${SSH_ASKPASS_REQUIRE:-}" >> "$SALCHI_TEST_SSH_ASKPASS_LOG"',
+            'printf "GIT_TERMINAL_PROMPT=%s\\n" "${GIT_TERMINAL_PROMPT:-}" >> "$SALCHI_TEST_SSH_ASKPASS_LOG"',
+            'printf "GCM_INTERACTIVE=%s\\n" "${GCM_INTERACTIVE:-}" >> "$SALCHI_TEST_SSH_ASKPASS_LOG"',
+            'printf "ARGS=%s\\n" "$*" >> "$SALCHI_TEST_SSH_ASKPASS_LOG"',
             "exit 1",
             "",
           ].join("\n"),
@@ -896,7 +896,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           process.env.SSH_ASKPASS_REQUIRE = "force";
           process.env.GIT_TERMINAL_PROMPT = "1";
           process.env.GCM_INTERACTIVE = "always";
-          process.env.T3_TEST_SSH_ASKPASS_LOG = sshLogPath;
+          process.env.SALCHI_TEST_SSH_ASKPASS_LOG = sshLogPath;
 
           yield* driver.pushCurrentBranch(cwd, null).pipe(Effect.flip);
 
@@ -929,9 +929,9 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
                 process.env.GCM_INTERACTIVE = previousGcmInteractive;
               }
               if (previousAskpassLog === undefined) {
-                delete process.env.T3_TEST_SSH_ASKPASS_LOG;
+                delete process.env.SALCHI_TEST_SSH_ASKPASS_LOG;
               } else {
-                process.env.T3_TEST_SSH_ASKPASS_LOG = previousAskpassLog;
+                process.env.SALCHI_TEST_SSH_ASKPASS_LOG = previousAskpassLog;
               }
             }),
           ),

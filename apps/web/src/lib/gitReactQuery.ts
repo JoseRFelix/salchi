@@ -9,7 +9,7 @@ import {
   type VcsStageFilesInput,
   type VcsUnstageFilesInput,
   type VcsWorkingTreeDiffTarget,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import {
   infiniteQueryOptions,
   mutationOptions,

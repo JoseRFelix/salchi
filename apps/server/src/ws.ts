@@ -36,12 +36,12 @@ import {
   type TerminalEvent,
   WS_METHODS,
   WsRpcGroup,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import {
   computeOrchestrationThreadDetailFingerprint,
   orchestrationThreadDetailFingerprintsEqual,
-} from "@t3tools/shared/orchestrationThreadDetailFingerprint";
-import { isOrchestrationThreadDetailEvent } from "@t3tools/shared/orchestrationThreadDetailEvents";
+} from "@salchi/shared/orchestrationThreadDetailFingerprint";
+import { isOrchestrationThreadDetailEvent } from "@salchi/shared/orchestrationThreadDetailEvents";
 import { clamp } from "effect/Number";
 import { HttpClient, HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";

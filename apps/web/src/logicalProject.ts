@@ -1,6 +1,6 @@
-import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime";
-import type { ScopedProjectRef, SidebarProjectGroupingMode } from "@t3tools/contracts";
-import type { UnifiedSettings } from "@t3tools/contracts/settings";
+import { scopedProjectKey, scopeProjectRef } from "@salchi/client-runtime";
+import type { ScopedProjectRef, SidebarProjectGroupingMode } from "@salchi/contracts";
+import type { UnifiedSettings } from "@salchi/contracts/settings";
 import { normalizeProjectPathForComparison } from "./lib/projectPaths";
 import type { Project } from "./types";
 

@@ -1,4 +1,4 @@
-import { WS_METHODS } from "@t3tools/contracts";
+import { WS_METHODS } from "@salchi/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BrowserWsRpcHarness } from "../../test/wsRpcHarness";

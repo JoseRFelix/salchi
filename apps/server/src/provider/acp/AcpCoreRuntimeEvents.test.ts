@@ -1,4 +1,4 @@
-import { ProviderDriverKind, RuntimeRequestId, TurnId } from "@t3tools/contracts";
+import { ProviderDriverKind, RuntimeRequestId, TurnId } from "@salchi/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

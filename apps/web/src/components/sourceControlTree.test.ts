@@ -1,4 +1,4 @@
-import type { VcsStatusResult } from "@t3tools/contracts";
+import type { VcsStatusResult } from "@salchi/contracts";
 import { describe, expect, it } from "vitest";
 
 import { buildSourceControlTree, flattenSourceControlTreeRows } from "./sourceControlTree";

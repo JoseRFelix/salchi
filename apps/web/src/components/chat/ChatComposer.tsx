@@ -13,25 +13,25 @@ import type {
   MessageId,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import {
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   PROVIDER_SEND_TURN_MAX_PDF_BYTES,
-} from "@t3tools/contracts";
-import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
+} from "@salchi/contracts";
+import { serializeComposerFileLink } from "@salchi/shared/composerTrigger";
 import {
   inferSupportedAttachmentType,
   normalizeAttachmentMimeType,
   PDF_MIME_TYPE,
-} from "@t3tools/shared/attachmentMime";
+} from "@salchi/shared/attachmentMime";
 import {
   createModelSelection,
   getProviderOptionBooleanSelectionValue,
   normalizeModelSlug,
-} from "@t3tools/shared/model";
+} from "@salchi/shared/model";
 import {
   memo,
   type ReactNode,
@@ -134,7 +134,7 @@ import {
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import { type AppModelOption, getAppModelOptionsForInstance } from "../../modelSelection";
-import type { UnifiedSettings } from "@t3tools/contracts/settings";
+import type { UnifiedSettings } from "@salchi/contracts/settings";
 import type { QueuedTurn, SessionPhase, Thread } from "../../types";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { PendingApproval, PendingUserInput } from "../../session-logic";

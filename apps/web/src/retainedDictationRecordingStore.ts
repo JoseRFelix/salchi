@@ -1,4 +1,4 @@
-import { EnvironmentId, type EnvironmentId as EnvironmentIdValue } from "@t3tools/contracts";
+import { EnvironmentId, type EnvironmentId as EnvironmentIdValue } from "@salchi/contracts";
 
 import { randomUUID } from "./lib/utils";
 

@@ -1,5 +1,5 @@
 {
-  "name": "@t3tools/shared",
+  "name": "@salchi/shared",
   "private": true,
   "type": "module",
   "exports": {
@@ -149,7 +149,7 @@
     "test": "vp test run"
   },
   "dependencies": {
-    "@t3tools/contracts": "workspace:*",
+    "@salchi/contracts": "workspace:*",
     "effect": "catalog:",
     "yaml": "catalog:"
   },

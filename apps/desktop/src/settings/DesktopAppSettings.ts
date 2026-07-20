@@ -3,8 +3,8 @@ import {
   DesktopUpdateChannelSchema,
   type DesktopServerExposureMode,
   type DesktopUpdateChannel,
-} from "@t3tools/contracts";
-import { fromLenientJson } from "@t3tools/shared/schemaJson";
+} from "@salchi/contracts";
+import { fromLenientJson } from "@salchi/shared/schemaJson";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -89,7 +89,7 @@ export interface DesktopAppSettingsShape {
 export class DesktopAppSettings extends Context.Service<
   DesktopAppSettings,
   DesktopAppSettingsShape
->()("@t3tools/desktop/settings/DesktopAppSettings") {}
+>()("@salchi/desktop/settings/DesktopAppSettings") {}
 
 export function resolveDefaultDesktopSettings(appVersion: string): DesktopSettings {
   return {

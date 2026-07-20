@@ -14,7 +14,7 @@ build/
 .diagnostics/
 release/
 release-mock/
-.t3
+.salchi
 .idea/
 apps/web/.playwright
 apps/web/playwright-report

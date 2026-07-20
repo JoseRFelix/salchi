@@ -129,7 +129,7 @@ describe("runProcess", () => {
   it.effect("resolves and escapes Windows command shims before spawning", () =>
     Effect.gen(function* () {
       const originalPlatform = process.platform;
-      const dir = mkdtempSync(join(tmpdir(), "t3-process-runner-"));
+      const dir = mkdtempSync(join(tmpdir(), "salchi-process-runner-"));
       try {
         Object.defineProperty(process, "platform", { value: "win32", configurable: true });
         writeFileSync(join(dir, "az.CMD"), "@echo off\r\n");

@@ -8,7 +8,7 @@ import {
   type FileContents,
   type LineAnnotation,
 } from "@pierre/diffs/react";
-import { type ProjectReadFileResult } from "@t3tools/contracts";
+import { type ProjectReadFileResult } from "@salchi/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeftIcon,

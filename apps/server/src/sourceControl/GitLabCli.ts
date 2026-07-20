@@ -7,7 +7,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import type * as DateTime from "effect/DateTime";
 
-import { TrimmedNonEmptyString, type SourceControlRepositoryVisibility } from "@t3tools/contracts";
+import { TrimmedNonEmptyString, type SourceControlRepositoryVisibility } from "@salchi/contracts";
 
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as GitLabMergeRequests from "./gitLabMergeRequests.ts";

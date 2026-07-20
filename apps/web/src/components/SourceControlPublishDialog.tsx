@@ -5,7 +5,7 @@ import type {
   SourceControlProviderKind,
   SourceControlPublishRepositoryResult,
   SourceControlRepositoryVisibility,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";

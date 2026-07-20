@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { EnvironmentId, ThreadId, TurnId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, TurnId } from "@salchi/contracts";
 
 import {
   __readWorkspaceFilePanelStateForTests,

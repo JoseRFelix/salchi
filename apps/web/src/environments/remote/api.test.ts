@@ -52,7 +52,7 @@ describe("remote environment api", () => {
     expect(
       resolveRemotePairingTarget({
         pairingUrl:
-          "https://app.t3.codes/pair?host=https%3A%2F%2Fdesktop.tailnet.ts.net%3A44342%2F#token=pairing-token",
+          "https://app.salchi.codes/pair?host=https%3A%2F%2Fdesktop.tailnet.ts.net%3A44342%2F#token=pairing-token",
       }),
     ).toEqual({
       credential: "pairing-token",
@@ -120,7 +120,7 @@ describe("remote environment api", () => {
       body: new URLSearchParams({
         grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
         subject_token: "pairing-token",
-        subject_token_type: "urn:t3:params:oauth:token-type:environment-bootstrap",
+        subject_token_type: "urn:salchi:params:oauth:token-type:environment-bootstrap",
         requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
       }).toString(),
     });
@@ -154,7 +154,7 @@ describe("remote environment api", () => {
               policy: "remote-reachable",
               bootstrapMethods: ["one-time-token"],
               sessionMethods: ["browser-session-cookie", "bearer-access-token"],
-              sessionCookieName: "t3_session",
+              sessionCookieName: "salchi_session",
             },
             role: "client",
             sessionMethod: "bearer-access-token",
@@ -204,7 +204,7 @@ describe("remote environment api", () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "https://remote.example.com/.well-known/t3/environment",
+      "https://remote.example.com/.well-known/salchi/environment",
       {
         method: "GET",
         headers: {},

@@ -1,4 +1,4 @@
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { ScopedThreadRef } from "@salchi/contracts";
 import { assert, describe, it } from "vitest";
 import {
   buildVisibleToastLayout,

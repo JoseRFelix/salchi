@@ -7,8 +7,8 @@ import type {
   ServerSendTestPushNotificationInput,
   ServerUnregisterPushSubscriptionInput,
   ServerPushNotificationPayload,
-} from "@t3tools/contracts";
-import { ServerPushNotificationError } from "@t3tools/contracts";
+} from "@salchi/contracts";
+import { ServerPushNotificationError } from "@salchi/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 

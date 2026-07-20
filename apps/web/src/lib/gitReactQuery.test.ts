@@ -24,7 +24,7 @@ import {
   type EnvironmentApi,
   type VcsListRefsResult,
   type VcsStatusLocalResult,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import * as environmentApi from "../environmentApi";
 
 import {

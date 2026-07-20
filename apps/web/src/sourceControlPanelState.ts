@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@salchi/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -36,7 +36,7 @@ const DEFAULT_WORKSPACE_VIEW_STATE: SourceControlPanelWorkspaceViewState = {
   viewMode: "list",
 };
 
-const SOURCE_CONTROL_PANEL_PERSIST_KEY = "t3code:source-control-panel:v1";
+const SOURCE_CONTROL_PANEL_PERSIST_KEY = "salchi:source-control-panel:v1";
 
 /**
  * Only the per-workspace view mode is persisted across launches. The commit

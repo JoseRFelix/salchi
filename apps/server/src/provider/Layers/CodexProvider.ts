@@ -20,11 +20,11 @@ import type {
   ProviderOptionDescriptor,
   ServerProviderModel,
   ServerProviderSkill,
-} from "@t3tools/contracts";
-import { ServerSettingsError } from "@t3tools/contracts";
+} from "@salchi/contracts";
+import { ServerSettingsError } from "@salchi/contracts";
 
-import { createModelCapabilities } from "@t3tools/shared/model";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { createModelCapabilities } from "@salchi/shared/model";
+import { resolveSpawnCommand } from "@salchi/shared/shell";
 import {
   AUTH_PROBE_TIMEOUT_MS,
   buildServerProvider,
@@ -354,7 +354,7 @@ const requestAllCodexModels = Effect.fn("requestAllCodexModels")(function* (
 export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
   return {
     clientInfo: {
-      name: "t3code_desktop",
+      name: "salchi_desktop",
       title: "Salchi Desktop",
       version: packageJson.version,
     },
@@ -410,7 +410,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
 
   const initialize = yield* client.request("initialize", {
     clientInfo: {
-      name: "t3code_desktop",
+      name: "salchi_desktop",
       title: "Salchi Desktop",
       version: "0.1.0",
     },

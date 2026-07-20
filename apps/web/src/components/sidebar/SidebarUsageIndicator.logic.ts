@@ -3,11 +3,11 @@ import {
   type OrchestrationThreadActivity,
   type ProviderInstanceId,
   type ServerProviderAuthStatus,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import {
   normalizeUsageWindowUsedPercent,
   readFirstPresentValue,
-} from "@t3tools/shared/rateLimitUsage";
+} from "@salchi/shared/rateLimitUsage";
 
 export type SidebarUsageDriverId = "codex" | "claudeAgent";
 export type SidebarUsageWindowId = "fiveHour" | "weekly";

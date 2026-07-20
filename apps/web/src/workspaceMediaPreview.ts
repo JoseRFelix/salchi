@@ -1,6 +1,6 @@
-import type { EnvironmentId } from "@t3tools/contracts";
-import { isSafeImageFileName } from "@t3tools/shared/imageMime";
-import { isSafeVideoFileName } from "@t3tools/shared/videoMime";
+import type { EnvironmentId } from "@salchi/contracts";
+import { isSafeImageFileName } from "@salchi/shared/imageMime";
+import { isSafeVideoFileName } from "@salchi/shared/videoMime";
 
 import { resolveEnvironmentHttpUrl } from "./environments/runtime";
 

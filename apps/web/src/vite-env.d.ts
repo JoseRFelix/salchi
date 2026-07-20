@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 /// <reference types="vite-plugin-pwa/client" />
 
-import type { DesktopBridge, LocalApi } from "@t3tools/contracts";
+import type { DesktopBridge, LocalApi } from "@salchi/contracts";
 
 interface ImportMetaEnv {
   readonly VITE_HTTP_URL: string;

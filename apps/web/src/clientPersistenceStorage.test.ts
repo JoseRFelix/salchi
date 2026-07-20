@@ -1,4 +1,4 @@
-import { EnvironmentId, type PersistedSavedEnvironmentRecord } from "@t3tools/contracts";
+import { EnvironmentId, type PersistedSavedEnvironmentRecord } from "@salchi/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const testEnvironmentId = EnvironmentId.make("environment-1");

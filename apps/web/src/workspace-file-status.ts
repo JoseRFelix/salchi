@@ -1,4 +1,4 @@
-import type { VcsStatusResult, VcsWorkingTreeFileStatus } from "@t3tools/contracts";
+import type { VcsStatusResult, VcsWorkingTreeFileStatus } from "@salchi/contracts";
 
 export type WorkspaceChangedFile = VcsStatusResult["workingTree"]["files"][number];
 

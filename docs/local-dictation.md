@@ -39,7 +39,7 @@ to mono 16 kHz WAV, so the managed server does not need `ffmpeg`.
 To turn automatic installation off:
 
 ```bash
-T3CODE_WHISPER_AUTO_PROVISION=false npx salchi@latest serve
+SALCHI_WHISPER_AUTO_PROVISION=false npx salchi@latest serve
 ```
 
 ## Use an existing sidecar
@@ -47,7 +47,7 @@ T3CODE_WHISPER_AUTO_PROVISION=false npx salchi@latest serve
 An explicit loopback server overrides automatic setup. For example:
 
 ```bash
-T3CODE_WHISPER_SERVER_URL=http://127.0.0.1:8080 \
+SALCHI_WHISPER_SERVER_URL=http://127.0.0.1:8080 \
   npx salchi@latest serve --tailscale-serve
 ```
 

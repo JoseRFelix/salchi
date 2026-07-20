@@ -78,7 +78,7 @@ describe("syntaxThemes", () => {
       importedTheme: record,
     });
 
-    expect(selected.themeName).toMatch(/^t3code-imported-/);
+    expect(selected.themeName).toMatch(/^salchi-imported-/);
     expect(selected.cacheKey).toBe(`imported:${selected.themeName}`);
 
     const [resolvedTheme] = await resolveThemes([selected.themeName]);

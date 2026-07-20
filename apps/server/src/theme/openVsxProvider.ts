@@ -3,10 +3,7 @@ import { inflateRawSync } from "node:zlib";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
-import {
-  pruneThemePreviewColors,
-  pruneThemePreviewTokenColors,
-} from "@t3tools/shared/themePreview";
+import { pruneThemePreviewColors, pruneThemePreviewTokenColors } from "@salchi/shared/themePreview";
 
 import {
   ThemeProviderError,
@@ -18,7 +15,7 @@ import {
   type ThemeSearchInput,
   type ThemeSearchResult,
   type ThemeTokenColor,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 
 /**
  * Open VSX (https://open-vsx.org) theme provider. The registry serves each

@@ -44,7 +44,7 @@ function runtimeLayer({
       ...(env ? { env } : {}),
     },
     cwd: process.cwd(),
-    clientInfo: { name: "t3-test", version: "0.0.0" },
+    clientInfo: { name: "salchi-test", version: "0.0.0" },
     authMethodId: "test",
     ...(resumeSessionId ? { resumeSessionId } : {}),
     ...(requestEvents
@@ -165,8 +165,8 @@ describe("AcpSessionRuntime resume", () => {
       Effect.provide(
         runtimeLayer({
           env: {
-            T3_ACP_LOAD_REPLAY_HISTORY: "1",
-            T3_ACP_PROMPT_RESPONSE_TEXT: "live after resume",
+            SALCHI_ACP_LOAD_REPLAY_HISTORY: "1",
+            SALCHI_ACP_PROMPT_RESPONSE_TEXT: "live after resume",
           },
         }),
       ),
@@ -200,8 +200,8 @@ describe("AcpSessionRuntime resume", () => {
       Effect.provide(
         runtimeLayer({
           env: {
-            T3_ACP_FAIL_LOAD_SESSION: "1",
-            T3_ACP_PROMPT_RESPONSE_TEXT: "live after fallback",
+            SALCHI_ACP_FAIL_LOAD_SESSION: "1",
+            SALCHI_ACP_PROMPT_RESPONSE_TEXT: "live after fallback",
           },
           requestEvents,
         }),
@@ -214,10 +214,10 @@ describe("AcpSessionRuntime resume", () => {
   it.effect("uses a fresh assistant item id epoch for each resumed runtime", () =>
     Effect.gen(function* () {
       const firstItemId = yield* firstAssistantItemId({
-        T3_ACP_PROMPT_RESPONSE_TEXT: "first runtime",
+        SALCHI_ACP_PROMPT_RESPONSE_TEXT: "first runtime",
       });
       const secondItemId = yield* firstAssistantItemId({
-        T3_ACP_PROMPT_RESPONSE_TEXT: "second runtime",
+        SALCHI_ACP_PROMPT_RESPONSE_TEXT: "second runtime",
       });
 
       expect(firstItemId).toMatch(assistantItemIdPattern);
@@ -237,8 +237,8 @@ describe("AcpSessionRuntime resume", () => {
       Effect.provide(
         runtimeLayer({
           env: {
-            T3_ACP_LOAD_REPLAY_HISTORY: "1",
-            T3_ACP_LOAD_REPLAY_MODE_ID: "code",
+            SALCHI_ACP_LOAD_REPLAY_HISTORY: "1",
+            SALCHI_ACP_LOAD_REPLAY_MODE_ID: "code",
           },
         }),
       ),

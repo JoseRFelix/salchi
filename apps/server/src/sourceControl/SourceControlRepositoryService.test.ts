@@ -5,7 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { GitCommandError, type SourceControlProviderError } from "@t3tools/contracts";
+import { GitCommandError, type SourceControlProviderError } from "@salchi/contracts";
 
 import { ServerConfig } from "../config.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -14,9 +14,9 @@ import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.
 import * as SourceControlRepositoryService from "./SourceControlRepositoryService.ts";
 
 const CLONE_URLS = {
-  nameWithOwner: "octocat/t3code",
-  url: "https://github.com/octocat/t3code",
-  sshUrl: "git@github.com:octocat/t3code.git",
+  nameWithOwner: "octocat/salchi",
+  url: "https://github.com/octocat/salchi",
+  sshUrl: "git@github.com:octocat/salchi.git",
 };
 
 function emptyWorkingTree() {
@@ -85,7 +85,9 @@ function makeLayer(input: {
         ...input.git,
       }),
     ),
-    Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-source-control-repos-" })),
+    Layer.provide(
+      ServerConfig.layerTest(process.cwd(), { prefix: "salchi-source-control-repos-" }),
+    ),
     Layer.provideMerge(NodeServices.layer),
   );
 }
@@ -104,12 +106,12 @@ it.effect("looks up repositories through the requested provider without search",
     const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
     const result = yield* service.lookupRepository({
       provider: "github",
-      repository: "octocat/t3code",
+      repository: "octocat/salchi",
       cwd: "/workspace",
     });
 
     assert.deepStrictEqual(result, { provider: "github", ...CLONE_URLS });
-    assert.deepStrictEqual(calls, [{ cwd: "/workspace", repository: "octocat/t3code" }]);
+    assert.deepStrictEqual(calls, [{ cwd: "/workspace", repository: "octocat/salchi" }]);
   }).pipe(Effect.provide(makeLayer({ provider })));
 });
 
@@ -117,16 +119,16 @@ it.effect("clones a looked-up repository into the requested destination", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const parent = yield* fs.makeTempDirectoryScoped({
-      prefix: "t3-source-control-clone-parent-",
+      prefix: "salchi-source-control-clone-parent-",
     });
-    const destinationPath = `${parent}/t3code`;
+    const destinationPath = `${parent}/salchi`;
     const cloneCalls: Array<{ cwd: string; args: ReadonlyArray<string> }> = [];
 
     yield* Effect.gen(function* () {
       const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const result = yield* service.cloneRepository({
         provider: "github",
-        repository: "octocat/t3code",
+        repository: "octocat/salchi",
         destinationPath,
         protocol: "https",
       });
@@ -139,7 +141,7 @@ it.effect("clones a looked-up repository into the requested destination", () =>
       assert.deepStrictEqual(cloneCalls, [
         {
           cwd: parent,
-          args: ["clone", CLONE_URLS.url, "t3code"],
+          args: ["clone", CLONE_URLS.url, "salchi"],
         },
       ]);
     }).pipe(
@@ -179,7 +181,7 @@ it.effect("publishes by creating the repository, adding a remote, and pushing up
     const result = yield* service.publishRepository({
       cwd: "/workspace",
       provider: "github",
-      repository: "octocat/t3code",
+      repository: "octocat/salchi",
       visibility: "private",
       remoteName: "origin",
       protocol: "ssh",
@@ -194,7 +196,7 @@ it.effect("publishes by creating the repository, adding a remote, and pushing up
       status: "pushed",
     });
     assert.deepStrictEqual(createCalls, [
-      { cwd: "/workspace", repository: "octocat/t3code", visibility: "private" },
+      { cwd: "/workspace", repository: "octocat/salchi", visibility: "private" },
     ]);
     assert.deepStrictEqual(remoteCalls, [
       { cwd: "/workspace", preferredName: "origin", url: CLONE_URLS.sshUrl },
@@ -234,7 +236,7 @@ it.effect("publishes to the remote name returned by ensureRemote", () => {
     const result = yield* service.publishRepository({
       cwd: "/workspace",
       provider: "github",
-      repository: "octocat/t3code",
+      repository: "octocat/salchi",
       visibility: "private",
       remoteName: "origin",
       protocol: "ssh",
@@ -270,7 +272,7 @@ it.effect("publish succeeds with status remote_added when the local repo has no 
     const result = yield* service.publishRepository({
       cwd: "/workspace",
       provider: "github",
-      repository: "octocat/t3code",
+      repository: "octocat/salchi",
       visibility: "private",
       remoteName: "origin",
       protocol: "ssh",

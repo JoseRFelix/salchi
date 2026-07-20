@@ -9,7 +9,7 @@ import {
   VcsProcessExitError,
   VcsProcessSpawnError,
   VcsProcessTimeoutError,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import { ProcessRunner, layer as ProcessRunnerLive } from "../processRunner.ts";
 import * as Match from "effect/Match";
 

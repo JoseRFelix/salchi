@@ -1,4 +1,4 @@
-import type { OrchestrationEvent } from "@t3tools/contracts";
+import type { OrchestrationEvent } from "@salchi/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

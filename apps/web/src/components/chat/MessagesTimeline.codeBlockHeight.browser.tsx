@@ -4,7 +4,7 @@ import {
   EnvironmentId,
   MessageId,
   type EnvironmentId as EnvironmentIdType,
-} from "@t3tools/contracts";
+} from "@salchi/contracts";
 import { createRef, forwardRef, useImperativeHandle, useMemo, useRef } from "react";
 import type { VirtualizedListHandle } from "../virtualization/VirtualizedList";
 import { page } from "vitest/browser";
