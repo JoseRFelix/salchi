@@ -11,6 +11,7 @@ import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
@@ -25,16 +26,20 @@ interface BufferedAnalyticsEvent {
   readonly capturedAt: string;
 }
 
+const ANALYTICS_REQUEST_TIMEOUT = "5 seconds";
+export const ANALYTICS_SHUTDOWN_TIMEOUT = "1 second";
+
 const TelemetryEnvConfig = Config.all({
-  posthogKey: Config.string("T3CODE_POSTHOG_KEY").pipe(
-    Config.withDefault("phc_XOWci4oZP4VvLiEyrFqkFjP4CZn55mjYYBMREK5Wd6m"),
+  posthogKey: Config.string("SALCHI_POSTHOG_KEY").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
   ),
-  posthogHost: Config.string("T3CODE_POSTHOG_HOST").pipe(
+  posthogHost: Config.string("SALCHI_POSTHOG_HOST").pipe(
     Config.withDefault("https://us.i.posthog.com"),
   ),
-  enabled: Config.boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(true)),
-  flushBatchSize: Config.number("T3CODE_TELEMETRY_FLUSH_BATCH_SIZE").pipe(Config.withDefault(20)),
-  maxBufferedEvents: Config.number("T3CODE_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
+  enabled: Config.boolean("SALCHI_TELEMETRY_ENABLED").pipe(Config.withDefault(true)),
+  flushBatchSize: Config.number("SALCHI_TELEMETRY_FLUSH_BATCH_SIZE").pipe(Config.withDefault(20)),
+  maxBufferedEvents: Config.number("SALCHI_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
     Config.withDefault(1_000),
   ),
 });
@@ -43,7 +48,8 @@ const makeAnalyticsService = Effect.gen(function* () {
   const telemetryConfig = yield* TelemetryEnvConfig;
   const httpClient = yield* HttpClient.HttpClient;
   const serverConfig = yield* ServerConfig;
-  const identifier = yield* getTelemetryIdentifier;
+  const posthogKey = telemetryConfig.posthogKey?.trim();
+  const identifier = telemetryConfig.enabled && posthogKey ? yield* getTelemetryIdentifier : null;
   const bufferRef = yield* Ref.make<ReadonlyArray<BufferedAnalyticsEvent>>([]);
   const clientType = serverConfig.mode === "desktop" ? "desktop-app" : "cli-web-client";
 
@@ -77,10 +83,10 @@ const makeAnalyticsService = Effect.gen(function* () {
   const sendBatch = Effect.fn("sendBatch")(function* (
     events: ReadonlyArray<BufferedAnalyticsEvent>,
   ) {
-    if (!telemetryConfig.enabled || !identifier) return;
+    if (!telemetryConfig.enabled || !posthogKey || !identifier) return;
 
     const payload = {
-      api_key: telemetryConfig.posthogKey,
+      api_key: posthogKey,
       batch: events.map((event) => ({
         event: event.event,
         distinct_id: identifier,
@@ -90,7 +96,7 @@ const makeAnalyticsService = Effect.gen(function* () {
           platform: process.platform,
           wsl: process.env.WSL_DISTRO_NAME,
           arch: process.arch,
-          t3CodeVersion: packageJson.version,
+          salchiVersion: packageJson.version,
           clientType,
         },
         timestamp: event.capturedAt,
@@ -101,6 +107,7 @@ const makeAnalyticsService = Effect.gen(function* () {
       HttpClientRequest.bodyJson(payload),
       Effect.flatMap(httpClient.execute),
       Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.timeout(ANALYTICS_REQUEST_TIMEOUT),
     );
   });
 
@@ -131,7 +138,7 @@ const makeAnalyticsService = Effect.gen(function* () {
 
   const record: AnalyticsServiceShape["record"] = Effect.fn("record")(
     function* (event, properties) {
-      if (!telemetryConfig.enabled || !identifier) return;
+      if (!telemetryConfig.enabled || !posthogKey || !identifier) return;
 
       const enqueueResult = yield* enqueueBufferedEvent(event, properties);
       if (enqueueResult.dropped) {
@@ -147,7 +154,18 @@ const makeAnalyticsService = Effect.gen(function* () {
     disableYield: true,
   }).pipe(Effect.forkScoped);
 
-  yield* Effect.addFinalizer(() => flush);
+  yield* Effect.addFinalizer(() =>
+    flush.pipe(
+      Effect.interruptible,
+      Effect.timeoutOption(ANALYTICS_SHUTDOWN_TIMEOUT),
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.logWarning("Telemetry flush timed out during shutdown"),
+          onSome: () => Effect.void,
+        }),
+      ),
+    ),
+  );
 
   return {
     record,
