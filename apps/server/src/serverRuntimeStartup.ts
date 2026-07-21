@@ -32,6 +32,7 @@ import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReac
 import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
 import { ServerSettingsService } from "./serverSettings.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
+import { installInteractiveServerTerminal } from "./interactiveServerTerminal.ts";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper.ts";
@@ -243,7 +244,7 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
   } as const;
 });
 
-const resolveStartupBrowserTarget = Effect.gen(function* () {
+export const resolveStartupBrowserTarget = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig;
   const serverAuth = yield* ServerAuth;
   const localUrl = `http://localhost:${serverConfig.port}`;
@@ -267,6 +268,17 @@ const resolveStartupBrowserTarget = Effect.gen(function* () {
     ),
   );
 });
+
+export const launchServerBrowser = Effect.gen(function* () {
+  const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
+  const target = yield* resolveStartupBrowserTarget;
+  yield* externalLauncher.launchBrowser(target);
+  return `Opened Salchi in the default browser.\nURL: ${target}`;
+});
+
+export const createServerPairingCodeOutput = issueHeadlessServeAccessInfo().pipe(
+  Effect.map(formatHeadlessServeOutput),
+);
 
 const maybeOpenBrowser = (target: string) =>
   Effect.gen(function* () {
@@ -460,6 +472,13 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
         }
         yield* runStartupPhase("browser.open", maybeOpenBrowser(startupBrowserTarget));
       }
+      yield* runStartupPhase(
+        "terminal.commands.start",
+        installInteractiveServerTerminal({
+          openBrowser: launchServerBrowser,
+          createPairingCode: createServerPairingCodeOutput,
+        }).pipe(Effect.asVoid),
+      );
       yield* Effect.logDebug("startup phase: complete");
     }),
   );
