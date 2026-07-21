@@ -7465,6 +7465,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("snapshots sticky codex settings into a new draft thread", async () => {
+    const activeModelSelection = createModelSelection(
+      ProviderInstanceId.make("codex"),
+      "gpt-5.3-codex",
+    );
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {
         [ProviderInstanceId.make("codex")]: createModelSelection(
@@ -7479,12 +7483,20 @@ describe("ChatView timeline estimator parity (full app)", () => {
       stickyActiveProvider: ProviderInstanceId.make("codex"),
     });
 
+    const baseSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-sticky-codex-traits-test" as MessageId,
+      targetText: "sticky codex traits test",
+    });
+    const snapshot = {
+      ...baseSnapshot,
+      threads: baseSnapshot.threads.map((thread) =>
+        thread.id === THREAD_ID ? { ...thread, modelSelection: activeModelSelection } : thread,
+      ),
+    };
+
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      snapshot: createSnapshotForTargetUser({
-        targetMessageId: "msg-user-sticky-codex-traits-test" as MessageId,
-        targetText: "sticky codex traits test",
-      }),
+      snapshot,
     });
 
     try {
@@ -7519,7 +7531,95 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("uses the project default instead of a stale sticky model for a new thread", async () => {
+    const projectDefaultModelSelection = createModelSelection(
+      ProviderInstanceId.make("codex"),
+      "gpt-5.3-codex",
+    );
+    const baseSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-new-thread-default-model-test" as MessageId,
+      targetText: "new thread default model test",
+    });
+    const snapshot = {
+      ...baseSnapshot,
+      projects: baseSnapshot.projects.map((project) =>
+        project.id === PROJECT_ID
+          ? { ...project, defaultModelSelection: projectDefaultModelSelection }
+          : project,
+      ),
+      threads: baseSnapshot.threads.map((thread) =>
+        thread.id === THREAD_ID
+          ? { ...thread, modelSelection: projectDefaultModelSelection }
+          : thread,
+      ),
+    };
+    useComposerDraftStore.setState({
+      stickyModelSelectionByProvider: {
+        [ProviderInstanceId.make("codex")]: createModelSelection(
+          ProviderInstanceId.make("codex"),
+          "gpt-5.4",
+        ),
+      },
+      stickyActiveProvider: ProviderInstanceId.make("codex"),
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot,
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          providers: nextFixture.serverConfig.providers.map((provider) => ({
+            ...provider,
+            models: [
+              {
+                slug: "gpt-5.3-codex",
+                name: "GPT-5.3 Codex",
+                isCustom: false,
+                capabilities: createModelCapabilities({ optionDescriptors: [] }),
+              },
+              {
+                slug: "gpt-5.4",
+                name: "GPT-5.4",
+                isCustom: false,
+                capabilities: createModelCapabilities({ optionDescriptors: [] }),
+              },
+            ],
+          })),
+        };
+      },
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      await page.getByTestId("new-thread-button").click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newDraftId = draftIdFromPath(newThreadPath);
+
+      expect(composerDraftFor(newDraftId)).toMatchObject({
+        modelSelectionByProvider: {
+          codex: projectDefaultModelSelection,
+        },
+        activeProvider: "codex",
+      });
+      await expect
+        .poll(() => findComposerProviderModelPicker()?.textContent)
+        .toContain("5.3 Codex");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("hydrates the provider alongside a sticky claude model", async () => {
+    const activeModelSelection = createModelSelection(
+      ProviderInstanceId.make("claudeAgent"),
+      "claude-opus-4-6",
+    );
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {
         [ProviderInstanceId.make("claudeAgent")]: createModelSelection(
@@ -7534,12 +7634,20 @@ describe("ChatView timeline estimator parity (full app)", () => {
       stickyActiveProvider: ProviderInstanceId.make("claudeAgent"),
     });
 
+    const baseSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-sticky-claude-model-test" as MessageId,
+      targetText: "sticky claude model test",
+    });
+    const snapshot = {
+      ...baseSnapshot,
+      threads: baseSnapshot.threads.map((thread) =>
+        thread.id === THREAD_ID ? { ...thread, modelSelection: activeModelSelection } : thread,
+      ),
+    };
+
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      snapshot: createSnapshotForTargetUser({
-        targetMessageId: "msg-user-sticky-claude-model-test" as MessageId,
-        targetText: "sticky claude model test",
-      }),
+      snapshot,
     });
 
     try {
@@ -7602,6 +7710,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("prefers draft state over sticky composer settings and defaults", async () => {
+    const activeModelSelection = createModelSelection(
+      ProviderInstanceId.make("codex"),
+      "gpt-5.3-codex",
+    );
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {
         [ProviderInstanceId.make("codex")]: createModelSelection(
@@ -7616,12 +7728,20 @@ describe("ChatView timeline estimator parity (full app)", () => {
       stickyActiveProvider: ProviderInstanceId.make("codex"),
     });
 
+    const baseSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-draft-codex-traits-precedence-test" as MessageId,
+      targetText: "draft codex traits precedence test",
+    });
+    const snapshot = {
+      ...baseSnapshot,
+      threads: baseSnapshot.threads.map((thread) =>
+        thread.id === THREAD_ID ? { ...thread, modelSelection: activeModelSelection } : thread,
+      ),
+    };
+
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      snapshot: createSnapshotForTargetUser({
-        targetMessageId: "msg-user-draft-codex-traits-precedence-test" as MessageId,
-        targetText: "draft codex traits precedence test",
-      }),
+      snapshot,
     });
 
     try {
