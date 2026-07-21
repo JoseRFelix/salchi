@@ -12,6 +12,7 @@ import {
   resampleToMonoPcm,
   resolveDictationInstallationState,
   resolveDictationInsertion,
+  scaleDictationAudioLevelForVisualization,
   selectDictationAudioMimeType,
   triggerDictationStartVibration,
 } from "./dictation";
@@ -334,6 +335,16 @@ describe("dictation recording feedback", () => {
   it("calculates microphone amplitude from time-domain samples", () => {
     expect(calculateDictationAudioLevel(new Uint8Array([128, 128, 128]))).toBe(0);
     expect(calculateDictationAudioLevel(new Uint8Array([0, 255]))).toBeGreaterThan(0.99);
+  });
+
+  it("makes quiet speech visible without amplifying the noise floor", () => {
+    const noiseLevel = calculateDictationAudioLevel(new Uint8Array([127, 129, 127, 129]));
+    const quietSpeechLevel = calculateDictationAudioLevel(new Uint8Array([126, 130, 126, 130]));
+
+    expect(scaleDictationAudioLevelForVisualization(0)).toBe(0);
+    expect(scaleDictationAudioLevelForVisualization(noiseLevel)).toBeLessThan(0.1);
+    expect(scaleDictationAudioLevelForVisualization(quietSpeechLevel)).toBeGreaterThan(0.18);
+    expect(scaleDictationAudioLevelForVisualization(1)).toBe(1);
   });
 
   it("formats elapsed recording time", () => {

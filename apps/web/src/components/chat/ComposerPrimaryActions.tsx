@@ -25,6 +25,7 @@ interface ComposerPrimaryActionsProps {
   isEnvironmentUnavailable: boolean;
   isPreparingWorktree: boolean;
   hasSendableContent: boolean;
+  hideSendAction?: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
@@ -65,6 +66,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   isEnvironmentUnavailable,
   isPreparingWorktree,
   hasSendableContent,
+  hideSendAction = false,
   preserveComposerFocusOnPointerDown = false,
   onPreviousPendingQuestion,
   onInterrupt,
@@ -149,7 +151,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             </svg>
           )}
         </button>
-        {hasSendableContent ? (
+        {hasSendableContent && !hideSendAction ? (
           <button
             type="submit"
             className="flex size-8 enabled:cursor-pointer items-center justify-center rounded-full bg-primary/90 text-primary-foreground shadow-xs enabled:shadow-primary/24 enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] transition-all duration-150 hover:bg-primary hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8"
@@ -174,6 +176,10 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         ) : null}
       </div>
     );
+  }
+
+  if (hideSendAction) {
+    return null;
   }
 
   if (showPlanFollowUpPrompt) {

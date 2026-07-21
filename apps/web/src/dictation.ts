@@ -40,6 +40,9 @@ const DICTATION_START_SOUND_DURATION_SECONDS = 0.1;
 const DICTATION_START_SOUND_TIMEOUT_MS = 250;
 const DICTATION_START_VIBRATION_MS = 50;
 const DICTATION_BLANK_AUDIO_PATTERN = /^(?:\[BLANK_AUDIO\]\s*)+$/i;
+const DICTATION_VISUALIZER_NOISE_FLOOR = 0.006;
+const DICTATION_VISUALIZER_FULL_SCALE_LEVEL = 0.18;
+const DICTATION_VISUALIZER_RESPONSE_CURVE = 0.55;
 
 export interface PreparedDictationStartSound {
   readonly play: () => Promise<void>;
@@ -182,6 +185,17 @@ export function calculateDictationAudioLevel(samples: Uint8Array): number {
     sumOfSquares += normalized * normalized;
   }
   return Math.min(1, Math.sqrt(sumOfSquares / samples.length));
+}
+
+export function scaleDictationAudioLevelForVisualization(audioLevel: number): number {
+  if (!Number.isFinite(audioLevel) || audioLevel <= DICTATION_VISUALIZER_NOISE_FLOOR) return 0;
+
+  const normalizedLevel = Math.min(
+    1,
+    (audioLevel - DICTATION_VISUALIZER_NOISE_FLOOR) /
+      (DICTATION_VISUALIZER_FULL_SCALE_LEVEL - DICTATION_VISUALIZER_NOISE_FLOOR),
+  );
+  return normalizedLevel ** DICTATION_VISUALIZER_RESPONSE_CURVE;
 }
 
 export function formatDictationRecordingDuration(durationMs: number): string {

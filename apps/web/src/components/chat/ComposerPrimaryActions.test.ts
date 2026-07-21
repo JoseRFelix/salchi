@@ -8,6 +8,7 @@ const renderRunningPrimaryActions = (input: {
   isInterrupting?: boolean;
   hasSendableContent?: boolean;
   isSendBusy?: boolean;
+  hideSendAction?: boolean;
 }) =>
   renderToStaticMarkup(
     createElement(ComposerPrimaryActions, {
@@ -22,6 +23,7 @@ const renderRunningPrimaryActions = (input: {
       isEnvironmentUnavailable: false,
       isPreparingWorktree: false,
       hasSendableContent: input.hasSendableContent ?? false,
+      hideSendAction: input.hideSendAction ?? false,
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
       onImplementPlanInNewThread: () => {},
@@ -152,5 +154,16 @@ describe("ComposerPrimaryActions stop button", () => {
     expect(markup).toContain('aria-label="Queueing message"');
     expect(markup).toContain('aria-label="Stop generation"');
     expect(markup).toContain("animate-spin");
+  });
+
+  it("hides the queue action during dictation while keeping stop available", () => {
+    const markup = renderRunningPrimaryActions({
+      hasSendableContent: true,
+      hideSendAction: true,
+    });
+
+    expect(markup).not.toContain('aria-label="Queue message"');
+    expect(markup).toContain('aria-label="Stop generation"');
+    expect(markup.match(/<button/g)).toHaveLength(1);
   });
 });

@@ -10050,6 +10050,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
         findComposerProviderModelPicker,
         "Unable to find provider model picker before recording.",
       );
+      useComposerDraftStore.getState().setPrompt(THREAD_REF, "Send after dictation finishes");
+      await waitForLayout();
+      expect((await waitForSendButton()).disabled).toBe(false);
       const dictateButton = await waitForElement(
         () => document.querySelector<HTMLButtonElement>('button[aria-label="Dictate"]'),
         "Unable to find dictation control.",
@@ -10067,10 +10070,27 @@ describe("ChatView timeline estimator parity (full app)", () => {
           document.querySelector<HTMLButtonElement>('button[aria-label="Attach files"]'),
         ).toBeNull();
         expect(
+          document.querySelector<HTMLButtonElement>('button[aria-label="Send message"]'),
+        ).toBeNull();
+        expect(
           document.querySelector<HTMLElement>('[data-chat-composer-footer="true"]')?.dataset
             .chatComposerDictationActive,
         ).toBe("true");
       });
+
+      const dispatchCountBeforeBlockedSubmit = wsRequests.filter(
+        (request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand,
+      ).length;
+      const composerForm = document.querySelector<HTMLFormElement>(
+        '[data-chat-composer-form="true"]',
+      );
+      if (!composerForm) throw new Error("Unable to find composer form during dictation.");
+      const blockedSubmit = new SubmitEvent("submit", { bubbles: true, cancelable: true });
+      expect(composerForm.dispatchEvent(blockedSubmit)).toBe(false);
+      expect(blockedSubmit.defaultPrevented).toBe(true);
+      expect(
+        wsRequests.filter((request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand),
+      ).toHaveLength(dispatchCountBeforeBlockedSubmit);
 
       composerEditor.blur();
       await waitForLayout();
@@ -10115,6 +10135,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       expect(
         document.querySelector<HTMLButtonElement>('button[aria-label="Attach files"]'),
       ).toBeNull();
+      expect(
+        document.querySelector<HTMLButtonElement>('button[aria-label="Send message"]'),
+      ).toBeNull();
 
       recorders.at(-1)?.finishStop();
       const expandAfterRecordingButton = await waitForElement(
@@ -10131,6 +10154,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
         document.querySelector<HTMLElement>('[data-chat-composer-footer="true"]')?.dataset
           .chatComposerDictationActive,
       ).toBe("false");
+      expect(
+        document.querySelector<HTMLButtonElement>('button[aria-label="Send message"]'),
+      ).not.toBeNull();
     } finally {
       await mounted.cleanup();
       vi.stubGlobal("MediaRecorder", originalMediaRecorder);
