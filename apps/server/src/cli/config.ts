@@ -23,6 +23,8 @@ import {
   type ServerConfigShape,
   type StartupPresentation,
 } from "../config.ts";
+import { migrateLegacyT3Home } from "../legacyHomeMigration.ts";
+import { createLegacyHomeMigrationProgressReporter } from "../legacyHomeMigrationProgress.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
 
 export const modeFlag = Flag.choice("mode", RuntimeMode.literals).pipe(
@@ -289,6 +291,9 @@ export const resolveServerConfig = (
         ),
       ),
     );
+    yield* migrateLegacyT3Home(baseDir, {
+      onProgress: createLegacyHomeMigrationProgressReporter(),
+    });
     const rawCwd = Option.getOrElse(normalizedFlags.cwd, () => process.cwd());
     const cwd = path.resolve(yield* expandHomePath(rawCwd.trim()));
     yield* fs.makeDirectory(cwd, { recursive: true });

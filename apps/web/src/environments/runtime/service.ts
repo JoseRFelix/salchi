@@ -3176,6 +3176,26 @@ function createPrimaryEnvironmentConnection(): EnvironmentConnection {
     throw new Error("Unable to resolve the primary environment.");
   }
 
+  const stalePrimaryConnections = [...environmentConnections.values()].filter(
+    (connection) =>
+      connection.kind === "primary" && connection.environmentId !== knownEnvironment.environmentId,
+  );
+  if (stalePrimaryConnections.length > 0) {
+    for (const staleConnection of stalePrimaryConnections) {
+      const staleEnvironmentId = staleConnection.environmentId;
+      disposeThreadDetailSubscriptionsForEnvironment(staleEnvironmentId);
+      void removeConnection(staleEnvironmentId).catch((error: unknown) => {
+        console.warn("Unable to dispose a stale primary environment connection", {
+          environmentId: staleEnvironmentId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      removeCachedEnvironmentState(staleEnvironmentId);
+      useStore.getState().removeEnvironmentState(staleEnvironmentId);
+    }
+    reconcileSnapshotDerivedState();
+  }
+
   const existing = environmentConnections.get(knownEnvironment.environmentId);
   if (existing) {
     return existing;

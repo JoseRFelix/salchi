@@ -40,7 +40,7 @@ import {
 import {
   getServerConfigUpdatedNotification,
   ServerConfigUpdatedNotification,
-  startServerStateSync,
+  startServerStateSyncFromConnectionRegistry,
   useServerConfig,
   useServerConfigUpdatedSubscription,
   useServerWelcomeSubscription,
@@ -52,7 +52,9 @@ import { useColorThemeSync } from "../hooks/useColorThemeSync";
 import {
   ensureEnvironmentConnectionBootstrapped,
   getPrimaryEnvironmentConnection,
+  listEnvironmentConnections,
   listSavedEnvironmentRecords,
+  subscribeEnvironmentConnections,
   waitForSavedEnvironmentRegistryHydration,
   startEnvironmentConnectionService,
   useSavedEnvironmentRegistryStore,
@@ -331,7 +333,12 @@ function ServerStateBootstrap() {
       return;
     }
 
-    return startServerStateSync(getPrimaryEnvironmentConnection().client.server);
+    getPrimaryEnvironmentConnection();
+    return startServerStateSyncFromConnectionRegistry({
+      readConnection: () =>
+        listEnvironmentConnections().find((connection) => connection.kind === "primary") ?? null,
+      subscribe: subscribeEnvironmentConnections,
+    });
   }, []);
 
   return null;
@@ -373,6 +380,7 @@ function EventRouter() {
     updatePrimaryEnvironmentDescriptor(payload.environment);
     setActiveEnvironmentId(payload.environment.environmentId);
     void (async () => {
+      getPrimaryEnvironmentConnection();
       await ensureEnvironmentConnectionBootstrapped(payload.environment.environmentId);
       if (disposedRef.current) {
         return;
@@ -509,6 +517,7 @@ function EventRouter() {
     }
 
     updatePrimaryEnvironmentDescriptor(serverConfig.environment);
+    getPrimaryEnvironmentConnection();
     setActiveEnvironmentId(serverConfig.environment.environmentId);
   }, [serverConfig, setActiveEnvironmentId]);
 

@@ -30,6 +30,17 @@ type ServerStateClient = Pick<
   "getConfig" | "subscribeConfig" | "subscribeLifecycle"
 >;
 
+export interface ServerStateConnection {
+  readonly client: {
+    readonly server: ServerStateClient;
+  };
+}
+
+export interface ServerStateConnectionRegistry {
+  readonly readConnection: () => ServerStateConnection | null;
+  readonly subscribe: (listener: () => void) => () => void;
+}
+
 function makeStateAtom<A>(label: string, initialValue: A) {
   return Atom.make(initialValue).pipe(Atom.keepAlive, Atom.withLabel(label));
 }
@@ -202,6 +213,45 @@ export function startServerStateSync(client: ServerStateClient): () => void {
     for (const cleanup of cleanups) {
       cleanup();
     }
+  };
+}
+
+/**
+ * Keeps server-state streams attached to the current primary connection.
+ *
+ * The primary connection can be replaced when an authoritative server
+ * descriptor invalidates a cached environment id (for example immediately
+ * after the legacy T3 home migration). The registry subscription makes that
+ * replacement transparent to the config/lifecycle state owner and ensures
+ * the superseded client's streams are unsubscribed before the new ones start.
+ */
+export function startServerStateSyncFromConnectionRegistry(
+  registry: ServerStateConnectionRegistry,
+): () => void {
+  let activeConnection: ServerStateConnection | null = null;
+  let stopActiveSync: () => void = () => undefined;
+
+  const syncActiveConnection = () => {
+    const nextConnection = registry.readConnection();
+    if (nextConnection === activeConnection) {
+      return;
+    }
+
+    stopActiveSync();
+    activeConnection = nextConnection;
+    stopActiveSync = nextConnection
+      ? startServerStateSync(nextConnection.client.server)
+      : () => undefined;
+  };
+
+  syncActiveConnection();
+  const unsubscribeRegistry = registry.subscribe(syncActiveConnection);
+
+  return () => {
+    unsubscribeRegistry();
+    stopActiveSync();
+    stopActiveSync = () => undefined;
+    activeConnection = null;
   };
 }
 
