@@ -47,8 +47,10 @@ That makes Salchi useful when you want:
   conversation surface.
 - PWA push notifications for agent activity. On mobile, install Salchi to the
   Home Screen first so notifications can work.
-- Local microphone dictation with a deferred, automatic `whisper.cpp` installation on supported
-  Linux hosts.
+- Local microphone dictation powered by `whisper.cpp`, with selectable Tiny,
+  Base, and Small English models so you can balance transcription accuracy
+  against CPU and memory use on your VPS or computer. On supported Linux hosts,
+  `whisper.cpp` and the selected model install automatically in the background.
 - Mobile-first PWA polish for coding-agent workflows that need to stay useful on
   small screens.
 
