@@ -11,6 +11,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 const SIDECAR_REGISTRY_DIRECTORY = "sidecars";
+const SIDECAR_REAP_CONCURRENCY = 8;
 const SIDECAR_TERMINATE_ATTEMPTS = 10;
 const SIDECAR_TERMINATE_RETRY_DELAY = "200 millis";
 
@@ -143,25 +144,43 @@ export const registerManagedWhisperSidecarProcess = Effect.fn(
   readonly processControl?: ManagedWhisperProcessControl;
 }) {
   const processControl = input.processControl ?? defaultProcessControl;
+  let registration: ManagedWhisperSidecarRegistration | undefined;
+  yield* Effect.addFinalizer(() =>
+    input.terminate.pipe(
+      Effect.ignore,
+      Effect.andThen(
+        Effect.suspend(() =>
+          registration === undefined
+            ? Effect.void
+            : removeRegistrationIfSidecarExited({ registration, processControl }),
+        ),
+      ),
+      Effect.ignore,
+    ),
+  );
+
   const owner = safeReadIdentity(processControl, process.pid);
   const sidecar = safeReadIdentity(processControl, input.sidecarPid);
   if (!owner || !sidecar) return;
 
   const registryDirectory = managedWhisperSidecarRegistryDirectory(input.cacheDir);
-  const registration: ManagedWhisperSidecarRegistration = {
+  const nextRegistration: ManagedWhisperSidecarRegistration = {
     filePath: join(registryDirectory, `${randomUUID()}.json`),
     record: { version: 1, owner, sidecar },
   };
-  const contents = yield* encodeSidecarRecord(registration.record);
-  yield* writeFileStringAtomically({
-    filePath: registration.filePath,
-    contents: `${contents}\n`,
-  });
-  yield* Effect.addFinalizer(() =>
-    input.terminate.pipe(
-      Effect.ignore,
-      Effect.andThen(removeRegistrationIfSidecarExited({ registration, processControl })),
-      Effect.ignore,
+  registration = yield* Effect.gen(function* () {
+    const contents = yield* encodeSidecarRecord(nextRegistration.record);
+    yield* writeFileStringAtomically({
+      filePath: nextRegistration.filePath,
+      contents: `${contents}\n`,
+    });
+    return nextRegistration;
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Unable to persist managed Whisper sidecar ownership", {
+        cacheDir: input.cacheDir,
+        cause,
+      }).pipe(Effect.as(undefined)),
     ),
   );
 });
@@ -250,11 +269,14 @@ export const reapManagedWhisperSidecars = Effect.fn("managedWhisper.reapSidecars
       .readDirectory(registryDirectory)
       .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)));
     const processControl = input.processControl ?? defaultProcessControl;
-    for (const entry of entries) {
-      yield* reapSidecarRecord({
-        filePath: path.join(registryDirectory, entry),
-        processControl,
-      }).pipe(Effect.catchCause(() => Effect.void));
-    }
+    yield* Effect.forEach(
+      entries,
+      (entry) =>
+        reapSidecarRecord({
+          filePath: path.join(registryDirectory, entry),
+          processControl,
+        }).pipe(Effect.catchCause(() => Effect.void)),
+      { concurrency: SIDECAR_REAP_CONCURRENCY, discard: true },
+    );
   },
 );

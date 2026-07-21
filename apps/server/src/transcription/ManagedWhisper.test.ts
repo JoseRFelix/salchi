@@ -234,6 +234,96 @@ it.effect("escalates when process inspection or TERM signaling fails", () =>
 );
 
 it.layer(NodeServices.layer)("managed Whisper sidecar crash cleanup", (it) => {
+  it.effect("terminates an untracked sidecar when default identity lookup is unavailable", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const baseDirectory = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "managed-whisper-sidecar-default-control-test-",
+        });
+        const signals: string[] = [];
+        const child = makeProcessHandle(Effect.never, {
+          kill: (options) =>
+            Effect.sync(() => {
+              signals.push(options?.killSignal ?? "SIGTERM");
+            }),
+        });
+        Object.defineProperty(child, "pid", {
+          configurable: true,
+          value: ChildProcessSpawner.ProcessId(2_147_483_647),
+        });
+        const started = yield* Deferred.make<void>();
+        const owner = yield* Effect.gen(function* () {
+          yield* registerManagedWhisperSidecarLifecycle({
+            cacheDir: baseDirectory,
+            child,
+          });
+          yield* Deferred.succeed(started, undefined);
+          return yield* Effect.never;
+        }).pipe(Effect.scoped, Effect.forkChild);
+        yield* Deferred.await(started);
+
+        const registryDirectory = managedWhisperSidecarRegistryDirectory(baseDirectory);
+        expect(
+          yield* fileSystem
+            .readDirectory(registryDirectory)
+            .pipe(Effect.catch(() => Effect.succeed([]))),
+        ).toEqual([]);
+        yield* Fiber.interrupt(owner);
+
+        expect(signals).toEqual(["SIGTERM"]);
+      }),
+    ),
+  );
+
+  it.effect("keeps termination cleanup when ownership persistence fails", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDirectory = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "managed-whisper-sidecar-registry-failure-test-",
+        });
+        const blockedCachePath = path.join(baseDirectory, "not-a-directory");
+        yield* fileSystem.writeFileString(blockedCachePath, "blocked");
+        const identities = new Map([
+          [process.pid, { pid: process.pid, startTimeTicks: "100" }],
+          [91_002, { pid: 91_002, startTimeTicks: "200" }],
+        ]);
+        const processControl: ManagedWhisperProcessControl = {
+          readIdentity: (pid) => identities.get(pid) ?? null,
+          signal: () => false,
+        };
+        const signals: string[] = [];
+        const child = makeProcessHandle(Effect.never, {
+          kill: (options) =>
+            Effect.sync(() => {
+              signals.push(options?.killSignal ?? "SIGTERM");
+              identities.delete(91_002);
+            }),
+        });
+        Object.defineProperty(child, "pid", {
+          configurable: true,
+          value: ChildProcessSpawner.ProcessId(91_002),
+        });
+        const started = yield* Deferred.make<void>();
+        const owner = yield* Effect.gen(function* () {
+          yield* registerManagedWhisperSidecarLifecycle({
+            cacheDir: blockedCachePath,
+            child,
+            processControl,
+          });
+          yield* Deferred.succeed(started, undefined);
+          return yield* Effect.never;
+        }).pipe(Effect.scoped, Effect.forkChild);
+        yield* Deferred.await(started);
+        yield* Fiber.interrupt(owner);
+
+        expect(signals).toEqual(["SIGTERM"]);
+      }),
+    ),
+  );
+
   it.effect("removes the ownership record when an interrupted scope terminates its sidecar", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -346,6 +436,50 @@ it.layer(NodeServices.layer)("managed Whisper sidecar crash cleanup", (it) => {
           "active.json",
           "unknown.json",
         ]);
+      }),
+    ),
+  );
+
+  it.effect("starts independent stale sidecar reaps concurrently", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDirectory = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "managed-whisper-sidecar-concurrent-reaper-test-",
+        });
+        const registryDirectory = managedWhisperSidecarRegistryDirectory(baseDirectory);
+        yield* fileSystem.makeDirectory(registryDirectory, { recursive: true });
+        for (const pid of [301, 302]) {
+          yield* fileSystem.writeFileString(
+            path.join(registryDirectory, `${String(pid)}.json`),
+            `{"version":1,"owner":{"pid":${String(pid + 100)},"startTimeTicks":"1"},` +
+              `"sidecar":{"pid":${String(pid)},"startTimeTicks":"2"}}`,
+          );
+        }
+
+        const identities = new Map([
+          [301, { pid: 301, startTimeTicks: "2" }],
+          [302, { pid: 302, startTimeTicks: "2" }],
+        ]);
+        const bothSignaled = yield* Deferred.make<void>();
+        const signals: number[] = [];
+        const processControl: ManagedWhisperProcessControl = {
+          readIdentity: (pid) => identities.get(pid) ?? null,
+          signal: (pid) => {
+            signals.push(pid);
+            if (signals.length === 2) Deferred.doneUnsafe(bothSignaled, Effect.void);
+            return true;
+          },
+        };
+        const reaper = yield* reapManagedWhisperSidecars({
+          cacheDir: baseDirectory,
+          processControl,
+        }).pipe(Effect.forkChild);
+
+        yield* Deferred.await(bothSignaled).pipe(Effect.timeout("1 second"));
+        expect(signals.toSorted()).toEqual([301, 302]);
+        yield* Fiber.interrupt(reaper);
       }),
     ),
   );
