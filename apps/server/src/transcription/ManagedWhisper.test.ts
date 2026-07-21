@@ -13,8 +13,12 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   awaitSidecarHealth,
+  managedWhisperSidecarRegistryDirectory,
   makeManagedWhisperSidecarCommand,
   ManagedWhisperError,
+  type ManagedWhisperProcessControl,
+  reapManagedWhisperSidecars,
+  registerManagedWhisperSidecarLifecycle,
   resolveManagedWhisperModelAsset,
   runTarExtraction,
   terminateManagedChildProcess,
@@ -33,6 +37,9 @@ it("isolates the managed sidecar from terminal signals sent to the server proces
   });
 
   expect(command.options.detached).toBe(true);
+  expect(command.options.stdin).toBe("ignore");
+  expect(command.options.stdout).toBe("ignore");
+  expect(command.options.stderr).toBe("ignore");
 });
 
 function makeProcessHandle(
@@ -225,6 +232,124 @@ it.effect("escalates when process inspection or TERM signaling fails", () =>
     expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
   }),
 );
+
+it.layer(NodeServices.layer)("managed Whisper sidecar crash cleanup", (it) => {
+  it.effect("removes the ownership record when an interrupted scope terminates its sidecar", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const baseDirectory = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "managed-whisper-sidecar-lifecycle-test-",
+        });
+        const identities = new Map([
+          [process.pid, { pid: process.pid, startTimeTicks: "100" }],
+          [91_001, { pid: 91_001, startTimeTicks: "200" }],
+        ]);
+        const processControl: ManagedWhisperProcessControl = {
+          readIdentity: (pid) => identities.get(pid) ?? null,
+          signal: () => false,
+        };
+        const signals: string[] = [];
+        const child = makeProcessHandle(Effect.never, {
+          kill: (options) =>
+            Effect.sync(() => {
+              signals.push(options?.killSignal ?? "SIGTERM");
+              identities.delete(91_001);
+            }),
+        });
+        Object.defineProperty(child, "pid", {
+          configurable: true,
+          value: ChildProcessSpawner.ProcessId(91_001),
+        });
+        const started = yield* Deferred.make<void>();
+        const owner = yield* Effect.gen(function* () {
+          yield* registerManagedWhisperSidecarLifecycle({
+            cacheDir: baseDirectory,
+            child,
+            processControl,
+          });
+          yield* Deferred.succeed(started, undefined);
+          return yield* Effect.never;
+        }).pipe(Effect.scoped, Effect.forkChild);
+        yield* Deferred.await(started);
+
+        const registryDirectory = managedWhisperSidecarRegistryDirectory(baseDirectory);
+        expect(yield* fileSystem.readDirectory(registryDirectory)).toHaveLength(1);
+        yield* Fiber.interrupt(owner);
+
+        expect(signals).toEqual(["SIGTERM"]);
+        expect(yield* fileSystem.readDirectory(registryDirectory)).toEqual([]);
+      }),
+    ),
+  );
+
+  it.effect("reaps only a sidecar whose exact owner lifetime is stale", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDirectory = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "managed-whisper-sidecar-reaper-test-",
+        });
+        const registryDirectory = managedWhisperSidecarRegistryDirectory(baseDirectory);
+        yield* fileSystem.makeDirectory(registryDirectory, { recursive: true });
+        const record = (
+          ownerPid: number,
+          ownerStart: string,
+          childPid: number,
+          childStart: string,
+        ) =>
+          `{"version":1,"owner":{"pid":${ownerPid},"startTimeTicks":"${ownerStart}"},` +
+          `"sidecar":{"pid":${childPid},"startTimeTicks":"${childStart}"}}`;
+        yield* fileSystem.writeFileString(
+          path.join(registryDirectory, "active.json"),
+          record(101, "1001", 201, "2001"),
+        );
+        yield* fileSystem.writeFileString(
+          path.join(registryDirectory, "stale.json"),
+          record(102, "1002", 202, "2002"),
+        );
+        yield* fileSystem.writeFileString(
+          path.join(registryDirectory, "reused.json"),
+          record(103, "1003", 203, "2003"),
+        );
+        yield* fileSystem.writeFileString(
+          path.join(registryDirectory, "unknown.json"),
+          record(104, "1004", 204, "2004"),
+        );
+
+        const identities = new Map([
+          [101, { pid: 101, startTimeTicks: "1001" }],
+          [201, { pid: 201, startTimeTicks: "2001" }],
+          [103, { pid: 103, startTimeTicks: "3003" }],
+          [202, { pid: 202, startTimeTicks: "2002" }],
+          [203, { pid: 203, startTimeTicks: "4003" }],
+          [204, { pid: 204, startTimeTicks: "2004" }],
+        ]);
+        const signals: Array<{ readonly pid: number; readonly signal: string }> = [];
+        const processControl: ManagedWhisperProcessControl = {
+          readIdentity: (pid) => (pid === 104 ? undefined : (identities.get(pid) ?? null)),
+          signal: (pid, signal) => {
+            signals.push({ pid, signal });
+            identities.delete(pid);
+            return true;
+          },
+        };
+
+        yield* reapManagedWhisperSidecars({
+          cacheDir: baseDirectory,
+          processControl,
+        });
+
+        expect(signals).toEqual([{ pid: 202, signal: "SIGTERM" }]);
+        expect((yield* fileSystem.readDirectory(registryDirectory)).toSorted()).toEqual([
+          "active.json",
+          "unknown.json",
+        ]);
+      }),
+    ),
+  );
+});
 
 it.layer(NodeServices.layer)("managed Whisper cache lifecycle", (it) => {
   it.effect("allows an installed runtime to atomically replace its temporary directory", () =>

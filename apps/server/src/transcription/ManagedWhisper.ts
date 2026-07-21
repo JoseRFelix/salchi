@@ -18,6 +18,18 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { ServerConfig } from "../config.ts";
+import {
+  managedWhisperSidecarRegistryDirectory,
+  type ManagedWhisperProcessControl,
+  reapManagedWhisperSidecars,
+  registerManagedWhisperSidecarProcess,
+} from "./ManagedWhisperProcessRegistry.ts";
+
+export {
+  managedWhisperSidecarRegistryDirectory,
+  type ManagedWhisperProcessControl,
+  reapManagedWhisperSidecars,
+};
 
 export const MANAGED_WHISPER_VERSION = "v1.9.1";
 const MANAGED_WHISPER_DOWNLOAD_TIMEOUT = "15 minutes";
@@ -478,6 +490,21 @@ const addManagedChildProcessFinalizer = (
 ): Effect.Effect<void, never, import("effect/Scope").Scope> =>
   Effect.addFinalizer(() => terminateManagedChildProcess(child).pipe(Effect.ignore));
 
+export const registerManagedWhisperSidecarLifecycle = Effect.fn(
+  "managedWhisper.registerSidecarLifecycle",
+)(function* (input: {
+  readonly cacheDir: string;
+  readonly child: ChildProcessSpawner.ChildProcessHandle;
+  readonly processControl?: ManagedWhisperProcessControl;
+}) {
+  yield* registerManagedWhisperSidecarProcess({
+    cacheDir: input.cacheDir,
+    sidecarPid: Number(input.child.pid),
+    terminate: terminateManagedChildProcess(input.child),
+    ...(input.processControl ? { processControl: input.processControl } : {}),
+  });
+});
+
 export const runTarExtraction = Effect.fn("managedWhisper.runTarExtraction")(function* (input: {
   readonly archivePath: string;
   readonly destination: string;
@@ -678,7 +705,7 @@ export function makeManagedWhisperSidecarCommand(input: {
       detached: true,
       stdin: "ignore",
       stdout: "ignore",
-      stderr: "inherit",
+      stderr: "ignore",
     },
   );
 }
@@ -707,7 +734,10 @@ const startManagedSidecar = Effect.fn("managedWhisper.startSidecar")(function* (
           temporaryDirectory,
         }),
       );
-      yield* addManagedChildProcessFinalizer(child);
+      yield* registerManagedWhisperSidecarLifecycle({
+        cacheDir: input.cacheDir,
+        child,
+      });
       return child;
     }),
   );
@@ -751,6 +781,7 @@ const provisionManagedWhisperInternal = Effect.fn("managedWhisper.provision")(fu
   }
 
   const cacheDir = path.join(config.providerStatusCacheDir, "dictation");
+  yield* reapManagedWhisperSidecars({ cacheDir });
   yield* input.onStatus({
     configured: true,
     state: "checking",
