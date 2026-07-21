@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -141,4 +142,35 @@ describe("tailscale", () => {
       ]);
     });
   });
+
+  it.effect("bounds a stalled tailscale serve shutdown to one second", () =>
+    Effect.gen(function* () {
+      const stalledHandle = ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(1),
+        exitCode: Effect.never,
+        isRunning: Effect.succeed(true),
+        kill: () => Effect.void,
+        unref: Effect.succeed(Effect.void),
+        stdin: Sink.drain,
+        stdout: Stream.empty,
+        stderr: Stream.never,
+        all: Stream.empty,
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+      });
+      const layer = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() => Effect.succeed(stalledHandle)),
+      );
+      const shutdown = yield* disableTailscaleServe().pipe(
+        Effect.provide(layer),
+        Effect.exit,
+        Effect.forkScoped,
+      );
+
+      yield* TestClock.adjust("1 second");
+
+      assert.isTrue(shutdown.pollUnsafe() !== undefined);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
 });
