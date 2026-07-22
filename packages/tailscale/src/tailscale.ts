@@ -10,6 +10,7 @@ import { resolveSpawnCommand } from "@salchi/shared/shell";
 export const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 export const TAILSCALE_STATUS_TIMEOUT_MS = 1_500;
 export const TAILSCALE_SERVE_TIMEOUT_MS = 10_000;
+export const TAILSCALE_SERVE_SHUTDOWN_TIMEOUT_MS = 1_000;
 export const TAILSCALE_PROBE_TIMEOUT_MS = 2_500;
 
 export class TailscaleCommandError extends Data.TaggedError("TailscaleCommandError")<{
@@ -287,7 +288,7 @@ export const disableTailscaleServe = (
       runMessage: "Failed to run tailscale serve off.",
       exitMessage: (exitCode) => `Tailscale serve off exited with code ${exitCode}.`,
       timeoutMessage: "Tailscale serve off timed out.",
-      timeoutMs: TAILSCALE_SERVE_TIMEOUT_MS,
+      timeoutMs: TAILSCALE_SERVE_SHUTDOWN_TIMEOUT_MS,
     });
   });
 
