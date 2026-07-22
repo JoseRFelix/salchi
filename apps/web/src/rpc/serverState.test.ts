@@ -21,6 +21,7 @@ import {
   onWelcome,
   resetServerStateForTests,
   startServerStateSync,
+  startServerStateSyncFromConnectionRegistry,
 } from "./serverState";
 
 function registerListener<T>(listeners: Set<(event: T) => void>, listener: (event: T) => void) {
@@ -146,6 +147,54 @@ describe("serverState", () => {
   it("uses default keybindings before a server config snapshot is available", () => {
     expect(getServerConfig()).toBeNull();
     expect(getServerKeybindings()).toEqual(DEFAULT_RESOLVED_KEYBINDINGS);
+  });
+
+  it("moves stream ownership when the primary environment connection is replaced", () => {
+    const makeConnection = () => {
+      const unsubscribeConfig = vi.fn();
+      const unsubscribeLifecycle = vi.fn();
+      const server = {
+        getConfig: vi.fn(async () => baseServerConfig),
+        subscribeConfig: vi.fn(() => unsubscribeConfig),
+        subscribeLifecycle: vi.fn(() => unsubscribeLifecycle),
+      };
+      return {
+        connection: { client: { server } },
+        server,
+        unsubscribeConfig,
+        unsubscribeLifecycle,
+      };
+    };
+    const initial = makeConnection();
+    const replacement = makeConnection();
+    let currentConnection: typeof initial.connection | null = initial.connection;
+    let emitRegistryChange: () => void = () => undefined;
+    const unsubscribeRegistry = vi.fn();
+
+    const stop = startServerStateSyncFromConnectionRegistry({
+      readConnection: () => currentConnection,
+      subscribe: (listener) => {
+        emitRegistryChange = listener;
+        return unsubscribeRegistry;
+      },
+    });
+
+    expect(initial.server.subscribeConfig).toHaveBeenCalledOnce();
+    expect(initial.server.subscribeLifecycle).toHaveBeenCalledOnce();
+
+    currentConnection = replacement.connection;
+    emitRegistryChange();
+
+    expect(initial.unsubscribeConfig).toHaveBeenCalledOnce();
+    expect(initial.unsubscribeLifecycle).toHaveBeenCalledOnce();
+    expect(replacement.server.subscribeConfig).toHaveBeenCalledOnce();
+    expect(replacement.server.subscribeLifecycle).toHaveBeenCalledOnce();
+
+    stop();
+
+    expect(unsubscribeRegistry).toHaveBeenCalledOnce();
+    expect(replacement.unsubscribeConfig).toHaveBeenCalledOnce();
+    expect(replacement.unsubscribeLifecycle).toHaveBeenCalledOnce();
   });
 
   it("bootstraps the server config snapshot and replays it to late subscribers", async () => {

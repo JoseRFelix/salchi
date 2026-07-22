@@ -757,6 +757,61 @@ describe("retainThreadDetailSubscription", () => {
     await resetEnvironmentServiceForTests();
   });
 
+  it("replaces a stale primary connection when migration changes the environment id", async () => {
+    const {
+      getPrimaryEnvironmentConnection,
+      listEnvironmentConnections,
+      resetEnvironmentServiceForTests,
+      startEnvironmentConnectionService,
+    } = await import("./service");
+    const { useStore } = await import("../../store");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const staleEnvironmentId = EnvironmentId.make("env-1");
+    const migratedEnvironmentId = EnvironmentId.make("env-migrated");
+    const threadId = ThreadId.make("thread-migrated");
+    const staleConnectionInput = mockCreateEnvironmentConnection.mock.calls[0]?.[0];
+    expect(staleConnectionInput).toBeDefined();
+    staleConnectionInput.syncShellSnapshot(
+      makeThreadShellSnapshot({ threadId, sessionStatus: "idle" }),
+      staleEnvironmentId,
+    );
+
+    mockGetPrimaryKnownEnvironment.mockReturnValue({
+      id: migratedEnvironmentId,
+      label: "Primary environment",
+      source: "window-origin",
+      target: {
+        httpBaseUrl: "http://127.0.0.1:3000/",
+        wsBaseUrl: "ws://127.0.0.1:3000/",
+      },
+      environmentId: migratedEnvironmentId,
+    });
+
+    getPrimaryEnvironmentConnection();
+    const migratedConnectionInput = mockCreateEnvironmentConnection.mock.calls[1]?.[0];
+    expect(migratedConnectionInput).toBeDefined();
+    migratedConnectionInput.syncShellSnapshot(
+      makeThreadShellSnapshot({ threadId, sessionStatus: "idle" }),
+      migratedEnvironmentId,
+    );
+
+    expect(listEnvironmentConnections().map((connection) => connection.environmentId)).toEqual([
+      migratedEnvironmentId,
+    ]);
+    expect(useStore.getState().environmentStateById[staleEnvironmentId]).toBeUndefined();
+    expect(
+      useStore.getState().environmentStateById[migratedEnvironmentId]?.threadShellById[threadId]
+        ?.environmentId,
+    ).toBe(migratedEnvironmentId);
+    expect(mockCreateEnvironmentConnection.mock.results[0]?.value.dispose).toHaveBeenCalledOnce();
+
+    stop();
+    useStore.getState().removeEnvironmentState(staleEnvironmentId);
+    useStore.getState().removeEnvironmentState(migratedEnvironmentId);
+    await resetEnvironmentServiceForTests();
+  });
+
   it("keeps non-idle thread detail subscriptions attached until the thread becomes idle", async () => {
     const {
       retainThreadDetailSubscription,
