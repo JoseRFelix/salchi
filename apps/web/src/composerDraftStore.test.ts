@@ -813,6 +813,31 @@ describe("composerDraftStore project draft thread mapping", () => {
     ]);
   });
 
+  it("uses an initial model selection after applying sticky composer traits", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setStickyModelSelection(
+      modelSelection(CODEX_DRIVER, "gpt-5.4", {
+        reasoningEffort: "high",
+        fastMode: true,
+      }),
+    );
+    store.initializeFreshProjectDraftThread(scopedProjectKey(projectRef), projectRef, draftId, {
+      threadId,
+      initialModelSelection: modelSelection(CODEX_DRIVER, "gpt-5.3-codex"),
+    });
+
+    expect(useComposerDraftStore.getState().getComposerDraft(draftId)).toMatchObject({
+      activeProvider: CODEX_INSTANCE,
+      modelSelectionByProvider: {
+        [CODEX_INSTANCE]: modelSelection(CODEX_DRIVER, "gpt-5.3-codex", {
+          reasoningEffort: "high",
+          fastMode: true,
+        }),
+      },
+    });
+  });
+
   it("does not apply sticky state when a reused draft id is not initialized", () => {
     const store = useComposerDraftStore.getState();
     const staleSelection = modelSelection(CODEX_DRIVER, "stale-draft-model");

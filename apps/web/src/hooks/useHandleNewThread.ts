@@ -1,5 +1,11 @@
 import { scopedProjectKey, scopeProjectRef } from "@salchi/client-runtime";
-import { DEFAULT_RUNTIME_MODE, type ScopedProjectRef } from "@salchi/contracts";
+import {
+  DEFAULT_MODEL,
+  DEFAULT_RUNTIME_MODE,
+  type ModelSelection,
+  ProviderInstanceId,
+  type ScopedProjectRef,
+} from "@salchi/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -15,7 +21,7 @@ import {
   getProjectOrderKey,
   selectProjectGroupingSettings,
 } from "../logicalProject";
-import { selectProjectsAcrossEnvironments, useStore } from "../store";
+import { selectProjectsAcrossEnvironments, selectThreadByRef, useStore } from "../store";
 import {
   draftThreadExistsOnServer,
   draftThreadServerRef,
@@ -44,7 +50,9 @@ function useNewThreadState() {
         envMode?: DraftThreadEnvMode;
       },
     ): Promise<void> => {
+      const composerDraftStore = useComposerDraftStore.getState();
       const {
+        getComposerDraft,
         getDraftSessionByLogicalProjectKey,
         getDraftSession,
         getDraftThread,
@@ -52,7 +60,7 @@ function useNewThreadState() {
         markDraftThreadPromoting,
         setDraftThreadContext,
         setLogicalProjectDraftThreadId,
-      } = useComposerDraftStore.getState();
+      } = composerDraftStore;
       const currentRouteTarget = getCurrentRouteTarget();
       const project = projects.find(
         (candidate) =>
@@ -62,6 +70,45 @@ function useNewThreadState() {
       const logicalProjectKey = project
         ? deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings)
         : scopedProjectKey(projectRef);
+      const projectDefaultModelSelection: ModelSelection = project?.defaultModelSelection ?? {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: DEFAULT_MODEL,
+      };
+      const readComposerModelSelection = (
+        target: Parameters<typeof getComposerDraft>[0],
+      ): ModelSelection | null => {
+        const composerDraft = getComposerDraft(target);
+        const activeInstanceId = composerDraft?.activeProvider;
+        return activeInstanceId
+          ? (composerDraft.modelSelectionByProvider[activeInstanceId] ?? null)
+          : null;
+      };
+      let initialModelSelection = projectDefaultModelSelection;
+      if (currentRouteTarget?.kind === "server") {
+        const currentThread = selectThreadByRef(useStore.getState(), currentRouteTarget.threadRef);
+        if (
+          currentThread?.environmentId === projectRef.environmentId &&
+          currentThread.projectId === projectRef.projectId
+        ) {
+          initialModelSelection =
+            readComposerModelSelection(currentRouteTarget.threadRef) ??
+            currentThread.modelSelection;
+        }
+      } else if (currentRouteTarget?.kind === "draft") {
+        const currentDraftSession = getDraftSession(currentRouteTarget.draftId);
+        if (
+          currentDraftSession?.environmentId === projectRef.environmentId &&
+          currentDraftSession.projectId === projectRef.projectId
+        ) {
+          initialModelSelection =
+            readComposerModelSelection(currentRouteTarget.draftId) ?? projectDefaultModelSelection;
+        }
+      }
+      const shouldSeedInitialModelSelection =
+        Object.keys(composerDraftStore.stickyModelSelectionByProvider).length > 0 ||
+        composerDraftStore.stickyActiveProvider !== null ||
+        initialModelSelection.instanceId !== projectDefaultModelSelection.instanceId ||
+        initialModelSelection.model !== projectDefaultModelSelection.model;
       const hasBranchOption = options?.branch !== undefined;
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
@@ -143,6 +190,7 @@ function useNewThreadState() {
           worktreePath: options?.worktreePath ?? null,
           envMode: options?.envMode ?? "local",
           runtimeMode: DEFAULT_RUNTIME_MODE,
+          ...(shouldSeedInitialModelSelection ? { initialModelSelection } : {}),
         });
         if (storedDraftThread) {
           finalizeMaterializedPromotedDraftThreadByRef(draftThreadServerRef(storedDraftThread));

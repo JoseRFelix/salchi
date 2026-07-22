@@ -309,6 +309,7 @@ interface DraftThreadInitializationOptions {
   runtimeMode?: RuntimeMode;
   interactionMode?: ProviderInteractionMode;
   sourceProposedPlan?: DraftSourceProposedPlan | null;
+  initialModelSelection?: ModelSelection;
 }
 
 /**
@@ -346,7 +347,7 @@ interface ComposerDraftStoreState {
     draftId: DraftId,
     options?: DraftThreadInitializationOptions,
   ) => void;
-  /** Creates a fresh draft session and snapshots the current sticky model state into it. */
+  /** Creates a fresh draft session and snapshots the current composer preferences into it. */
   initializeFreshProjectDraftThread: (
     logicalProjectKey: string,
     projectRef: ScopedProjectRef,
@@ -2176,6 +2177,12 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             get().getDraftSessionByLogicalProjectKey(logicalProjectKey);
           if (initializedDraftSession?.draftId === draftId) {
             get().applyStickyState(draftId);
+            if (options?.initialModelSelection) {
+              // Sticky state retains cross-thread traits such as reasoning effort and fast mode,
+              // but the caller's contextual model (current thread or project default) is
+              // authoritative for a newly created thread.
+              get().setModelSelection(draftId, options.initialModelSelection);
+            }
           }
         },
         setProjectDraftThreadId: (projectRef, draftId, options) => {
