@@ -393,6 +393,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   isConnecting: boolean;
   isEnvironmentUnavailable: boolean;
   hasSendableContent: boolean;
+  hideSendAction: boolean;
   primaryActionLeadingContent: ReactNode;
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
@@ -423,6 +424,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         isEnvironmentUnavailable={props.isEnvironmentUnavailable}
         isPreparingWorktree={props.isPreparingWorktree}
         hasSendableContent={props.hasSendableContent}
+        hideSendAction={props.hideSendAction}
         preserveComposerFocusOnPointerDown={props.preserveComposerFocusOnPointerDown ?? false}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
         onInterrupt={props.onInterrupt}
@@ -1898,12 +1900,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const submitComposer = useCallback(
     (event?: { preventDefault: () => void }) => {
+      if (isDictationActive) {
+        event?.preventDefault();
+        return;
+      }
       onSend(event);
       if (shouldBlurMobileComposerOnSubmit()) {
         blurMobileComposerAfterSend();
       }
     },
-    [blurMobileComposerAfterSend, onSend, shouldBlurMobileComposerOnSubmit],
+    [blurMobileComposerAfterSend, isDictationActive, onSend, shouldBlurMobileComposerOnSubmit],
   );
   const expandMobileComposer = useCallback(() => {
     if (composerBlurFrameRef.current !== null) {
@@ -2848,6 +2854,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   isEnvironmentUnavailable={environmentUnavailable !== null}
                   isPreparingWorktree={isPreparingWorktree}
                   hasSendableContent={composerSendState.hasSendableContent}
+                  hideSendAction={isDictationActive}
                   primaryActionLeadingContent={
                     <ComposerDictationButton
                       key={dictationRecordingOwnerKey}

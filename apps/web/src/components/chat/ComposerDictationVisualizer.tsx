@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 
-import { calculateDictationAudioLevel, formatDictationRecordingDuration } from "../../dictation";
+import {
+  calculateDictationAudioLevel,
+  formatDictationRecordingDuration,
+  scaleDictationAudioLevelForVisualization,
+} from "../../dictation";
 
 const SAMPLE_INTERVAL_MS = 45;
 const BAR_WIDTH_PX = 2;
@@ -58,7 +62,7 @@ export function ComposerDictationVisualizer(props: {
       audioContext = new AudioContext();
       source = audioContext.createMediaStreamSource(props.stream);
       analyser = audioContext.createAnalyser();
-      analyser.fftSize = 256;
+      analyser.fftSize = 2_048;
       analyser.smoothingTimeConstant = 0.72;
       source.connect(analyser);
       if (audioContext.state === "suspended") {
@@ -88,7 +92,7 @@ export function ComposerDictationVisualizer(props: {
       if (timestamp - lastSampleTime >= SAMPLE_INTERVAL_MS) {
         analyser.getByteTimeDomainData(samples);
         const rawLevel = calculateDictationAudioLevel(samples);
-        const visibleLevel = rawLevel < 0.015 ? 0 : Math.min(1, rawLevel * 4.5);
+        const visibleLevel = scaleDictationAudioLevelForVisualization(rawLevel);
         history.shift();
         history.push(visibleLevel);
         lastSampleTime = timestamp;
