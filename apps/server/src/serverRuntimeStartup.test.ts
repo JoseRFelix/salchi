@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { DEFAULT_MODEL, ProjectId, ProviderInstanceId, ThreadId } from "@salchi/contracts";
-import { assert, it } from "@effect/vitest";
+import { assert, expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -17,8 +17,11 @@ import {
 } from "./orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
+import * as ExternalLauncher from "./process/externalLauncher.ts";
+import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import {
   getAutoBootstrapDefaultModelSelection,
+  launchServerBrowser,
   launchStartupHeartbeat,
   makeCommandGate,
   resolveAutoBootstrapWelcomeTargets,
@@ -126,6 +129,34 @@ it.effect("resolveWelcomeBase derives cwd and project name from server config", 
       cwd: "/tmp/startup-project",
       projectName: "startup-project",
     });
+  }),
+);
+
+it.effect("explicit browser launch still works when automatic browser opening is disabled", () =>
+  Effect.gen(function* () {
+    const launchedTarget = yield* Ref.make<string | null>(null);
+    const message = yield* launchServerBrowser.pipe(
+      Effect.provideService(ServerConfig, {
+        mode: "desktop",
+        port: 3773,
+        host: "127.0.0.1",
+        devUrl: undefined,
+        noBrowser: true,
+        tailscaleServeEnabled: false,
+        tailscaleServePort: 443,
+      } as never),
+      Effect.provideService(ServerAuth, {
+        issueStartupPairingUrl: () => Effect.die("desktop launch should not issue a pairing URL"),
+      } as never),
+      Effect.provideService(ExternalLauncher.ExternalLauncher, {
+        launchBrowser: (target) => Ref.set(launchedTarget, target),
+        launchEditor: () => Effect.die("unused"),
+      }),
+      Effect.provide(NodeServices.layer),
+    );
+
+    expect(yield* Ref.get(launchedTarget)).toBe("http://127.0.0.1:3773");
+    expect(message).toContain("Opened Salchi in the default browser");
   }),
 );
 
