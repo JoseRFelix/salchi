@@ -803,9 +803,6 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
       };
       return Effect.gen(function* () {
         const headContext = yield* resolveBranchHeadContext(cwd, details);
-        if (details.upstreamRef === null && (yield* isUnpublishedBranch(cwd, headContext))) {
-          return { latest: null, headContext };
-        }
         const latest = yield* findLatestPrForHeadContext(cwd, headContext);
         return { latest, headContext };
       });
@@ -1050,30 +1047,6 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
       headRepositoryOwnerLogin: remoteRepository.ownerLogin,
       isCrossRepository,
     } satisfies BranchHeadContext;
-  });
-
-  const isUnpublishedBranch = Effect.fn("isUnpublishedBranch")(function* (
-    cwd: string,
-    headContext: Pick<BranchHeadContext, "headBranch">,
-  ) {
-    if (headContext.headBranch.length === 0) return false;
-    const matchesRef = (pattern: string) =>
-      gitCore
-        .execute({
-          operation: "GitManager.isUnpublishedBranch",
-          cwd,
-          args: ["for-each-ref", "--count=1", "--format=%(refname)", pattern],
-          timeoutMs: 5_000,
-        })
-        .pipe(Effect.map((result) => result.stdout.trim().length > 0));
-
-    return yield* Effect.all(
-      [matchesRef("refs/remotes"), matchesRef(`refs/remotes/*/${headContext.headBranch}`)],
-      { concurrency: "unbounded" },
-    ).pipe(
-      Effect.map(([tracksAnyRemote, tracksThisBranch]) => tracksAnyRemote && !tracksThisBranch),
-      Effect.orElseSucceed(() => false),
-    );
   });
 
   const findOpenPr = Effect.fn("findOpenPr")(function* (

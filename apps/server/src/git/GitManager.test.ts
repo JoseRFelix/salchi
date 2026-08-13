@@ -957,21 +957,41 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("status skips provider lookup for a branch that was never pushed", () =>
+  it.effect("status finds historical PRs after the remote-tracking ref is pruned", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("salchi-git-manager-");
       yield* initRepo(repoDir);
       const remoteDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
       yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
-      yield* runGit(repoDir, ["checkout", "-b", "feature/never-pushed"]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/pruned-remote-ref"]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/pruned-remote-ref"]);
+      yield* runGit(repoDir, ["branch", "--unset-upstream"]);
+      yield* runGit(repoDir, ["update-ref", "-d", "refs/remotes/origin/feature/pruned-remote-ref"]);
 
-      const { manager, ghCalls } = yield* makeManager();
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([
+              {
+                number: 213,
+                title: "Historical PR",
+                url: "https://github.com/example/project/pull/213",
+                baseRefName: "main",
+                headRefName: "feature/pruned-remote-ref",
+                state: "MERGED",
+                updatedAt: "2026-04-01T15:00:00Z",
+              },
+            ]),
+          ],
+        },
+      });
       const status = yield* manager.status({ cwd: repoDir });
 
-      expect(status.refName).toBe("feature/never-pushed");
-      expect(status.pr).toBeNull();
-      expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(0);
+      expect(status.refName).toBe("feature/pruned-remote-ref");
+      expect(status.pr).toMatchObject({ number: 213, state: "merged" });
+      expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(1);
     }),
   );
 
