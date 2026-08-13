@@ -4,7 +4,7 @@ import { page } from "vitest/browser";
 import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
-import { ThreadErrorBanner } from "./ThreadErrorBanner";
+import { dismissThreadError, isThreadErrorDismissed, ThreadErrorBanner } from "./ThreadErrorBanner";
 
 describe("ThreadErrorBanner", () => {
   afterEach(async () => {
@@ -36,5 +36,14 @@ describe("ThreadErrorBanner", () => {
     } finally {
       await screen.unmount();
     }
+  });
+
+  it("keeps dismissal scoped to the exact thread error", () => {
+    const threadKey = "environment-a:thread-dismissal-test";
+    dismissThreadError(threadKey, "Provider disconnected");
+
+    expect(isThreadErrorDismissed(threadKey, "Provider disconnected")).toBe(true);
+    expect(isThreadErrorDismissed(threadKey, "Authentication expired")).toBe(false);
+    expect(isThreadErrorDismissed(`${threadKey}-other`, "Provider disconnected")).toBe(false);
   });
 });

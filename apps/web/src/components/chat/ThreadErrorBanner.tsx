@@ -4,6 +4,23 @@ import { Button } from "../ui/button";
 import { CircleAlertIcon, XIcon } from "lucide-react";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
+// Keep dismissals outside reconciled thread state so reconnects cannot restore
+// the exact banner the user already acknowledged. A different error or thread
+// receives a different key and remains visible.
+const dismissedThreadErrors = new Set<string>();
+
+function dismissalKey(threadKey: string, error: string): string {
+  return JSON.stringify([threadKey, error]);
+}
+
+export function dismissThreadError(threadKey: string, error: string): void {
+  dismissedThreadErrors.add(dismissalKey(threadKey, error));
+}
+
+export function isThreadErrorDismissed(threadKey: string, error: string): boolean {
+  return dismissedThreadErrors.has(dismissalKey(threadKey, error));
+}
+
 export const ThreadErrorBanner = memo(function ThreadErrorBanner({
   error,
   onDismiss,
