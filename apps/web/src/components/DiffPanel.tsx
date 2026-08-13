@@ -342,6 +342,51 @@ function measureDiffHeaderHeight(viewport: HTMLElement | null): number | null {
   return height > 0 ? Math.round(height) : null;
 }
 
+const DIFF_FILE_SCROLL_MAX_ATTEMPTS = 60;
+
+function scrollDiffFileIntoViewWhenReady(
+  viewport: HTMLElement,
+  selectedFilePath: string,
+): () => void {
+  let animationFrame = 0;
+  let attempts = 0;
+  let previousLayoutKey: string | null = null;
+
+  const attemptScroll = () => {
+    const target = Array.from(viewport.querySelectorAll<HTMLElement>("[data-diff-file-path]")).find(
+      (element) => element.dataset.diffFilePath === selectedFilePath,
+    );
+    const scrollContainer = viewport.querySelector<HTMLElement>(".diff-render-surface");
+
+    attempts += 1;
+    if (target && scrollContainer) {
+      target.scrollIntoView({ block: "nearest" });
+
+      const layoutKey = [
+        scrollContainer.clientHeight,
+        scrollContainer.scrollHeight,
+        target.offsetHeight,
+        target.offsetTop,
+      ].join(":");
+      const hasMeasurableLayout =
+        scrollContainer.clientHeight > 0 &&
+        scrollContainer.scrollHeight > 0 &&
+        target.offsetHeight > 0;
+      if (hasMeasurableLayout && layoutKey === previousLayoutKey) {
+        return;
+      }
+      previousLayoutKey = layoutKey;
+    }
+
+    if (attempts < DIFF_FILE_SCROLL_MAX_ATTEMPTS) {
+      animationFrame = requestAnimationFrame(attemptScroll);
+    }
+  };
+
+  animationFrame = requestAnimationFrame(attemptScroll);
+  return () => cancelAnimationFrame(animationFrame);
+}
+
 export { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 
 export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
@@ -664,13 +709,14 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   }, [gitStatusQuery.data, refetchWorkingTreeDiff, selectedDiffSource, workingTreeDiffFetched]);
 
   useEffect(() => {
-    if (!selectedFilePath || !patchViewportRef.current) {
+    const viewport = patchViewportRef.current;
+    if (!selectedFilePath || !viewport) {
       return;
     }
-    const target = Array.from(
-      patchViewportRef.current.querySelectorAll<HTMLElement>("[data-diff-file-path]"),
-    ).find((element) => element.dataset.diffFilePath === selectedFilePath);
-    target?.scrollIntoView({ block: "nearest" });
+    // Virtualized file wrappers mount before @pierre/diffs computes their estimated
+    // heights. A one-shot scroll during that first layout sees every file near the
+    // top, so retry until the target geometry remains stable across frames.
+    return scrollDiffFileIntoViewWhenReady(viewport, selectedFilePath);
   }, [selectedFilePath, renderableFiles]);
 
   const buildDiffFileReturnTarget = useCallback(

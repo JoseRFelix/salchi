@@ -22,7 +22,10 @@ import { useIsMobile } from "~/hooks/useMediaQuery";
 import { useMobileEdgeSwipe } from "~/hooks/useMobileEdgeSwipe";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import * as Schema from "effect/Schema";
-import { isToastPortalDismissalRequest } from "./sheetDismissal";
+import {
+  isCommandDialogPortalDismissalRequest,
+  isToastPortalDismissalRequest,
+} from "./sheetDismissal";
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state";
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
@@ -249,7 +252,11 @@ function Sidebar({
         <Sheet
           modal={false}
           onOpenChange={(open, eventDetails) => {
-            if (!open && isToastPortalDismissalRequest(eventDetails)) {
+            if (
+              !open &&
+              (isToastPortalDismissalRequest(eventDetails) ||
+                isCommandDialogPortalDismissalRequest(eventDetails))
+            ) {
               eventDetails.cancel();
               return;
             }

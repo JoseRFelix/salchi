@@ -8,7 +8,7 @@ export class PersistenceSqlError extends Schema.TaggedErrorClass<PersistenceSqlE
   {
     operation: Schema.String,
     detail: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
@@ -21,7 +21,7 @@ export class PersistenceDecodeError extends Schema.TaggedErrorClass<PersistenceD
   {
     operation: Schema.String,
     issue: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
@@ -68,7 +68,7 @@ export class ProviderSessionRepositoryValidationError extends Schema.TaggedError
   {
     operation: Schema.String,
     issue: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
@@ -81,7 +81,7 @@ export class ProviderSessionRepositoryPersistenceError extends Schema.TaggedErro
   {
     operation: Schema.String,
     detail: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {

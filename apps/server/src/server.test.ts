@@ -1820,6 +1820,45 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("negotiates permessage-deflate with clients that offer it", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const { cookie, url } = parseSessionCookieFromWsUrl(yield* getWsServerUrl("/ws"));
+      const openSocket = (perMessageDeflate: boolean) =>
+        Effect.acquireRelease(
+          Effect.callback<NodeSocket.NodeWS.WebSocket, Error>((resume) => {
+            const socket = new NodeSocket.NodeWS.WebSocket(url, {
+              perMessageDeflate,
+              ...(cookie ? { headers: { cookie } } : {}),
+            });
+            const onOpen = () => {
+              socket.off("error", onError);
+              resume(Effect.succeed(socket));
+            };
+            const onError = (error: Error) => {
+              socket.off("open", onOpen);
+              resume(Effect.fail(error));
+            };
+            socket.once("open", onOpen);
+            socket.once("error", onError);
+            return Effect.sync(() => {
+              socket.off("open", onOpen);
+              socket.off("error", onError);
+              socket.terminate();
+            });
+          }),
+          (socket) => Effect.sync(() => socket.terminate()),
+        );
+
+      const compressed = yield* openSocket(true);
+      assert.include(compressed.extensions, "permessage-deflate");
+
+      const plain = yield* openSocket(false);
+      assert.notInclude(plain.extensions, "permessage-deflate");
+    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect(
     "rejects websocket rpc handshake when a session token is only provided via query string",
     () =>
@@ -1889,6 +1928,33 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
       assert.equal(response.status, 200);
       assert.equal(yield* response.text, "attachment-ok");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("serves attachment files as downloads when requested", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const attachmentId = "thread-22222222-2222-4222-8222-222222222222";
+
+      const config = yield* buildAppUnderTest();
+      const attachmentPath = resolveAttachmentRelativePath({
+        attachmentsDir: config.attachmentsDir,
+        relativePath: `${attachmentId}.png`,
+      });
+      assert.isNotNull(attachmentPath, "Attachment path should be resolvable");
+
+      yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true });
+      yield* fileSystem.writeFileString(attachmentPath, "attachment-download-ok");
+
+      const response = yield* HttpClient.get(`/attachments/${attachmentId}?download=1`, {
+        headers: {
+          cookie: yield* getAuthenticatedSessionCookieHeader(),
+        },
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers["content-disposition"], "attachment");
+      assert.equal(yield* response.text, "attachment-download-ok");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

@@ -91,6 +91,7 @@ function makeReadModel(
     ],
     threads: threads.map((thread) => ({
       id: thread.id,
+      createdByThreadId: null,
       projectId,
       title: `Thread ${thread.id}`,
       modelSelection: defaultModelSelection,
@@ -139,6 +140,11 @@ describe("ProviderSessionReaper", () => {
     readonly stopSessionImplementation?: (input: {
       readonly threadId: ThreadId;
     }) => ReturnType<ProviderServiceShape["stopSession"]>;
+    readonly reaperOptions?: {
+      readonly inactivityThresholdMs?: number;
+      readonly sweepIntervalMs?: number;
+      readonly maxIdleReadyRootSessions?: number;
+    };
   }) {
     const stoppedThreadIds = new Set<ThreadId>();
     const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(
@@ -193,6 +199,7 @@ describe("ProviderSessionReaper", () => {
     const layer = makeProviderSessionReaperLive({
       inactivityThresholdMs: 1_000,
       sweepIntervalMs: 60_000,
+      ...input.reaperOptions,
     }).pipe(
       Layer.provideMerge(providerSessionDirectoryLayer),
       Layer.provideMerge(runtimeRepositoryLayer),
@@ -368,6 +375,57 @@ describe("ProviderSessionReaper", () => {
     expect(harness.stopSession).not.toHaveBeenCalled();
     const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
     expect(Option.isSome(remaining)).toBe(true);
+  });
+
+  it("keeps the newest idle ready roots and reaps only the LRU overflow", async () => {
+    const threadIds = Array.from({ length: 5 }, (_, index) =>
+      ThreadId.make(`thread-reaper-capacity-${index}`),
+    );
+    const nowMs = await Effect.runPromise(Clock.currentTimeMillis);
+    const harness = await createHarness({
+      readModel: makeReadModel(
+        threadIds.map((threadId) => ({
+          id: threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: DateTime.formatIso(DateTime.makeUnsafe(nowMs)),
+          },
+        })),
+      ),
+      reaperOptions: {
+        inactivityThresholdMs: 60 * 60 * 1000,
+        maxIdleReadyRootSessions: 4,
+      },
+    });
+    const repository = await runtime!.runPromise(Effect.service(ProviderSessionRuntimeRepository));
+
+    for (const [index, threadId] of threadIds.entries()) {
+      await runtime!.runPromise(
+        repository.upsert({
+          threadId,
+          providerName: "codex",
+          providerInstanceId: null,
+          adapterKey: "codex",
+          runtimeMode: "full-access",
+          status: "running",
+          lastSeenAt: DateTime.formatIso(DateTime.makeUnsafe(nowMs - index * 1_000)),
+          resumeCursor: { opaque: `resume-capacity-${index}` },
+          runtimePayload: null,
+        }),
+      );
+    }
+
+    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
+    scope = await Effect.runPromise(Scope.make("sequential"));
+    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
+    await waitFor(() => harness.stopSession.mock.calls.length === 1);
+
+    expect(harness.stopSession).toHaveBeenCalledWith({ threadId: threadIds[4] });
   });
 
   it("skips persisted sessions that are already marked stopped", async () => {

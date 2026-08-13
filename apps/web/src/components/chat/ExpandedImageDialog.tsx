@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useState } from "react";
-import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, DownloadIcon, XIcon } from "lucide-react";
 import { Button } from "../ui/button";
-import type { ExpandedImagePreview } from "./ExpandedImagePreview";
+import { buildAttachmentDownloadUrl, type ExpandedImagePreview } from "./ExpandedImagePreview";
 
 interface ExpandedImageDialogProps {
   preview: ExpandedImagePreview;
@@ -92,6 +92,14 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
         >
           <XIcon />
         </Button>
+        <a
+          href={buildAttachmentDownloadUrl(item.src)}
+          download={item.name}
+          className="absolute right-12 top-2 inline-flex size-8 items-center justify-center rounded-md bg-background/80 text-foreground shadow-sm hover:bg-background"
+          aria-label={`Download ${item.name}`}
+        >
+          <DownloadIcon className="size-4" aria-hidden />
+        </a>
         <img
           src={item.src}
           alt={item.name}

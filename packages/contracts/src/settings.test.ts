@@ -42,6 +42,16 @@ describe("ServerSettings.transcriptionModel", () => {
   });
 });
 
+describe("ServerSettings.textGenerationModelSelection", () => {
+  it("defaults thread and Git text generation to GPT-5.6 Luna", () => {
+    expect(decodeServerSettings({}).textGenerationModelSelection).toEqual({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.6-luna",
+      options: [{ id: "reasoningEffort", value: "low" }],
+    });
+  });
+});
+
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("defaults to an empty record so legacy configs without the key still decode", () => {
     expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});

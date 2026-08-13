@@ -624,11 +624,11 @@ describe("WsTransport", () => {
       expect(socket.sent).toHaveLength(1);
     });
 
-    const requestMessage = JSON.parse(socket.sent[0] ?? "{}") as { id: string };
+    const requestMessage = JSON.parse(socket.sent[0] ?? "{}") as { id: string | number };
     await waitFor(() => {
       expect(getSlowRpcAckRequests()).toMatchObject([
         {
-          requestId: requestMessage.id,
+          requestId: String(requestMessage.id),
           tag: WS_METHODS.serverUpsertKeybinding,
         },
       ]);
@@ -680,12 +680,12 @@ describe("WsTransport", () => {
       expect(firstSocket.sent).toHaveLength(1);
     });
 
-    const firstRequest = JSON.parse(firstSocket.sent[0] ?? "{}") as { id: string };
+    const firstRequest = JSON.parse(firstSocket.sent[0] ?? "{}") as { id: string | number };
 
     await waitFor(() => {
       expect(getSlowRpcAckRequests()).toMatchObject([
         {
-          requestId: firstRequest.id,
+          requestId: String(firstRequest.id),
           tag: WS_METHODS.serverUpsertKeybinding,
         },
       ]);

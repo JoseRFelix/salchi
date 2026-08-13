@@ -3396,6 +3396,269 @@ export function hydrateCachedEnvironmentState(
   });
 }
 
+function mergeCachedShellRecord<T>(
+  current: Record<ThreadId, T>,
+  cached: Record<ThreadId, T>,
+  threadIds: readonly ThreadId[],
+): Record<ThreadId, T> {
+  const merged: Record<string, T> = {};
+  for (const threadId of threadIds) {
+    if (Object.prototype.hasOwnProperty.call(current, threadId)) {
+      merged[threadId] = current[threadId] as T;
+    } else if (Object.prototype.hasOwnProperty.call(cached, threadId)) {
+      merged[threadId] = cached[threadId] as T;
+    }
+  }
+  return merged as Record<ThreadId, T>;
+}
+
+/**
+ * Restores a complete IndexedDB sidebar shell over a compact synchronous shell. The caller must
+ * verify that both records share the same shell revision before invoking this merge.
+ */
+export function hydrateCachedEnvironmentShellState(
+  state: AppState,
+  environmentId: EnvironmentId,
+  cachedState: EnvironmentState,
+): AppState {
+  const current = getStoredEnvironmentState(state, environmentId);
+  if (
+    current.bootstrapComplete ||
+    (current.projectIds.length === 0 && current.threadIds.length === 0)
+  ) {
+    return state;
+  }
+
+  const projectIds = appendMissingCacheIds(
+    cachedState.projectIds.filter((projectId) => cachedState.projectById[projectId] !== undefined),
+    current.projectIds.filter((projectId) => current.projectById[projectId] !== undefined),
+  );
+  const projectById = Object.fromEntries(
+    projectIds.map((projectId) => [
+      projectId,
+      current.projectById[projectId] ?? cachedState.projectById[projectId],
+    ]),
+  ) as EnvironmentState["projectById"];
+  const threadIds = appendMissingCacheIds(
+    cachedState.threadIds.filter((threadId) => cachedState.threadShellById[threadId] !== undefined),
+    current.threadIds.filter((threadId) => current.threadShellById[threadId] !== undefined),
+  );
+  const retainedProjectIds = new Set(projectIds);
+  const threadIdsByProjectId: Record<string, ThreadId[]> = {};
+  for (const threadId of threadIds) {
+    const projectId =
+      current.threadShellById[threadId]?.projectId ??
+      cachedState.threadShellById[threadId]?.projectId;
+    if (!projectId || !retainedProjectIds.has(projectId)) {
+      continue;
+    }
+    threadIdsByProjectId[projectId] = [...(threadIdsByProjectId[projectId] ?? []), threadId];
+  }
+
+  return commitEnvironmentState(state, environmentId, {
+    ...current,
+    projectIds,
+    projectById,
+    threadIds,
+    threadIdsByProjectId: threadIdsByProjectId as EnvironmentState["threadIdsByProjectId"],
+    threadShellById: mergeCachedShellRecord(
+      current.threadShellById,
+      cachedState.threadShellById,
+      threadIds,
+    ),
+    threadSessionById: mergeCachedShellRecord(
+      current.threadSessionById,
+      cachedState.threadSessionById,
+      threadIds,
+    ),
+    threadTurnStateById: mergeCachedShellRecord(
+      current.threadTurnStateById,
+      cachedState.threadTurnStateById,
+      threadIds,
+    ),
+    sidebarThreadSummaryById: mergeCachedShellRecord(
+      current.sidebarThreadSummaryById,
+      cachedState.sidebarThreadSummaryById,
+      threadIds,
+    ),
+    bootstrapComplete: false,
+  });
+}
+
+function appendMissingCacheIds<Id extends string>(
+  existingIds: readonly Id[],
+  incomingIds: readonly Id[],
+): Id[] {
+  const mergedIds = [...existingIds];
+  const seen = new Set<Id>(existingIds);
+  for (const id of incomingIds) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      mergedIds.push(id);
+    }
+  }
+  return mergedIds;
+}
+
+function hasCachedThreadDetail(state: EnvironmentState, threadId: ThreadId): boolean {
+  return (
+    (state.messageIdsByThreadId[threadId]?.length ?? 0) > 0 ||
+    (state.queuedTurnIdsByThreadId[threadId]?.length ?? 0) > 0 ||
+    (state.activityIdsByThreadId[threadId]?.length ?? 0) > 0 ||
+    (state.proposedPlanIdsByThreadId[threadId]?.length ?? 0) > 0 ||
+    (state.turnDiffIdsByThreadId[threadId]?.length ?? 0) > 0
+  );
+}
+
+function mergeCachedThreadRecord<T>(
+  current: Record<ThreadId, T>,
+  cached: Record<ThreadId, T>,
+  hydratedThreadIds: ReadonlySet<ThreadId>,
+): Record<ThreadId, T> {
+  const merged = { ...current };
+  for (const threadId of hydratedThreadIds) {
+    if (Object.prototype.hasOwnProperty.call(cached, threadId)) {
+      merged[threadId] = cached[threadId] as T;
+    }
+  }
+  return merged;
+}
+
+function mergeCachedThreadIdRecord<Id extends string>(
+  current: Record<ThreadId, Id[]>,
+  cached: Record<ThreadId, Id[]>,
+  hydratedThreadIds: ReadonlySet<ThreadId>,
+): Record<ThreadId, Id[]> {
+  const merged = { ...current };
+  for (const threadId of hydratedThreadIds) {
+    merged[threadId] = appendMissingCacheIds(cached[threadId] ?? [], current[threadId] ?? []);
+  }
+  return merged;
+}
+
+function mergeCachedThreadEntityRecord<Id extends string, Entity>(
+  current: Record<ThreadId, Record<Id, Entity>>,
+  cached: Record<ThreadId, Record<Id, Entity>>,
+  hydratedThreadIds: ReadonlySet<ThreadId>,
+): Record<ThreadId, Record<Id, Entity>> {
+  const merged = { ...current };
+  for (const threadId of hydratedThreadIds) {
+    merged[threadId] = {
+      ...cached[threadId],
+      ...current[threadId],
+    } as Record<Id, Entity>;
+  }
+  return merged;
+}
+
+/**
+ * IndexedDB detail arrives asynchronously after the synchronous local startup projection. Only
+ * fill detail that is still absent, and never race an authoritative live bootstrap.
+ */
+export function hydrateCachedEnvironmentDetailState(
+  state: AppState,
+  environmentId: EnvironmentId,
+  cachedState: EnvironmentState,
+): AppState {
+  const current = getStoredEnvironmentState(state, environmentId);
+  if (current.bootstrapComplete) {
+    return state;
+  }
+  if (current.projectIds.length === 0 && current.threadIds.length === 0) {
+    return state;
+  }
+
+  const currentThreadIds = new Set(current.threadIds);
+  const hydratedThreadIds = new Set(
+    cachedState.threadIds.filter((threadId) => {
+      if (!currentThreadIds.has(threadId) || !hasCachedThreadDetail(cachedState, threadId)) {
+        return false;
+      }
+      if (!hasCachedThreadDetail(current, threadId)) {
+        return true;
+      }
+      const currentSequence = current.lastAppliedEventSequenceByThreadId?.[threadId];
+      const cachedSequence = cachedState.lastAppliedEventSequenceByThreadId?.[threadId];
+      return (
+        currentSequence !== undefined &&
+        cachedSequence !== undefined &&
+        cachedSequence >= currentSequence
+      );
+    }),
+  );
+  const nextEnvironmentState: EnvironmentState = {
+    ...current,
+    messageIdsByThreadId: mergeCachedThreadIdRecord(
+      current.messageIdsByThreadId,
+      cachedState.messageIdsByThreadId,
+      hydratedThreadIds,
+    ),
+    messageByThreadId: mergeCachedThreadEntityRecord(
+      current.messageByThreadId,
+      cachedState.messageByThreadId,
+      hydratedThreadIds,
+    ),
+    queuedTurnIdsByThreadId: mergeCachedThreadIdRecord(
+      current.queuedTurnIdsByThreadId,
+      cachedState.queuedTurnIdsByThreadId,
+      hydratedThreadIds,
+    ),
+    queuedTurnByThreadId: mergeCachedThreadEntityRecord(
+      current.queuedTurnByThreadId,
+      cachedState.queuedTurnByThreadId,
+      hydratedThreadIds,
+    ),
+    activityIdsByThreadId: mergeCachedThreadIdRecord(
+      current.activityIdsByThreadId,
+      cachedState.activityIdsByThreadId,
+      hydratedThreadIds,
+    ),
+    activityByThreadId: mergeCachedThreadEntityRecord(
+      current.activityByThreadId,
+      cachedState.activityByThreadId,
+      hydratedThreadIds,
+    ),
+    proposedPlanIdsByThreadId: mergeCachedThreadIdRecord(
+      current.proposedPlanIdsByThreadId,
+      cachedState.proposedPlanIdsByThreadId,
+      hydratedThreadIds,
+    ),
+    proposedPlanByThreadId: mergeCachedThreadEntityRecord(
+      current.proposedPlanByThreadId,
+      cachedState.proposedPlanByThreadId,
+      hydratedThreadIds,
+    ),
+    turnDiffIdsByThreadId: mergeCachedThreadIdRecord(
+      current.turnDiffIdsByThreadId,
+      cachedState.turnDiffIdsByThreadId,
+      hydratedThreadIds,
+    ),
+    turnDiffSummaryByThreadId: mergeCachedThreadEntityRecord(
+      current.turnDiffSummaryByThreadId,
+      cachedState.turnDiffSummaryByThreadId,
+      hydratedThreadIds,
+    ),
+    threadDetailPageInfoByThreadId: mergeCachedThreadRecord(
+      current.threadDetailPageInfoByThreadId,
+      cachedState.threadDetailPageInfoByThreadId,
+      hydratedThreadIds,
+    ),
+    lastAppliedEventSequenceByThreadId: mergeCachedThreadRecord(
+      current.lastAppliedEventSequenceByThreadId ?? {},
+      cachedState.lastAppliedEventSequenceByThreadId ?? {},
+      hydratedThreadIds,
+    ),
+    lastAppliedEventIdByThreadId: mergeCachedThreadRecord(
+      current.lastAppliedEventIdByThreadId ?? {},
+      cachedState.lastAppliedEventIdByThreadId ?? {},
+      hydratedThreadIds,
+    ),
+    bootstrapComplete: false,
+  };
+
+  return commitEnvironmentState(state, environmentId, nextEnvironmentState);
+}
+
 export function setThreadBranch(
   state: AppState,
   threadRef: ScopedThreadRef,
@@ -3424,6 +3687,14 @@ interface AppStore extends AppState {
   setActiveEnvironmentId: (environmentId: EnvironmentId) => void;
   removeEnvironmentState: (environmentId: EnvironmentId) => void;
   hydrateCachedEnvironmentState: (
+    environmentId: EnvironmentId,
+    cachedState: EnvironmentState,
+  ) => void;
+  hydrateCachedEnvironmentShellState: (
+    environmentId: EnvironmentId,
+    cachedState: EnvironmentState,
+  ) => void;
+  hydrateCachedEnvironmentDetailState: (
     environmentId: EnvironmentId,
     cachedState: EnvironmentState,
   ) => void;
@@ -3471,6 +3742,10 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => removeEnvironmentState(state, environmentId)),
   hydrateCachedEnvironmentState: (environmentId, cachedState) =>
     set((state) => hydrateCachedEnvironmentState(state, environmentId, cachedState)),
+  hydrateCachedEnvironmentShellState: (environmentId, cachedState) =>
+    set((state) => hydrateCachedEnvironmentShellState(state, environmentId, cachedState)),
+  hydrateCachedEnvironmentDetailState: (environmentId, cachedState) =>
+    set((state) => hydrateCachedEnvironmentDetailState(state, environmentId, cachedState)),
   syncServerShellSnapshot: (snapshot, environmentId) =>
     set((state) => syncServerShellSnapshot(state, snapshot, environmentId)),
   syncServerThreadDetail: (thread, environmentId, options) =>

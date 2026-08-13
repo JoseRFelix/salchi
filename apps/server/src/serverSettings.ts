@@ -13,6 +13,7 @@
 import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER,
+  DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT,
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
   isProviderDriverKind,
@@ -220,6 +221,16 @@ function fallbackTextGenerationProvider(settings: ServerSettings): ServerSetting
         DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER[fallback] ??
         DEFAULT_MODEL_BY_PROVIDER[fallback] ??
         DEFAULT_GIT_TEXT_GENERATION_MODEL,
+      ...(fallback === ProviderDriverKind.make("codex")
+        ? {
+            options: [
+              {
+                id: "reasoningEffort",
+                value: DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT,
+              },
+            ],
+          }
+        : {}),
     } satisfies ModelSelection,
   };
 }

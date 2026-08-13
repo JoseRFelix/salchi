@@ -55,10 +55,16 @@ const CLAUDE_PRESENTATION = {
   displayName: "Claude",
   showInteractionModeToggle: true,
 } as const;
+const MINIMUM_CLAUDE_OPUS_5_VERSION = "2.1.219";
 const MINIMUM_CLAUDE_FABLE_5_VERSION = "2.1.170";
 const MINIMUM_CLAUDE_OPUS_4_8_VERSION = "2.1.154";
 const MINIMUM_CLAUDE_OPUS_4_7_VERSION = "2.1.111";
 const VERSION_GATED_MODEL_REQUIREMENTS = [
+  {
+    slug: "claude-opus-5",
+    name: "Claude Opus 5",
+    minimumVersion: MINIMUM_CLAUDE_OPUS_5_VERSION,
+  },
   {
     slug: "claude-fable-5",
     name: "Claude Fable 5",
@@ -75,7 +81,46 @@ const VERSION_GATED_MODEL_REQUIREMENTS = [
     minimumVersion: MINIMUM_CLAUDE_OPUS_4_7_VERSION,
   },
 ] as const;
+
+function createModernClaudeOpusCapabilities(defaultEffort: "high" | "xhigh"): ModelCapabilities {
+  return createModelCapabilities({
+    optionDescriptors: [
+      buildSelectOptionDescriptor({
+        id: "effort",
+        label: "Reasoning",
+        options: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High", isDefault: defaultEffort === "high" },
+          { value: "xhigh", label: "Extra High", isDefault: defaultEffort === "xhigh" },
+          { value: "max", label: "Max" },
+          { value: "ultrathink", label: "Ultrathink" },
+        ],
+        promptInjectedValues: ["ultrathink"],
+      }),
+      buildBooleanOptionDescriptor({
+        id: "fastMode",
+        label: "Fast Mode",
+      }),
+      buildSelectOptionDescriptor({
+        id: "contextWindow",
+        label: "Context Window",
+        options: [
+          { value: "200k", label: "200k", isDefault: true },
+          { value: "1m", label: "1M" },
+        ],
+      }),
+    ],
+  });
+}
+
 const BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
+  {
+    slug: "claude-opus-5",
+    name: "Claude Opus 5",
+    isCustom: false,
+    capabilities: createModernClaudeOpusCapabilities("high"),
+  },
   {
     slug: "claude-fable-5",
     name: "Claude Fable 5",
@@ -102,69 +147,13 @@ const BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
     slug: "claude-opus-4-8",
     name: "Claude Opus 4.8",
     isCustom: false,
-    capabilities: createModelCapabilities({
-      optionDescriptors: [
-        buildSelectOptionDescriptor({
-          id: "effort",
-          label: "Reasoning",
-          options: [
-            { value: "low", label: "Low" },
-            { value: "medium", label: "Medium" },
-            { value: "high", label: "High", isDefault: true },
-            { value: "xhigh", label: "Extra High" },
-            { value: "max", label: "Max" },
-            { value: "ultrathink", label: "Ultrathink" },
-          ],
-          promptInjectedValues: ["ultrathink"],
-        }),
-        buildBooleanOptionDescriptor({
-          id: "fastMode",
-          label: "Fast Mode",
-        }),
-        buildSelectOptionDescriptor({
-          id: "contextWindow",
-          label: "Context Window",
-          options: [
-            { value: "200k", label: "200k", isDefault: true },
-            { value: "1m", label: "1M" },
-          ],
-        }),
-      ],
-    }),
+    capabilities: createModernClaudeOpusCapabilities("high"),
   },
   {
     slug: "claude-opus-4-7",
     name: "Claude Opus 4.7",
     isCustom: false,
-    capabilities: createModelCapabilities({
-      optionDescriptors: [
-        buildSelectOptionDescriptor({
-          id: "effort",
-          label: "Reasoning",
-          options: [
-            { value: "low", label: "Low" },
-            { value: "medium", label: "Medium" },
-            { value: "high", label: "High" },
-            { value: "xhigh", label: "Extra High", isDefault: true },
-            { value: "max", label: "Max" },
-            { value: "ultrathink", label: "Ultrathink" },
-          ],
-          promptInjectedValues: ["ultrathink"],
-        }),
-        buildBooleanOptionDescriptor({
-          id: "fastMode",
-          label: "Fast Mode",
-        }),
-        buildSelectOptionDescriptor({
-          id: "contextWindow",
-          label: "Context Window",
-          options: [
-            { value: "200k", label: "200k", isDefault: true },
-            { value: "1m", label: "1M" },
-          ],
-        }),
-      ],
-    }),
+    capabilities: createModernClaudeOpusCapabilities("xhigh"),
   },
   {
     slug: "claude-opus-4-6",

@@ -213,7 +213,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       ] as const;
     }).pipe(Effect.flatten);
 
-  const respondWithSuccess = (requestId: string, value: unknown) =>
+  const respondWithSuccess = (requestId: string | number, value: unknown) =>
     offerOutgoing({
       _tag: "Exit",
       requestId,
@@ -223,7 +223,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       },
     });
 
-  const respondWithError = (requestId: string, error: AcpError.AcpRequestError) =>
+  const respondWithError = (requestId: string | number, error: AcpError.AcpRequestError) =>
     offerOutgoing({
       _tag: "Exit",
       requestId,
@@ -312,21 +312,22 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
   const handleExitEncoded = (message: RpcMessage.ResponseExitEncoded) =>
     Ref.get(extPending).pipe(
       Effect.flatMap((pending) => {
-        if (!pending.has(message.requestId)) {
+        const requestId = String(message.requestId);
+        if (!pending.has(requestId)) {
           return Queue.offer(clientQueue, message).pipe(Effect.asVoid);
         }
         if (message.exit._tag === "Success") {
-          return completeExtPendingSuccess(message.requestId, message.exit.value);
+          return completeExtPendingSuccess(requestId, message.exit.value);
         }
         const failure = message.exit.cause.find((entry) => entry._tag === "Fail");
         if (failure && isProtocolError(failure.error)) {
           return completeExtPendingFailure(
-            message.requestId,
+            requestId,
             AcpError.AcpRequestError.fromProtocolError(failure.error),
           );
         }
         return completeExtPendingFailure(
-          message.requestId,
+          requestId,
           AcpError.AcpRequestError.internalError("Extension request failed"),
         );
       }),
@@ -343,9 +344,9 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       case "Chunk":
         return Ref.get(extPending).pipe(
           Effect.flatMap((pending) =>
-            pending.has(message.requestId)
+            pending.has(String(message.requestId))
               ? completeExtPendingFailure(
-                  message.requestId,
+                  String(message.requestId),
                   AcpError.AcpRequestError.internalError(
                     "Streaming extension responses are not supported",
                   ),
@@ -507,7 +508,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     yield* Ref.update(extPending, (pending) => new Map(pending).set(String(requestId), deferred));
     yield* offerOutgoing({
       _tag: "Request",
-      id: String(requestId),
+      id: Number(requestId),
       tag: method,
       payload,
       headers: [],

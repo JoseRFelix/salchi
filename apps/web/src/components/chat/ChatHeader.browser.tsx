@@ -185,33 +185,32 @@ describe("ChatHeader responsive controls", () => {
     const screen = await render(<ChatHeaderHarness />);
 
     try {
-      const sourceControl = page.getByRole("button", { name: "Toggle source control" });
       const terminal = page.getByRole("button", { name: "Toggle terminal drawer" });
       const disabledDevServer = page.getByRole("button", { name: "No running dev servers" });
       const moreActions = page.getByRole("button", { name: "More thread actions" });
-      const sourceControlElement = document.querySelector<HTMLElement>(
-        '[aria-label="Toggle source control"]',
-      );
 
-      expect(sourceControlElement).not.toBeNull();
-      const sourceControlBackgroundBefore = getComputedStyle(sourceControlElement!).backgroundColor;
-
-      await expect.element(sourceControl).toHaveAttribute("aria-pressed", "false");
       await expect.element(terminal).toHaveAttribute("aria-pressed", "false");
+      await expect.element(page.getByRole("button", { name: "Toggle diff panel" })).toBeVisible();
+      await expect
+        .element(page.getByRole("button", { name: "Toggle source control" }))
+        .not.toBeInTheDocument();
       await expect.element(disabledDevServer).toHaveAttribute("aria-disabled", "true");
       await expect.element(moreActions).toBeVisible();
 
-      await sourceControl.click();
+      await moreActions.click();
+      const sourceControlMenuItem = page.getByRole("menuitem", { name: "Source control" });
+      const fileExplorerMenuItem = page.getByRole("menuitem", { name: "File explorer" });
+      await expect.element(sourceControlMenuItem).toBeVisible();
+      await expect.element(fileExplorerMenuItem).toBeVisible();
+      await sourceControlMenuItem.click();
+
       await terminal.click();
 
-      await expect.element(sourceControl).toHaveAttribute("aria-pressed", "true");
       await expect.element(terminal).toHaveAttribute("aria-pressed", "true");
-      expect(getComputedStyle(sourceControlElement!).backgroundColor).not.toBe(
-        sourceControlBackgroundBefore,
-      );
 
       await page.viewport(761, 700);
 
+      const sourceControl = page.getByRole("button", { name: "Toggle source control" });
       await expect.element(sourceControl).toHaveAttribute("aria-pressed", "true");
       await expect.element(terminal).toHaveAttribute("aria-pressed", "true");
       await expect

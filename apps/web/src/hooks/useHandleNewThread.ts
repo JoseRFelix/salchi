@@ -1,9 +1,7 @@
 import { scopedProjectKey, scopeProjectRef } from "@salchi/client-runtime";
 import {
-  DEFAULT_MODEL,
   DEFAULT_RUNTIME_MODE,
   type ModelSelection,
-  ProviderInstanceId,
   type ScopedProjectRef,
 } from "@salchi/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
@@ -70,10 +68,7 @@ function useNewThreadState() {
       const logicalProjectKey = project
         ? deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings)
         : scopedProjectKey(projectRef);
-      const projectDefaultModelSelection: ModelSelection = project?.defaultModelSelection ?? {
-        instanceId: ProviderInstanceId.make("codex"),
-        model: DEFAULT_MODEL,
-      };
+      const projectDefaultModelSelection = project?.defaultModelSelection ?? null;
       const readComposerModelSelection = (
         target: Parameters<typeof getComposerDraft>[0],
       ): ModelSelection | null => {
@@ -83,7 +78,7 @@ function useNewThreadState() {
           ? (composerDraft.modelSelectionByProvider[activeInstanceId] ?? null)
           : null;
       };
-      let initialModelSelection = projectDefaultModelSelection;
+      let initialModelSelection: ModelSelection | null = projectDefaultModelSelection;
       if (currentRouteTarget?.kind === "server") {
         const currentThread = selectThreadByRef(useStore.getState(), currentRouteTarget.threadRef);
         if (
@@ -104,11 +99,15 @@ function useNewThreadState() {
             readComposerModelSelection(currentRouteTarget.draftId) ?? projectDefaultModelSelection;
         }
       }
-      const shouldSeedInitialModelSelection =
+      const hasStickyModelSelection =
         Object.keys(composerDraftStore.stickyModelSelectionByProvider).length > 0 ||
-        composerDraftStore.stickyActiveProvider !== null ||
-        initialModelSelection.instanceId !== projectDefaultModelSelection.instanceId ||
-        initialModelSelection.model !== projectDefaultModelSelection.model;
+        composerDraftStore.stickyActiveProvider !== null;
+      const shouldSeedInitialModelSelection =
+        initialModelSelection !== null &&
+        (hasStickyModelSelection ||
+          projectDefaultModelSelection === null ||
+          initialModelSelection.instanceId !== projectDefaultModelSelection.instanceId ||
+          initialModelSelection.model !== projectDefaultModelSelection.model);
       const hasBranchOption = options?.branch !== undefined;
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
@@ -190,7 +189,9 @@ function useNewThreadState() {
           worktreePath: options?.worktreePath ?? null,
           envMode: options?.envMode ?? "local",
           runtimeMode: DEFAULT_RUNTIME_MODE,
-          ...(shouldSeedInitialModelSelection ? { initialModelSelection } : {}),
+          ...(shouldSeedInitialModelSelection && initialModelSelection
+            ? { initialModelSelection }
+            : {}),
         });
         if (storedDraftThread) {
           finalizeMaterializedPromotedDraftThreadByRef(draftThreadServerRef(storedDraftThread));

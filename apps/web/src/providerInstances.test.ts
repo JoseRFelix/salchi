@@ -2,7 +2,9 @@ import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@sa
 import { describe, expect, it } from "vitest";
 import {
   deriveProviderInstanceEntries,
+  getDefaultProviderInstanceModel,
   normalizeProviderAccentColor,
+  resolveDefaultProviderModelSelection,
   resolveSelectableProviderInstance,
   resolveProviderDriverKindForInstanceSelection,
 } from "./providerInstances";
@@ -13,6 +15,7 @@ function provider(input: {
   enabled?: boolean;
   availability?: ServerProvider["availability"];
   displayName?: string;
+  models?: ServerProvider["models"];
 }): ServerProvider {
   return {
     instanceId: ProviderInstanceId.make(input.instanceId),
@@ -25,11 +28,19 @@ function provider(input: {
     ...(input.availability ? { availability: input.availability } : {}),
     auth: { status: "authenticated" },
     checkedAt: "2026-01-01T00:00:00.000Z",
-    models: [],
+    models: input.models ?? [],
     slashCommands: [],
     skills: [],
   };
 }
+
+const model = (slug: string, isCustom = false, isDefault = false) => ({
+  slug,
+  name: slug,
+  isCustom,
+  ...(isDefault ? { isDefault: true } : {}),
+  capabilities: null,
+});
 
 describe("deriveProviderInstanceEntries", () => {
   it("uses explicit instance id and driver kind from the snapshot", () => {
@@ -102,6 +113,55 @@ describe("resolveSelectableProviderInstance", () => {
     expect(resolveSelectableProviderInstance(providers, disabled)).toBeUndefined();
     expect(resolveSelectableProviderInstance(providers, unavailable)).toBeUndefined();
     expect(resolveSelectableProviderInstance(providers, unknown)).toBeUndefined();
+  });
+});
+
+describe("getDefaultProviderInstanceModel", () => {
+  it("honors the live declared default before catalog order", () => {
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex",
+        models: [model("gpt-5.4"), model("gpt-5.6-sol", false, true)],
+      }),
+    ];
+
+    expect(getDefaultProviderInstanceModel(providers, ProviderInstanceId.make("codex"))).toBe(
+      "gpt-5.6-sol",
+    );
+  });
+});
+
+describe("resolveDefaultProviderModelSelection", () => {
+  it("resolves inheritance through the live provider default", () => {
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex",
+        models: [model("gpt-5.4"), model("gpt-5.6-sol", false, true)],
+      }),
+    ];
+
+    expect(resolveDefaultProviderModelSelection(providers, null)).toEqual({
+      instanceId: "codex",
+      model: "gpt-5.6-sol",
+    });
+  });
+
+  it("preserves an explicit 5.4 pin", () => {
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex",
+        models: [model("gpt-5.6-sol", false, true), model("gpt-5.4")],
+      }),
+    ];
+    const pinned = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.4",
+    };
+
+    expect(resolveDefaultProviderModelSelection(providers, pinned)).toBe(pinned);
   });
 });
 
