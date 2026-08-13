@@ -1892,6 +1892,33 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("serves attachment files as downloads when requested", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const attachmentId = "thread-22222222-2222-4222-8222-222222222222";
+
+      const config = yield* buildAppUnderTest();
+      const attachmentPath = resolveAttachmentRelativePath({
+        attachmentsDir: config.attachmentsDir,
+        relativePath: `${attachmentId}.png`,
+      });
+      assert.isNotNull(attachmentPath, "Attachment path should be resolvable");
+
+      yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true });
+      yield* fileSystem.writeFileString(attachmentPath, "attachment-download-ok");
+
+      const response = yield* HttpClient.get(`/attachments/${attachmentId}?download=1`, {
+        headers: {
+          cookie: yield* getAuthenticatedSessionCookieHeader(),
+        },
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers["content-disposition"], "attachment");
+      assert.equal(yield* response.text, "attachment-download-ok");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("serves attachment files for URL-encoded paths", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

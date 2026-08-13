@@ -1583,6 +1583,113 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("maps dynamic tool image outputs to distinct generated-image events", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 3)).pipe(
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit({
+        id: asEventId("evt-dynamic-tool-images"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("dynamic_tool_1"),
+        payload: {
+          completedAtMs: 1_778_000_000_000,
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "dynamicToolCall",
+            id: "dynamic_tool_1",
+            tool: "imagegen",
+            arguments: {},
+            status: "completed",
+            success: true,
+            contentItems: [
+              { type: "inputText", text: "Generated images" },
+              { type: "inputImage", imageUrl: "data:image/png;base64,aGVsbG8=" },
+              { type: "inputImage", imageUrl: "data:image/jpeg;base64,d29ybGQ=" },
+            ],
+          },
+        },
+      } satisfies ProviderEvent);
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+
+      assert.equal(events.length, 3);
+      const generatedEvents = events.filter((event) => event.type === "image.generated");
+      assert.equal(generatedEvents.length, 2);
+      assert.deepStrictEqual(
+        generatedEvents.map((event) => event.eventId),
+        ["evt-dynamic-tool-images:image:0", "evt-dynamic-tool-images:image:1"],
+      );
+      assert.deepStrictEqual(
+        generatedEvents.map((event) => event.payload.name),
+        ["dynamic_tool_1-image-1", "dynamic_tool_1-image-2"],
+      );
+      assert.deepStrictEqual(
+        generatedEvents.map((event) => event.payload.dataUrl),
+        ["data:image/png;base64,aGVsbG8=", "data:image/jpeg;base64,d29ybGQ="],
+      );
+      assert.equal(events[2]?.type, "item.completed");
+    }),
+  );
+
+  it.effect("maps MCP image and image-resource outputs to generated-image events", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 3)).pipe(
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit({
+        id: asEventId("evt-mcp-tool-images"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("mcp_tool_1"),
+        payload: {
+          completedAtMs: 1_778_000_000_000,
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "mcpToolCall",
+            id: "mcp_tool_1",
+            server: "visuals",
+            tool: "render",
+            arguments: {},
+            status: "completed",
+            result: {
+              content: [
+                { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+                {
+                  type: "resource",
+                  resource: { blob: "d29ybGQ=", mimeType: "image/webp" },
+                },
+              ],
+            },
+          },
+        },
+      } satisfies ProviderEvent);
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+
+      assert.equal(events.length, 3);
+      const generatedEvents = events.filter((event) => event.type === "image.generated");
+      assert.deepStrictEqual(
+        generatedEvents.map((event) => event.payload.dataUrl),
+        ["data:image/png;base64,aGVsbG8=", "data:image/webp;base64,d29ybGQ="],
+      );
+      assert.equal(events[2]?.type, "item.completed");
+    }),
+  );
+
   it.effect("maps plan deltas to canonical proposed-plan delta events", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

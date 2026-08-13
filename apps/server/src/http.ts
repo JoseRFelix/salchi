@@ -433,6 +433,9 @@ export const attachmentsRouteLayer = HttpRouter.add(
       status: 200,
       headers: {
         "Cache-Control": "public, max-age=31536000, immutable",
+        ...(url.value.searchParams.get("download") === "1"
+          ? { "Content-Disposition": "attachment" }
+          : {}),
       },
     }).pipe(
       Effect.catch(() =>
