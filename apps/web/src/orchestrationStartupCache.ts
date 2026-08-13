@@ -3,12 +3,17 @@ import type { EnvironmentId, ProjectId, ThreadId } from "@salchi/contracts";
 import type { EnvironmentState } from "./store";
 import { clearPersistedStartupThreadTargetForEnvironment } from "./startupNavigation";
 import { hasEnvironmentThreadDetailContent } from "./threadDetailContent";
+import {
+  clearIndexedDbCachedEnvironmentStates,
+  removeIndexedDbCachedEnvironmentState,
+  writeIndexedDbCachedEnvironmentState,
+} from "./orchestrationStartupCacheIndexedDb";
 
 const STORAGE_KEY = "salchi:orchestration-startup-cache:v1";
 const DOCUMENT_VERSION = 1;
 const MAX_CACHED_ENVIRONMENTS = 8;
 const MAX_CACHED_PROJECTS = 250;
-const MAX_CACHED_SHELL_THREADS = 1_000;
+const MAX_LOCAL_CACHED_SHELL_THREADS = 100;
 const MAX_CACHED_DETAIL_THREADS = 12;
 const MAX_CACHED_THREAD_MESSAGES = 800;
 const MAX_CACHED_THREAD_ACTIVITIES = 400;
@@ -16,20 +21,45 @@ const MAX_CACHED_THREAD_PROPOSED_PLANS = 100;
 const MAX_CACHED_THREAD_DIFFS = 250;
 const MAX_CACHE_DOCUMENT_CHARS = 2_000_000;
 const WRITE_DEBOUNCE_MS = 500;
-const DETAIL_THREAD_CACHE_CAP_LADDER = [MAX_CACHED_DETAIL_THREADS, 6, 3, 1, 0] as const;
-const SHELL_THREAD_CACHE_CAP_LADDER = [
-  MAX_CACHED_SHELL_THREADS,
-  750,
-  500,
-  250,
-  100,
-  50,
-  20,
-  0,
-] as const;
+const WRITE_IDLE_TIMEOUT_MS = 2_000;
+const DETAIL_THREAD_CACHE_CAP_LADDER = [MAX_CACHED_DETAIL_THREADS, 6, 3, 1] as const;
+const SHELL_THREAD_CACHE_CAP_LADDER = [MAX_LOCAL_CACHED_SHELL_THREADS, 50, 20, 0] as const;
+
+interface CachedThreadDetailLimits {
+  readonly messages: number;
+  readonly queuedTurns: number;
+  readonly activities: number;
+  readonly proposedPlans: number;
+  readonly turnDiffs: number;
+}
+
+const DEFAULT_CACHED_THREAD_DETAIL_LIMITS: CachedThreadDetailLimits = {
+  messages: MAX_CACHED_THREAD_MESSAGES,
+  queuedTurns: MAX_CACHED_THREAD_MESSAGES,
+  activities: MAX_CACHED_THREAD_ACTIVITIES,
+  proposedPlans: MAX_CACHED_THREAD_PROPOSED_PLANS,
+  turnDiffs: MAX_CACHED_THREAD_DIFFS,
+};
+
+/**
+ * A single coding conversation can exceed the whole startup-cache budget through message text or
+ * tool activity payloads. Preserve progressively smaller recent tails for the preferred thread
+ * before falling back to a shell-only cache.
+ */
+const COMPACT_CACHED_THREAD_DETAIL_LIMITS = [
+  { messages: 200, queuedTurns: 100, activities: 100, proposedPlans: 25, turnDiffs: 50 },
+  { messages: 50, queuedTurns: 25, activities: 25, proposedPlans: 10, turnDiffs: 10 },
+  { messages: 20, queuedTurns: 5, activities: 5, proposedPlans: 3, turnDiffs: 3 },
+  { messages: 5, queuedTurns: 1, activities: 0, proposedPlans: 1, turnDiffs: 1 },
+  { messages: 1, queuedTurns: 0, activities: 0, proposedPlans: 0, turnDiffs: 0 },
+] as const satisfies readonly CachedThreadDetailLimits[];
+const MINIMAL_CACHED_THREAD_DETAIL_LIMITS =
+  COMPACT_CACHED_THREAD_DETAIL_LIMITS[COMPACT_CACHED_THREAD_DETAIL_LIMITS.length - 1]!;
 
 interface CachedEnvironmentEntry {
   readonly updatedAt: string;
+  readonly shellRevision: string | null;
+  readonly shellComplete: boolean;
   readonly state: EnvironmentState;
 }
 
@@ -41,6 +71,8 @@ interface CachedOrchestrationDocument {
 export interface CachedEnvironmentStateEntry {
   readonly environmentId: EnvironmentId;
   readonly updatedAt: string;
+  readonly shellRevision: string | null;
+  readonly shellComplete: boolean;
   readonly state: EnvironmentState;
 }
 
@@ -51,6 +83,7 @@ interface PendingEnvironmentWrite {
   readonly removedProjectIds: Set<ProjectId>;
   readonly removedThreadIds: Set<ThreadId>;
   timeoutId: ReturnType<typeof setTimeout> | null;
+  idleCallbackId: number | null;
 }
 
 export interface CachedEnvironmentStateWriteOptions {
@@ -73,6 +106,7 @@ interface StartupCachePersistenceTargets {
 }
 
 const pendingWrites = new Map<EnvironmentId, PendingEnvironmentWrite>();
+let cacheRevisionCounter = 0;
 let memoizedDocument: {
   readonly raw: string | null;
   readonly document: CachedOrchestrationDocument;
@@ -80,6 +114,11 @@ let memoizedDocument: {
 
 function invalidateDocumentMemo(): void {
   memoizedDocument = null;
+}
+
+function createCacheRevision(updatedAt: string): string {
+  cacheRevisionCounter += 1;
+  return `${updatedAt}:${cacheRevisionCounter.toString(36)}`;
 }
 
 function storage(): Storage | null {
@@ -102,7 +141,7 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
-function isEnvironmentStateLike(value: unknown): value is EnvironmentState {
+export function isEnvironmentStateLike(value: unknown): value is EnvironmentState {
   if (!isRecord(value)) {
     return false;
   }
@@ -176,26 +215,20 @@ function readDocument(): CachedOrchestrationDocument {
       if (!isRecord(entry) || typeof entry.updatedAt !== "string") {
         continue;
       }
-      if (!isEnvironmentStateLike(entry.state)) {
+      const state = decodeCachedEnvironmentState(entry.state);
+      if (!state) {
         continue;
       }
       environments[environmentId] = {
         updatedAt: entry.updatedAt,
-        state: {
-          ...entry.state,
-          threadDetailPageInfoByThreadId: isRecord(entry.state.threadDetailPageInfoByThreadId)
-            ? entry.state.threadDetailPageInfoByThreadId
-            : {},
-          lastAppliedEventSequenceByThreadId: isRecord(
-            entry.state.lastAppliedEventSequenceByThreadId,
-          )
-            ? (entry.state.lastAppliedEventSequenceByThreadId as Record<ThreadId, number>)
-            : {},
-          lastAppliedEventIdByThreadId: isRecord(entry.state.lastAppliedEventIdByThreadId)
-            ? (entry.state.lastAppliedEventIdByThreadId as Record<ThreadId, string>)
-            : {},
-          bootstrapComplete: false,
-        },
+        // Legacy records used updatedAt as the implicit shared revision.
+        shellRevision: Object.prototype.hasOwnProperty.call(entry, "shellRevision")
+          ? typeof entry.shellRevision === "string"
+            ? entry.shellRevision
+            : null
+          : entry.updatedAt,
+        shellComplete: entry.shellComplete === true,
+        state,
       };
     }
 
@@ -346,6 +379,7 @@ function retainDetailThreadIds(
 function retainProjectState(
   state: EnvironmentState,
   retainedThreadIds: readonly ThreadId[],
+  maxProjects: number,
 ): Pick<EnvironmentState, "projectIds" | "projectById"> {
   const referencedProjectIds = new Set(
     retainedThreadIds.flatMap((threadId) => {
@@ -367,7 +401,7 @@ function retainProjectState(
     }
   }
   for (const projectId of state.projectIds) {
-    if (orderedProjectIds.length >= MAX_CACHED_PROJECTS) {
+    if (orderedProjectIds.length >= maxProjects) {
       break;
     }
     appendProjectId(projectId);
@@ -624,6 +658,13 @@ function retainThreadItemRecord<T>(
   const nextIdsByThreadId: Record<string, string[]> = {};
   const nextByThreadId: Record<string, Record<string, T>> = {};
 
+  if (maxItems <= 0) {
+    return {
+      idsByThreadId: nextIdsByThreadId as Record<ThreadId, string[]>,
+      byThreadId: nextByThreadId as Record<ThreadId, Record<string, T>>,
+    };
+  }
+
   for (const threadId of detailThreadIds) {
     const ids = (idsByThreadId[threadId] ?? []).slice(-maxItems);
     const byId = byThreadId[threadId];
@@ -649,6 +690,7 @@ function retainThreadItemRecord<T>(
 function retainTurnDiffRecords(
   state: EnvironmentState,
   detailThreadIds: ReadonlySet<ThreadId>,
+  maxItems: number,
 ): Pick<EnvironmentState, "turnDiffIdsByThreadId" | "turnDiffSummaryByThreadId"> {
   const turnDiffIdsByThreadId: Record<string, EnvironmentState["turnDiffIdsByThreadId"][ThreadId]> =
     {};
@@ -657,8 +699,16 @@ function retainTurnDiffRecords(
     EnvironmentState["turnDiffSummaryByThreadId"][ThreadId]
   > = {};
 
+  if (maxItems <= 0) {
+    return {
+      turnDiffIdsByThreadId: turnDiffIdsByThreadId as EnvironmentState["turnDiffIdsByThreadId"],
+      turnDiffSummaryByThreadId:
+        turnDiffSummaryByThreadId as EnvironmentState["turnDiffSummaryByThreadId"],
+    };
+  }
+
   for (const threadId of detailThreadIds) {
-    const ids = (state.turnDiffIdsByThreadId[threadId] ?? []).slice(-MAX_CACHED_THREAD_DIFFS);
+    const ids = (state.turnDiffIdsByThreadId[threadId] ?? []).slice(-maxItems);
     const byId = state.turnDiffSummaryByThreadId[threadId];
     if (ids.length === 0 || !byId) {
       continue;
@@ -679,9 +729,17 @@ function retainTurnDiffRecords(
 function createCachedEnvironmentState(
   state: EnvironmentState,
   preferredThreadIds: readonly ThreadId[],
-  maxDetailThreads = MAX_CACHED_DETAIL_THREADS,
-  maxShellThreads = MAX_CACHED_SHELL_THREADS,
+  options: {
+    readonly maxDetailThreads?: number;
+    readonly maxShellThreads?: number;
+    readonly maxProjects?: number;
+    readonly detailLimits?: CachedThreadDetailLimits;
+  } = {},
 ): EnvironmentState {
+  const maxDetailThreads = options.maxDetailThreads ?? MAX_CACHED_DETAIL_THREADS;
+  const maxShellThreads = options.maxShellThreads ?? MAX_LOCAL_CACHED_SHELL_THREADS;
+  const maxProjects = options.maxProjects ?? MAX_CACHED_PROJECTS;
+  const detailLimits = options.detailLimits ?? DEFAULT_CACHED_THREAD_DETAIL_LIMITS;
   const retainedThreadIds = retainOrderedThreadIds(state, preferredThreadIds, maxShellThreads);
   const retainedThreadIdSet = new Set(retainedThreadIds);
   const detailThreadIds = retainDetailThreadIds(
@@ -690,32 +748,32 @@ function createCachedEnvironmentState(
     preferredThreadIds,
     maxDetailThreads,
   );
-  const projectState = retainProjectState(state, retainedThreadIds);
+  const projectState = retainProjectState(state, retainedThreadIds, maxProjects);
   const messageState = retainThreadItemRecord(
     state.messageIdsByThreadId,
     state.messageByThreadId,
     detailThreadIds,
-    MAX_CACHED_THREAD_MESSAGES,
+    detailLimits.messages,
   );
   const queuedTurnState = retainThreadItemRecord(
     state.queuedTurnIdsByThreadId,
     state.queuedTurnByThreadId,
     detailThreadIds,
-    MAX_CACHED_THREAD_MESSAGES,
+    detailLimits.queuedTurns,
   );
   const activityState = retainThreadItemRecord(
     state.activityIdsByThreadId,
     state.activityByThreadId,
     detailThreadIds,
-    MAX_CACHED_THREAD_ACTIVITIES,
+    detailLimits.activities,
   );
   const proposedPlanState = retainThreadItemRecord(
     state.proposedPlanIdsByThreadId,
     state.proposedPlanByThreadId,
     detailThreadIds,
-    MAX_CACHED_THREAD_PROPOSED_PLANS,
+    detailLimits.proposedPlans,
   );
-  const turnDiffState = retainTurnDiffRecords(state, detailThreadIds);
+  const turnDiffState = retainTurnDiffRecords(state, detailThreadIds, detailLimits.turnDiffs);
 
   return stripTransientRuntimeState({
     ...projectState,
@@ -753,6 +811,17 @@ function createCachedEnvironmentState(
   });
 }
 
+function hasCompleteShellCoverage(source: EnvironmentState, cached: EnvironmentState): boolean {
+  const sourceProjectIds = source.projectIds.filter((projectId) => source.projectById[projectId]);
+  const sourceThreadIds = source.threadIds.filter((threadId) => source.threadShellById[threadId]);
+  return (
+    cached.projectIds.length === sourceProjectIds.length &&
+    cached.threadIds.length === sourceThreadIds.length &&
+    sourceProjectIds.every((projectId) => cached.projectById[projectId] !== undefined) &&
+    sourceThreadIds.every((threadId) => cached.threadShellById[threadId] !== undefined)
+  );
+}
+
 function retainNewestEnvironments(
   environments: Record<string, CachedEnvironmentEntry>,
 ): Record<string, CachedEnvironmentEntry> {
@@ -774,6 +843,10 @@ function prepareCachedEnvironmentStateForHydration(state: EnvironmentState): Env
   });
 }
 
+export function decodeCachedEnvironmentState(value: unknown): EnvironmentState | null {
+  return isEnvironmentStateLike(value) ? prepareCachedEnvironmentStateForHydration(value) : null;
+}
+
 export function readCachedEnvironmentState(environmentId: EnvironmentId): EnvironmentState | null {
   const cached = readDocument().environments[environmentId];
   return cached ? prepareCachedEnvironmentStateForHydration(cached.state) : null;
@@ -785,6 +858,8 @@ export function readCachedEnvironmentStateEntries(): readonly CachedEnvironmentS
     .map(([environmentId, cached]) => ({
       environmentId: environmentId as EnvironmentId,
       updatedAt: cached.updatedAt,
+      shellRevision: cached.shellRevision,
+      shellComplete: cached.shellComplete,
       state: prepareCachedEnvironmentStateForHydration(cached.state),
     }));
 }
@@ -796,7 +871,8 @@ export function writeCachedEnvironmentState(
 ): void {
   const document = readDocument();
   const updatedAt = new Date().toISOString();
-  const cachedState = document.environments[environmentId]?.state ?? null;
+  const cachedEntry = document.environments[environmentId] ?? null;
+  const cachedState = cachedEntry?.state ?? null;
   const cachedDetailThreadIds = cachedState
     ? cachedState.threadIds
         .filter((threadId) => hasEnvironmentThreadDetailContent(cachedState, threadId))
@@ -807,24 +883,67 @@ export function writeCachedEnvironmentState(
     cachedDetailThreadIds,
   );
   const stateForWrite = mergeDetailStateWithCachedShell(state, cachedState, options);
-  const createDocument = (
-    maxDetailThreads: number,
-    maxShellThreads = MAX_CACHED_SHELL_THREADS,
-  ): CachedOrchestrationDocument => ({
-    version: DOCUMENT_VERSION,
-    environments: retainNewestEnvironments({
-      ...document.environments,
-      [environmentId]: {
-        updatedAt,
-        state: createCachedEnvironmentState(
-          stateForWrite,
-          preferredThreadIds,
-          maxDetailThreads,
-          maxShellThreads,
-        ),
-      },
-    }),
+  const durableState = createCachedEnvironmentState(stateForWrite, preferredThreadIds, {
+    maxShellThreads: Number.POSITIVE_INFINITY,
+    maxProjects: Number.POSITIVE_INFINITY,
   });
+  // Shell-stream writes are complete. Detail-stream writes can also safely advance the durable
+  // shell when they are enriching a local shell that was known to be complete before compaction.
+  const canProduceCompleteShell =
+    state.bootstrapComplete ||
+    options.preserveCachedShell !== true ||
+    cachedEntry?.shellComplete === true;
+  const hasShellTombstones =
+    (options.removedProjectIds?.length ?? 0) > 0 || (options.removedThreadIds?.length ?? 0) > 0;
+  const shellRevision = canProduceCompleteShell
+    ? createCacheRevision(updatedAt)
+    : hasShellTombstones
+      ? null
+      : (cachedEntry?.shellRevision ?? null);
+  const durableShellState = canProduceCompleteShell
+    ? createCachedEnvironmentState(durableState, [], {
+        maxDetailThreads: 0,
+        maxShellThreads: Number.POSITIVE_INFINITY,
+        maxProjects: Number.POSITIVE_INFINITY,
+      })
+    : null;
+  void writeIndexedDbCachedEnvironmentState({
+    environmentId,
+    updatedAt,
+    state: durableState,
+    ...(shellRevision !== null && durableShellState !== null
+      ? {
+          shellRevision,
+          shellUpdatedAt: updatedAt,
+          shellState: durableShellState,
+        }
+      : {}),
+  });
+  const createDocument = (limits: {
+    readonly maxDetailThreads: number;
+    readonly maxShellThreads?: number;
+    readonly detailLimits?: CachedThreadDetailLimits;
+  }): CachedOrchestrationDocument => {
+    const cachedEnvironmentState = createCachedEnvironmentState(
+      stateForWrite,
+      preferredThreadIds,
+      limits,
+    );
+    return {
+      version: DOCUMENT_VERSION,
+      environments: retainNewestEnvironments({
+        ...document.environments,
+        [environmentId]: {
+          updatedAt,
+          shellRevision,
+          shellComplete:
+            canProduceCompleteShell &&
+            hasCompleteShellCoverage(stateForWrite, cachedEnvironmentState),
+          state: cachedEnvironmentState,
+        },
+      }),
+    };
+  };
   const retainOnlyCurrentEnvironment = (
     nextDocument: CachedOrchestrationDocument,
   ): CachedOrchestrationDocument => ({
@@ -833,19 +952,78 @@ export function writeCachedEnvironmentState(
       [environmentId]: nextDocument.environments[environmentId]!,
     },
   });
+  const stripOtherEnvironmentDetail = (
+    nextDocument: CachedOrchestrationDocument,
+  ): CachedOrchestrationDocument => ({
+    version: DOCUMENT_VERSION,
+    environments: Object.fromEntries(
+      Object.entries(nextDocument.environments).map(([cachedEnvironmentId, entry]) => [
+        cachedEnvironmentId,
+        cachedEnvironmentId === environmentId
+          ? entry
+          : {
+              ...entry,
+              state: createCachedEnvironmentState(entry.state, [], { maxDetailThreads: 0 }),
+            },
+      ]),
+    ),
+  });
 
-  let shellOnlyDocument: CachedOrchestrationDocument | null = null;
-  for (const maxDetailThreads of DETAIL_THREAD_CACHE_CAP_LADDER) {
-    const nextDocument = createDocument(maxDetailThreads);
-    if (maxDetailThreads === 0) {
-      shellOnlyDocument = nextDocument;
-    }
+  const availableDetailThreadCount = stateForWrite.threadIds.filter((threadId) =>
+    hasEnvironmentThreadDetailContent(stateForWrite, threadId),
+  ).length;
+  const detailThreadCaps = [
+    ...new Set(
+      DETAIL_THREAD_CACHE_CAP_LADDER.map((maxDetailThreads) =>
+        Math.min(maxDetailThreads, availableDetailThreadCount),
+      ),
+    ),
+  ].filter((maxDetailThreads) => maxDetailThreads > 0);
+  const detailedDocuments: CachedOrchestrationDocument[] = [];
+
+  for (const maxDetailThreads of detailThreadCaps) {
+    const nextDocument = createDocument({ maxDetailThreads });
+    detailedDocuments.push(nextDocument);
     if (tryPersistDocument(nextDocument)) {
       return;
     }
   }
 
-  let nextDocument: CachedOrchestrationDocument | null = shellOnlyDocument ?? createDocument(0);
+  if (availableDetailThreadCount > 0) {
+    for (const detailLimits of COMPACT_CACHED_THREAD_DETAIL_LIMITS) {
+      const compactPreferredDetailDocument = createDocument({
+        maxDetailThreads: 1,
+        detailLimits,
+      });
+      detailedDocuments.push(compactPreferredDetailDocument);
+      if (tryPersistDocument(compactPreferredDetailDocument)) {
+        return;
+      }
+    }
+  }
+
+  // Under document or browser quota pressure, detail from the conversation the user is opening is
+  // more useful than detail from another environment. Keep every environment's projects and
+  // sidebar threads while reducing only their conversation detail.
+  if (Object.keys(document.environments).some((cachedId) => cachedId !== environmentId)) {
+    for (const detailedDocument of detailedDocuments) {
+      if (tryPersistDocument(stripOtherEnvironmentDetail(detailedDocument))) {
+        return;
+      }
+    }
+  }
+
+  const shellOnlyDocument = createDocument({ maxDetailThreads: 0 });
+  if (tryPersistDocument(shellOnlyDocument)) {
+    return;
+  }
+
+  const allEnvironmentShellDocument = stripOtherEnvironmentDetail(shellOnlyDocument);
+  if (tryPersistDocument(allEnvironmentShellDocument)) {
+    return;
+  }
+
+  let nextDocument: CachedOrchestrationDocument | null = allEnvironmentShellDocument;
   while (nextDocument !== null) {
     nextDocument = removeOldestEnvironment(nextDocument, { excludeEnvironmentId: environmentId });
     if (nextDocument === null) {
@@ -862,7 +1040,11 @@ export function writeCachedEnvironmentState(
   for (const maxShellThreads of SHELL_THREAD_CACHE_CAP_LADDER.slice(1)) {
     for (const maxDetailThreads of [1, 0] as const) {
       const compactCurrentEnvironment = retainOnlyCurrentEnvironment(
-        createDocument(maxDetailThreads, maxShellThreads),
+        createDocument({
+          maxDetailThreads,
+          maxShellThreads,
+          detailLimits: MINIMAL_CACHED_THREAD_DETAIL_LIMITS,
+        }),
       );
       if (tryPersistDocument(compactCurrentEnvironment)) {
         return;
@@ -876,7 +1058,7 @@ export function scheduleCachedEnvironmentStateWrite(
   state: EnvironmentState,
   options: CachedEnvironmentStateWriteOptions = {},
 ): void {
-  if (!storage()) {
+  if (!storage() && typeof indexedDB === "undefined") {
     return;
   }
 
@@ -887,6 +1069,7 @@ export function scheduleCachedEnvironmentStateWrite(
     removedProjectIds: new Set<ProjectId>(),
     removedThreadIds: new Set<ThreadId>(),
     timeoutId: null,
+    idleCallbackId: null,
   };
   pending.state = state;
   pending.preserveCachedShell = options.preserveCachedShell ?? false;
@@ -904,14 +1087,32 @@ export function scheduleCachedEnvironmentStateWrite(
   if (pending.timeoutId !== null) {
     clearTimeout(pending.timeoutId);
   }
+  if (pending.idleCallbackId !== null && typeof cancelIdleCallback === "function") {
+    cancelIdleCallback(pending.idleCallbackId);
+    pending.idleCallbackId = null;
+  }
   pending.timeoutId = setTimeout(() => {
-    pendingWrites.delete(environmentId);
-    writeCachedEnvironmentState(environmentId, pending.state, {
-      preferredThreadIds: [...pending.preferredThreadIds],
-      preserveCachedShell: pending.preserveCachedShell,
-      removedProjectIds: [...pending.removedProjectIds],
-      removedThreadIds: [...pending.removedThreadIds],
-    });
+    pending.timeoutId = null;
+    const persist = () => {
+      pending.idleCallbackId = null;
+      if (pendingWrites.get(environmentId) !== pending) {
+        return;
+      }
+      pendingWrites.delete(environmentId);
+      writeCachedEnvironmentState(environmentId, pending.state, {
+        preferredThreadIds: [...pending.preferredThreadIds],
+        preserveCachedShell: pending.preserveCachedShell,
+        removedProjectIds: [...pending.removedProjectIds],
+        removedThreadIds: [...pending.removedThreadIds],
+      });
+    };
+    if (typeof requestIdleCallback === "function") {
+      pending.idleCallbackId = requestIdleCallback(persist, {
+        timeout: WRITE_IDLE_TIMEOUT_MS,
+      });
+    } else {
+      persist();
+    }
   }, WRITE_DEBOUNCE_MS);
   pendingWrites.set(environmentId, pending);
 }
@@ -925,6 +1126,10 @@ export function flushPendingCachedEnvironmentStateWrite(environmentId: Environme
   if (pending.timeoutId !== null) {
     clearTimeout(pending.timeoutId);
     pending.timeoutId = null;
+  }
+  if (pending.idleCallbackId !== null && typeof cancelIdleCallback === "function") {
+    cancelIdleCallback(pending.idleCallbackId);
+    pending.idleCallbackId = null;
   }
   writeCachedEnvironmentState(environmentId, pending.state, {
     preferredThreadIds: [...pending.preferredThreadIds],
@@ -968,9 +1173,13 @@ export function installOrchestrationStartupCachePersistence(
 
 export function removeCachedEnvironmentState(environmentId: EnvironmentId): void {
   clearPersistedStartupThreadTargetForEnvironment(environmentId);
+  void removeIndexedDbCachedEnvironmentState(environmentId);
   const pending = pendingWrites.get(environmentId);
   if (pending?.timeoutId) {
     clearTimeout(pending.timeoutId);
+  }
+  if (pending && pending.idleCallbackId !== null && typeof cancelIdleCallback === "function") {
+    cancelIdleCallback(pending.idleCallbackId);
   }
   pendingWrites.delete(environmentId);
 
@@ -992,10 +1201,18 @@ export function clearOrchestrationStartupCacheForTests(): void {
     if (pending.timeoutId !== null) {
       clearTimeout(pending.timeoutId);
     }
+    if (pending.idleCallbackId !== null && typeof cancelIdleCallback === "function") {
+      cancelIdleCallback(pending.idleCallbackId);
+    }
   }
   pendingWrites.clear();
   storage()?.removeItem(STORAGE_KEY);
   invalidateDocumentMemo();
+}
+
+export async function clearOrchestrationStartupCacheDurableForTests(): Promise<void> {
+  clearOrchestrationStartupCacheForTests();
+  await clearIndexedDbCachedEnvironmentStates();
 }
 
 export const ORCHESTRATION_STARTUP_CACHE_STORAGE_KEY = STORAGE_KEY;

@@ -221,7 +221,13 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
 
 it.effect("resolveAutoBootstrapWelcomeTargets creates a project and thread when missing", () =>
   Effect.gen(function* () {
-    const dispatchCalls = yield* Ref.make<ReadonlyArray<string>>([]);
+    const dispatchCalls = yield* Ref.make<
+      ReadonlyArray<{
+        readonly type: string;
+        readonly defaultModelSelection?: unknown;
+        readonly modelSelection?: unknown;
+      }>
+    >([]);
     const targets = yield* resolveAutoBootstrapWelcomeTargets.pipe(
       Effect.provideService(ServerConfig, {
         cwd: "/tmp/startup-project",
@@ -245,10 +251,20 @@ it.effect("resolveAutoBootstrapWelcomeTargets creates a project and thread when 
       }),
       Effect.provideService(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
-        dispatch: (command) =>
-          Ref.update(dispatchCalls, (calls) => [...calls, command.type]).pipe(
+        dispatch: (command) => {
+          const captured =
+            command.type === "project.create"
+              ? {
+                  type: command.type,
+                  defaultModelSelection: command.defaultModelSelection,
+                }
+              : command.type === "thread.create"
+                ? { type: command.type, modelSelection: command.modelSelection }
+                : { type: command.type };
+          return Ref.update(dispatchCalls, (calls) => [...calls, captured]).pipe(
             Effect.as({ sequence: 1 }),
-          ),
+          );
+        },
         streamDomainEvents: Stream.empty,
       } satisfies OrchestrationEngineShape),
       Effect.provide(NodeServices.layer),
@@ -256,7 +272,11 @@ it.effect("resolveAutoBootstrapWelcomeTargets creates a project and thread when 
 
     assert.equal(typeof targets.bootstrapProjectId, "string");
     assert.equal(typeof targets.bootstrapThreadId, "string");
-    assert.deepStrictEqual(yield* Ref.get(dispatchCalls), ["project.create", "thread.create"]);
+    const [projectCreate, threadCreate] = yield* Ref.get(dispatchCalls);
+    assert.equal(projectCreate?.type, "project.create");
+    assert.equal(projectCreate?.defaultModelSelection, null);
+    assert.equal(threadCreate?.type, "thread.create");
+    assert.deepStrictEqual(threadCreate?.modelSelection, getAutoBootstrapDefaultModelSelection());
   }),
 );
 

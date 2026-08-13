@@ -1,18 +1,26 @@
 import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
 import type { ScopedProjectRef, ScopedThreadRef } from "@salchi/contracts";
 
-import type { DraftThreadState } from "./composerDraftStore";
+import type { ComposerThreadDraftState, DraftId, DraftThreadState } from "./composerDraftStore";
 import type { LocalDispatchSnapshot } from "./components/ChatView.logic";
 import type { SidebarThreadSummary, Thread } from "./types";
 
 export interface SidebarThreadPresentation {
   readonly threads: SidebarThreadSummary[];
   readonly pendingThreadKeys: ReadonlySet<string>;
+  readonly draftThreadKeys: ReadonlySet<string>;
+  readonly draftIdByThreadKey: ReadonlyMap<string, DraftId>;
+}
+
+export interface SidebarDraftThreadInput {
+  readonly draftId: DraftId;
+  readonly thread: DraftThreadState;
+  readonly composerDraft: ComposerThreadDraftState | null;
 }
 
 export interface SidebarThreadPresentationInput {
   readonly serverThreads: readonly SidebarThreadSummary[];
-  readonly draftThreads: readonly DraftThreadState[];
+  readonly draftThreads: readonly SidebarDraftThreadInput[];
   readonly localDispatchByThreadKey: Readonly<Record<string, LocalDispatchSnapshot | undefined>>;
   readonly serverThreadByKey?: ReadonlyMap<string, Thread>;
   readonly projectRefs?: readonly ScopedProjectRef[];
@@ -24,6 +32,37 @@ function threadKey(ref: ScopedThreadRef): string {
 
 function draftThreadRef(draftThread: DraftThreadState): ScopedThreadRef {
   return scopeThreadRef(draftThread.environmentId, draftThread.threadId);
+}
+
+export function hasPendingComposerInput(
+  draft: ComposerThreadDraftState | null | undefined,
+): boolean {
+  return Boolean(
+    draft &&
+    (draft.prompt.trim().length > 0 ||
+      draft.images.length > 0 ||
+      draft.persistedAttachments.length > 0 ||
+      draft.terminalContexts.length > 0),
+  );
+}
+
+export function placeDraftThreadsFirst<TThread extends SidebarThreadSummary>(
+  threads: readonly TThread[],
+  draftThreadKeys: ReadonlySet<string>,
+): TThread[] {
+  if (draftThreadKeys.size === 0) {
+    return [...threads];
+  }
+
+  const draftThreads: TThread[] = [];
+  const serverThreads: TThread[] = [];
+  for (const thread of threads) {
+    const target = draftThreadKeys.has(threadKey(scopeThreadRef(thread.environmentId, thread.id)))
+      ? draftThreads
+      : serverThreads;
+    target.push(thread);
+  }
+  return [...draftThreads, ...serverThreads];
 }
 
 function matchesProjectRefs(
@@ -103,9 +142,12 @@ export function buildSidebarThreadPresentation(
     input.serverThreads.map((thread) => threadKey(scopeThreadRef(thread.environmentId, thread.id))),
   );
   const pendingThreadKeys = new Set<string>();
+  const draftThreadKeys = new Set<string>();
+  const draftIdByThreadKey = new Map<string, DraftId>();
   const pendingThreads: SidebarThreadSummary[] = [];
 
-  for (const draftThread of input.draftThreads) {
+  for (const draftInput of input.draftThreads) {
+    const draftThread = draftInput.thread;
     if (!matchesProjectRefs(draftThread, input.projectRefs)) {
       continue;
     }
@@ -120,12 +162,20 @@ export function buildSidebarThreadPresentation(
     const draftKey = threadKey(draftRef);
     const localDispatch =
       input.localDispatchByThreadKey[rowKey] ?? input.localDispatchByThreadKey[draftKey] ?? null;
-    const isPromotedMissingSidebarSummary = draftThread.promotedTo !== null;
-    if (!localDispatch && !isPromotedMissingSidebarSummary) {
+    const isPromotedMissingSidebarSummary = draftThread.promotedTo != null;
+    const isComposerDraft =
+      !localDispatch &&
+      !isPromotedMissingSidebarSummary &&
+      hasPendingComposerInput(draftInput.composerDraft);
+    if (!localDispatch && !isPromotedMissingSidebarSummary && !isComposerDraft) {
       continue;
     }
 
     pendingThreadKeys.add(rowKey);
+    if (isComposerDraft) {
+      draftThreadKeys.add(rowKey);
+      draftIdByThreadKey.set(rowKey, draftInput.draftId);
+    }
     pendingThreads.push(
       buildPendingThreadSummary({
         draftThread,
@@ -139,5 +189,7 @@ export function buildSidebarThreadPresentation(
   return {
     threads: [...input.serverThreads, ...pendingThreads],
     pendingThreadKeys,
+    draftThreadKeys,
+    draftIdByThreadKey,
   };
 }

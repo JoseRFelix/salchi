@@ -1,5 +1,6 @@
 import { ProviderUpdateLaunchNotification } from "./ProviderUpdateLaunchNotification";
 import { PwaPushNotificationPrompt } from "./pwa-push-notification-prompt";
+import { PushSubscriptionReconciler } from "../push/PushSubscriptionReconciler";
 
 export function RootDeferredOverlays({
   primaryEnvironmentAuthenticated,
@@ -8,6 +9,7 @@ export function RootDeferredOverlays({
 }) {
   return (
     <>
+      {primaryEnvironmentAuthenticated ? <PushSubscriptionReconciler /> : null}
       {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
       {primaryEnvironmentAuthenticated ? <PwaPushNotificationPrompt /> : null}
     </>

@@ -55,6 +55,30 @@ function settingsWithProviderInstances(): UnifiedSettings {
 }
 
 describe("instance-scoped model selection", () => {
+  it("uses the live declared default when no model is pinned", () => {
+    const baseProvider = provider({
+      instanceId: "codex",
+      models: ["gpt-5.4", "gpt-5.6-sol"],
+    });
+    const providers: ReadonlyArray<ServerProvider> = [
+      {
+        ...baseProvider,
+        models: baseProvider.models.map((entry) =>
+          entry.slug === "gpt-5.6-sol" ? { ...entry, isDefault: true } : entry,
+        ),
+      },
+    ];
+
+    expect(
+      resolveAppModelSelectionForInstance(
+        ProviderInstanceId.make("codex"),
+        settingsWithProviderInstances(),
+        providers,
+        null,
+      ),
+    ).toBe("gpt-5.6-sol");
+  });
+
   it("keeps custom models on the provider instance that declared them", () => {
     const providers = [
       provider({

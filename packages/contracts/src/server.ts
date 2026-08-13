@@ -64,6 +64,7 @@ export const ServerProviderModel = Schema.Struct({
   shortName: Schema.optional(TrimmedNonEmptyString),
   subProvider: Schema.optional(TrimmedNonEmptyString),
   isCustom: Schema.Boolean,
+  isDefault: Schema.optional(Schema.Boolean),
   capabilities: Schema.NullOr(ModelCapabilities),
 });
 export type ServerProviderModel = typeof ServerProviderModel.Type;
@@ -561,7 +562,7 @@ export class ServerProviderUpdateError extends Schema.TaggedErrorClass<ServerPro
   {
     provider: ProviderDriverKind,
     reason: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {

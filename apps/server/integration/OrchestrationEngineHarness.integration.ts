@@ -172,7 +172,7 @@ class OrchestrationHarnessRuntimeError extends Schema.TaggedErrorClass<Orchestra
   "OrchestrationHarnessRuntimeError",
   {
     operation: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 

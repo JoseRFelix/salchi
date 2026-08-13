@@ -13,12 +13,14 @@ import {
 } from "../Services/ProviderSessionReaper.ts";
 import { ProviderService } from "../Services/ProviderService.ts";
 
-const DEFAULT_INACTIVITY_THRESHOLD_MS = 30 * 60 * 1000;
-const DEFAULT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_INACTIVITY_THRESHOLD_MS = 10 * 60 * 1000;
+const DEFAULT_SWEEP_INTERVAL_MS = 60 * 1000;
+const DEFAULT_MAX_IDLE_READY_ROOT_SESSIONS = 4;
 
 export interface ProviderSessionReaperLiveOptions {
   readonly inactivityThresholdMs?: number;
   readonly sweepIntervalMs?: number;
+  readonly maxIdleReadyRootSessions?: number;
 }
 
 const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =>
@@ -32,11 +34,21 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       options?.inactivityThresholdMs ?? DEFAULT_INACTIVITY_THRESHOLD_MS,
     );
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
+    const maxIdleReadyRootSessions = Math.max(
+      0,
+      options?.maxIdleReadyRootSessions ?? DEFAULT_MAX_IDLE_READY_ROOT_SESSIONS,
+    );
 
     const sweep = Effect.gen(function* () {
       const bindings = yield* directory.listBindings();
       const now = yield* Clock.currentTimeMillis;
       let reapedCount = 0;
+      const candidates: Array<{
+        readonly binding: (typeof bindings)[number];
+        readonly idleDurationMs: number;
+        readonly lastSeenMs: number;
+        readonly isIdleReadyRoot: boolean;
+      }> = [];
 
       for (const binding of bindings) {
         if (binding.status === "stopped") {
@@ -54,10 +66,6 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         }
 
         const idleDurationMs = now - lastSeenMs;
-        if (idleDurationMs < inactivityThresholdMs) {
-          continue;
-        }
-
         const thread = yield* projectionSnapshotQuery
           .getThreadShellById(binding.threadId)
           .pipe(Effect.map(Option.getOrUndefined));
@@ -70,13 +78,45 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
+        candidates.push({
+          binding,
+          idleDurationMs,
+          lastSeenMs,
+          isIdleReadyRoot: thread?.createdByThreadId == null && thread?.session?.status === "ready",
+        });
+      }
+
+      const overCapacityThreadIds = new Set(
+        candidates
+          .filter((candidate) => candidate.isIdleReadyRoot)
+          .toSorted(
+            (left, right) =>
+              right.lastSeenMs - left.lastSeenMs ||
+              String(right.binding.threadId).localeCompare(String(left.binding.threadId)),
+          )
+          .slice(maxIdleReadyRootSessions)
+          .map((candidate) => candidate.binding.threadId),
+      );
+
+      for (const candidate of candidates) {
+        const { binding, idleDurationMs } = candidate;
+        const reason =
+          idleDurationMs >= inactivityThresholdMs
+            ? "inactivity_threshold"
+            : overCapacityThreadIds.has(binding.threadId)
+              ? "idle_ready_capacity"
+              : null;
+        if (reason === null) {
+          continue;
+        }
+
         const reaped = yield* providerService.stopSession({ threadId: binding.threadId }).pipe(
           Effect.tap(() =>
             Effect.logInfo("provider.session.reaped", {
               threadId: binding.threadId,
               provider: binding.provider,
               idleDurationMs,
-              reason: "inactivity_threshold",
+              reason,
             }),
           ),
           Effect.as(true),
@@ -124,6 +164,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         yield* Effect.logInfo("provider.session.reaper.started", {
           inactivityThresholdMs,
           sweepIntervalMs,
+          maxIdleReadyRootSessions,
         });
       });
 

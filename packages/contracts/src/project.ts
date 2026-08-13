@@ -35,7 +35,7 @@ export class ProjectSearchEntriesError extends Schema.TaggedErrorClass<ProjectSe
   "ProjectSearchEntriesError",
   {
     message: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -58,7 +58,7 @@ export class ProjectListDirectoryEntriesError extends Schema.TaggedErrorClass<Pr
   "ProjectListDirectoryEntriesError",
   {
     message: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -80,7 +80,7 @@ export class ProjectReadFileError extends Schema.TaggedErrorClass<ProjectReadFil
   "ProjectReadFileError",
   {
     message: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -100,7 +100,7 @@ export class ProjectWriteFileError extends Schema.TaggedErrorClass<ProjectWriteF
   "ProjectWriteFileError",
   {
     message: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -121,6 +121,6 @@ export class ProjectDeleteEntryError extends Schema.TaggedErrorClass<ProjectDele
   "ProjectDeleteEntryError",
   {
     message: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}

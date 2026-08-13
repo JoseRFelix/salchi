@@ -7,6 +7,7 @@ import {
   ProjectId,
   type ModelSelection,
   type ProviderDriverKind,
+  type ProviderInstanceId,
   type ServerProvider,
   type ScopedThreadRef,
   type ThreadId,
@@ -62,6 +63,25 @@ export function buildLocalDraftThread(
     proposedPlans: [],
     detailPageInfo: EMPTY_ORCHESTRATION_THREAD_DETAIL_PAGE_INFO,
   };
+}
+
+/**
+ * A local draft's synthetic Thread needs a concrete model for its UI shape,
+ * but that fallback must not turn an inherited project default into a pin.
+ * Once a draft has an active provider, its composer selection is explicit (or
+ * sticky/contextual) and should take precedence normally.
+ */
+export function resolveComposerThreadModelSelection(input: {
+  readonly isLocalDraftThread: boolean;
+  readonly projectModelSelection: ModelSelection | null | undefined;
+  readonly draftActiveProvider: ProviderInstanceId | null | undefined;
+  readonly threadModelSelection: ModelSelection | null | undefined;
+}): ModelSelection | null | undefined {
+  return input.isLocalDraftThread &&
+    input.projectModelSelection == null &&
+    input.draftActiveProvider == null
+    ? null
+    : input.threadModelSelection;
 }
 
 export function shouldWriteThreadErrorToCurrentServerThread(input: {

@@ -5,7 +5,6 @@ import * as Schema from "effect/Schema";
 
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { claimClaudeLoginNotification } from "../../claudeLoginNotification";
-import { ensureLocalApi } from "../../localApi";
 import type { AppState } from "../../store";
 import { useStore } from "../../store";
 import { useServerConfig, useServerProviders } from "../../rpc/serverState";
@@ -21,6 +20,8 @@ import {
   getSidebarUsageBarPercent,
   getSidebarUsageDisplayPercent,
   getSidebarUsagePrimaryWindow,
+  getSidebarUsageVisibleWindows,
+  hasSidebarUsageProviderInstances,
   resolveSidebarUsageIndicatorRenderState,
   getSidebarUsageSummary,
   type SidebarUsageSummary,
@@ -28,9 +29,10 @@ import {
   type SidebarUsageThreadInput,
   type SidebarUsageWindow,
 } from "./SidebarUsageIndicator.logic";
+import { startSidebarUsagePolling } from "./sidebarUsagePolling";
+import { refreshSidebarUsageLimits } from "./sidebarUsageRefresh";
 
 const SIDEBAR_USAGE_EXPANDED_STORAGE_KEY = "salchi:sidebar-usage-expanded:v1";
-const SIDEBAR_USAGE_POLL_INTERVAL_MS = 30_000;
 
 function collectSidebarUsageThreads(
   environmentStateById: AppState["environmentStateById"],
@@ -192,10 +194,25 @@ function SidebarUsageWindowMeter({
 }
 
 function SidebarUsageDetailsGrid({ row }: { row: SidebarUsageProviderRow }) {
+  const visibleWindows = getSidebarUsageVisibleWindows(row);
+  if (visibleWindows.length === 0) {
+    return (
+      <div className="rounded-md bg-muted/35 px-2 py-1.5 text-[10px] text-muted-foreground/70">
+        No limit data yet
+      </div>
+    );
+  }
+
   return (
-    <div className="grid grid-cols-2 gap-1.5">
-      <SidebarUsageWindowMeter row={row} window={row.windows.fiveHour} fallbackLabel="5h" />
-      <SidebarUsageWindowMeter row={row} window={row.windows.weekly} fallbackLabel="Week" />
+    <div className={cn("grid gap-1.5", visibleWindows.length > 1 && "grid-cols-2")}>
+      {visibleWindows.map(({ id, window }) => (
+        <SidebarUsageWindowMeter
+          key={id}
+          row={row}
+          window={window}
+          fallbackLabel={id === "fiveHour" ? "5h" : "Week"}
+        />
+      ))}
     </div>
   );
 }
@@ -222,36 +239,9 @@ function SidebarUsageProviderRowView({ row }: { row: SidebarUsageProviderRow }) 
   );
 }
 
-function accountRateLimitsToStoreRecord(
-  accountRateLimits: ReadonlyArray<{
-    readonly providerInstanceId: string;
-    readonly rateLimits: unknown;
-  }>,
-  fetchedAt: string,
-): AppState["accountRateLimitsByInstanceId"] {
-  return Object.fromEntries(
-    accountRateLimits.map((entry) => [
-      String(entry.providerInstanceId),
-      { rateLimits: entry.rateLimits, updatedAt: fetchedAt },
-    ]),
-  );
-}
-
-export function SidebarUsageIndicator() {
-  const navigate = useNavigate();
-  const [expanded, setExpanded] = useLocalStorage(
-    SIDEBAR_USAGE_EXPANDED_STORAGE_KEY,
-    false,
-    Schema.Boolean,
-  );
-  const environmentStateById = useStore((state) => state.environmentStateById);
-  const accountRateLimitsByInstanceId = useStore((state) => state.accountRateLimitsByInstanceId);
-  const setAccountRateLimitsByInstanceId = useStore(
-    (state) => state.setAccountRateLimitsByInstanceId,
-  );
-  const serverConfig = useServerConfig();
+function useSidebarUsageProviderInstances() {
   const providers = useServerProviders();
-  const usageProviderInstances = useMemo(
+  return useMemo(
     () =>
       providers.map((provider) => ({
         instanceId: provider.instanceId,
@@ -263,11 +253,56 @@ export function SidebarUsageIndicator() {
       })),
     [providers],
   );
+}
+
+export function SidebarUsageBackgroundRefresh() {
+  const usageProviderInstances = useSidebarUsageProviderInstances();
   const { isMobile, open, openMobile } = useSidebar();
   const sidebarVisible = isMobile ? openMobile : open;
   const previousSidebarVisibleRef = useRef(false);
-  const refreshInFlightRef = useRef<Promise<unknown> | null>(null);
+  const hasUsageProviders = hasSidebarUsageProviderInstances(usageProviderInstances);
+
+  const refreshUsageLimits = useCallback(() => refreshSidebarUsageLimits(), []);
+
+  useEffect(() => {
+    const previousSidebarVisible = previousSidebarVisibleRef.current;
+    previousSidebarVisibleRef.current = sidebarVisible;
+    if (!hasUsageProviders || !sidebarVisible || previousSidebarVisible) {
+      return;
+    }
+
+    void refreshUsageLimits();
+  }, [hasUsageProviders, refreshUsageLimits, sidebarVisible]);
+
+  useEffect(() => {
+    if (!hasUsageProviders) {
+      return;
+    }
+
+    return startSidebarUsagePolling(refreshUsageLimits);
+  }, [hasUsageProviders, refreshUsageLimits]);
+
+  return null;
+}
+
+export function SidebarUsageIndicator() {
+  const navigate = useNavigate();
+  const [expanded, setExpanded] = useLocalStorage(
+    SIDEBAR_USAGE_EXPANDED_STORAGE_KEY,
+    false,
+    Schema.Boolean,
+  );
+  const environmentStateById = useStore((state) => state.environmentStateById);
+  const accountRateLimitsByInstanceId = useStore((state) => state.accountRateLimitsByInstanceId);
+  const serverConfig = useServerConfig();
+  const usageProviderInstances = useSidebarUsageProviderInstances();
   const claudeLoginNotificationAttemptedRef = useRef(false);
+
+  useEffect(() => {
+    if (expanded) {
+      void refreshSidebarUsageLimits();
+    }
+  }, [expanded]);
 
   const threads = useMemo(
     () => collectSidebarUsageThreads(environmentStateById),
@@ -320,58 +355,6 @@ export function SidebarUsageIndicator() {
       }),
     );
   }, [claudeLoginPromptInstanceIds, navigate]);
-
-  const refreshUsageLimits = useCallback(() => {
-    if (refreshInFlightRef.current) {
-      return refreshInFlightRef.current;
-    }
-
-    const promise = ensureLocalApi()
-      .server.refreshUsageLimits()
-      .then((result) => {
-        const fetchedAt = new Date().toISOString();
-        const updates = accountRateLimitsToStoreRecord(result.accountRateLimits, fetchedAt);
-        setAccountRateLimitsByInstanceId(updates);
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (refreshInFlightRef.current === promise) {
-          refreshInFlightRef.current = null;
-        }
-      });
-
-    refreshInFlightRef.current = promise;
-    return promise;
-  }, [setAccountRateLimitsByInstanceId]);
-
-  useEffect(() => {
-    const previousSidebarVisible = previousSidebarVisibleRef.current;
-    previousSidebarVisibleRef.current = sidebarVisible;
-    if (!hasUsageProviders || !sidebarVisible || (previousSidebarVisible && !expanded)) {
-      return;
-    }
-
-    void refreshUsageLimits();
-  }, [expanded, hasUsageProviders, refreshUsageLimits, sidebarVisible]);
-
-  useEffect(() => {
-    if (!hasUsageProviders) {
-      return;
-    }
-
-    void refreshUsageLimits();
-  }, [hasUsageProviders, refreshUsageLimits]);
-
-  useEffect(() => {
-    if (!hasUsageProviders || !sidebarVisible || !expanded) {
-      return;
-    }
-
-    const intervalId = window.setInterval(() => {
-      void refreshUsageLimits();
-    }, SIDEBAR_USAGE_POLL_INTERVAL_MS);
-    return () => window.clearInterval(intervalId);
-  }, [expanded, hasUsageProviders, refreshUsageLimits, sidebarVisible]);
 
   if (renderState === "loading") {
     return (

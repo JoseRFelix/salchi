@@ -896,6 +896,7 @@ describe("ClaudeAdapterLive", () => {
 
   it.effect("emits Claude subscription usage from the OAuth usage endpoint", () => {
     const homeDir = mkdtempSync(path.join(os.tmpdir(), "claude-oauth-usage-"));
+    let fetchUsageCount = 0;
     const credentialsDir = path.join(homeDir, ".claude");
     mkdirSync(credentialsDir, { recursive: true });
     writeFileSync(
@@ -916,6 +917,7 @@ describe("ClaudeAdapterLive", () => {
       claudeConfig: { homePath: homeDir },
       enableOAuthUsage: true,
       fetchOAuthUsage: async ({ accessToken }) => {
+        fetchUsageCount += 1;
         assert.equal(accessToken, "test-access-token");
         return {
           five_hour: {
@@ -972,6 +974,10 @@ describe("ClaudeAdapterLive", () => {
           },
         });
       }
+      assert.equal(fetchUsageCount, 1);
+      yield* TestClock.adjust("2 minutes");
+      yield* Effect.yieldNow;
+      assert.equal(fetchUsageCount, 1);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -1057,6 +1063,28 @@ describe("ClaudeAdapterLive", () => {
           },
         });
       }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("uses high as the Claude Opus 5 default effort", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-opus-5",
+        },
+        runtimeMode: "full-access",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.effort, "high");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

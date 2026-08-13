@@ -93,7 +93,7 @@ export class VcsProcessSpawnError extends Schema.TaggedErrorClass<VcsProcessSpaw
     operation: Schema.String,
     command: Schema.String,
     cwd: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {
   override get message(): string {
@@ -151,7 +151,7 @@ export class VcsOutputDecodeError extends Schema.TaggedErrorClass<VcsOutputDecod
     command: Schema.String,
     cwd: Schema.String,
     detail: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
@@ -201,7 +201,7 @@ export class VcsRepositoryDetectionError extends Schema.TaggedErrorClass<VcsRepo
     operation: Schema.String,
     cwd: Schema.String,
     detail: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {

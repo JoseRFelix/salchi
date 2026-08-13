@@ -57,13 +57,13 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           electron: "41.5.0",
         },
         {
-          "@effect/platform-node": "4.0.0-beta.73",
-          effect: "4.0.0-beta.73",
+          "@effect/platform-node": "4.0.0-beta.102",
+          effect: "4.0.0-beta.102",
         },
       ),
       {
-        "@effect/platform-node": "4.0.0-beta.73",
-        effect: "4.0.0-beta.73",
+        "@effect/platform-node": "4.0.0-beta.102",
+        effect: "4.0.0-beta.102",
       },
     );
   });
@@ -73,18 +73,28 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       createStagePnpmConfig(
         {
           "@expo/metro-config@56.0.13": "patches/@expo%2Fmetro-config@56.0.13.patch",
+          "@effect/platform-bun@4.0.0-beta.102":
+            "patches/@effect__platform-bun@4.0.0-beta.102.patch",
+          "@effect/platform-node@4.0.0-beta.102":
+            "patches/@effect__platform-node@4.0.0-beta.102.patch",
           "@pierre/diffs@1.1.20": "patches/@pierre%2Fdiffs@1.1.20.patch",
-          "effect@4.0.0-beta.73": "patches/effect@4.0.0-beta.73.patch",
+          "effect@4.0.0-beta.102": "patches/effect@4.0.0-beta.102.patch",
         },
         {
+          "@effect/platform-bun": "4.0.0-beta.102",
+          "@effect/platform-node": "4.0.0-beta.102",
           "@pierre/diffs": "1.1.20",
-          effect: "4.0.0-beta.73",
+          effect: "4.0.0-beta.102",
         },
       ),
       {
         patchedDependencies: {
+          "@effect/platform-bun@4.0.0-beta.102":
+            "patches/@effect__platform-bun@4.0.0-beta.102.patch",
+          "@effect/platform-node@4.0.0-beta.102":
+            "patches/@effect__platform-node@4.0.0-beta.102.patch",
           "@pierre/diffs@1.1.20": "patches/@pierre%2Fdiffs@1.1.20.patch",
-          "effect@4.0.0-beta.73": "patches/effect@4.0.0-beta.73.patch",
+          "effect@4.0.0-beta.102": "patches/effect@4.0.0-beta.102.patch",
         },
       },
     );
@@ -94,7 +104,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         {
           "@expo/metro-config@56.0.13": "patches/@expo%2Fmetro-config@56.0.13.patch",
         },
-        { effect: "4.0.0-beta.73" },
+        { effect: "4.0.0-beta.102" },
       ),
       undefined,
     );
@@ -102,7 +112,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   it("parses scoped patched dependency package names", () => {
     assert.equal(getPatchedDependencyPackageName("@pierre/diffs@1.1.20"), "@pierre/diffs");
-    assert.equal(getPatchedDependencyPackageName("effect@4.0.0-beta.73"), "effect");
+    assert.equal(getPatchedDependencyPackageName("effect@4.0.0-beta.102"), "effect");
   });
 
   it.effect("includes command stdout and stderr tails in failures", () =>

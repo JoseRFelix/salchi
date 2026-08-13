@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
   ApprovalRequestId,
   type AssistantDeliveryMode,
+  CHAT_IMAGE_ATTACHMENT_MAX_BYTES,
   type ChatAttachment,
   CommandId,
   EventId,
@@ -13,7 +14,6 @@ import {
   type OrchestrationProposedPlanId,
   CheckpointRef,
   isToolLifecycleItemType,
-  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   ThreadId,
   type ToolLifecycleItemType,
   type ThreadTokenUsageSnapshot,
@@ -989,8 +989,7 @@ const make = Effect.gen(function* () {
         projectId,
         title,
         workspaceRoot,
-        defaultModelSelection:
-          input.event.payload.modelSelection ?? input.sourceThread.modelSelection,
+        defaultModelSelection: null,
         createdAt: input.event.createdAt,
       });
 
@@ -1595,7 +1594,7 @@ const make = Effect.gen(function* () {
         return null;
       }
       const fileSize = Number(fileInfo.size);
-      if (fileSize <= 0 || fileSize > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+      if (fileSize <= 0 || fileSize > CHAT_IMAGE_ATTACHMENT_MAX_BYTES) {
         return null;
       }
 
@@ -1668,7 +1667,7 @@ const make = Effect.gen(function* () {
       }
 
       const bytes = Buffer.from(parsed.base64, "base64");
-      if (bytes.byteLength <= 0 || bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+      if (bytes.byteLength <= 0 || bytes.byteLength > CHAT_IMAGE_ATTACHMENT_MAX_BYTES) {
         return null;
       }
 
@@ -2602,7 +2601,11 @@ const make = Effect.gen(function* () {
           threadId: thread.id,
           dataUrl: event.payload.dataUrl,
           ...(event.payload.name ? { name: event.payload.name } : {}),
-          ...(event.itemId ? { stableKey: `provider-item:${event.itemId}` } : {}),
+          ...(event.itemId
+            ? {
+                stableKey: `provider-item:${event.itemId}:name:${event.payload.name ?? "image"}`,
+              }
+            : {}),
         });
 
         if (attachment) {

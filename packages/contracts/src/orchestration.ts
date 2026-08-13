@@ -146,6 +146,7 @@ export const PROVIDER_SEND_TURN_MAX_INPUT_CHARS = 120_000;
 export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 8;
 export const PROVIDER_SEND_TURN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 export const PROVIDER_SEND_TURN_MAX_PDF_BYTES = 10 * 1024 * 1024;
+export const CHAT_IMAGE_ATTACHMENT_MAX_BYTES = 64 * 1024 * 1024;
 const PROVIDER_SEND_TURN_MAX_IMAGE_DATA_URL_CHARS = 14_000_000;
 export const PROVIDER_SEND_TURN_MAX_PDF_DATA_URL_CHARS =
   PROVIDER_SEND_TURN_MAX_IMAGE_DATA_URL_CHARS;
@@ -165,7 +166,7 @@ export const ChatImageAttachment = Schema.Struct({
   id: ChatAttachmentId,
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
   mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100), Schema.isPattern(/^image\//i)),
-  sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES)),
+  sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(CHAT_IMAGE_ATTACHMENT_MAX_BYTES)),
 });
 export type ChatImageAttachment = typeof ChatImageAttachment.Type;
 
@@ -1711,7 +1712,7 @@ export class OrchestrationGetSnapshotError extends Schema.TaggedErrorClass<Orche
   "OrchestrationGetSnapshotError",
   {
     message: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -1719,7 +1720,7 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedErrorClass<O
   "OrchestrationDispatchCommandError",
   {
     message: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -1727,7 +1728,7 @@ export class OrchestrationGetTurnDiffError extends Schema.TaggedErrorClass<Orche
   "OrchestrationGetTurnDiffError",
   {
     message: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -1735,7 +1736,7 @@ export class OrchestrationGetFullThreadDiffError extends Schema.TaggedErrorClass
   "OrchestrationGetFullThreadDiffError",
   {
     message: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -1743,6 +1744,6 @@ export class OrchestrationReplayEventsError extends Schema.TaggedErrorClass<Orch
   "OrchestrationReplayEventsError",
   {
     message: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}

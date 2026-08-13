@@ -1,7 +1,11 @@
 import type { ChatAttachment } from "../../types";
 import { cn } from "../../lib/utils";
-import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
-import { ExternalLinkIcon, FileTextIcon } from "lucide-react";
+import {
+  buildAttachmentDownloadUrl,
+  buildExpandedImagePreview,
+  type ExpandedImagePreview,
+} from "./ExpandedImagePreview";
+import { DownloadIcon, ExternalLinkIcon, FileTextIcon } from "lucide-react";
 
 interface MessageAttachmentsProps {
   attachments: ReadonlyArray<ChatAttachment>;
@@ -46,26 +50,36 @@ function MessageImageGridOnly({
       {images.map((image) => (
         <div
           key={image.id}
-          className="overflow-hidden rounded-lg border border-border/80 bg-background/70"
+          className="group relative overflow-hidden rounded-lg border border-border/80 bg-background/70"
         >
           {image.previewUrl ? (
-            <button
-              type="button"
-              className="h-full w-full cursor-zoom-in"
-              aria-label={`Preview ${image.name}`}
-              onClick={() => {
-                const preview = buildExpandedImagePreview(images, image.id);
-                if (!preview) return;
-                onImageExpand(preview);
-              }}
-            >
-              <img
-                src={image.previewUrl}
-                alt={image.name}
-                className="block h-auto max-h-[220px] w-full object-cover"
-                loading="lazy"
-              />
-            </button>
+            <>
+              <button
+                type="button"
+                className="h-full w-full cursor-zoom-in"
+                aria-label={`Preview ${image.name}`}
+                onClick={() => {
+                  const preview = buildExpandedImagePreview(images, image.id);
+                  if (!preview) return;
+                  onImageExpand(preview);
+                }}
+              >
+                <img
+                  src={image.previewUrl}
+                  alt={image.name}
+                  className="block h-auto max-h-[220px] w-full object-cover"
+                  loading="lazy"
+                />
+              </button>
+              <a
+                href={buildAttachmentDownloadUrl(image.previewUrl)}
+                download={image.name}
+                className="absolute right-2 top-2 inline-flex size-8 items-center justify-center rounded-md bg-black/60 text-white opacity-0 shadow-sm transition-opacity hover:bg-black/75 focus-visible:opacity-100 group-hover:opacity-100"
+                aria-label={`Download ${image.name}`}
+              >
+                <DownloadIcon className="size-4" aria-hidden />
+              </a>
+            </>
           ) : (
             <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-[11px] text-muted-foreground/70">
               {image.name}
@@ -87,25 +101,35 @@ function MessageImageAttachment({
   onImageExpand: (preview: ExpandedImagePreview) => void;
 }) {
   return (
-    <div className="max-w-[420px] overflow-hidden rounded-lg border border-border/80 bg-background/70">
+    <div className="group relative max-w-[420px] overflow-hidden rounded-lg border border-border/80 bg-background/70">
       {image.previewUrl ? (
-        <button
-          type="button"
-          className="h-full w-full cursor-zoom-in"
-          aria-label={`Preview ${image.name}`}
-          onClick={() => {
-            const preview = buildExpandedImagePreview(images, image.id);
-            if (!preview) return;
-            onImageExpand(preview);
-          }}
-        >
-          <img
-            src={image.previewUrl}
-            alt={image.name}
-            className="block h-auto max-h-[220px] w-full object-cover"
-            loading="lazy"
-          />
-        </button>
+        <>
+          <button
+            type="button"
+            className="h-full w-full cursor-zoom-in"
+            aria-label={`Preview ${image.name}`}
+            onClick={() => {
+              const preview = buildExpandedImagePreview(images, image.id);
+              if (!preview) return;
+              onImageExpand(preview);
+            }}
+          >
+            <img
+              src={image.previewUrl}
+              alt={image.name}
+              className="block h-auto max-h-[220px] w-full object-cover"
+              loading="lazy"
+            />
+          </button>
+          <a
+            href={buildAttachmentDownloadUrl(image.previewUrl)}
+            download={image.name}
+            className="absolute right-2 top-2 inline-flex size-8 items-center justify-center rounded-md bg-black/60 text-white opacity-0 shadow-sm transition-opacity hover:bg-black/75 focus-visible:opacity-100 group-hover:opacity-100"
+            aria-label={`Download ${image.name}`}
+          >
+            <DownloadIcon className="size-4" aria-hidden />
+          </a>
+        </>
       ) : (
         <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-[11px] text-muted-foreground/70">
           {image.name}
