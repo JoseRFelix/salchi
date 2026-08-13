@@ -27,6 +27,7 @@ import {
   installOrchestrationStartupCachePersistence,
   ORCHESTRATION_STARTUP_CACHE_STORAGE_KEY,
   readCachedEnvironmentState,
+  readCachedEnvironmentStateEntries,
   scheduleCachedEnvironmentStateWrite,
   writeCachedEnvironmentState,
 } from "./orchestrationStartupCache";
@@ -381,6 +382,10 @@ describe("orchestration startup cache", () => {
     expect(cached?.proposedPlanIdsByThreadId[THREAD_ID]).toEqual(["plan-1"]);
     expect(cached?.turnDiffIdsByThreadId[THREAD_ID]).toEqual([TurnId.make("turn-1")]);
     expect(cached?.threadDetailPageInfoByThreadId[THREAD_ID]).toEqual(pageInfo);
+    expect(readCachedEnvironmentStateEntries()[0]).toMatchObject({
+      shellComplete: true,
+      shellRevision: expect.any(String),
+    });
   });
 
   it("hydrates projects, sidebar summaries, and thread detail before connection startup", () => {
@@ -428,6 +433,272 @@ describe("orchestration startup cache", () => {
       THREAD_ID,
       SHELL_ONLY_THREAD_ID,
     ]);
+  });
+
+  it("fills missing local startup detail from the durable cache without replacing the local shell", () => {
+    const durableState = makeEnvironmentState({ messageText: "durable cached conversation" });
+    const shellOnlyState: EnvironmentState = {
+      ...durableState,
+      threadShellById: {
+        ...durableState.threadShellById,
+        [THREAD_ID]: {
+          ...durableState.threadShellById[THREAD_ID]!,
+          title: "Newer local shell title",
+        },
+      },
+      messageIdsByThreadId: {},
+      messageByThreadId: {},
+      queuedTurnIdsByThreadId: {},
+      queuedTurnByThreadId: {},
+      activityIdsByThreadId: {},
+      activityByThreadId: {},
+      proposedPlanIdsByThreadId: {},
+      proposedPlanByThreadId: {},
+      turnDiffIdsByThreadId: {},
+      turnDiffSummaryByThreadId: {},
+      threadDetailPageInfoByThreadId: {},
+    };
+
+    useStore.getState().hydrateCachedEnvironmentState(ENVIRONMENT_ID, shellOnlyState);
+    useStore.getState().hydrateCachedEnvironmentDetailState(ENVIRONMENT_ID, durableState);
+
+    const hydrated = useStore.getState().environmentStateById[ENVIRONMENT_ID] ?? null;
+    expect(threadMessageTexts(hydrated, THREAD_ID)).toEqual(["durable cached conversation"]);
+    expect(hydrated?.threadShellById[THREAD_ID]?.title).toBe("Newer local shell title");
+  });
+
+  it("does not replace an existing local hot tail with asynchronous durable detail", () => {
+    useStore
+      .getState()
+      .hydrateCachedEnvironmentState(
+        ENVIRONMENT_ID,
+        makeEnvironmentState({ messageText: "newer local hot tail" }),
+      );
+
+    useStore
+      .getState()
+      .hydrateCachedEnvironmentDetailState(
+        ENVIRONMENT_ID,
+        makeEnvironmentState({ messageText: "older durable detail" }),
+      );
+
+    expect(
+      threadMessageTexts(
+        useStore.getState().environmentStateById[ENVIRONMENT_ID] ?? null,
+        THREAD_ID,
+      ),
+    ).toEqual(["newer local hot tail"]);
+  });
+
+  it("enriches a local hot tail from durable detail at the same projection sequence", () => {
+    const localState = makeEnvironmentState({ messageText: "message template" });
+    const templateMessageId = localState.messageIdsByThreadId[THREAD_ID]![0]!;
+    const templateMessage = localState.messageByThreadId[THREAD_ID]![templateMessageId]!;
+    const olderMessageId = MessageId.make("durable-older-message");
+    const tailMessageId = MessageId.make("shared-tail-message");
+    const durableState: EnvironmentState = {
+      ...localState,
+      messageIdsByThreadId: {
+        [THREAD_ID]: [olderMessageId, tailMessageId],
+      },
+      messageByThreadId: {
+        [THREAD_ID]: {
+          [olderMessageId]: {
+            ...templateMessage,
+            id: olderMessageId,
+            text: "durable older message",
+          },
+          [tailMessageId]: {
+            ...templateMessage,
+            id: tailMessageId,
+            text: "stale durable tail",
+          },
+        },
+      },
+      lastAppliedEventSequenceByThreadId: {
+        [THREAD_ID]: 42,
+      },
+    };
+    const compactLocalState: EnvironmentState = {
+      ...localState,
+      messageIdsByThreadId: {
+        [THREAD_ID]: [tailMessageId],
+      },
+      messageByThreadId: {
+        [THREAD_ID]: {
+          [tailMessageId]: {
+            ...templateMessage,
+            id: tailMessageId,
+            text: "newer local tail",
+          },
+        },
+      },
+      lastAppliedEventSequenceByThreadId: {
+        [THREAD_ID]: 42,
+      },
+    };
+
+    useStore.getState().hydrateCachedEnvironmentState(ENVIRONMENT_ID, compactLocalState);
+    useStore.getState().hydrateCachedEnvironmentDetailState(ENVIRONMENT_ID, durableState);
+
+    expect(
+      threadMessageTexts(
+        useStore.getState().environmentStateById[ENVIRONMENT_ID] ?? null,
+        THREAD_ID,
+      ),
+    ).toEqual(["durable older message", "newer local tail"]);
+  });
+
+  it("does not recreate an environment from durable detail after its local shell is removed", () => {
+    useStore
+      .getState()
+      .hydrateCachedEnvironmentDetailState(
+        ENVIRONMENT_ID,
+        makeEnvironmentState({ messageText: "stale durable environment" }),
+      );
+
+    expect(useStore.getState().environmentStateById[ENVIRONMENT_ID]).toBeUndefined();
+  });
+
+  it("does not recreate a thread that is absent from the synchronous sidebar shell", () => {
+    const durableState = makeEnvironmentState({ messageText: "stale deleted thread detail" });
+    const localState: EnvironmentState = {
+      ...durableState,
+      threadIds: [SHELL_ONLY_THREAD_ID],
+      threadIdsByProjectId: {
+        [PROJECT_ID]: [SHELL_ONLY_THREAD_ID],
+      },
+      messageIdsByThreadId: {},
+      messageByThreadId: {},
+      queuedTurnIdsByThreadId: {},
+      queuedTurnByThreadId: {},
+      activityIdsByThreadId: {},
+      activityByThreadId: {},
+      proposedPlanIdsByThreadId: {},
+      proposedPlanByThreadId: {},
+      turnDiffIdsByThreadId: {},
+      turnDiffSummaryByThreadId: {},
+    };
+    useStore.getState().hydrateCachedEnvironmentState(ENVIRONMENT_ID, localState);
+    useStore.getState().hydrateCachedEnvironmentDetailState(ENVIRONMENT_ID, durableState);
+
+    const hydrated = useStore.getState().environmentStateById[ENVIRONMENT_ID]!;
+    expect(hydrated.threadIds).toEqual([SHELL_ONLY_THREAD_ID]);
+    expect(threadMessageTexts(hydrated, THREAD_ID)).toEqual([]);
+  });
+
+  it("does not apply asynchronous durable detail after live bootstrap becomes authoritative", () => {
+    const liveState = {
+      ...makeEnvironmentState({ messageText: "live conversation" }),
+      bootstrapComplete: true,
+    };
+    useStore.setState({
+      activeEnvironmentId: ENVIRONMENT_ID,
+      environmentStateById: {
+        [ENVIRONMENT_ID]: liveState,
+      },
+    });
+
+    useStore
+      .getState()
+      .hydrateCachedEnvironmentDetailState(
+        ENVIRONMENT_ID,
+        makeEnvironmentState({ messageText: "stale durable conversation" }),
+      );
+
+    expect(
+      threadMessageTexts(
+        useStore.getState().environmentStateById[ENVIRONMENT_ID] ?? null,
+        THREAD_ID,
+      ),
+    ).toEqual(["live conversation"]);
+  });
+
+  it("fills a compact synchronous sidebar shell without replacing newer local shell rows", () => {
+    const durableState = makeEnvironmentState();
+    const { [THREAD_ID]: _removedShell, ...threadShellById } = durableState.threadShellById;
+    const { [THREAD_ID]: _removedSession, ...threadSessionById } = durableState.threadSessionById;
+    const { [THREAD_ID]: _removedTurnState, ...threadTurnStateById } =
+      durableState.threadTurnStateById;
+    const { [THREAD_ID]: _removedSummary, ...sidebarThreadSummaryById } =
+      durableState.sidebarThreadSummaryById;
+    const localState: EnvironmentState = {
+      ...durableState,
+      threadIds: [SHELL_ONLY_THREAD_ID],
+      threadIdsByProjectId: {
+        [PROJECT_ID]: [SHELL_ONLY_THREAD_ID],
+      },
+      threadShellById: {
+        ...threadShellById,
+        [SHELL_ONLY_THREAD_ID]: {
+          ...threadShellById[SHELL_ONLY_THREAD_ID]!,
+          title: "Newer local shell row",
+        },
+      },
+      threadSessionById,
+      threadTurnStateById,
+      sidebarThreadSummaryById,
+    };
+    useStore.getState().hydrateCachedEnvironmentState(ENVIRONMENT_ID, localState);
+
+    useStore.getState().hydrateCachedEnvironmentShellState(ENVIRONMENT_ID, durableState);
+
+    const hydrated = useStore.getState().environmentStateById[ENVIRONMENT_ID]!;
+    expect(hydrated.threadIds).toEqual([THREAD_ID, SHELL_ONLY_THREAD_ID]);
+    expect(hydrated.threadShellById[THREAD_ID]?.title).toBe("Cached thread");
+    expect(hydrated.threadShellById[SHELL_ONLY_THREAD_ID]?.title).toBe("Newer local shell row");
+  });
+
+  it("does not apply an IndexedDB sidebar shell after live bootstrap becomes authoritative", () => {
+    const liveState: EnvironmentState = {
+      ...makeEnvironmentState({
+        threads: [{ id: SHELL_ONLY_THREAD_ID, title: "Live shell thread" }],
+      }),
+      bootstrapComplete: true,
+    };
+    useStore.setState({
+      activeEnvironmentId: ENVIRONMENT_ID,
+      environmentStateById: {
+        [ENVIRONMENT_ID]: liveState,
+      },
+    });
+
+    useStore.getState().hydrateCachedEnvironmentShellState(ENVIRONMENT_ID, makeEnvironmentState());
+
+    expect(useStore.getState().environmentStateById[ENVIRONMENT_ID]).toBe(liveState);
+  });
+
+  it("invalidates a compact shell revision when a pre-bootstrap tombstone cannot update it completely", () => {
+    const completeState = makeEnvironmentState();
+    writeCachedEnvironmentState(ENVIRONMENT_ID, completeState);
+    const rawDocument = localStorageStub.getItem(ORCHESTRATION_STARTUP_CACHE_STORAGE_KEY);
+    if (!rawDocument) {
+      throw new Error("Expected a startup cache document.");
+    }
+    const document = JSON.parse(rawDocument) as {
+      environments: Record<string, { shellComplete: boolean }>;
+    };
+    document.environments[ENVIRONMENT_ID]!.shellComplete = false;
+    localStorageStub.setItem(ORCHESTRATION_STARTUP_CACHE_STORAGE_KEY, JSON.stringify(document));
+
+    writeCachedEnvironmentState(
+      ENVIRONMENT_ID,
+      {
+        ...completeState,
+        threadIds: [SHELL_ONLY_THREAD_ID],
+        threadIdsByProjectId: {
+          [PROJECT_ID]: [SHELL_ONLY_THREAD_ID],
+        },
+      },
+      {
+        preserveCachedShell: true,
+        removedThreadIds: [THREAD_ID],
+      },
+    );
+
+    const cachedEntry = readCachedEnvironmentStateEntries()[0];
+    expect(cachedEntry?.shellRevision).toBeNull();
+    expect(cachedEntry?.state.threadIds).toEqual([SHELL_ONLY_THREAD_ID]);
   });
 
   it("does not let a detail-first write erase a previously cached sidebar shell", () => {
@@ -787,6 +1058,93 @@ describe("orchestration startup cache", () => {
     }
   });
 
+  it("keeps a recent preferred-thread message tail when its full conversation exceeds the document budget", () => {
+    const state = makeEnvironmentState({ messageText: "message template" });
+    const templateMessageId = state.messageIdsByThreadId[THREAD_ID]![0]!;
+    const templateMessage = state.messageByThreadId[THREAD_ID]![templateMessageId]!;
+    const messageIds = Array.from({ length: 40 }, (_, index) =>
+      MessageId.make(`large-conversation-message-${index}`),
+    );
+    const messageById = Object.fromEntries(
+      messageIds.map((messageId, index) => [
+        messageId,
+        {
+          ...templateMessage,
+          id: messageId,
+          text: `large conversation message ${index} ${"x".repeat(60_000)}`,
+          createdAt: new Date(Date.UTC(2026, 3, 1, 0, index)).toISOString(),
+        },
+      ]),
+    ) as EnvironmentState["messageByThreadId"][ThreadId];
+
+    writeCachedEnvironmentState(
+      ENVIRONMENT_ID,
+      {
+        ...state,
+        messageIdsByThreadId: {
+          ...state.messageIdsByThreadId,
+          [THREAD_ID]: messageIds,
+        },
+        messageByThreadId: {
+          ...state.messageByThreadId,
+          [THREAD_ID]: messageById,
+        },
+      },
+      { preferredThreadIds: [THREAD_ID] },
+    );
+
+    const cachedMessages = threadMessageTexts(
+      readCachedEnvironmentState(ENVIRONMENT_ID),
+      THREAD_ID,
+    );
+    expect(cachedMessages.length).toBeGreaterThan(0);
+    expect(cachedMessages.at(-1)).toBe(`large conversation message 39 ${"x".repeat(60_000)}`);
+    expect(localStorageStub.getItem(ORCHESTRATION_STARTUP_CACHE_STORAGE_KEY)?.length).toBeLessThan(
+      2_000_000,
+    );
+  });
+
+  it("drops older environment detail without dropping its sidebar shell", () => {
+    writeCachedEnvironmentState(
+      OTHER_ENVIRONMENT_ID,
+      makeEnvironmentState({
+        environmentId: OTHER_ENVIRONMENT_ID,
+        messageText: `older environment ${"o".repeat(1_100_000)}`,
+      }),
+      { preferredThreadIds: [THREAD_ID] },
+    );
+
+    writeCachedEnvironmentState(
+      ENVIRONMENT_ID,
+      makeEnvironmentState({
+        messageText: `current environment ${"c".repeat(1_100_000)}`,
+      }),
+      { preferredThreadIds: [THREAD_ID] },
+    );
+
+    const currentMessages = threadMessageTexts(
+      readCachedEnvironmentState(ENVIRONMENT_ID),
+      THREAD_ID,
+    );
+    expect(currentMessages).toHaveLength(1);
+    expect(currentMessages[0]?.startsWith("current environment ")).toBe(true);
+    expect(currentMessages[0]).toHaveLength("current environment ".length + 1_100_000);
+    const olderEnvironment = readCachedEnvironmentState(OTHER_ENVIRONMENT_ID);
+    expect(olderEnvironment?.projectIds).toHaveLength(1);
+    expect(olderEnvironment?.threadIds).toEqual([THREAD_ID, SHELL_ONLY_THREAD_ID]);
+    expect(olderEnvironment?.threadShellById[THREAD_ID]?.title).toBe("Cached thread");
+    expect(threadMessageTexts(olderEnvironment, THREAD_ID)).toEqual([]);
+
+    hydrateOrchestrationStartupCache();
+    const sidebarThreads = selectSidebarThreadsAcrossEnvironments(useStore.getState());
+    expect(sidebarThreads.filter((thread) => thread.environmentId === ENVIRONMENT_ID)).toHaveLength(
+      2,
+    );
+    expect(
+      sidebarThreads.filter((thread) => thread.environmentId === OTHER_ENVIRONMENT_ID),
+    ).toHaveLength(2);
+  });
+
   it("drops older other environments before dropping current-environment shells", () => {
     const currentShellBytes = measureStoredBytes(ENVIRONMENT_ID, makeEnvironmentState());
     clearOrchestrationStartupCacheForTests();
@@ -856,6 +1214,7 @@ describe("orchestration startup cache", () => {
     expect(repaired?.threadIds).toContain(activeThreadId);
     expect(repaired?.threadIds.length).toBeLessThan(oversizedThreads.length);
     expect(threadMessageTexts(repaired, activeThreadId)).toEqual(["cached active conversation"]);
+    expect(readCachedEnvironmentStateEntries()[0]?.shellComplete).toBe(false);
     expect(localStorageStub.getItem(ORCHESTRATION_STARTUP_CACHE_STORAGE_KEY)?.length).toBeLessThan(
       2_000_000,
     );

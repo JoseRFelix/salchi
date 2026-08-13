@@ -970,6 +970,7 @@ interface SidebarProjectThreadListProps {
   renderedThreadItems: readonly SidebarThreadTreeItem<SidebarThreadSummary>[];
   threadExpandedByKey: ReadonlyMap<string, boolean>;
   showEmptyThreadState: boolean;
+  isThreadListResolved: boolean;
   shouldShowThreadPanel: boolean;
   isThreadListExpanded: boolean;
   projectCwd: string;
@@ -1025,6 +1026,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
     renderedThreadItems,
     threadExpandedByKey,
     showEmptyThreadState,
+    isThreadListResolved,
     shouldShowThreadPanel,
     isThreadListExpanded,
     projectCwd,
@@ -1143,7 +1145,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
             data-thread-selection-safe
             className="flex h-6 w-full translate-x-0 items-center px-2 text-left text-xs text-muted-foreground/60 md:text-[10px]"
           >
-            <span>No threads yet</span>
+            <span>{isThreadListResolved ? "No threads yet" : "Loading threads..."}</span>
           </div>
         </SidebarMenuSubItem>
       ) : null}
@@ -1246,6 +1248,12 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const { updateSettings } = useUpdateSettings();
   const sidebarThreadPreviewCount = useSettings<SidebarThreadPreviewCount>(
     (settings) => settings.sidebarThreadPreviewCount,
+  );
+  const isThreadListResolved = useStore((state) =>
+    project.memberProjectRefs.every(
+      (projectRef) =>
+        state.environmentStateById[projectRef.environmentId]?.bootstrapComplete === true,
+    ),
   );
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -2562,6 +2570,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         renderedThreadItems={renderedThreadItems}
         threadExpandedByKey={threadExpandedByKey}
         showEmptyThreadState={showEmptyThreadState}
+        isThreadListResolved={isThreadListResolved}
         shouldShowThreadPanel={shouldShowThreadPanel}
         isThreadListExpanded={isThreadListExpanded}
         projectCwd={project.cwd}

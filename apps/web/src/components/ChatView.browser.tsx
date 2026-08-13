@@ -88,14 +88,18 @@ import { useUiStateStore } from "../uiStateStore";
 import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers";
 import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test/wsRpcHarness";
 import {
-  clearOrchestrationStartupCacheForTests,
+  clearOrchestrationStartupCacheDurableForTests,
   flushPendingCachedEnvironmentStateWrites,
   installOrchestrationStartupCachePersistence,
+  ORCHESTRATION_STARTUP_CACHE_STORAGE_KEY,
   readCachedEnvironmentState,
   scheduleCachedEnvironmentStateWrite,
   writeCachedEnvironmentState,
 } from "../orchestrationStartupCache";
-import { hydrateOrchestrationStartupCache } from "../orchestrationStartupBootstrap";
+import {
+  hydrateOrchestrationIndexedDbStartupCache,
+  hydrateOrchestrationStartupCache,
+} from "../orchestrationStartupBootstrap";
 import {
   consumeStartupThreadRestoreTarget,
   primeStartupThreadRestore,
@@ -2495,7 +2499,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     await setViewport(DEFAULT_VIEWPORT);
     await clearPendingNotificationClick();
     localStorage.clear();
-    clearOrchestrationStartupCacheForTests();
+    await clearOrchestrationStartupCacheDurableForTests();
     document.body.innerHTML = "";
     wsRequests.length = 0;
     customWsRpcResolver = null;
@@ -2547,7 +2551,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     vi.useRealTimers();
     customWsRpcResolver = null;
     resetStartupThreadRestoreForTests();
-    clearOrchestrationStartupCacheForTests();
+    await clearOrchestrationStartupCacheDurableForTests();
     document.body.innerHTML = "";
   });
 
@@ -2968,6 +2972,52 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     try {
       await expect.element(page.getByText("No threads yet")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not label an unresolved cached project as having no threads", async () => {
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-unresolved-sidebar-project" as MessageId,
+      targetText: "unresolved sidebar project",
+    });
+    const cachedState = createStartupCacheEnvironmentState(snapshot, THREAD_ID, {
+      sidebarThreadSummary: {},
+    });
+    const projectId = cachedState.threadShellById[THREAD_ID]!.projectId;
+    useStore.getState().hydrateCachedEnvironmentState(LOCAL_ENVIRONMENT_ID, {
+      ...cachedState,
+      threadIds: [],
+      threadIdsByProjectId: {
+        [projectId]: [],
+      },
+      bootstrapComplete: false,
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot,
+      initialPath: "/",
+      waitForBootstrap: false,
+      configureFixture: (fixture) => {
+        const { bootstrapThreadId: _bootstrapThreadId, ...welcome } = fixture.welcome;
+        fixture.welcome = welcome;
+      },
+      getInitialStreamValues: (request) => {
+        if (
+          request._tag === ORCHESTRATION_WS_METHODS.subscribeShell ||
+          request._tag === ORCHESTRATION_WS_METHODS.subscribeThread
+        ) {
+          return [];
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      await expect.element(page.getByText("Loading threads...")).toBeInTheDocument();
+      await expect.element(page.getByText("No threads yet")).not.toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }
@@ -6011,6 +6061,268 @@ describe("ChatView timeline estimator parity (full app)", () => {
     } finally {
       await mounted.cleanup();
     }
+  });
+
+  it("renders a recent cached conversation tail when oversized activity exceeds the cache budget", async () => {
+    const recentMessageId = "msg-user-large-cache-recent-tail" as MessageId;
+    const oversizedActivityId = EventId.make("activity-large-cache-payload");
+    const snapshot = appendUserMessageToThreadSnapshot(
+      createSnapshotForTargetUser({
+        targetMessageId: "msg-user-large-cache-base" as MessageId,
+        targetText: "large cache base message",
+      }),
+      THREAD_ID,
+      {
+        id: recentMessageId,
+        text: "recent conversation from compact startup cache",
+      },
+    );
+    const cachedState = createStartupCacheEnvironmentState(snapshot, THREAD_ID, {
+      sidebarThreadSummary: {},
+    });
+
+    writeCachedEnvironmentState(
+      LOCAL_ENVIRONMENT_ID,
+      {
+        ...cachedState,
+        activityIdsByThreadId: {
+          [THREAD_ID]: [oversizedActivityId],
+        },
+        activityByThreadId: {
+          [THREAD_ID]: {
+            [oversizedActivityId]: {
+              id: oversizedActivityId,
+              tone: "info",
+              kind: "step",
+              summary: "Oversized cached tool activity",
+              payload: { output: "x".repeat(2_100_000) },
+              turnId: null,
+              sequence: 1,
+              createdAt: NOW_ISO,
+            },
+          },
+        },
+      },
+      { preferredThreadIds: [THREAD_ID] },
+    );
+    hydrateOrchestrationStartupCache();
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot,
+      initialPath: serverThreadPath(THREAD_ID),
+      waitForBootstrap: false,
+      getInitialStreamValues: (request) => {
+        if (
+          request._tag === ORCHESTRATION_WS_METHODS.subscribeThread &&
+          request.threadId === THREAD_ID
+        ) {
+          return [];
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      await expect
+        .element(page.getByText("recent conversation from compact startup cache"))
+        .toBeInTheDocument();
+      await expect.element(page.getByText("Loading conversation...")).not.toBeInTheDocument();
+      expect(
+        selectThreadByRef(useStore.getState(), THREAD_REF)?.messages.some(
+          (message) => message.id === recentMessageId,
+        ),
+      ).toBe(true);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("hydrates conversation detail from IndexedDB when the synchronous startup cache has only a shell", async () => {
+    const cachedMessageId = "msg-user-indexed-db-startup-detail" as MessageId;
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: cachedMessageId,
+      targetText: "conversation restored from IndexedDB",
+    });
+    writeCachedEnvironmentState(
+      LOCAL_ENVIRONMENT_ID,
+      createStartupCacheEnvironmentState(snapshot, THREAD_ID, {
+        sidebarThreadSummary: {},
+      }),
+      { preferredThreadIds: [THREAD_ID] },
+    );
+
+    const rawDocument = localStorage.getItem(ORCHESTRATION_STARTUP_CACHE_STORAGE_KEY);
+    if (!rawDocument) {
+      throw new Error("Expected a synchronous startup cache document.");
+    }
+    const localDocument = JSON.parse(rawDocument) as {
+      environments: Record<string, { state: Record<string, unknown> }>;
+    };
+    const localState = localDocument.environments[LOCAL_ENVIRONMENT_ID]?.state;
+    if (!localState) {
+      throw new Error("Expected a local environment startup cache entry.");
+    }
+    for (const field of [
+      "messageIdsByThreadId",
+      "messageByThreadId",
+      "queuedTurnIdsByThreadId",
+      "queuedTurnByThreadId",
+      "activityIdsByThreadId",
+      "activityByThreadId",
+      "proposedPlanIdsByThreadId",
+      "proposedPlanByThreadId",
+      "turnDiffIdsByThreadId",
+      "turnDiffSummaryByThreadId",
+      "threadDetailPageInfoByThreadId",
+    ]) {
+      localState[field] = {};
+    }
+    localStorage.setItem(ORCHESTRATION_STARTUP_CACHE_STORAGE_KEY, JSON.stringify(localDocument));
+
+    hydrateOrchestrationStartupCache();
+    expect(
+      selectThreadByRef(useStore.getState(), THREAD_REF)?.messages.some(
+        (message) => message.id === cachedMessageId,
+      ),
+    ).toBe(false);
+
+    await hydrateOrchestrationIndexedDbStartupCache();
+    expect(
+      selectThreadByRef(useStore.getState(), THREAD_REF)?.messages.some(
+        (message) => message.id === cachedMessageId,
+      ),
+    ).toBe(true);
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot,
+      initialPath: serverThreadPath(THREAD_ID),
+      waitForBootstrap: false,
+      getInitialStreamValues: (request) => {
+        if (
+          request._tag === ORCHESTRATION_WS_METHODS.subscribeThread &&
+          request.threadId === THREAD_ID
+        ) {
+          return [];
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      await expect
+        .element(page.getByText("conversation restored from IndexedDB"))
+        .toBeInTheDocument();
+      await expect.element(page.getByText("Loading conversation...")).not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("restores a revision-matched IndexedDB sidebar shell without applying a stale revision", async () => {
+    const secondaryThreadId = "thread-indexed-db-sidebar-fallback" as ThreadId;
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-indexed-db-sidebar-fallback" as MessageId,
+      targetText: "conversation with a durable sidebar shell",
+    });
+    const cachedState = createStartupCacheEnvironmentState(snapshot, THREAD_ID, {
+      sidebarThreadSummary: {},
+    });
+    const projectId = cachedState.threadShellById[THREAD_ID]!.projectId;
+    const primaryShell = cachedState.threadShellById[THREAD_ID]!;
+    const primarySummary = cachedState.sidebarThreadSummaryById[THREAD_ID]!;
+    writeCachedEnvironmentState(LOCAL_ENVIRONMENT_ID, {
+      ...cachedState,
+      threadIds: [...cachedState.threadIds, secondaryThreadId],
+      threadIdsByProjectId: {
+        ...cachedState.threadIdsByProjectId,
+        [projectId]: [...(cachedState.threadIdsByProjectId[projectId] ?? []), secondaryThreadId],
+      },
+      threadShellById: {
+        ...cachedState.threadShellById,
+        [secondaryThreadId]: {
+          ...primaryShell,
+          id: secondaryThreadId,
+          title: "Sidebar thread restored from IndexedDB",
+          updatedAt: "2026-07-29T00:00:02.000Z",
+        },
+      },
+      threadSessionById: {
+        ...cachedState.threadSessionById,
+        [secondaryThreadId]: null,
+      },
+      threadTurnStateById: {
+        ...cachedState.threadTurnStateById,
+        [secondaryThreadId]: { latestTurn: null },
+      },
+      sidebarThreadSummaryById: {
+        ...cachedState.sidebarThreadSummaryById,
+        [secondaryThreadId]: {
+          ...primarySummary,
+          id: secondaryThreadId,
+          title: "Sidebar thread restored from IndexedDB",
+          updatedAt: "2026-07-29T00:00:02.000Z",
+        },
+      },
+    });
+
+    const rawDocument = localStorage.getItem(ORCHESTRATION_STARTUP_CACHE_STORAGE_KEY);
+    if (!rawDocument) {
+      throw new Error("Expected a synchronous startup cache document.");
+    }
+    const localDocument = JSON.parse(rawDocument) as {
+      environments: Record<
+        string,
+        {
+          shellRevision?: string;
+          shellComplete?: boolean;
+          state: {
+            threadIds: ThreadId[];
+            threadIdsByProjectId: Record<string, ThreadId[]>;
+            threadShellById: Record<string, unknown>;
+            threadSessionById: Record<string, unknown>;
+            threadTurnStateById: Record<string, unknown>;
+            sidebarThreadSummaryById: Record<string, unknown>;
+          };
+        }
+      >;
+    };
+    const localEntry = localDocument.environments[LOCAL_ENVIRONMENT_ID];
+    if (!localEntry) {
+      throw new Error("Expected a local environment startup cache entry.");
+    }
+    localEntry.shellComplete = false;
+    localEntry.state.threadIds = localEntry.state.threadIds.filter(
+      (threadId) => threadId !== secondaryThreadId,
+    );
+    localEntry.state.threadIdsByProjectId[projectId] = (
+      localEntry.state.threadIdsByProjectId[projectId] ?? []
+    ).filter((threadId) => threadId !== secondaryThreadId);
+    delete localEntry.state.threadShellById[secondaryThreadId];
+    delete localEntry.state.threadSessionById[secondaryThreadId];
+    delete localEntry.state.threadTurnStateById[secondaryThreadId];
+    delete localEntry.state.sidebarThreadSummaryById[secondaryThreadId];
+    localStorage.setItem(ORCHESTRATION_STARTUP_CACHE_STORAGE_KEY, JSON.stringify(localDocument));
+
+    hydrateOrchestrationStartupCache();
+    expect(
+      selectSidebarThreadsAcrossEnvironments(useStore.getState()).map((thread) => thread.id),
+    ).not.toContain(secondaryThreadId);
+
+    await hydrateOrchestrationIndexedDbStartupCache();
+    expect(
+      selectSidebarThreadsAcrossEnvironments(useStore.getState()).map((thread) => thread.id),
+    ).toContain(secondaryThreadId);
+
+    useStore.setState({ activeEnvironmentId: null, environmentStateById: {} });
+    localEntry.shellRevision = `${localEntry.shellRevision ?? "missing"}:newer-local-shell`;
+    localStorage.setItem(ORCHESTRATION_STARTUP_CACHE_STORAGE_KEY, JSON.stringify(localDocument));
+    hydrateOrchestrationStartupCache();
+    await hydrateOrchestrationIndexedDbStartupCache();
+    expect(
+      selectSidebarThreadsAcrossEnvironments(useStore.getState()).map((thread) => thread.id),
+    ).not.toContain(secondaryThreadId);
   });
 
   it("clears a missing startup target after an environment bootstraps with no threads", async () => {
