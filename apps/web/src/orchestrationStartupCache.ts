@@ -575,77 +575,6 @@ function mergeDetailStateWithCachedShell(
   };
 }
 
-function isTransientCachedSession(
-  session: EnvironmentState["threadSessionById"][ThreadId] | null | undefined,
-): boolean {
-  return (
-    session?.status === "connecting" ||
-    session?.status === "running" ||
-    session?.orchestrationStatus === "starting" ||
-    session?.orchestrationStatus === "running" ||
-    (session?.activeTurnId !== undefined && session.activeTurnId !== null)
-  );
-}
-
-function isTransientCachedTurn(
-  turnState: EnvironmentState["threadTurnStateById"][ThreadId] | undefined,
-): boolean {
-  return turnState?.latestTurn?.state === "running" && turnState.latestTurn.completedAt === null;
-}
-
-/**
- * A runtime can finish while an installed PWA is suspended or terminated. Persisting a running
- * session as durable startup truth makes that thread appear to work forever until the socket has
- * reconciled it. Cached conversations remain useful, but active runtime state must be confirmed by
- * the server after every process start.
- */
-function stripTransientRuntimeState(state: EnvironmentState): EnvironmentState {
-  const threadSessionById = { ...state.threadSessionById };
-  const threadTurnStateById = { ...state.threadTurnStateById };
-  const sidebarThreadSummaryById = { ...state.sidebarThreadSummaryById };
-  let changed = false;
-
-  for (const threadId of state.threadIds) {
-    if (isTransientCachedSession(threadSessionById[threadId])) {
-      threadSessionById[threadId] = null;
-      changed = true;
-    }
-    if (isTransientCachedTurn(threadTurnStateById[threadId])) {
-      threadTurnStateById[threadId] = {
-        ...threadTurnStateById[threadId],
-        latestTurn: null,
-      };
-      changed = true;
-    }
-
-    const summary = sidebarThreadSummaryById[threadId];
-    if (!summary) {
-      continue;
-    }
-    const stripSession = isTransientCachedSession(summary.session);
-    const stripTurn =
-      summary.latestTurn?.state === "running" && summary.latestTurn.completedAt === null;
-    if (!stripSession && !stripTurn) {
-      continue;
-    }
-    sidebarThreadSummaryById[threadId] = {
-      ...summary,
-      ...(stripSession ? { session: null } : {}),
-      ...(stripTurn ? { latestTurn: null } : {}),
-    };
-    changed = true;
-  }
-
-  return changed
-    ? {
-        ...state,
-        threadSessionById,
-        threadTurnStateById,
-        sidebarThreadSummaryById,
-      }
-    : state;
-}
-
 function retainThreadItemRecord<T>(
   idsByThreadId: Record<ThreadId, string[]>,
   byThreadId: Record<ThreadId, Record<string, T>>,
@@ -775,7 +704,7 @@ function createCachedEnvironmentState(
   );
   const turnDiffState = retainTurnDiffRecords(state, detailThreadIds, detailLimits.turnDiffs);
 
-  return stripTransientRuntimeState({
+  return {
     ...projectState,
     threadIds: retainedThreadIds,
     threadIdsByProjectId: rebuildThreadIdsByProjectId(state, retainedThreadIds),
@@ -808,7 +737,7 @@ function createCachedEnvironmentState(
     ),
     sidebarThreadSummaryById: pickThreadRecord(state.sidebarThreadSummaryById, retainedThreadIdSet),
     bootstrapComplete: false,
-  });
+  };
 }
 
 function hasCompleteShellCoverage(source: EnvironmentState, cached: EnvironmentState): boolean {
@@ -833,14 +762,14 @@ function retainNewestEnvironments(
 }
 
 function prepareCachedEnvironmentStateForHydration(state: EnvironmentState): EnvironmentState {
-  return stripTransientRuntimeState({
+  return {
     ...state,
     queuedTurnIdsByThreadId: state.queuedTurnIdsByThreadId ?? {},
     queuedTurnByThreadId: state.queuedTurnByThreadId ?? {},
     lastAppliedEventSequenceByThreadId: state.lastAppliedEventSequenceByThreadId ?? {},
     lastAppliedEventIdByThreadId: state.lastAppliedEventIdByThreadId ?? {},
     bootstrapComplete: false,
-  });
+  };
 }
 
 export function decodeCachedEnvironmentState(value: unknown): EnvironmentState | null {

@@ -821,7 +821,7 @@ describe("orchestration startup cache", () => {
     expect(cached?.threadShellById[SHELL_ONLY_THREAD_ID]).toBeUndefined();
   });
 
-  it("does not revive unverified running state after a process restart", () => {
+  it("round-trips the last persisted running state across a process restart", () => {
     const runningTurnId = TurnId.make("turn-running-before-background");
     const state = makeEnvironmentState({ messageText: "cached while running" });
     const runningSession: NonNullable<EnvironmentState["threadSessionById"][ThreadId]> = {
@@ -864,10 +864,10 @@ describe("orchestration startup cache", () => {
     );
 
     const cached = readCachedEnvironmentState(ENVIRONMENT_ID);
-    expect(cached?.threadSessionById[THREAD_ID]).toBeNull();
-    expect(cached?.threadTurnStateById[THREAD_ID]?.latestTurn).toBeNull();
-    expect(cached?.sidebarThreadSummaryById[THREAD_ID]?.session).toBeNull();
-    expect(cached?.sidebarThreadSummaryById[THREAD_ID]?.latestTurn).toBeNull();
+    expect(cached?.threadSessionById[THREAD_ID]).toEqual(runningSession);
+    expect(cached?.threadTurnStateById[THREAD_ID]?.latestTurn).toEqual(runningTurn);
+    expect(cached?.sidebarThreadSummaryById[THREAD_ID]?.session).toEqual(runningSession);
+    expect(cached?.sidebarThreadSummaryById[THREAD_ID]?.latestTurn).toEqual(runningTurn);
     expect(threadMessageTexts(cached, THREAD_ID)).toEqual(["cached while running"]);
   });
 
