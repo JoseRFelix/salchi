@@ -80,7 +80,7 @@ export class ServerPushNotificationError extends Schema.TaggedErrorClass<ServerP
   {
     operation: Schema.String,
     detail: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {

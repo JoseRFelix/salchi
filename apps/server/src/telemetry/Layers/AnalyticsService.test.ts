@@ -123,7 +123,7 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
         ConfigProvider.fromUnknown({
           SALCHI_TELEMETRY_ENABLED: true,
           SALCHI_POSTHOG_KEY: "test-posthog-key",
-          SALCHI_POSTHOG_HOST: "",
+          SALCHI_POSTHOG_HOST: ".",
           SALCHI_TELEMETRY_FLUSH_BATCH_SIZE: 20,
         }),
       );
@@ -167,9 +167,9 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
           Array.isArray(request.body?.batch),
       );
       assert.equal(batchRequests.length, 3);
-      assert.equal(
-        batchRequests.every((request) => request.path === "/batch/" || request.path === "/batch"),
-        true,
+      assert.deepEqual(
+        batchRequests.map((request) => request.path),
+        ["/batch/", "/batch/", "/batch/"],
       );
       const deliveredIndexes = batchRequests.flatMap((request) =>
         request.body.batch

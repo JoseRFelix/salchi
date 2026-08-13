@@ -1820,6 +1820,45 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("negotiates permessage-deflate with clients that offer it", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const { cookie, url } = parseSessionCookieFromWsUrl(yield* getWsServerUrl("/ws"));
+      const openSocket = (perMessageDeflate: boolean) =>
+        Effect.acquireRelease(
+          Effect.callback<NodeSocket.NodeWS.WebSocket, Error>((resume) => {
+            const socket = new NodeSocket.NodeWS.WebSocket(url, {
+              perMessageDeflate,
+              ...(cookie ? { headers: { cookie } } : {}),
+            });
+            const onOpen = () => {
+              socket.off("error", onError);
+              resume(Effect.succeed(socket));
+            };
+            const onError = (error: Error) => {
+              socket.off("open", onOpen);
+              resume(Effect.fail(error));
+            };
+            socket.once("open", onOpen);
+            socket.once("error", onError);
+            return Effect.sync(() => {
+              socket.off("open", onOpen);
+              socket.off("error", onError);
+              socket.terminate();
+            });
+          }),
+          (socket) => Effect.sync(() => socket.terminate()),
+        );
+
+      const compressed = yield* openSocket(true);
+      assert.include(compressed.extensions, "permessage-deflate");
+
+      const plain = yield* openSocket(false);
+      assert.notInclude(plain.extensions, "permessage-deflate");
+    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect(
     "rejects websocket rpc handshake when a session token is only provided via query string",
     () =>
