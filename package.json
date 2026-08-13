@@ -38,6 +38,7 @@
     "dev:web": "node scripts/dev-runner.ts dev:web",
     "dev:marketing": "vp run --filter @salchi/marketing dev",
     "dev:desktop": "node scripts/dev-runner.ts dev:desktop",
+    "demo:mobile": "bun apps/web/demo/render-mobile-demo.ts",
     "start": "vp run --filter salchi start",
     "start:desktop": "vp run --filter @salchi/desktop start",
     "start:marketing": "vp run --filter @salchi/marketing preview",
