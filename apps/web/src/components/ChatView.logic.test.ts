@@ -27,6 +27,7 @@ import {
   hasOlderThreadDetailPage,
   hasServerAcknowledgedLocalDispatch,
   reconcileMountedTerminalThreadIds,
+  resolveComposerThreadModelSelection,
   resolveInterruptTurnId,
   resolveSendEnvMode,
   shouldShowThreadDetailLoading,
@@ -36,6 +37,43 @@ import {
 } from "./ChatView.logic";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
+
+describe("resolveComposerThreadModelSelection", () => {
+  const legacyFallback = {
+    instanceId: ProviderInstanceId.make("codex"),
+    model: "gpt-5.4",
+  };
+
+  it("does not convert a synthetic local-draft fallback into an inherited project pin", () => {
+    expect(
+      resolveComposerThreadModelSelection({
+        isLocalDraftThread: true,
+        projectModelSelection: null,
+        draftActiveProvider: null,
+        threadModelSelection: legacyFallback,
+      }),
+    ).toBeNull();
+  });
+
+  it("preserves an explicit draft or project selection", () => {
+    expect(
+      resolveComposerThreadModelSelection({
+        isLocalDraftThread: true,
+        projectModelSelection: null,
+        draftActiveProvider: ProviderInstanceId.make("codex"),
+        threadModelSelection: legacyFallback,
+      }),
+    ).toBe(legacyFallback);
+    expect(
+      resolveComposerThreadModelSelection({
+        isLocalDraftThread: true,
+        projectModelSelection: legacyFallback,
+        draftActiveProvider: null,
+        threadModelSelection: legacyFallback,
+      }),
+    ).toBe(legacyFallback);
+  });
+});
 
 describe("deriveComposerSendState", () => {
   it("treats expired terminal pills as non-sendable content", () => {

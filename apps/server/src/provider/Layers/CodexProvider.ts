@@ -21,7 +21,7 @@ import type {
   ServerProviderModel,
   ServerProviderSkill,
 } from "@salchi/contracts";
-import { ServerSettingsError } from "@salchi/contracts";
+import { PREFERRED_DEFAULT_CODEX_MODELS, ServerSettingsError } from "@salchi/contracts";
 
 import { createModelCapabilities } from "@salchi/shared/model";
 import { resolveSpawnCommand } from "@salchi/shared/shell";
@@ -236,8 +236,34 @@ function parseCodexModelListResponse(
     slug: model.model,
     name: toDisplayName(model),
     isCustom: false,
+    ...(model.isDefault ? { isDefault: true } : {}),
     capabilities: mapCodexModelCapabilities(model),
   }));
+}
+
+/**
+ * Prefer Salchi's current Codex default ranking when a preferred built-in
+ * model is available. Otherwise preserve Codex's live `isDefault` choice.
+ */
+export function applyPreferredCodexDefaultModel(
+  models: ReadonlyArray<ServerProviderModel>,
+): ReadonlyArray<ServerProviderModel> {
+  const preferredSlug = PREFERRED_DEFAULT_CODEX_MODELS.find((slug) =>
+    models.some((model) => model.slug === slug && !model.isCustom),
+  );
+  if (!preferredSlug) {
+    return models;
+  }
+  return models.map((model) => {
+    if (model.slug === preferredSlug) {
+      return model.isDefault ? model : { ...model, isDefault: true };
+    }
+    if (!model.isDefault) {
+      return model;
+    }
+    const { isDefault: _isDefault, ...rest } = model;
+    return rest;
+  });
 }
 
 function appendCustomCodexModels(
@@ -455,7 +481,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     account: accountResponse,
     version,
     models: applyCodexAutoReviewSupport(
-      appendCustomCodexModels(models, input.customModels ?? []),
+      applyPreferredCodexDefaultModel(appendCustomCodexModels(models, input.customModels ?? [])),
       autoReviewSupport,
     ),
     skills: parseCodexSkillsListResponse(skillsResponse, input.cwd),
