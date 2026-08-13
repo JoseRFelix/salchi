@@ -64,6 +64,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   private failure: unknown | undefined;
 
   public readonly interruptCalls: Array<void> = [];
+  public readonly stopTaskCalls: Array<string> = [];
   public readonly setModelCalls: Array<string | undefined> = [];
   public readonly setPermissionModeCalls: Array<string> = [];
   public readonly setMaxThinkingTokensCalls: Array<number | null> = [];
@@ -83,6 +84,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
     apiUsage: null,
   };
   public interruptHandler: () => Promise<void> = () => Promise.resolve();
+  public stopTaskHandler: (taskId: string) => Promise<void> = () => Promise.resolve();
   public getContextUsageHandler: () => Promise<SDKControlGetContextUsageResponse> = () =>
     Promise.resolve(this.contextUsageResponse);
   public closeCalls = 0;
@@ -124,6 +126,11 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   readonly interrupt = async (): Promise<void> => {
     this.interruptCalls.push(undefined);
     await this.interruptHandler();
+  };
+
+  readonly stopTask = async (taskId: string): Promise<void> => {
+    this.stopTaskCalls.push(taskId);
+    await this.stopTaskHandler(taskId);
   };
 
   readonly setModel = async (model?: string): Promise<void> => {
@@ -2129,6 +2136,180 @@ describe("ClaudeAdapterLive", () => {
         assert.equal(turnCompleted.payload.errorMessage, "Error: Request was aborted.");
         assert.equal(turnCompleted.payload.stopReason, "tool_use");
       }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("hides internal diagnostics from aborted tool results", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: ["[ede_diagnostic] result_type=user stop_reason=tool_use"],
+        stop_reason: "tool_use",
+        terminal_reason: "aborted_tools",
+        session_id: "sdk-session-aborted-tools",
+        uuid: "result-aborted-tools",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const completion = runtimeEvents.at(-1);
+      assert.equal(completion?.type, "turn.completed");
+      if (completion?.type === "turn.completed") {
+        assert.equal(String(completion.turnId), String(turn.turnId));
+        assert.equal(completion.payload.state, "interrupted");
+        assert.equal(completion.payload.errorMessage, undefined);
+      }
+      assert.equal(
+        runtimeEvents.some((event) => event.type === "runtime.error"),
+        false,
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("stops live background tasks before interrupting the parent turn", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const taskEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type.startsWith("task.")),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "spawn agents",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-live",
+        description: "Live agent",
+        task_type: "local_agent",
+        uuid: "task-live-started",
+        session_id: "sdk-session-background-tasks",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-settled",
+        description: "Settled agent",
+        task_type: "local_agent",
+        uuid: "task-settled-started",
+        session_id: "sdk-session-background-tasks",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-settled",
+        status: "completed",
+        output_file: "/tmp/task-settled.jsonl",
+        summary: "done",
+        uuid: "task-settled-completed",
+        session_id: "sdk-session-background-tasks",
+      } as unknown as SDKMessage);
+      yield* Fiber.join(taskEventsFiber);
+
+      const stoppedEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            (event.type === "task.completed" || event.type === "subagent.completed") &&
+            event.payload.status === "stopped",
+        ),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const callOrder: string[] = [];
+      harness.query.stopTaskHandler = async (taskId) => {
+        callOrder.push(`stop:${taskId}`);
+      };
+      harness.query.interruptHandler = async () => {
+        callOrder.push("interrupt");
+      };
+
+      yield* adapter.interruptTurn(session.threadId);
+
+      assert.deepEqual(harness.query.stopTaskCalls, ["task-live"]);
+      assert.deepEqual(callOrder, ["stop:task-live", "interrupt"]);
+      const stoppedEvents = Array.from(yield* Fiber.join(stoppedEventsFiber));
+      assert.deepEqual(
+        stoppedEvents.map((event) => event.type),
+        ["task.completed", "subagent.completed"],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("still interrupts the parent when stopping a background task fails", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const startedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "task.started"),
+        Stream.take(1),
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "spawn agent",
+        attachments: [],
+      });
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-refuses-stop",
+        description: "Agent",
+        task_type: "local_agent",
+        uuid: "task-refuses-stop-started",
+        session_id: "sdk-session-stop-failure",
+      } as unknown as SDKMessage);
+      yield* Fiber.join(startedFiber);
+      harness.query.stopTaskHandler = () => Promise.reject(new Error("stop refused"));
+
+      yield* adapter.interruptTurn(session.threadId);
+
+      assert.deepEqual(harness.query.stopTaskCalls, ["task-refuses-stop"]);
+      assert.equal(harness.query.interruptCalls.length, 1);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
