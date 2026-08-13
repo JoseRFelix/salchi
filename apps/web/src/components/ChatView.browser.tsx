@@ -8925,7 +8925,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("opens command palette without closing the mobile sidebar", async () => {
+  it("opens and closes the command palette without closing the mobile sidebar", async () => {
     const mounted = await mountChatView({
       viewport: COMPACT_FOOTER_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -8952,6 +8952,23 @@ describe("ChatView timeline estimator parity (full app)", () => {
         .element(page.getByPlaceholder("Search commands, projects, and threads..."))
         .toBeInTheDocument();
       expect(document.activeElement).not.toBe(input);
+
+      const backdrop = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-slot="command-dialog-backdrop"]'),
+        "Command palette backdrop did not open.",
+      );
+      backdrop.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, button: 0, cancelable: true }),
+      );
+      backdrop.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, button: 0, cancelable: true }),
+      );
+      backdrop.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, button: 0, cancelable: true }),
+      );
+
+      await expect.element(palette).not.toBeInTheDocument();
+      expect(mobileSidebar).toHaveAttribute("data-open", "");
     } finally {
       await mounted.cleanup();
     }
