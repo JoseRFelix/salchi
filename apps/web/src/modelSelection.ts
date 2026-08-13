@@ -22,7 +22,11 @@ import {
   resolveSelectableProvider,
 } from "./providerModels";
 import { ModelEsque } from "./components/chat/providerIconUtils";
-import { type ProviderInstanceEntry, deriveProviderInstanceEntries } from "./providerInstances";
+import {
+  type ProviderInstanceEntry,
+  deriveProviderInstanceEntries,
+  getDefaultProviderInstanceModel,
+} from "./providerInstances";
 import { sortModelsForProviderInstance } from "./modelOrdering";
 
 const MAX_CUSTOM_MODEL_COUNT = 32;
@@ -247,8 +251,10 @@ export function resolveAppModelSelectionForInstance(
   );
   if (!entry) return null;
   const options = getAppModelOptionsForInstance(settings, entry);
+  const defaultModel = getDefaultProviderInstanceModel(providers, instanceId);
   return (
     resolveSelectableModel(entry.driverKind, selectedModel, options) ??
+    resolveSelectableModel(entry.driverKind, defaultModel, options) ??
     options[0]?.slug ??
     entry.models[0]?.slug ??
     null

@@ -989,8 +989,7 @@ const make = Effect.gen(function* () {
         projectId,
         title,
         workspaceRoot,
-        defaultModelSelection:
-          input.event.payload.modelSelection ?? input.sourceThread.modelSelection,
+        defaultModelSelection: null,
         createdAt: input.event.createdAt,
       });
 

@@ -60,7 +60,12 @@ import {
   type ComposerNativeInputChangeMetadata,
   isComposerNativeComposingKeyEvent,
 } from "../../composerNativeInput";
-import { deriveComposerSendState, readFileAsDataUrl, threadHasStarted } from "../ChatView.logic";
+import {
+  deriveComposerSendState,
+  readFileAsDataUrl,
+  resolveComposerThreadModelSelection,
+  threadHasStarted,
+} from "../ChatView.logic";
 import {
   type ComposerImageAttachment,
   composerTargetKey,
@@ -615,7 +620,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThreadEnvironmentId: _activeThreadEnvironmentId,
     activeThread,
     isServerThread: _isServerThread,
-    isLocalDraftThread: _isLocalDraftThread,
+    isLocalDraftThread,
     phase,
     isConnecting,
     isSendBusy,
@@ -825,12 +830,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedProvider,
   ]);
 
+  const inheritedThreadModelSelection = resolveComposerThreadModelSelection({
+    isLocalDraftThread,
+    projectModelSelection: activeProjectDefaultModelSelection,
+    draftActiveProvider: composerDraft.activeProvider,
+    threadModelSelection: activeThreadModelSelection,
+  });
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     threadRef: composerDraftTarget,
     providers: providerStatuses,
     selectedProvider,
     selectedInstanceId,
-    threadModelSelection: activeThreadModelSelection,
+    threadModelSelection: inheritedThreadModelSelection,
     projectModelSelection: activeProjectDefaultModelSelection,
     settings,
   });

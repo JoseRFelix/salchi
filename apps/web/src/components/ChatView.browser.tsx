@@ -10299,6 +10299,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5.4",
     };
+    const inheritedLiveDefaultModel = "gpt-5.6-sol";
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithPlanFollowUpPrompt({
@@ -10359,7 +10360,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         modelSelectionByProvider: {
           codex: {
             instanceId: planModelSelection.instanceId,
-            model: planModelSelection.model,
+            model: inheritedLiveDefaultModel,
           },
         },
         activeProvider: planModelSelection.instanceId,
