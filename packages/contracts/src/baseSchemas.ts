@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
@@ -19,6 +20,23 @@ export const PortSchema = Schema.Int.check(Schema.isBetween({ minimum: 1, maximu
 
 export const IsoDateTime = Schema.String;
 export type IsoDateTime = typeof IsoDateTime.Type;
+
+/** Decode growing wire arrays by dropping elements unknown to this build. */
+export const ForwardCompatibleArray = <Element extends Schema.Top>(element: Element) => {
+  const decodeElement = Schema.decodeUnknownOption(element as never);
+  return Schema.Array(Schema.Unknown).pipe(
+    Schema.decodeTo(
+      Schema.Array(element),
+      SchemaTransformation.transform<ReadonlyArray<Element["Encoded"]>, ReadonlyArray<unknown>>({
+        decode: (values) =>
+          values.filter((value) => Option.isSome(decodeElement(value))) as ReadonlyArray<
+            Element["Encoded"]
+          >,
+        encode: (values) => values,
+      }),
+    ),
+  );
+};
 
 /**
  * Construct a branded identifier. Enforces non-empty trimmed strings
