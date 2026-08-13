@@ -115,7 +115,6 @@ const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJ
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.UnknownFromJsonString);
 
 const PROVIDER = ProviderDriverKind.make("claudeAgent");
-const CLAUDE_USAGE_REFRESH_INTERVAL = Duration.seconds(30);
 const CLAUDE_USAGE_REFRESH_TIMEOUT = Duration.seconds(10);
 const CLAUDE_INTERRUPT_TIMEOUT = Duration.seconds(10);
 const CLAUDE_RATE_LIMIT_RESET_STALE_GRACE_MS = 2 * 60 * 1000;
@@ -2159,17 +2158,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         concurrency: "unbounded",
         discard: true,
       },
-    );
-
-  const makeClaudeUsageRefreshLoop = (context: ClaudeSessionContext) =>
-    refreshClaudeUsageBestEffort(context).pipe(
-      Effect.andThen(
-        Effect.forever(
-          Effect.sleep(CLAUDE_USAGE_REFRESH_INTERVAL).pipe(
-            Effect.andThen(refreshClaudeUsageBestEffort(context)),
-          ),
-        ),
-      ),
     );
 
   const emitClaudeRateLimits = Effect.fn("emitClaudeRateLimits")(function* (
@@ -4782,7 +4770,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       });
 
       let usageRefreshFiber: Fiber.Fiber<void, never>;
-      usageRefreshFiber = runFork(makeClaudeUsageRefreshLoop(context));
+      // Provider-level polling owns recurring account refreshes. This one-shot keeps a newly
+      // opened session's usage display warm without adding a timer per session.
+      usageRefreshFiber = runFork(refreshClaudeUsageBestEffort(context));
       context.usageRefreshFiber = usageRefreshFiber;
       usageRefreshFiber.addObserver(() => {
         if (context.usageRefreshFiber === usageRefreshFiber) {
@@ -5009,21 +4999,21 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       return normalizeClaudeAccountUsageRateLimits(usage, "claude.oauth.usage");
     }).pipe(Effect.catch(() => Effect.void));
 
-  const refreshUsage: NonNullable<ClaudeAdapterShape["refreshUsage"]> = () =>
-    Effect.forEach(
-      Array.from(sessions.values()).filter((context) => !context.stopped),
-      (context) =>
-        Effect.all(
-          [
-            refreshClaudeUsageBestEffort(context),
-            context.lastKnownRateLimits
-              ? emitClaudeRateLimits(context, context.lastKnownRateLimits)
-              : Effect.void,
-          ],
-          { concurrency: "unbounded", discard: true },
-        ),
-      { concurrency: "unbounded", discard: true },
+  const refreshUsage: NonNullable<ClaudeAdapterShape["refreshUsage"]> = () => {
+    const context = Array.from(sessions.values()).find((candidate) => !candidate.stopped);
+    if (!context) {
+      return Effect.void;
+    }
+    return Effect.all(
+      [
+        refreshClaudeUsageBestEffort(context),
+        context.lastKnownRateLimits
+          ? emitClaudeRateLimits(context, context.lastKnownRateLimits)
+          : Effect.void,
+      ],
+      { concurrency: 2, discard: true },
     ).pipe(Effect.asVoid);
+  };
 
   const stopAll: ClaudeAdapterShape["stopAll"] = () =>
     Effect.forEach(

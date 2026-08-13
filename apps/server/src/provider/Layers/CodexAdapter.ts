@@ -35,6 +35,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -65,6 +66,7 @@ import {
 import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { reapManagedChildProcesses } from "../../process/ManagedChildProcessRegistry.ts";
 import {
   formatPdfAttachmentReferenceText,
   toProviderAttachmentReference,
@@ -2054,7 +2056,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const fileSystem = yield* FileSystem.FileSystem;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const crypto = yield* Crypto.Crypto;
+  const path = yield* Path.Path;
   const serverConfig = yield* Effect.service(ServerConfig);
+  const processRegistryDirectory = path.join(
+    serverConfig.providerStatusCacheDir,
+    "codex-app-servers",
+  );
+  yield* reapManagedChildProcesses({ registryDirectory: processRegistryDirectory });
   const nativeEventLogger =
     options?.nativeEventLogger ??
     (options?.nativeEventLogPath !== undefined
@@ -2501,6 +2509,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           providerInstanceId: boundInstanceId,
           cwd: input.cwd ?? process.cwd(),
           binaryPath: codexConfig.binaryPath,
+          processRegistryDirectory,
           ...(options?.environment ? { environment: options.environment } : {}),
           ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
           ...(isCodexResumeCursorSchema(input.resumeCursor)
@@ -2939,23 +2948,26 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const hasSession: CodexAdapterShape["hasSession"] = (threadId) =>
     Effect.succeed(Boolean(sessions.get(threadId) && !sessions.get(threadId)?.stopped));
 
-  const refreshUsage: NonNullable<CodexAdapterShape["refreshUsage"]> = () =>
-    Effect.forEach(
-      Array.from(sessions.values()).filter(
-        (session): session is CodexAdapterRootSessionContext =>
-          session.kind === "root" && !session.stopped,
+  const refreshUsage: NonNullable<CodexAdapterShape["refreshUsage"]> = () => {
+    const session = Array.from(sessions.values()).find(
+      (candidate): candidate is CodexAdapterRootSessionContext =>
+        candidate.kind === "root" && !candidate.stopped,
+    );
+    if (!session) {
+      return Effect.void;
+    }
+    // Usage is account-scoped for an adapter instance. Refreshing every root produces identical
+    // work and synchronized app-server traffic, so one healthy root is sufficient.
+    return session.runtime.refreshUsage.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logDebug("codex.adapter.usage.refresh-failed", {
+          threadId: session.threadId,
+          cause,
+        }),
       ),
-      (session) =>
-        session.runtime.refreshUsage.pipe(
-          Effect.catchCause((cause) =>
-            Effect.logDebug("codex.adapter.usage.refresh-failed", {
-              threadId: session.threadId,
-              cause,
-            }),
-          ),
-        ),
-      { concurrency: "unbounded", discard: true },
-    ).pipe(Effect.asVoid);
+      Effect.asVoid,
+    );
+  };
 
   const getAccountRateLimits: NonNullable<CodexAdapterShape["getAccountRateLimits"]> = () =>
     Effect.gen(function* () {
@@ -2970,6 +2982,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           binaryPath: codexConfig.binaryPath,
           ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
           cwd: process.cwd(),
+          processRegistryDirectory,
           ...(options?.environment ? { environment: options.environment } : {}),
         }).pipe(
           Effect.provideService(Scope.Scope, accountScope),
