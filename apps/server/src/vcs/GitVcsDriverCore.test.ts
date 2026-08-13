@@ -239,6 +239,23 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("reports remote status on unborn HEAD without failing", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* driver.initRepo({ cwd });
+        const initialBranch = yield* git(cwd, ["symbolic-ref", "--short", "HEAD"]);
+
+        const status = yield* driver.statusDetailsRemote(cwd);
+
+        assert.equal(status.isRepo, true);
+        assert.equal(status.branch, initialBranch);
+        assert.equal(status.hasUpstream, false);
+        assert.equal(status.aheadCount, 0);
+        assert.equal(status.behindCount, 0);
+      }),
+    );
+
     it.effect("uses origin HEAD for default-branch detection with a non-origin upstream", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

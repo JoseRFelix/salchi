@@ -1354,18 +1354,31 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (branchResult === null) {
       return NON_REPOSITORY_REMOTE_STATUS_DETAILS;
     }
+    let branch: string | null;
     if (branchResult.exitCode !== 0) {
-      const stderr = branchResult.stderr.trim();
-      return yield* createGitCommandError(
-        "GitVcsDriver.statusDetailsRemote.branch",
+      // rev-parse cannot resolve HEAD before the first commit. A successful
+      // symbolic-ref confirms this is an unborn branch rather than a broken
+      // repository or unrelated command failure.
+      const symbolicBranch = yield* executeGit(
+        "GitVcsDriver.statusDetailsRemote.unbornBranch",
         cwd,
-        ["rev-parse", "--abbrev-ref", "HEAD"],
-        stderr || "git branch lookup failed",
+        ["symbolic-ref", "--quiet", "--short", "HEAD"],
+        { allowNonZeroExit: true },
       );
+      if (symbolicBranch.exitCode !== 0) {
+        const stderr = branchResult.stderr.trim();
+        return yield* createGitCommandError(
+          "GitVcsDriver.statusDetailsRemote.branch",
+          cwd,
+          ["rev-parse", "--abbrev-ref", "HEAD"],
+          stderr || "git branch lookup failed",
+        );
+      }
+      branch = symbolicBranch.stdout.trim() || null;
+    } else {
+      const branchValue = branchResult.stdout.trim();
+      branch = branchValue.length > 0 && branchValue !== "HEAD" ? branchValue : null;
     }
-
-    const branchValue = branchResult.stdout.trim();
-    const branch = branchValue.length > 0 && branchValue !== "HEAD" ? branchValue : null;
     const upstream = yield* resolveCurrentUpstream(cwd);
     const upstreamRef = upstream?.upstreamRef ?? null;
     let aheadCount = 0;
