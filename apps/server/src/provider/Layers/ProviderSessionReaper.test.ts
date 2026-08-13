@@ -1,5 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  EventId,
+  type OrchestrationThreadActivity,
   ProjectId,
   ThreadId,
   TurnId,
@@ -25,7 +27,10 @@ import { ProviderValidationError } from "../Errors.ts";
 import { ProviderSessionReaper } from "../Services/ProviderSessionReaper.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
-import { makeProviderSessionReaperLive } from "./ProviderSessionReaper.ts";
+import {
+  hasLiveBackgroundActivity,
+  makeProviderSessionReaperLive,
+} from "./ProviderSessionReaper.ts";
 
 const defaultModelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
@@ -60,6 +65,8 @@ const unsupported = () => Effect.die(new Error("Unsupported provider call in tes
 function makeReadModel(
   threads: ReadonlyArray<{
     readonly id: ThreadId;
+    readonly createdByThreadId?: ThreadId | null;
+    readonly activities?: ReadonlyArray<OrchestrationThreadActivity>;
     readonly session: {
       readonly threadId: ThreadId;
       readonly status: "starting" | "running" | "ready" | "interrupted" | "stopped" | "error";
@@ -91,7 +98,7 @@ function makeReadModel(
     ],
     threads: threads.map((thread) => ({
       id: thread.id,
-      createdByThreadId: null,
+      createdByThreadId: thread.createdByThreadId ?? null,
       projectId,
       title: `Thread ${thread.id}`,
       modelSelection: defaultModelSelection,
@@ -108,8 +115,9 @@ function makeReadModel(
       hasActionableProposedPlan: false,
       latestTurn: null,
       messages: [],
+      queuedTurns: [],
       session: thread.session,
-      activities: [],
+      activities: thread.activities ?? [],
       proposedPlans: [],
       checkpoints: [],
       deletedAt: null,
@@ -208,7 +216,7 @@ describe("ProviderSessionReaper", () => {
         Layer.succeed(ProjectionSnapshotQuery, {
           getCommandReadModel: () => Effect.die("unused"),
           getSnapshot: () => Effect.die("unused"),
-          getShellSnapshot: () => Effect.die("unused"),
+          getShellSnapshot: () => Effect.succeed(input.readModel),
           getArchivedShellSnapshot: () => Effect.die("unused"),
           getSnapshotSequence: () =>
             Effect.succeed({ snapshotSequence: input.readModel.snapshotSequence }),
@@ -224,7 +232,12 @@ describe("ProviderSessionReaper", () => {
                 ? Option.some(input.readModel.threads.find((thread) => thread.id === threadId)!)
                 : Option.none(),
             ),
-          getThreadDetailById: () => Effect.die("unused"),
+          getThreadDetailById: (threadId) =>
+            Effect.succeed(
+              Option.fromNullishOr(
+                input.readModel.threads.find((thread) => thread.id === threadId),
+              ),
+            ),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
       ),
@@ -234,6 +247,32 @@ describe("ProviderSessionReaper", () => {
     runtime = ManagedRuntime.make(layer);
     return { stopSession, stoppedThreadIds };
   }
+
+  it("treats terminal subagent updates as settled background work", () => {
+    const now = "2026-01-01T00:00:00.000Z";
+    expect(
+      hasLiveBackgroundActivity([
+        {
+          id: EventId.make("event-reaper-subagent-started"),
+          tone: "info",
+          kind: "subagent.started",
+          summary: "Subagent started",
+          payload: { subagentId: "background-agent", status: "running" },
+          turnId: null,
+          createdAt: now,
+        },
+        {
+          id: EventId.make("event-reaper-subagent-settled"),
+          tone: "info",
+          kind: "subagent.updated",
+          summary: "Subagent completed",
+          payload: { subagentId: "background-agent", status: "completed" },
+          turnId: null,
+          createdAt: now,
+        },
+      ]),
+    ).toBe(false);
+  });
 
   it("reaps stale persisted sessions without active turns", async () => {
     const threadId = ThreadId.make("thread-reaper-stale");
@@ -328,6 +367,116 @@ describe("ProviderSessionReaper", () => {
     expect(harness.stopSession).not.toHaveBeenCalled();
     const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
     expect(Option.isSome(remaining)).toBe(true);
+  });
+
+  it("skips stale roots while a materialized descendant has an active turn", async () => {
+    const rootThreadId = ThreadId.make("thread-reaper-root-with-live-child");
+    const childThreadId = ThreadId.make("thread-reaper-live-child");
+    const childTurnId = TurnId.make("turn-reaper-live-child");
+    const now = "2026-01-01T00:00:00.000Z";
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: rootThreadId,
+          session: {
+            threadId: rootThreadId,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+        {
+          id: childThreadId,
+          createdByThreadId: rootThreadId,
+          session: {
+            threadId: childThreadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: childTurnId,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+      ]),
+    });
+    const repository = await runtime!.runPromise(Effect.service(ProviderSessionRuntimeRepository));
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId: rootThreadId,
+        providerName: "codex",
+        providerInstanceId: null,
+        adapterKey: "codex",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: null,
+        runtimePayload: null,
+      }),
+    );
+
+    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
+    scope = await Effect.runPromise(Scope.make("sequential"));
+    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
+    await Effect.runPromise(drainFibers);
+
+    expect(harness.stopSession).not.toHaveBeenCalled();
+  });
+
+  it("skips stale sessions while background activity remains live", async () => {
+    const threadId = ThreadId.make("thread-reaper-live-background-activity");
+    const now = "2026-01-01T00:00:00.000Z";
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          activities: [
+            {
+              id: EventId.make("event-reaper-live-background"),
+              tone: "info",
+              kind: "subagent.started",
+              summary: "Subagent started",
+              payload: { subagentId: "background-agent" },
+              turnId: null,
+              createdAt: now,
+            },
+          ],
+        },
+      ]),
+    });
+    const repository = await runtime!.runPromise(Effect.service(ProviderSessionRuntimeRepository));
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: null,
+        runtimePayload: null,
+      }),
+    );
+
+    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
+    scope = await Effect.runPromise(Scope.make("sequential"));
+    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
+    await Effect.runPromise(drainFibers);
+
+    expect(harness.stopSession).not.toHaveBeenCalled();
   });
 
   it("does not reap sessions that are still within the inactivity threshold", async () => {

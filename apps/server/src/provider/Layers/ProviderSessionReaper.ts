@@ -4,6 +4,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
+import type { OrchestrationThreadActivity, OrchestrationThreadShell } from "@salchi/contracts";
+import { isRecord } from "@salchi/shared/Record";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
@@ -21,6 +23,87 @@ export interface ProviderSessionReaperLiveOptions {
   readonly inactivityThresholdMs?: number;
   readonly sweepIntervalMs?: number;
   readonly maxIdleReadyRootSessions?: number;
+}
+
+function activityIdentity(
+  activity: OrchestrationThreadActivity,
+  field: "taskId" | "subagentId",
+): string | null {
+  if (!isRecord(activity.payload)) {
+    return null;
+  }
+  const value = activity.payload[field];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function subagentActivityIsTerminal(activity: OrchestrationThreadActivity): boolean {
+  if (!isRecord(activity.payload)) {
+    return false;
+  }
+  return (
+    activity.payload.status === "completed" ||
+    activity.payload.status === "failed" ||
+    activity.payload.status === "stopped" ||
+    activity.payload.status === "interrupted"
+  );
+}
+
+export function hasLiveBackgroundActivity(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): boolean {
+  const liveTasks = new Set<string>();
+  const liveSubagents = new Set<string>();
+
+  for (const activity of activities) {
+    if (activity.kind === "task.started" || activity.kind === "task.progress") {
+      const taskId = activityIdentity(activity, "taskId");
+      if (taskId) liveTasks.add(taskId);
+    } else if (activity.kind === "task.completed") {
+      const taskId = activityIdentity(activity, "taskId");
+      if (taskId) liveTasks.delete(taskId);
+    } else if (activity.kind === "subagent.started" || activity.kind === "subagent.updated") {
+      const subagentId = activityIdentity(activity, "subagentId");
+      if (subagentId) {
+        if (subagentActivityIsTerminal(activity)) {
+          liveSubagents.delete(subagentId);
+        } else {
+          liveSubagents.add(subagentId);
+        }
+      }
+    } else if (activity.kind === "subagent.completed") {
+      const subagentId = activityIdentity(activity, "subagentId");
+      if (subagentId) liveSubagents.delete(subagentId);
+    }
+  }
+
+  return liveTasks.size > 0 || liveSubagents.size > 0;
+}
+
+export function threadIdsWithLiveDescendants(
+  threads: ReadonlyArray<OrchestrationThreadShell>,
+): ReadonlySet<string> {
+  const threadsById = new Map(threads.map((thread) => [String(thread.id), thread]));
+  const owners = new Set<string>();
+  for (const thread of threads) {
+    const session = thread.session;
+    if (
+      session?.activeTurnId == null &&
+      session?.status !== "starting" &&
+      session?.status !== "running"
+    ) {
+      continue;
+    }
+
+    let ownerId = thread.createdByThreadId;
+    const visited = new Set<string>();
+    while (ownerId !== null && !visited.has(String(ownerId))) {
+      const normalizedOwnerId = String(ownerId);
+      visited.add(normalizedOwnerId);
+      owners.add(normalizedOwnerId);
+      ownerId = threadsById.get(normalizedOwnerId)?.createdByThreadId ?? null;
+    }
+  }
+  return owners;
 }
 
 const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =>
@@ -41,6 +124,9 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
 
     const sweep = Effect.gen(function* () {
       const bindings = yield* directory.listBindings();
+      const shellSnapshot = yield* projectionSnapshotQuery.getShellSnapshot();
+      const threadsById = new Map(shellSnapshot.threads.map((thread) => [thread.id, thread]));
+      const liveDescendantOwnerIds = threadIdsWithLiveDescendants(shellSnapshot.threads);
       const now = yield* Clock.currentTimeMillis;
       let reapedCount = 0;
       const candidates: Array<{
@@ -66,9 +152,9 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         }
 
         const idleDurationMs = now - lastSeenMs;
-        const thread = yield* projectionSnapshotQuery
-          .getThreadShellById(binding.threadId)
-          .pipe(Effect.map(Option.getOrUndefined));
+        const thread = threadsById.get(binding.threadId);
+        const isIdleReadyRoot =
+          thread?.createdByThreadId == null && thread?.session?.status === "ready";
         if (thread?.session?.activeTurnId != null) {
           yield* Effect.logDebug("provider.session.reaper.skipped-active-turn", {
             threadId: binding.threadId,
@@ -78,11 +164,47 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
+        if (idleDurationMs < inactivityThresholdMs && !isIdleReadyRoot) {
+          continue;
+        }
+
+        if (liveDescendantOwnerIds.has(String(binding.threadId))) {
+          yield* Effect.logDebug("provider.session.reaper.skipped-live-descendant", {
+            threadId: binding.threadId,
+            idleDurationMs,
+          });
+          continue;
+        }
+
+        const hasBackgroundActivity = yield* projectionSnapshotQuery
+          .getThreadDetailById(binding.threadId)
+          .pipe(
+            Effect.map(
+              Option.match({
+                onNone: () => false,
+                onSome: (detail) => hasLiveBackgroundActivity(detail.activities),
+              }),
+            ),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("provider.session.reaper.background-check-failed", {
+                threadId: binding.threadId,
+                cause,
+              }).pipe(Effect.as(true)),
+            ),
+          );
+        if (hasBackgroundActivity) {
+          yield* Effect.logDebug("provider.session.reaper.skipped-background-work", {
+            threadId: binding.threadId,
+            idleDurationMs,
+          });
+          continue;
+        }
+
         candidates.push({
           binding,
           idleDurationMs,
           lastSeenMs,
-          isIdleReadyRoot: thread?.createdByThreadId == null && thread?.session?.status === "ready",
+          isIdleReadyRoot,
         });
       }
 
