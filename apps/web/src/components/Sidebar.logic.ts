@@ -402,9 +402,12 @@ export function isContextMenuPointerDown(input: {
 export function resolveThreadRowClassName(input: {
   isActive: boolean;
   isSelected: boolean;
+  isDraft?: boolean;
 }): string {
-  const baseClassName =
-    "h-7 w-full translate-x-0 cursor-pointer justify-start px-2 text-left select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
+  const baseClassName = cn(
+    "h-7 w-full translate-x-0 cursor-pointer justify-start px-2 text-left select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+    input.isDraft && "border border-dashed border-muted-foreground/45",
+  );
 
   if (input.isSelected && input.isActive) {
     return cn(
@@ -428,6 +431,13 @@ export function resolveThreadRowClassName(input: {
   }
 
   return cn(baseClassName, "text-muted-foreground hover:bg-accent hover:text-foreground");
+}
+
+export function shouldShowProjectDraftBadge(input: {
+  projectExpanded: boolean;
+  hasDraftThread: boolean;
+}): boolean {
+  return !input.projectExpanded && input.hasDraftThread;
 }
 
 export function resolveThreadStatusPill(input: {

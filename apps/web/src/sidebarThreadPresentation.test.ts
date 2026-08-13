@@ -8,10 +8,17 @@ import {
 } from "@salchi/contracts";
 import { describe, expect, it } from "vitest";
 
-import type { DraftThreadState } from "./composerDraftStore";
+import {
+  DraftId,
+  type ComposerThreadDraftState,
+  type DraftThreadState,
+} from "./composerDraftStore";
 import type { LocalDispatchSnapshot } from "./components/ChatView.logic";
 import { sortThreads } from "./lib/threadSort";
-import { buildSidebarThreadPresentation } from "./sidebarThreadPresentation";
+import {
+  buildSidebarThreadPresentation,
+  placeDraftThreadsFirst,
+} from "./sidebarThreadPresentation";
 import type { SidebarThreadSummary, Thread } from "./types";
 
 const environmentId = EnvironmentId.make("env-sidebar-pending");
@@ -21,6 +28,7 @@ const modelSelection: ModelSelection = {
   model: "gpt-5.5",
   options: [],
 };
+const draftId = DraftId.make("draft-sidebar-pending");
 
 function makeDraftThread(overrides: Partial<DraftThreadState> = {}): DraftThreadState {
   return {
@@ -50,6 +58,30 @@ function makeLocalDispatch(overrides: Partial<LocalDispatchSnapshot> = {}): Loca
     latestTurnCompletedAt: null,
     ...overrides,
   };
+}
+
+function makeComposerDraft(
+  overrides: Partial<ComposerThreadDraftState> = {},
+): ComposerThreadDraftState {
+  return {
+    prompt: "",
+    images: [],
+    nonPersistedImageIds: [],
+    persistedAttachments: [],
+    terminalContexts: [],
+    modelSelectionByProvider: {},
+    activeProvider: null,
+    runtimeMode: null,
+    interactionMode: null,
+    ...overrides,
+  };
+}
+
+function makeDraftInput(
+  thread: DraftThreadState = makeDraftThread(),
+  composerDraft: ComposerThreadDraftState | null = null,
+) {
+  return { draftId, thread, composerDraft };
 }
 
 function makeSidebarThreadSummary(
@@ -110,7 +142,7 @@ describe("buildSidebarThreadPresentation", () => {
 
     const presentation = buildSidebarThreadPresentation({
       serverThreads: [],
-      draftThreads: [draftThread],
+      draftThreads: [makeDraftInput(draftThread)],
       localDispatchByThreadKey: {
         [threadKey]: makeLocalDispatch(),
       },
@@ -137,7 +169,7 @@ describe("buildSidebarThreadPresentation", () => {
 
     const presentation = buildSidebarThreadPresentation({
       serverThreads: [],
-      draftThreads: [draftThread],
+      draftThreads: [makeDraftInput(draftThread)],
       localDispatchByThreadKey: {},
     });
 
@@ -156,7 +188,7 @@ describe("buildSidebarThreadPresentation", () => {
 
     const presentation = buildSidebarThreadPresentation({
       serverThreads: [],
-      draftThreads: [draftThread],
+      draftThreads: [makeDraftInput(draftThread)],
       localDispatchByThreadKey: {
         [draftThreadKey]: makeLocalDispatch({
           startedAt: "2026-04-03T20:45:00.000Z",
@@ -175,12 +207,41 @@ describe("buildSidebarThreadPresentation", () => {
   it("does not add an idle unpromoted draft row", () => {
     const presentation = buildSidebarThreadPresentation({
       serverThreads: [],
-      draftThreads: [makeDraftThread()],
+      draftThreads: [makeDraftInput()],
       localDispatchByThreadKey: {},
     });
 
     expect(presentation.threads).toEqual([]);
     expect(presentation.pendingThreadKeys.size).toBe(0);
+  });
+
+  it("adds a draft row only while the composer has pending input", () => {
+    const draftThread = makeDraftThread();
+    const threadKey = scopedThreadKey(scopeThreadRef(environmentId, draftThread.threadId));
+
+    const presentation = buildSidebarThreadPresentation({
+      serverThreads: [],
+      draftThreads: [
+        makeDraftInput(draftThread, makeComposerDraft({ prompt: "Plan this change" })),
+      ],
+      localDispatchByThreadKey: {},
+    });
+
+    expect(presentation.threads).toHaveLength(1);
+    expect(presentation.pendingThreadKeys.has(threadKey)).toBe(true);
+    expect(presentation.draftThreadKeys.has(threadKey)).toBe(true);
+    expect(presentation.draftIdByThreadKey.get(threadKey)).toBe(draftId);
+  });
+
+  it("does not treat whitespace-only composer text as pending input", () => {
+    const presentation = buildSidebarThreadPresentation({
+      serverThreads: [],
+      draftThreads: [makeDraftInput(makeDraftThread(), makeComposerDraft({ prompt: "  \n " }))],
+      localDispatchByThreadKey: {},
+    });
+
+    expect(presentation.threads).toEqual([]);
+    expect(presentation.draftThreadKeys.size).toBe(0);
   });
 
   it("lets the server sidebar row override a pending draft row", () => {
@@ -193,7 +254,7 @@ describe("buildSidebarThreadPresentation", () => {
 
     const presentation = buildSidebarThreadPresentation({
       serverThreads: [serverThread],
-      draftThreads: [draftThread],
+      draftThreads: [makeDraftInput(draftThread)],
       localDispatchByThreadKey: {
         [threadKey]: makeLocalDispatch(),
       },
@@ -215,7 +276,7 @@ describe("buildSidebarThreadPresentation", () => {
 
     const presentation = buildSidebarThreadPresentation({
       serverThreads: [olderServerThread],
-      draftThreads: [draftThread],
+      draftThreads: [makeDraftInput(draftThread)],
       localDispatchByThreadKey: {
         [threadKey]: makeLocalDispatch({ startedAt: "2026-04-03T20:30:00.000Z" }),
       },
@@ -226,5 +287,30 @@ describe("buildSidebarThreadPresentation", () => {
 
     expect(sortedThreads[0]?.id).toBe(draftThread.threadId);
     expect(sortedThreads[0]?.title).toBe("Server detail title");
+  });
+});
+
+describe("placeDraftThreadsFirst", () => {
+  it("pins a draft above newer server threads without changing server-thread order", () => {
+    const olderServerThread = makeSidebarThreadSummary({
+      id: ThreadId.make("thread-older"),
+      title: "Older server thread",
+    });
+    const draftThread = makeSidebarThreadSummary({
+      id: ThreadId.make("thread-draft"),
+      title: "New thread",
+    });
+    const newerServerThread = makeSidebarThreadSummary({
+      id: ThreadId.make("thread-newer"),
+      title: "Newer server thread",
+    });
+    const draftThreadKey = scopedThreadKey(scopeThreadRef(environmentId, draftThread.id));
+
+    expect(
+      placeDraftThreadsFirst(
+        [newerServerThread, draftThread, olderServerThread],
+        new Set([draftThreadKey]),
+      ).map((thread) => thread.id),
+    ).toEqual([draftThread.id, newerServerThread.id, olderServerThread.id]);
   });
 });

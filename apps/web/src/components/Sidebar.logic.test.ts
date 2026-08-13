@@ -23,6 +23,7 @@ import {
   resolveThreadStatusPill,
   shouldEnableSidebarListAnimations,
   shouldClearThreadSelectionOnMouseDown,
+  shouldShowProjectDraftBadge,
   sortProjectsForSidebar,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
@@ -965,6 +966,31 @@ describe("resolveThreadRowClassName", () => {
     const className = resolveThreadRowClassName({ isActive: true, isSelected: false });
     expect(className).toContain("bg-accent/85");
     expect(className).toContain("hover:bg-accent");
+  });
+
+  it("adds a dashed CSS border to draft rows", () => {
+    const className = resolveThreadRowClassName({
+      isActive: true,
+      isSelected: false,
+      isDraft: true,
+    });
+
+    expect(className).toContain("border-dashed");
+    expect(className).toContain("border-muted-foreground/45");
+  });
+});
+
+describe("shouldShowProjectDraftBadge", () => {
+  it("shows the badge only for collapsed projects with a draft", () => {
+    expect(shouldShowProjectDraftBadge({ projectExpanded: false, hasDraftThread: true })).toBe(
+      true,
+    );
+    expect(shouldShowProjectDraftBadge({ projectExpanded: true, hasDraftThread: true })).toBe(
+      false,
+    );
+    expect(shouldShowProjectDraftBadge({ projectExpanded: false, hasDraftThread: false })).toBe(
+      false,
+    );
   });
 });
 
