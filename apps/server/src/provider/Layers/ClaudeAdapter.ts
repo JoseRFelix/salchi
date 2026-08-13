@@ -2776,24 +2776,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         rawPayload: result ?? { status },
       });
 
-      const stamp = yield* makeEventStamp();
-      yield* offerRuntimeEvent({
-        type: "turn.completed",
-        eventId: stamp.eventId,
-        provider: PROVIDER,
-        createdAt: stamp.createdAt,
+      yield* Effect.logInfo("claude.turn.result-without-active-turn", {
         threadId: context.session.threadId,
-        payload: {
-          state: status,
-          ...(result?.stop_reason !== undefined ? { stopReason: result.stop_reason } : {}),
-          ...(result?.usage ? { usage: result.usage } : {}),
-          ...(result?.modelUsage ? { modelUsage: result.modelUsage } : {}),
-          ...(typeof result?.total_cost_usd === "number"
-            ? { totalCostUsd: result.total_cost_usd }
-            : {}),
-          ...(errorMessage ? { errorMessage } : {}),
-        },
-        providerRefs: {},
+        status,
+        numTurns: result?.num_turns,
+        hasUsage: result?.usage !== undefined,
+        ...(errorMessage ? { errorMessage } : {}),
       });
       return;
     }
