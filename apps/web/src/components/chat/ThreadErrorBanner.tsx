@@ -7,6 +7,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 // Keep dismissals outside reconciled thread state so reconnects cannot restore
 // the exact banner the user already acknowledged. A different error or thread
 // receives a different key and remains visible.
+const MAX_DISMISSED_THREAD_ERRORS = 512;
 const dismissedThreadErrors = new Set<string>();
 
 function dismissalKey(threadKey: string, error: string): string {
@@ -14,7 +15,17 @@ function dismissalKey(threadKey: string, error: string): string {
 }
 
 export function dismissThreadError(threadKey: string, error: string): void {
-  dismissedThreadErrors.add(dismissalKey(threadKey, error));
+  const key = dismissalKey(threadKey, error);
+  if (dismissedThreadErrors.has(key)) {
+    return;
+  }
+  if (dismissedThreadErrors.size >= MAX_DISMISSED_THREAD_ERRORS) {
+    const oldestKey = dismissedThreadErrors.values().next().value;
+    if (oldestKey !== undefined) {
+      dismissedThreadErrors.delete(oldestKey);
+    }
+  }
+  dismissedThreadErrors.add(key);
 }
 
 export function isThreadErrorDismissed(threadKey: string, error: string): boolean {

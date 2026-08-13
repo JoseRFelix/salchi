@@ -46,4 +46,13 @@ describe("ThreadErrorBanner", () => {
     expect(isThreadErrorDismissed(threadKey, "Authentication expired")).toBe(false);
     expect(isThreadErrorDismissed(`${threadKey}-other`, "Provider disconnected")).toBe(false);
   });
+
+  it("bounds retained dismissals for long-lived clients", () => {
+    for (let index = 0; index <= 512; index += 1) {
+      dismissThreadError(`environment-b:thread-${index}`, `Error ${index}`);
+    }
+
+    expect(isThreadErrorDismissed("environment-b:thread-0", "Error 0")).toBe(false);
+    expect(isThreadErrorDismissed("environment-b:thread-512", "Error 512")).toBe(true);
+  });
 });
