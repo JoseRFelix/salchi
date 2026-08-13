@@ -8299,7 +8299,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
       });
 
       try {
-        await page.getByRole("button", { name: "Toggle source control" }).click();
+        if (standalone) {
+          await page.getByRole("button", { name: "More thread actions" }).click();
+          await page.getByRole("menuitem", { name: "Source control" }).click();
+        } else {
+          await page.getByRole("button", { name: "Toggle source control" }).click();
+        }
         await expect.element(page.getByText("README.md")).toBeVisible();
         await page.getByText("README.md").click();
 
