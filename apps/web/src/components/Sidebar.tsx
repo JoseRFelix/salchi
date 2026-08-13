@@ -2953,7 +2953,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     attachProjectListAutoAnimateRef,
     projectsLength,
   } = props;
-  const { isMobile, setOpenMobile } = useSidebar();
   const scrollViewportRef = useRef<HTMLDivElement | null>(null);
 
   const handleProjectSortOrderChange = useCallback(
@@ -2980,13 +2979,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     },
     [updateSettings],
   );
-  const handleCommandPaletteClick = useCallback(() => {
-    if (isMobile) {
-      setOpenMobile(false);
-    }
-    openCommandPalette();
-  }, [isMobile, openCommandPalette, setOpenMobile]);
-
   const renderProjectListRow = (project: SidebarProjectSnapshot) => (
     <SidebarProjectListRow
       key={project.projectKey}
@@ -3041,7 +3033,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
               size="sm"
               className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:ring-0"
               data-testid="command-palette-trigger"
-              onClick={handleCommandPaletteClick}
+              onClick={openCommandPalette}
             >
               <SearchIcon className="size-3.5 text-muted-foreground/70" />
               <span className="flex-1 truncate text-left text-[15px]">Search</span>

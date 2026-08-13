@@ -8572,7 +8572,43 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("opens command palette from the mobile sidebar search button", async () => {
+  it("keeps the command palette backdrop mounted until the click completes", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-command-palette-backdrop-test" as MessageId,
+        targetText: "command palette backdrop test",
+      }),
+    });
+
+    try {
+      await openCommandPaletteFromTrigger();
+
+      const palette = page.getByTestId("command-palette");
+      const backdrop = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-slot="command-dialog-backdrop"]'),
+        "Command palette backdrop did not open.",
+      );
+
+      backdrop.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, button: 0, cancelable: true }),
+      );
+      await waitForLayout();
+      await expect.element(palette).toBeInTheDocument();
+
+      backdrop.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, button: 0, cancelable: true }),
+      );
+      backdrop.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, button: 0, cancelable: true }),
+      );
+      await expect.element(palette).not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens command palette without closing the mobile sidebar", async () => {
     const mounted = await mountChatView({
       viewport: COMPACT_FOOTER_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -8583,12 +8619,17 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     try {
       await openMobileSidebarFromTrigger();
+      const mobileSidebar = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-mobile="true"][data-sidebar="sidebar"]'),
+        "Mobile sidebar should remain mounted while the command palette is open.",
+      );
       const trigger = page.getByTestId("command-palette-trigger");
       await expect.element(trigger).toBeInTheDocument();
       await trigger.click();
 
       const palette = page.getByTestId("command-palette");
       await expect.element(palette).toBeInTheDocument();
+      expect(mobileSidebar).toHaveAttribute("data-open", "");
       const input = await waitForCommandPaletteInput("Search commands, projects, and threads...");
       await expect
         .element(page.getByPlaceholder("Search commands, projects, and threads..."))
