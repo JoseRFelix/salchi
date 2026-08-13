@@ -1370,6 +1370,8 @@ describe("WorkspaceFilePreviewPanel", () => {
       expect(video.preload).toBe("metadata");
       expect(video.dataset.loadState).toBe("loading");
       expect(video.className).toContain("invisible");
+      expect(video.className).toContain("max-h-[min(24rem,60vh)]");
+      expect(video.className).toContain("max-w-[min(100%,32rem)]");
       // Keep Chromium from trying to load the unreachable mocked route before the
       // synthetic metadata event exercises the component's loaded state.
       video.addEventListener("error", (event) => event.stopImmediatePropagation(), {
