@@ -27,12 +27,14 @@ import {
   type ProviderSession,
 } from "@salchi/contracts";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as Stream from "effect/Stream";
@@ -67,7 +69,11 @@ const isModelSelection = Schema.is(ModelSelection);
  */
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogger?: EventNdjsonLogger;
+  readonly usageCacheTtlMs?: number;
+  readonly now?: () => number;
 }
+
+export const PROVIDER_USAGE_CACHE_TTL_MS = 20_000;
 
 const ProviderRollbackConversationInput = Schema.Struct({
   threadId: ThreadId,
@@ -225,6 +231,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const registry = yield* ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
+  const usageRefreshSemaphore = yield* Semaphore.make(1);
+  let cachedUsageRefresh:
+    | {
+        readonly expiresAtMs: number;
+        readonly value: Effect.Success<ReturnType<ProviderServiceShape["refreshUsage"]>>;
+      }
+    | undefined;
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
   const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
@@ -1110,63 +1123,86 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
-  const refreshUsage: ProviderServiceShape["refreshUsage"] = Effect.fn("refreshUsage")(
-    function* () {
-      const entries = yield* getAdapterEntries;
-      yield* Effect.forEach(
-        entries,
-        ([instanceId, adapter]) => {
-          const refresh = adapter.refreshUsage;
-          if (!refresh) {
-            return Effect.void;
+  const refreshUsageUncached: ProviderServiceShape["refreshUsage"] = Effect.fn(
+    "refreshUsageUncached",
+  )(function* () {
+    const entries = yield* getAdapterEntries;
+    yield* Effect.forEach(
+      entries,
+      ([instanceId, adapter]) => {
+        const refresh = adapter.refreshUsage;
+        if (!refresh) {
+          return Effect.void;
+        }
+        return refresh().pipe(
+          Effect.catchCause((cause) =>
+            Effect.logDebug("provider.usage.refresh-failed", {
+              instanceId,
+              provider: adapter.provider,
+              cause,
+            }),
+          ),
+        );
+      },
+      { concurrency: 2, discard: true },
+    );
+
+    const accountRateLimits = yield* Effect.forEach(
+      entries,
+      ([instanceId, adapter]) =>
+        Effect.gen(function* () {
+          const getAccountRateLimits = adapter.getAccountRateLimits;
+          if (!getAccountRateLimits) {
+            return [];
           }
-          return refresh().pipe(
+          const rateLimits = yield* getAccountRateLimits().pipe(
             Effect.catchCause((cause) =>
-              Effect.logDebug("provider.usage.refresh-failed", {
+              Effect.logDebug("provider.account-rate-limits.failed", {
                 instanceId,
                 provider: adapter.provider,
                 cause,
-              }),
+              }).pipe(Effect.as(undefined)),
             ),
           );
-        },
-        { concurrency: "unbounded", discard: true },
-      );
+          if (rateLimits === undefined) {
+            return [];
+          }
+          return [
+            {
+              providerInstanceId: instanceId,
+              provider: adapter.provider,
+              rateLimits,
+            },
+          ];
+        }),
+      { concurrency: 2 },
+    ).pipe(Effect.map((results) => results.flat()));
 
-      const accountRateLimits = yield* Effect.forEach(
-        entries,
-        ([instanceId, adapter]) =>
-          Effect.gen(function* () {
-            const getAccountRateLimits = adapter.getAccountRateLimits;
-            if (!getAccountRateLimits) {
-              return [];
-            }
-            const rateLimits = yield* getAccountRateLimits().pipe(
-              Effect.catchCause((cause) =>
-                Effect.logDebug("provider.account-rate-limits.failed", {
-                  instanceId,
-                  provider: adapter.provider,
-                  cause,
-                }).pipe(Effect.as(undefined)),
-              ),
-            );
-            if (rateLimits === undefined) {
-              return [];
-            }
-            return [
-              {
-                providerInstanceId: instanceId,
-                provider: adapter.provider,
-                rateLimits,
-              },
-            ];
-          }),
-        { concurrency: "unbounded" },
-      ).pipe(Effect.map((results) => results.flat()));
+    return { accountRateLimits };
+  });
 
-      return { accountRateLimits };
-    },
-  );
+  const refreshUsage: ProviderServiceShape["refreshUsage"] = () =>
+    usageRefreshSemaphore.withPermit(
+      Effect.gen(function* () {
+        const nowMs = options?.now?.() ?? (yield* Clock.currentTimeMillis);
+        if (cachedUsageRefresh && cachedUsageRefresh.expiresAtMs > nowMs) {
+          return cachedUsageRefresh.value;
+        }
+        return yield* refreshUsageUncached().pipe(
+          Effect.tap((value) =>
+            Effect.gen(function* () {
+              const refreshedAtMs = options?.now?.() ?? (yield* Clock.currentTimeMillis);
+              cachedUsageRefresh = {
+                expiresAtMs:
+                  refreshedAtMs +
+                  Math.max(0, options?.usageCacheTtlMs ?? PROVIDER_USAGE_CACHE_TTL_MS),
+                value,
+              };
+            }),
+          ),
+        );
+      }),
+    );
 
   const runStopAll = Effect.fn("runStopAll")(function* () {
     const threadIds = yield* directory.listThreadIds();

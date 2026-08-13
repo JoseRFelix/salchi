@@ -14,6 +14,8 @@ import {
   getSidebarUsageBarPercent,
   getSidebarUsageDisplayPercent,
   getSidebarUsageSummary,
+  getSidebarUsageVisibleWindows,
+  hasSidebarUsageProviderInstances,
   type SidebarUsageWindow,
 } from "./SidebarUsageIndicator.logic";
 
@@ -72,6 +74,28 @@ describe("SidebarUsageIndicator.logic", () => {
         hasUsageProviders: false,
       }),
     ).toBe("hidden");
+  });
+
+  it("recognizes installed rate-limit providers before usage data arrives", () => {
+    expect(
+      hasSidebarUsageProviderInstances([
+        {
+          instanceId: ProviderInstanceId.make("codex_work"),
+          driverKind: ProviderDriverKind.make("codex"),
+          installed: true,
+        },
+      ]),
+    ).toBe(true);
+    expect(
+      hasSidebarUsageProviderInstances([
+        {
+          instanceId: ProviderInstanceId.make("claude_personal"),
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+          installed: true,
+          authStatus: "unauthenticated",
+        },
+      ]),
+    ).toBe(false);
   });
 
   it("groups latest 5h and weekly rate-limit usage by Codex and Claude driver", () => {
@@ -739,6 +763,81 @@ describe("SidebarUsageIndicator.logic", () => {
     expect(rows[0]?.windows.fiveHour?.usedPercent).toBe(33);
     expect(rows[0]?.windows.weekly?.usedPercent).toBe(11);
     expect(rows[0]?.threadId).toBeNull();
+  });
+
+  it("hides an absent or unbounded 5h window and restores it when reported again", () => {
+    const providerInstances = [
+      {
+        instanceId: ProviderInstanceId.make("codex_work"),
+        driverKind: ProviderDriverKind.make("codex"),
+      },
+    ];
+    const weeklyWindow = {
+      usedPercent: 11,
+      windowDurationMins: 10_080,
+      resetsAt: LATER_FUTURE_RESET_SECONDS,
+    };
+
+    const unavailableRows = deriveSidebarUsageProviderRows({
+      providerInstances,
+      threads: [],
+      accountRateLimitsByInstanceId: {
+        codex_work: {
+          updatedAt: "2026-07-20T00:00:00.000Z",
+          rateLimits: {
+            primary: null,
+            secondary: weeklyWindow,
+          },
+        },
+      },
+    });
+
+    expect(unavailableRows[0]?.windows.fiveHour).toBeNull();
+    expect(getSidebarUsageVisibleWindows(unavailableRows[0]!)).toMatchObject([
+      { id: "weekly", window: { usedPercent: 11 } },
+    ]);
+
+    const temporarilyUnboundedRows = deriveSidebarUsageProviderRows({
+      providerInstances,
+      threads: [],
+      accountRateLimitsByInstanceId: {
+        codex_work: {
+          updatedAt: "2026-07-21T00:00:00.000Z",
+          rateLimits: {
+            primary: { usedPercent: 0, windowDurationMins: 300, unbounded: true },
+            secondary: weeklyWindow,
+          },
+        },
+      },
+    });
+
+    expect(temporarilyUnboundedRows[0]?.windows.fiveHour).toBeNull();
+    expect(getSidebarUsageVisibleWindows(temporarilyUnboundedRows[0]!)).toMatchObject([
+      { id: "weekly", window: { usedPercent: 11 } },
+    ]);
+
+    const restoredRows = deriveSidebarUsageProviderRows({
+      providerInstances,
+      threads: [],
+      accountRateLimitsByInstanceId: {
+        codex_work: {
+          updatedAt: "2026-07-29T00:00:00.000Z",
+          rateLimits: {
+            primary: {
+              usedPercent: 7,
+              windowDurationMins: 300,
+              resetsAt: FUTURE_RESET_SECONDS,
+            },
+            secondary: weeklyWindow,
+          },
+        },
+      },
+    });
+
+    expect(getSidebarUsageVisibleWindows(restoredRows[0]!)).toMatchObject([
+      { id: "fiveHour", window: { usedPercent: 7 } },
+      { id: "weekly", window: { usedPercent: 11 } },
+    ]);
   });
 
   it("populates Claude and Codex rows from account-level limits", () => {
