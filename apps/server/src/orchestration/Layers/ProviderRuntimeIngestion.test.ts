@@ -419,6 +419,27 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBe("turn failed");
   });
 
+  it("ignores an untargeted completion when no turn is active", async () => {
+    const harness = await createHarness();
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-untargeted-completion-without-turn"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:05.000Z",
+      payload: { state: "failed", errorMessage: "resume handshake" },
+    });
+    await harness.drain();
+
+    const snapshot = await harness.readModel();
+    const thread = snapshot.threads.find((entry) => entry.id === "thread-1");
+    expect(thread?.session?.status).toBe("ready");
+    expect(thread?.session?.activeTurnId).toBeNull();
+    expect(thread?.session?.lastError).toBeNull();
+    expect(thread?.latestTurn).toBeNull();
+  });
+
   it("stamps omitted provider turn ids from the active turn across session replacement", async () => {
     const harness = await createHarness();
     const turnId = asTurnId("turn-active-omitted");

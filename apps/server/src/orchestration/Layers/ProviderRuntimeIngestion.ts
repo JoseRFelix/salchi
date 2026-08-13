@@ -2396,8 +2396,11 @@ const make = Effect.gen(function* () {
             if (activeTurnId !== null && packedEventTurnId !== undefined) {
               return sameId(activeTurnId, packedEventTurnId);
             }
-            // If no active turn is tracked, accept completion scoped to this thread.
-            return true;
+            // Without an active turn, an untargeted completion cannot prove
+            // that it belongs to a turn this thread actually ran. Resume
+            // handshakes and late provider results can otherwise overwrite a
+            // pending or ready lifecycle state.
+            return eventTurnId !== undefined;
           default:
             return true;
         }
