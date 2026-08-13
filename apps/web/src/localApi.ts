@@ -228,9 +228,10 @@ export function ensureLocalApi(): LocalApi {
 export async function __resetLocalApiForTests() {
   cachedApi = undefined;
   const { __resetClientSettingsPersistenceForTests } = await import("./hooks/useSettings");
-  const { clearOrchestrationStartupCacheForTests } = await import("./orchestrationStartupCache");
+  const { clearOrchestrationStartupCacheDurableForTests } =
+    await import("./orchestrationStartupCache");
   __resetClientSettingsPersistenceForTests();
-  clearOrchestrationStartupCacheForTests();
+  await clearOrchestrationStartupCacheDurableForTests();
   await resetEnvironmentServiceForTests();
   resetGitStatusStateForTests();
   resetSourceControlDiscoveryStateForTests();
