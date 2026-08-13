@@ -53,6 +53,10 @@ import * as OpenVsxProvider from "./theme/openVsxProvider.ts";
 import { Keybindings } from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
+import {
+  projectActivityEvent,
+  projectThreadDetailSnapshot,
+} from "./orchestration/ActivityPayloadProjection.ts";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -833,6 +837,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             ).pipe(
               Effect.map((events) => Array.from(events)),
               Effect.flatMap(enrichOrchestrationEvents),
+              Effect.map((events) => events.map(projectActivityEvent)),
               Effect.mapError(
                 (cause) =>
                   new OrchestrationReplayEventsError({
@@ -885,7 +890,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                 });
               }
 
-              const snapshot = snapshotOption.value;
+              const snapshot = projectThreadDetailSnapshot(snapshotOption.value);
               const serverSequence = snapshot.snapshotSequence;
               const serverFingerprint = computeOrchestrationThreadDetailFingerprint(snapshot);
               const snapshotResult = (
@@ -962,7 +967,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                 kind: "events" as const,
                 serverSequence,
                 serverFingerprint,
-                events: threadDetailEvents,
+                events: threadDetailEvents.map(projectActivityEvent),
               };
             }),
             { "rpc.aggregate": "orchestration" },
@@ -1049,7 +1054,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             projectionSnapshotQuery.getThreadDetailSnapshotById(input.threadId, input.page).pipe(
               Effect.flatMap((snapshot) =>
                 Option.isSome(snapshot)
-                  ? Effect.succeed(snapshot.value)
+                  ? Effect.succeed(projectThreadDetailSnapshot(snapshot.value))
                   : Effect.fail(
                       new OrchestrationGetSnapshotError({
                         message: `Thread ${input.threadId} was not found`,
@@ -1091,7 +1096,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                 });
               }
 
-              const snapshot = threadDetailSnapshot.value;
+              const snapshot = projectThreadDetailSnapshot(threadDetailSnapshot.value);
               const isSubscribedThreadDetailEvent = (event: OrchestrationEvent) =>
                 event.aggregateKind === "thread" &&
                 event.aggregateId === input.threadId &&
@@ -1101,7 +1106,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                   Stream.filter(isSubscribedThreadDetailEvent),
                   Stream.map((event) => ({
                     kind: "event" as const,
-                    event,
+                    event: projectActivityEvent(event),
                   })),
                 );
               const replayStream = orchestrationEngine.readEvents(snapshot.snapshotSequence).pipe(
