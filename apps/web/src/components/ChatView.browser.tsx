@@ -6536,7 +6536,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
                   payload: null,
                   turnId: entry.latestTurn.turnId,
                   sequence: 1,
-                  createdAt: isoAt(10),
+                  createdAt: isoAt(180),
                 },
               ],
             }
@@ -6601,7 +6601,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await expect.element(page.getByLabelText("Working")).toBeInTheDocument();
 
       await waitForWsClient();
-      const completedAt = isoAt(60);
+      const completedAt = isoAt(240);
       fixture.snapshot = {
         ...fixture.snapshot,
         snapshotSequence: fixture.snapshot.snapshotSequence + 1,
