@@ -199,6 +199,7 @@ import {
   type SidebarSortableProjectHandleProps,
 } from "./sidebar/SidebarProjectDndList";
 import { SidebarFooterItems } from "./sidebar/SidebarFooterItems";
+import { SidebarUsageBackgroundRefresh } from "./sidebar/SidebarUsageIndicator";
 import {
   getFixedVirtualItemStyle,
   useFixedSharedScrollVirtualizer,
@@ -3903,6 +3904,7 @@ export default function Sidebar() {
 
   return (
     <>
+      <SidebarUsageBackgroundRefresh />
       <SidebarChromeHeader isElectron={isElectron} />
 
       {isOnSettings ? (

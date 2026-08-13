@@ -51,7 +51,11 @@ import {
 } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderService } from "../Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
-import { makeProviderServiceLive } from "./ProviderService.ts";
+import {
+  makeProviderServiceLive,
+  PROVIDER_USAGE_CACHE_TTL_MS,
+  type ProviderServiceLiveOptions,
+} from "./ProviderService.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "./ProviderEventLoggers.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -213,6 +217,11 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
       }),
   );
 
+  const refreshUsage = vi.fn((): Effect.Effect<void, ProviderAdapterError> => Effect.void);
+  const getAccountRateLimits = vi.fn(
+    (): Effect.Effect<unknown | undefined, ProviderAdapterError> => Effect.void,
+  );
+
   const adapter: ProviderAdapterShape<ProviderAdapterError> = {
     provider,
     capabilities: {
@@ -231,6 +240,8 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     hasSession,
     readThread,
     rollbackThread,
+    refreshUsage,
+    getAccountRateLimits,
     stopAll,
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
@@ -267,6 +278,8 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     hasSession,
     readThread,
     rollbackThread,
+    refreshUsage,
+    getAccountRateLimits,
     stopAll,
   };
 }
@@ -285,7 +298,7 @@ const hasMetricSnapshot = (
       Object.entries(attributes).every(([key, value]) => snapshot.attributes?.[key] === value),
   );
 
-function makeProviderServiceLayer() {
+function makeProviderServiceLayer(options?: ProviderServiceLiveOptions) {
   const codex = makeFakeCodexAdapter();
   const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
   const cursor = makeFakeCodexAdapter(CURSOR_DRIVER);
@@ -301,29 +314,57 @@ function makeProviderServiceLayer() {
   );
   const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
 
-  const layer = it.layer(
-    Layer.mergeAll(
-      makeProviderServiceLive().pipe(
-        Layer.provide(providerAdapterLayer),
-        Layer.provide(directoryLayer),
-        Layer.provide(defaultServerSettingsLayer),
-        Layer.provideMerge(AnalyticsService.layerTest),
-        Layer.provide(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
-      ),
-      directoryLayer,
-
-      runtimeRepositoryLayer,
-      NodeServices.layer,
+  const serviceLayer = Layer.mergeAll(
+    makeProviderServiceLive(options).pipe(
+      Layer.provide(providerAdapterLayer),
+      Layer.provide(directoryLayer),
+      Layer.provide(defaultServerSettingsLayer),
+      Layer.provideMerge(AnalyticsService.layerTest),
+      Layer.provide(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
     ),
+    directoryLayer,
+    runtimeRepositoryLayer,
+    NodeServices.layer,
   );
+  const layer = it.layer(serviceLayer);
 
   return {
     codex,
     claude,
     cursor,
     layer,
+    serviceLayer,
   };
 }
+
+it.effect("ProviderServiceLive coalesces usage refreshes behind a twenty-second cache", () => {
+  let nowMs = 10_000;
+  const { codex, claude, cursor, serviceLayer } = makeProviderServiceLayer({
+    now: () => nowMs,
+  });
+
+  return Effect.gen(function* () {
+    const providerService = yield* ProviderService;
+
+    yield* Effect.all([providerService.refreshUsage(), providerService.refreshUsage()], {
+      concurrency: "unbounded",
+    });
+    yield* providerService.refreshUsage();
+
+    for (const adapter of [codex, claude, cursor]) {
+      assert.strictEqual(adapter.refreshUsage.mock.calls.length, 1);
+      assert.strictEqual(adapter.getAccountRateLimits.mock.calls.length, 1);
+    }
+
+    nowMs += PROVIDER_USAGE_CACHE_TTL_MS;
+    yield* providerService.refreshUsage();
+
+    for (const adapter of [codex, claude, cursor]) {
+      assert.strictEqual(adapter.refreshUsage.mock.calls.length, 2);
+      assert.strictEqual(adapter.getAccountRateLimits.mock.calls.length, 2);
+    }
+  }).pipe(Effect.provide(serviceLayer));
+});
 
 it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
   Effect.gen(function* () {

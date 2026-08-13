@@ -70,6 +70,11 @@ export interface SidebarUsageSummary {
   readonly window: SidebarUsageWindow;
 }
 
+export interface SidebarUsageVisibleWindow {
+  readonly id: SidebarUsageWindowId;
+  readonly window: SidebarUsageWindow;
+}
+
 const CODEX_DRIVER_KIND = ProviderDriverKind.make("codex");
 const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 
@@ -215,7 +220,7 @@ function parseCodexWindow(
   updatedAt: string,
 ): SidebarUsageWindow | null {
   const windowRecord = asRecord(windowValue);
-  if (!windowRecord) {
+  if (!windowRecord || isUnavailableUsageWindow(windowRecord)) {
     return null;
   }
 
@@ -232,6 +237,22 @@ function parseCodexWindow(
       readString(snapshot, ["rateLimitReachedType", "rate_limit_reached_type"]),
     updatedAt,
   });
+}
+
+function isUnavailableUsageWindow(windowRecord: Record<string, unknown>): boolean {
+  const availability = readString(windowRecord, ["availability", "status"]);
+  if (
+    availability === "unavailable" ||
+    availability === "not_available" ||
+    availability === "unbounded" ||
+    availability === "unlimited"
+  ) {
+    return true;
+  }
+
+  return ["unbounded", "isUnbounded", "is_unbounded", "unlimited", "isUnlimited", "is_unlimited"]
+    .map((key) => windowRecord[key])
+    .some((value) => value === true);
 }
 
 function parseClaudeWindow(
@@ -369,6 +390,15 @@ function isUsageProviderIncluded(instance: SidebarUsageProviderInstanceInput): b
   );
 }
 
+export function hasSidebarUsageProviderInstances(
+  providerInstances: ReadonlyArray<SidebarUsageProviderInstanceInput>,
+): boolean {
+  return providerInstances.some(
+    (instance) =>
+      isSidebarUsageDriverId(String(instance.driverKind)) && isUsageProviderIncluded(instance),
+  );
+}
+
 export function getSidebarClaudeLoginPromptInstanceIds(
   providerInstances: ReadonlyArray<SidebarUsageProviderInstanceInput>,
 ): ReadonlyArray<string> {
@@ -471,6 +501,15 @@ export function getSidebarUsagePrimaryWindow(
     },
     null,
   );
+}
+
+export function getSidebarUsageVisibleWindows(
+  row: SidebarUsageProviderRow,
+): ReadonlyArray<SidebarUsageVisibleWindow> {
+  return (["fiveHour", "weekly"] as const).flatMap((id) => {
+    const window = row.windows[id];
+    return window ? [{ id, window }] : [];
+  });
 }
 
 export function getSidebarUsageDisplayPercent(window: SidebarUsageWindow | null): number | null {
