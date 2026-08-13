@@ -267,7 +267,8 @@ async function registerPushSubscription(
  * intentionally idempotent server-side and transfers it away from an expired session.
  */
 export async function reconcileCurrentPushSubscription(): Promise<WebPushSubscriptionJson | null> {
-  const subscription = await getCurrentPushSubscription();
+  const registration = await getInspectableServiceWorkerRegistration();
+  const subscription = registration ? await registration.pushManager.getSubscription() : null;
   return subscription ? registerPushSubscription(subscription) : null;
 }
 

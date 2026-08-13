@@ -4,6 +4,7 @@ import { reconcileCurrentPushSubscription, sendTestPushNotification } from "./no
 
 const registerPushSubscription = vi.hoisted(() => vi.fn());
 const sendTestPushNotificationRpc = vi.hoisted(() => vi.fn());
+const registerServiceWorker = vi.hoisted(() => vi.fn());
 
 vi.mock("../localApi", () => ({
   ensureLocalApi: () => ({
@@ -37,6 +38,7 @@ function installBrowserPushEnvironment(subscription: PushSubscription | null): v
       getSubscription: vi.fn(async () => subscription),
     },
   } as unknown as ServiceWorkerRegistration;
+  registerServiceWorker.mockResolvedValue(registration);
 
   vi.stubGlobal("window", {
     isSecureContext: true,
@@ -45,7 +47,9 @@ function installBrowserPushEnvironment(subscription: PushSubscription | null): v
   });
   vi.stubGlobal("navigator", {
     serviceWorker: {
-      register: vi.fn(async () => registration),
+      getRegistration: vi.fn(async () => registration),
+      ready: Promise.resolve(registration),
+      register: registerServiceWorker,
     },
     userAgent: "Salchi push reconciliation test",
   });
@@ -73,6 +77,7 @@ describe("push subscription reconciliation", () => {
       subscription: subscriptionJson,
       userAgent: "Salchi push reconciliation test",
     });
+    expect(registerServiceWorker).not.toHaveBeenCalled();
   });
 
   it("does not register anything when the browser has no subscription", async () => {
