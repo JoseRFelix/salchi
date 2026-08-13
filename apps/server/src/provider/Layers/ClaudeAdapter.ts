@@ -283,6 +283,11 @@ interface ClaudeTaskState {
   readonly blockedBy: Set<string>;
 }
 
+interface ClaudeBackgroundTask {
+  readonly description?: string;
+  readonly taskType?: string;
+}
+
 interface ClaudeSessionContext {
   session: ProviderSession;
   readonly promptQueue: Queue.Queue<PromptQueueItem>;
@@ -301,6 +306,7 @@ interface ClaudeSessionContext {
   }>;
   readonly inFlightTools: Map<number, ToolInFlight>;
   readonly claudeTasks: Map<string, ClaudeTaskState>;
+  readonly liveBackgroundTasks: Map<string, ClaudeBackgroundTask>;
   turnState: ClaudeTurnState | undefined;
   lastKnownContextWindow: number | undefined;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
@@ -317,6 +323,7 @@ interface ClaudeSessionContext {
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly interrupt: () => Promise<void>;
+  readonly stopTask: (taskId: string) => Promise<void>;
   readonly setModel: (model?: string) => Promise<void>;
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
@@ -634,7 +641,21 @@ function resultErrorsText(result: SDKResultMessage): string {
     : "";
 }
 
+function resultUserFacingError(result: SDKResultMessage): string | undefined {
+  if (result.subtype === "success" || !Array.isArray(result.errors)) {
+    return undefined;
+  }
+  return result.errors.find((error) => !error.startsWith("[ede_diagnostic]"));
+}
+
 function isInterruptedResult(result: SDKResultMessage): boolean {
+  if (
+    result.terminal_reason === "aborted_tools" ||
+    result.terminal_reason === "aborted_streaming"
+  ) {
+    return true;
+  }
+
   const errors = resultErrorsText(result);
   if (errors.includes("interrupt")) {
     return true;
@@ -3485,7 +3506,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     const status = turnStatusFromResult(message);
-    const errorMessage = message.subtype === "success" ? undefined : message.errors[0];
+    const errorMessage = resultUserFacingError(message);
 
     if (status === "failed") {
       yield* emitRuntimeError(context, errorMessage ?? "Claude turn failed.");
@@ -3642,6 +3663,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         });
         return;
       case "task_started":
+        context.liveBackgroundTasks.set(message.task_id, {
+          ...(message.description ? { description: message.description } : {}),
+          ...(message.task_type ? { taskType: message.task_type } : {}),
+        });
         yield* offerRuntimeEvent({
           ...base,
           type: "task.started",
@@ -3706,6 +3731,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         }
         return;
       case "task_notification":
+        context.liveBackgroundTasks.delete(message.task_id);
         yield* emitThreadTokenUsage(
           context,
           normalizeClaudeTaskProgressTokenUsage(message.usage, context),
@@ -4159,6 +4185,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
       const inFlightTools = new Map<number, ToolInFlight>();
       const claudeTasks = new Map<string, ClaudeTaskState>();
+      const liveBackgroundTasks = new Map<string, ClaudeBackgroundTask>();
 
       const contextRef = yield* Ref.make<ClaudeSessionContext | undefined>(undefined);
 
@@ -4685,6 +4712,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         turns: [],
         inFlightTools,
         claudeTasks,
+        liveBackgroundTasks,
         turnState: undefined,
         lastKnownContextWindow: initialContextWindow,
         lastKnownTokenUsage: undefined,
@@ -4917,6 +4945,63 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const interruptTurn: ClaudeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
     function* (threadId, _turnId) {
       const context = yield* requireSession(threadId);
+      const liveTasks = Array.from(context.liveBackgroundTasks.entries());
+      if (liveTasks.length > 0) {
+        yield* Effect.forEach(
+          liveTasks,
+          ([taskId, task]) =>
+            Effect.gen(function* () {
+              const stopAcknowledged = yield* Effect.tryPromise({
+                try: () => context.query.stopTask(taskId),
+                catch: () => undefined,
+              }).pipe(
+                Effect.timeoutOption("3 seconds"),
+                Effect.orElseSucceed(() => Option.none()),
+              );
+              if (Option.isNone(stopAcknowledged) || !context.liveBackgroundTasks.delete(taskId)) {
+                return;
+              }
+
+              const taskStamp = yield* makeEventStamp();
+              yield* offerRuntimeEvent({
+                type: "task.completed",
+                eventId: taskStamp.eventId,
+                provider: PROVIDER,
+                createdAt: taskStamp.createdAt,
+                threadId: context.session.threadId,
+                ...(context.turnState
+                  ? { turnId: asCanonicalTurnId(context.turnState.turnId) }
+                  : {}),
+                payload: {
+                  taskId: RuntimeTaskId.make(taskId),
+                  status: "stopped",
+                  ...(task.description ? { summary: task.description } : {}),
+                },
+                providerRefs: nativeProviderRefs(context),
+              });
+
+              const subagentStamp = yield* makeEventStamp();
+              yield* offerRuntimeEvent({
+                type: "subagent.completed",
+                eventId: subagentStamp.eventId,
+                provider: PROVIDER,
+                createdAt: subagentStamp.createdAt,
+                threadId: context.session.threadId,
+                ...(context.turnState
+                  ? { turnId: asCanonicalTurnId(context.turnState.turnId) }
+                  : {}),
+                payload: {
+                  subagentId: asRuntimeSubagentId(taskId),
+                  status: "stopped",
+                  ...(task.description ? { summary: task.description } : {}),
+                  ...(task.taskType ? { role: task.taskType } : {}),
+                },
+                providerRefs: nativeProviderRefs(context),
+              });
+            }).pipe(Effect.ignore),
+          { concurrency: 8, discard: true },
+        ).pipe(Effect.timeoutOption("10 seconds"), Effect.ignore);
+      }
       yield* Effect.tryPromise({
         try: () => context.query.interrupt(),
         catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
