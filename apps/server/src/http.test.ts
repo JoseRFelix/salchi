@@ -5,6 +5,7 @@ import {
   isLoopbackHostname,
   resolveDevRedirectUrl,
   resolveWorkspaceMediaByteRange,
+  svgSandboxHeaders,
 } from "./http.ts";
 
 describe("http dev routing", () => {
@@ -100,6 +101,27 @@ describe("workspace media byte ranges", () => {
     });
     expect(resolveWorkspaceMediaByteRange("bytes=0-10,20-30", 100)).toEqual({
       kind: "unsatisfiable",
+    });
+  });
+});
+
+describe("SVG response isolation", () => {
+  it("sandboxes SVG content identified by MIME type or path", () => {
+    const expectedPolicy = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+
+    expect(svgSandboxHeaders("image/svg+xml")).toEqual({
+      "Content-Security-Policy": expectedPolicy,
+      "X-Content-Type-Options": "nosniff",
+    });
+    expect(svgSandboxHeaders("/workspace/icon.SVG?version=1")).toEqual({
+      "Content-Security-Policy": expectedPolicy,
+      "X-Content-Type-Options": "nosniff",
+    });
+  });
+
+  it("keeps nosniff protection on non-SVG media without adding a sandbox", () => {
+    expect(svgSandboxHeaders("image/png")).toEqual({
+      "X-Content-Type-Options": "nosniff",
     });
   });
 });
