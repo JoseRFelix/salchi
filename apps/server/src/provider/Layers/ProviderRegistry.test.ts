@@ -1691,12 +1691,16 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             false,
           );
           assert.strictEqual(
+            status.models.some((model) => model.slug === "claude-opus-5"),
+            false,
+          );
+          assert.strictEqual(
             status.models.some((model) => model.slug === "claude-opus-4-8"),
             true,
           );
           assert.strictEqual(
             status.message,
-            "Claude Code v2.1.169 is too old for Claude Fable 5. Upgrade to v2.1.170 or newer to access it.",
+            "Claude Code v2.1.169 is too old for Claude Opus 5. Upgrade to v2.1.219 or newer to access it.",
           );
         }).pipe(
           Effect.provide(
@@ -1774,7 +1778,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           );
           assert.strictEqual(
             status.message,
-            "Claude Code v2.1.153 is too old for Claude Fable 5. Upgrade to v2.1.170 or newer to access it.",
+            "Claude Code v2.1.153 is too old for Claude Opus 5. Upgrade to v2.1.219 or newer to access it.",
           );
         }).pipe(
           Effect.provide(
@@ -1843,6 +1847,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             claudeCapabilities(),
           );
           assert.strictEqual(
+            status.models.some((model) => model.slug === "claude-opus-5"),
+            false,
+          );
+          assert.strictEqual(
             status.models.some((model) => model.slug === "claude-opus-4-8"),
             false,
           );
@@ -1852,7 +1860,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           );
           assert.strictEqual(
             status.message,
-            "Claude Code v2.1.110 is too old for Claude Fable 5. Upgrade to v2.1.170 or newer to access it.",
+            "Claude Code v2.1.110 is too old for Claude Opus 5. Upgrade to v2.1.219 or newer to access it.",
           );
         }).pipe(
           Effect.provide(
