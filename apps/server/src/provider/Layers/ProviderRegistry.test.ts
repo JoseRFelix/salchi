@@ -1781,6 +1781,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             false,
           );
           assert.strictEqual(
+            status.models.some((model) => model.slug === "claude-opus-5"),
+            false,
+          );
+          assert.strictEqual(
             status.models.some((model) => model.slug === "claude-opus-4-8"),
             true,
           );
@@ -1931,6 +1935,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           const status = yield* checkClaudeProviderStatus(
             defaultClaudeSettings,
             claudeCapabilities(),
+          );
+          assert.strictEqual(
+            status.models.some((model) => model.slug === "claude-opus-5"),
+            false,
           );
           assert.strictEqual(
             status.models.some((model) => model.slug === "claude-opus-4-8"),
