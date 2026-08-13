@@ -235,30 +235,32 @@ export const ChatHeader = memo(function ChatHeader({
             links={devServerLinks}
             probe={probeDevServerUrl}
           />
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Toggle
-                  className={headerIconActionClassName}
-                  pressed={sourceControlOpen}
-                  onPressedChange={onToggleSourceControl}
-                  aria-label="Toggle source control"
-                  variant="subtle-outline"
-                  size="xs"
-                  disabled={!hasSourceControl}
-                >
-                  <GitBranchIcon className={headerToggleIconClassName} />
-                </Toggle>
-              }
-            />
-            <TooltipPopup side="bottom">
-              {hasSourceControl
-                ? sourceControlToggleShortcutLabel
-                  ? `Toggle source control (${sourceControlToggleShortcutLabel})`
-                  : "Toggle source control"
-                : "Source control is unavailable until this thread has an active project."}
-            </TooltipPopup>
-          </Tooltip>
+          {!isCompactHeader && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Toggle
+                    className={headerIconActionClassName}
+                    pressed={sourceControlOpen}
+                    onPressedChange={onToggleSourceControl}
+                    aria-label="Toggle source control"
+                    variant="subtle-outline"
+                    size="xs"
+                    disabled={!hasSourceControl}
+                  >
+                    <GitBranchIcon className="size-3" />
+                  </Toggle>
+                }
+              />
+              <TooltipPopup side="bottom">
+                {hasSourceControl
+                  ? sourceControlToggleShortcutLabel
+                    ? `Toggle source control (${sourceControlToggleShortcutLabel})`
+                    : "Toggle source control"
+                  : "Source control is unavailable until this thread has an active project."}
+              </TooltipPopup>
+            </Tooltip>
+          )}
           <Tooltip>
             <TooltipTrigger
               render={
@@ -307,32 +309,30 @@ export const ChatHeader = memo(function ChatHeader({
               </TooltipPopup>
             </Tooltip>
           )}
-          {!isCompactHeader && (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Toggle
-                    className={headerIconActionClassName}
-                    pressed={diffOpen}
-                    onPressedChange={onToggleDiff}
-                    aria-label="Toggle diff panel"
-                    variant="subtle-outline"
-                    size="xs"
-                    disabled={!isGitRepo && !diffOpen}
-                  >
-                    <DiffIcon className="size-3" />
-                  </Toggle>
-                }
-              />
-              <TooltipPopup side="bottom">
-                {!isGitRepo && !diffOpen
-                  ? "Diff panel is unavailable because this project is not a git repository."
-                  : diffToggleShortcutLabel
-                    ? `Toggle diff panel (${diffToggleShortcutLabel})`
-                    : "Toggle diff panel"}
-              </TooltipPopup>
-            </Tooltip>
-          )}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Toggle
+                  className={headerIconActionClassName}
+                  pressed={diffOpen}
+                  onPressedChange={onToggleDiff}
+                  aria-label="Toggle diff panel"
+                  variant="subtle-outline"
+                  size="xs"
+                  disabled={!isGitRepo && !diffOpen}
+                >
+                  <DiffIcon className={headerToggleIconClassName} />
+                </Toggle>
+              }
+            />
+            <TooltipPopup side="bottom">
+              {!isGitRepo && !diffOpen
+                ? "Diff panel is unavailable because this project is not a git repository."
+                : diffToggleShortcutLabel
+                  ? `Toggle diff panel (${diffToggleShortcutLabel})`
+                  : "Toggle diff panel"}
+            </TooltipPopup>
+          </Tooltip>
           {isCompactHeader ? (
             <Menu>
               <MenuTrigger
@@ -348,9 +348,9 @@ export const ChatHeader = memo(function ChatHeader({
                 <EllipsisIcon className="size-4.5" />
               </MenuTrigger>
               <MenuPopup align="end" side="bottom" className="min-w-48">
-                <MenuItem onClick={() => onToggleDiff()} disabled={!isGitRepo && !diffOpen}>
-                  <DiffIcon aria-hidden="true" className="size-4" />
-                  Diff
+                <MenuItem onClick={() => onToggleSourceControl()} disabled={!hasSourceControl}>
+                  <GitBranchIcon aria-hidden="true" className="size-4" />
+                  Source control
                 </MenuItem>
                 <MenuItem onClick={() => onToggleFileExplorer()} disabled={!fileExplorerAvailable}>
                   <FolderTreeIcon aria-hidden="true" className="size-4" />
