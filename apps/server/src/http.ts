@@ -41,6 +41,7 @@ import {
 import { WorkspacePaths } from "./workspace/Services/WorkspacePaths.ts";
 
 const PROJECT_FAVICON_CACHE_CONTROL = "public, max-age=3600";
+const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 const FALLBACK_PROJECT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="project-favicon"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z"/></svg>`;
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 export const WORKSPACE_IMAGE_ROUTE_PATH = "/api/workspace-image";
@@ -48,6 +49,15 @@ export const WORKSPACE_GIT_IMAGE_ROUTE_PATH = "/api/workspace-git-image";
 export const WORKSPACE_VIDEO_ROUTE_PATH = "/api/workspace-video";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const GIT_OBJECT_ID_PATTERN = /^[0-9a-f]{7,64}$/i;
+
+export function svgSandboxHeaders(mimeTypeOrPath: string): Record<string, string> {
+  const normalized = mimeTypeOrPath.trim().toLowerCase();
+  const isSvg = normalized === "image/svg+xml" || normalized.split(/[?#]/u, 1)[0]?.endsWith(".svg");
+  return {
+    "X-Content-Type-Options": "nosniff",
+    ...(isSvg ? { "Content-Security-Policy": SVG_CONTENT_SECURITY_POLICY } : {}),
+  };
+}
 
 export type WorkspaceMediaByteRange =
   | {
@@ -223,10 +233,13 @@ export function resolveWorkspaceMediaByteRange(
   };
 }
 
-function workspaceMediaHeaders(input: { supportsRanges: boolean }): Record<string, string> {
+function workspaceMediaHeaders(input: {
+  supportsRanges: boolean;
+  mimeType: string;
+}): Record<string, string> {
   return {
     "Cache-Control": "no-store",
-    "X-Content-Type-Options": "nosniff",
+    ...svgSandboxHeaders(input.mimeType),
     ...(input.supportsRanges ? { "Accept-Ranges": "bytes" } : {}),
   };
 }
@@ -278,7 +291,10 @@ function serveWorkspaceMediaFile(input: {
     const byteRange = input.supportsRanges
       ? resolveWorkspaceMediaByteRange(input.rangeHeader, fileSize)
       : ({ kind: "full" } as const);
-    const baseHeaders = workspaceMediaHeaders({ supportsRanges: input.supportsRanges });
+    const baseHeaders = workspaceMediaHeaders({
+      supportsRanges: input.supportsRanges,
+      mimeType: input.mimeType,
+    });
 
     if (byteRange.kind === "unsatisfiable") {
       return HttpServerResponse.text("Range Not Satisfiable", {
@@ -433,6 +449,7 @@ export const attachmentsRouteLayer = HttpRouter.add(
       status: 200,
       headers: {
         "Cache-Control": "public, max-age=31536000, immutable",
+        ...svgSandboxHeaders(filePath),
         ...(url.value.searchParams.get("download") === "1"
           ? { "Content-Disposition": "attachment" }
           : {}),
@@ -469,6 +486,7 @@ export const projectFaviconRouteLayer = HttpRouter.add(
         contentType: "image/svg+xml",
         headers: {
           "Cache-Control": PROJECT_FAVICON_CACHE_CONTROL,
+          ...svgSandboxHeaders("image/svg+xml"),
         },
       });
     }
@@ -477,6 +495,7 @@ export const projectFaviconRouteLayer = HttpRouter.add(
       status: 200,
       headers: {
         "Cache-Control": PROJECT_FAVICON_CACHE_CONTROL,
+        ...svgSandboxHeaders(faviconFilePath),
       },
     }).pipe(
       Effect.catch(() =>
@@ -608,7 +627,7 @@ export const workspaceGitImageRouteLayer = HttpRouter.add(
       contentType: mimeType,
       headers: {
         "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff",
+        ...svgSandboxHeaders(mimeType),
       },
     });
   }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
