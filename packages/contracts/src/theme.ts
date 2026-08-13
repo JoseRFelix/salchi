@@ -105,7 +105,7 @@ export class ThemeProviderError extends Schema.TaggedErrorClass<ThemeProviderErr
   {
     operation: Schema.Literals(["search", "preview", "import"]),
     detail: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {

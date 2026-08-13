@@ -13,8 +13,10 @@
  * @module providerInstances
  */
 import {
+  DEFAULT_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   PROVIDER_DISPLAY_NAMES,
+  type ModelSelection,
   type ProviderDriverKind,
   type ProviderInstanceId,
   type ServerProvider,
@@ -209,6 +211,24 @@ export function getProviderInstanceModels(
 }
 
 /**
+ * Resolve an instance's live default model before falling back to catalog
+ * order or the driver's static emergency default.
+ */
+export function getDefaultProviderInstanceModel(
+  providers: ReadonlyArray<ServerProvider>,
+  instanceId: ProviderInstanceId,
+): string | undefined {
+  const entry = getProviderInstanceEntry(providers, instanceId);
+  if (!entry) return undefined;
+  return (
+    entry.models.find((model) => model.isDefault && !model.isCustom)?.slug ??
+    entry.models.find((model) => !model.isCustom)?.slug ??
+    entry.models[0]?.slug ??
+    DEFAULT_MODEL_BY_PROVIDER[entry.driverKind]
+  );
+}
+
+/**
  * Resolve the routing key for a selection that may reference an instance
  * id that no longer exists (e.g. a persisted thread selection after the
  * user deleted the custom instance). Returns the first enabled instance
@@ -229,6 +249,22 @@ export function resolveSelectableProviderInstance(
     return instanceId;
   }
   return entries.find((entry) => entry.enabled && entry.isAvailable)?.instanceId;
+}
+
+/**
+ * Resolve a stored project default. A valid stored selection is an explicit
+ * pin and is preserved; `null` means inherit the selected provider instance's
+ * live default model.
+ */
+export function resolveDefaultProviderModelSelection(
+  providers: ReadonlyArray<ServerProvider>,
+  selection: ModelSelection | null | undefined,
+): ModelSelection | null {
+  const instanceId = resolveSelectableProviderInstance(providers, selection?.instanceId);
+  if (instanceId === undefined) return null;
+  if (selection?.instanceId === instanceId) return selection;
+  const model = getDefaultProviderInstanceModel(providers, instanceId);
+  return model ? { instanceId, model } : null;
 }
 
 /**

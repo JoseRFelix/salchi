@@ -35,6 +35,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -65,6 +66,7 @@ import {
 import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { reapManagedChildProcesses } from "../../process/ManagedChildProcessRegistry.ts";
 import {
   formatPdfAttachmentReferenceText,
   toProviderAttachmentReference,
@@ -488,6 +490,26 @@ function codexThreadSnapshotBackfillEvents(input: {
       const detail = itemDetail(item);
       const status = runtimeItemStatusFromSnapshotItem(item);
       const eventType = status === "inProgress" ? "item.updated" : "item.completed";
+      const generatedImages = generatedImagePayloadsFromItem(item);
+      for (const [index, generatedImage] of generatedImages.entries()) {
+        events.push({
+          eventId: backfillEventId(
+            input.snapshot.threadId,
+            turn.id,
+            item.id,
+            "image-generated",
+            String(index),
+          ),
+          provider: PROVIDER,
+          providerInstanceId: input.providerInstanceId,
+          threadId: input.threadId,
+          turnId: turn.id,
+          itemId,
+          createdAt: turnCompletedAt,
+          type: "image.generated",
+          payload: generatedImage,
+        });
+      }
       events.push({
         eventId: backfillEventId(input.snapshot.threadId, turn.id, item.id, eventType),
         provider: PROVIDER,
@@ -532,46 +554,114 @@ function codexThreadSnapshotBackfillEvents(input: {
   return events;
 }
 
-function imageGenerationPayloadFromItem(
-  item: unknown,
-): { readonly name: string; readonly dataUrl: string } | undefined {
-  if (!item || typeof item !== "object") {
-    return undefined;
-  }
-
-  const record = item as Record<string, unknown>;
-  if (record.type !== "imageGeneration" && record.type !== "image_generation_call") {
-    return undefined;
-  }
-
-  const result = trimText(typeof record.result === "string" ? record.result : undefined);
-  if (!result) {
-    return undefined;
-  }
-
-  const id = trimText(typeof record.id === "string" ? record.id : undefined);
-  const baseName = id ? `${id}.png` : "generated-image.png";
-  return {
-    name: baseName,
-    dataUrl: /^data:image\//i.test(result) ? result : `data:image/png;base64,${result}`,
-  };
+interface GeneratedImagePayload {
+  readonly name: string;
+  readonly dataUrl: string;
 }
 
-function imageGeneratedRuntimeEventFromItem(
+function imageDataUrl(value: unknown): string | undefined {
+  const url = readString(value);
+  return url && /^data:image\/[^;,]+;base64,/i.test(url) ? url : undefined;
+}
+
+function base64ImageDataUrl(input: {
+  readonly data: unknown;
+  readonly mimeType: unknown;
+}): string | undefined {
+  const data = readString(input.data);
+  const mimeType = readString(input.mimeType)?.toLowerCase();
+  if (!data || !mimeType?.startsWith("image/")) {
+    return undefined;
+  }
+  return `data:${mimeType};base64,${data}`;
+}
+
+function imagePayloadFromToolContentItem(
+  contentItem: unknown,
+  name: string,
+): GeneratedImagePayload | undefined {
+  if (!isRecord(contentItem)) {
+    return undefined;
+  }
+
+  const type = readString(contentItem.type);
+  if (type === "inputImage") {
+    const dataUrl = imageDataUrl(contentItem.imageUrl);
+    return dataUrl ? { name, dataUrl } : undefined;
+  }
+  if (type === "input_image") {
+    const dataUrl = imageDataUrl(contentItem.image_url);
+    return dataUrl ? { name, dataUrl } : undefined;
+  }
+  if (type === "image") {
+    const dataUrl = base64ImageDataUrl({
+      data: contentItem.data,
+      mimeType: contentItem.mimeType ?? contentItem.mime_type,
+    });
+    return dataUrl ? { name, dataUrl } : undefined;
+  }
+  if (type === "resource" && isRecord(contentItem.resource)) {
+    const dataUrl = base64ImageDataUrl({
+      data: contentItem.resource.blob,
+      mimeType: contentItem.resource.mimeType ?? contentItem.resource.mime_type,
+    });
+    return dataUrl ? { name, dataUrl } : undefined;
+  }
+  return undefined;
+}
+
+function generatedImagePayloadsFromItem(item: unknown): ReadonlyArray<GeneratedImagePayload> {
+  if (!isRecord(item)) {
+    return [];
+  }
+
+  const type = readString(item.type);
+  const itemId = readString(item.id) ?? "tool-output";
+  if (type === "imageGeneration" || type === "image_generation_call") {
+    const result = readString(item.result);
+    if (!result) {
+      return [];
+    }
+    return [
+      {
+        name: `${itemId}.png`,
+        dataUrl: imageDataUrl(result) ?? `data:image/png;base64,${result}`,
+      },
+    ];
+  }
+
+  const contentItems =
+    type === "dynamicToolCall"
+      ? item.contentItems
+      : type === "mcpToolCall" && isRecord(item.result)
+        ? item.result.content
+        : undefined;
+  if (!Array.isArray(contentItems)) {
+    return [];
+  }
+
+  const images: GeneratedImagePayload[] = [];
+  for (const contentItem of contentItems) {
+    const imageNumber = images.length + 1;
+    const image = imagePayloadFromToolContentItem(contentItem, `${itemId}-image-${imageNumber}`);
+    if (image) {
+      images.push(image);
+    }
+  }
+  return images;
+}
+
+function imageGeneratedRuntimeEventsFromItem(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
   item: unknown,
-): ProviderRuntimeEvent | undefined {
-  const generatedImage = imageGenerationPayloadFromItem(item);
-  if (!generatedImage) {
-    return undefined;
-  }
-
-  return {
+): ReadonlyArray<ProviderRuntimeEvent> {
+  return generatedImagePayloadsFromItem(item).map((generatedImage, index) => ({
     ...runtimeEventBase(event, canonicalThreadId),
+    eventId: EventId.make(`${event.id}:image:${index}`),
     type: "image.generated",
     payload: generatedImage,
-  };
+  }));
 }
 
 function toRequestTypeFromMethod(method: string): CanonicalRequestType {
@@ -1491,21 +1581,17 @@ function mapToRuntimeEvents(
       EffectCodexSchema.V2RawResponseItemCompletedNotification,
       event.payload,
     );
-    const generatedEvent = imageGeneratedRuntimeEventFromItem(
+    const generatedEvents = imageGeneratedRuntimeEventsFromItem(
       event,
       canonicalThreadId,
       payload?.item,
     );
-    if (!generatedEvent) {
-      return [];
-    }
-
-    return [generatedEvent];
+    return generatedEvents;
   }
 
   if (event.method === "item/started") {
     const payload = readPayload(EffectCodexSchema.V2ItemStartedNotification, event.payload);
-    const generatedEvent = imageGeneratedRuntimeEventFromItem(
+    const generatedEvents = imageGeneratedRuntimeEventsFromItem(
       event,
       canonicalThreadId,
       payload?.item,
@@ -1514,11 +1600,7 @@ function mapToRuntimeEvents(
     const subagentEvents = payload?.item
       ? codexSubagentEventsFromLifecycle(event, canonicalThreadId, "item.started", payload.item)
       : [];
-    return [
-      ...(generatedEvent ? [generatedEvent] : []),
-      ...(started ? [started] : []),
-      ...subagentEvents,
-    ];
+    return [...generatedEvents, ...(started ? [started] : []), ...subagentEvents];
   }
 
   if (event.method === "item/completed") {
@@ -1543,7 +1625,7 @@ function mapToRuntimeEvents(
         },
       ];
     }
-    const generatedEvent = imageGeneratedRuntimeEventFromItem(event, canonicalThreadId, item);
+    const generatedEvents = imageGeneratedRuntimeEventsFromItem(event, canonicalThreadId, item);
     const completed = mapItemLifecycle(event, canonicalThreadId, "item.completed");
     const subagentEvents = codexSubagentEventsFromLifecycle(
       event,
@@ -1551,11 +1633,7 @@ function mapToRuntimeEvents(
       "item.completed",
       item,
     );
-    return [
-      ...(generatedEvent ? [generatedEvent] : []),
-      ...(completed ? [completed] : []),
-      ...subagentEvents,
-    ];
+    return [...generatedEvents, ...(completed ? [completed] : []), ...subagentEvents];
   }
 
   if (
@@ -2054,7 +2132,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const fileSystem = yield* FileSystem.FileSystem;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const crypto = yield* Crypto.Crypto;
+  const path = yield* Path.Path;
   const serverConfig = yield* Effect.service(ServerConfig);
+  const processRegistryDirectory = path.join(
+    serverConfig.providerStatusCacheDir,
+    "codex-app-servers",
+  );
+  yield* reapManagedChildProcesses({ registryDirectory: processRegistryDirectory });
   const nativeEventLogger =
     options?.nativeEventLogger ??
     (options?.nativeEventLogPath !== undefined
@@ -2501,6 +2585,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           providerInstanceId: boundInstanceId,
           cwd: input.cwd ?? process.cwd(),
           binaryPath: codexConfig.binaryPath,
+          processRegistryDirectory,
           ...(options?.environment ? { environment: options.environment } : {}),
           ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
           ...(isCodexResumeCursorSchema(input.resumeCursor)
@@ -2939,23 +3024,26 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const hasSession: CodexAdapterShape["hasSession"] = (threadId) =>
     Effect.succeed(Boolean(sessions.get(threadId) && !sessions.get(threadId)?.stopped));
 
-  const refreshUsage: NonNullable<CodexAdapterShape["refreshUsage"]> = () =>
-    Effect.forEach(
-      Array.from(sessions.values()).filter(
-        (session): session is CodexAdapterRootSessionContext =>
-          session.kind === "root" && !session.stopped,
+  const refreshUsage: NonNullable<CodexAdapterShape["refreshUsage"]> = () => {
+    const session = Array.from(sessions.values()).find(
+      (candidate): candidate is CodexAdapterRootSessionContext =>
+        candidate.kind === "root" && !candidate.stopped,
+    );
+    if (!session) {
+      return Effect.void;
+    }
+    // Usage is account-scoped for an adapter instance. Refreshing every root produces identical
+    // work and synchronized app-server traffic, so one healthy root is sufficient.
+    return session.runtime.refreshUsage.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logDebug("codex.adapter.usage.refresh-failed", {
+          threadId: session.threadId,
+          cause,
+        }),
       ),
-      (session) =>
-        session.runtime.refreshUsage.pipe(
-          Effect.catchCause((cause) =>
-            Effect.logDebug("codex.adapter.usage.refresh-failed", {
-              threadId: session.threadId,
-              cause,
-            }),
-          ),
-        ),
-      { concurrency: "unbounded", discard: true },
-    ).pipe(Effect.asVoid);
+      Effect.asVoid,
+    );
+  };
 
   const getAccountRateLimits: NonNullable<CodexAdapterShape["getAccountRateLimits"]> = () =>
     Effect.gen(function* () {
@@ -2970,6 +3058,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           binaryPath: codexConfig.binaryPath,
           ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
           cwd: process.cwd(),
+          processRegistryDirectory,
           ...(options?.environment ? { environment: options.environment } : {}),
         }).pipe(
           Effect.provideService(Scope.Scope, accountScope),

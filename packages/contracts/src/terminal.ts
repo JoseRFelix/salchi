@@ -15,8 +15,18 @@ const TerminalIdSchema = TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(12
 const TerminalEnvKeySchema = Schema.String.check(
   Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/),
 ).check(Schema.isMaxLength(128));
+const isTerminalEnvKey = Schema.is(TerminalEnvKeySchema);
 const TerminalEnvValueSchema = Schema.String.check(Schema.isMaxLength(8_192));
-const TerminalEnvSchema = Schema.Record(TerminalEnvKeySchema, TerminalEnvValueSchema).check(
+const TerminalEnvSchema = Schema.Record(Schema.String, TerminalEnvValueSchema).check(
+  Schema.makeFilter((env) => {
+    const invalidKey = Object.keys(env).find((key) => !isTerminalEnvKey(key));
+    return invalidKey === undefined
+      ? undefined
+      : {
+          path: [invalidKey],
+          issue: "Invalid terminal environment variable name",
+        };
+  }),
   Schema.isMaxProperties(128),
 );
 
@@ -162,7 +172,7 @@ export class TerminalCwdError extends Schema.TaggedErrorClass<TerminalCwdError>(
   {
     cwd: Schema.String,
     reason: Schema.Literals(["notFound", "notDirectory", "statFailed"]),
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message() {
@@ -191,7 +201,7 @@ export class TerminalHistoryError extends Schema.TaggedErrorClass<TerminalHistor
     operation: Schema.Literals(["read", "truncate", "migrate"]),
     threadId: Schema.String,
     terminalId: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message() {

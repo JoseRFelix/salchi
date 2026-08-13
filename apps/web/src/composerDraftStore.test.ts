@@ -388,10 +388,10 @@ describe("composerDraftStore syncPersistedAttachments", () => {
         dataUrl: image.previewUrl,
       },
     ]);
-    await Promise.resolve();
-
-    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.persistedAttachments).toEqual([]);
-    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.nonPersistedImageIds).toEqual([image.id]);
+    await vi.waitFor(() => {
+      expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.persistedAttachments).toEqual([]);
+      expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.nonPersistedImageIds).toEqual([image.id]);
+    });
   });
 });
 

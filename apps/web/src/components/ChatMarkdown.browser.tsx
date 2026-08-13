@@ -225,6 +225,11 @@ describe("ChatMarkdown", () => {
       expect(getComputedStyle(favicon!).verticalAlign).not.toBe("baseline");
       expect(leading?.textContent).toBe("O");
       expect(link.element().textContent).toBe("OpenAI");
+      const themeColorProbe = document.createElement("span");
+      themeColorProbe.style.color = "var(--primary)";
+      document.body.append(themeColorProbe);
+      expect(getComputedStyle(link.element()).color).toBe(getComputedStyle(themeColorProbe).color);
+      themeColorProbe.remove();
       expect(getComputedStyle(link.element()).textDecorationLine).toBe("none");
       expect(link.element().querySelector("img, svg")?.getBoundingClientRect().width).toBe(14);
       await link.hover();

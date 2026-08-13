@@ -16,7 +16,7 @@ CLIs instead of reselling tokens.
 
 ## Demo
 
-https://github.com/user-attachments/assets/f1198b94-858d-4600-b3ad-d9ea40f568bd
+https://github.com/user-attachments/assets/c9f8687a-de73-4aef-b614-98a9eb0a5629
 
 ## Why Salchi?
 

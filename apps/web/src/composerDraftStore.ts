@@ -31,7 +31,6 @@ import * as Equal from "effect/Equal";
 import { DeepMutable } from "effect/Types";
 import { createModelSelection, normalizeModelSlug } from "@salchi/shared/model";
 import { useMemo } from "react";
-import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { resolveAppModelSelection, resolveAppModelSelectionForInstance } from "./modelSelection";
 import { PDF_MIME_TYPE } from "@salchi/shared/attachmentMime";
 import {
@@ -47,9 +46,9 @@ import {
   normalizeTerminalContextText,
 } from "./lib/terminalContext";
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 import { useShallow } from "zustand/react/shallow";
-import { createDebouncedStorage, createMemoryStorage } from "./lib/storage";
+import { createComposerDraftPersistStorage } from "./composerDraftIndexedDbStorage";
 import { getDefaultServerModel } from "./providerModels";
 import { UnifiedSettings } from "@salchi/contracts/settings";
 const isRuntimeMode = Schema.is(RuntimeMode);
@@ -64,18 +63,6 @@ export const DraftId = Schema.String.pipe(Schema.brand("DraftId"));
 export type DraftId = typeof DraftId.Type;
 
 const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
-
-const composerDebouncedStorage = createDebouncedStorage(
-  typeof localStorage !== "undefined" ? localStorage : createMemoryStorage(),
-  COMPOSER_PERSIST_DEBOUNCE_MS,
-);
-
-// Flush pending composer draft writes before page unload to prevent data loss.
-if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-  window.addEventListener("beforeunload", () => {
-    composerDebouncedStorage.flush();
-  });
-}
 
 export const PersistedComposerImageAttachment = Schema.Struct({
   type: Schema.optionalKey(Schema.Literals(["image", "pdf"])),
@@ -230,10 +217,19 @@ const PersistedComposerDraftStoreState = Schema.Struct({
 });
 type PersistedComposerDraftStoreState = typeof PersistedComposerDraftStoreState.Type;
 
-const PersistedComposerDraftStoreStorage = Schema.Struct({
-  version: Schema.Number,
-  state: PersistedComposerDraftStoreState,
+const composerDraftStorage = createComposerDraftPersistStorage<PersistedComposerDraftStoreState>({
+  debounceMs: COMPOSER_PERSIST_DEBOUNCE_MS,
 });
+
+// IndexedDB commits are asynchronous, but starting the final pending write on both lifecycle
+// signals gives desktop and installed-PWA shells the widest reliable recovery window.
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  const flushComposerDrafts = () => {
+    void composerDraftStorage.flush();
+  };
+  window.addEventListener("pagehide", flushComposerDrafts);
+  window.addEventListener("beforeunload", flushComposerDrafts);
+}
 
 /**
  * Composer content keyed by either a draft session (`DraftId`) or a real server
@@ -1855,27 +1851,7 @@ function normalizeCurrentPersistedComposerDraftStoreState(
   };
 }
 
-function readPersistedAttachmentIdsFromStorage(threadKey: string): string[] {
-  if (threadKey.length === 0) {
-    return [];
-  }
-  try {
-    const persisted = getLocalStorageItem(
-      COMPOSER_DRAFT_STORAGE_KEY,
-      PersistedComposerDraftStoreStorage,
-    );
-    if (!persisted || persisted.version !== COMPOSER_DRAFT_STORAGE_VERSION) {
-      return [];
-    }
-    return (persisted.state.draftsByThreadKey[threadKey]?.attachments ?? []).map(
-      (attachment) => attachment.id,
-    );
-  } catch {
-    return [];
-  }
-}
-
-function verifyPersistedAttachments(
+async function verifyPersistedAttachments(
   threadKey: string,
   attachments: PersistedComposerAttachment[],
   set: (
@@ -1887,14 +1863,12 @@ function verifyPersistedAttachments(
         ) => ComposerDraftStoreState | Partial<ComposerDraftStoreState>),
     replace?: false,
   ) => void,
-): void {
-  let persistedIdSet = new Set<string>();
-  try {
-    composerDebouncedStorage.flush();
-    persistedIdSet = new Set(readPersistedAttachmentIdsFromStorage(threadKey));
-  } catch {
-    persistedIdSet = new Set();
-  }
+): Promise<void> {
+  const persistedIdSet = await composerDraftStorage.hasPersistedAttachments(
+    COMPOSER_DRAFT_STORAGE_KEY,
+    threadKey,
+    attachments.map((attachment) => attachment.id),
+  );
   set((state) => {
     const current = state.draftsByThreadKey[threadKey];
     if (!current) {
@@ -2998,9 +2972,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             }
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
-          Promise.resolve().then(() => {
-            verifyPersistedAttachments(threadKey, attachments, set);
-          });
+          void verifyPersistedAttachments(threadKey, attachments, set);
         },
         clearComposerContent: (threadRef) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
@@ -3034,7 +3006,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
     {
       name: COMPOSER_DRAFT_STORAGE_KEY,
       version: COMPOSER_DRAFT_STORAGE_VERSION,
-      storage: createJSONStorage(() => composerDebouncedStorage),
+      storage: composerDraftStorage,
       migrate: migratePersistedComposerDraftStoreState,
       partialize: partializeComposerDraftStoreState,
       merge: (persistedState, currentState) => {

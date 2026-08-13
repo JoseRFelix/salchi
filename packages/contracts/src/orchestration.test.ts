@@ -19,7 +19,7 @@ import {
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
   OrchestrationSession,
-  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  CHAT_IMAGE_ATTACHMENT_MAX_BYTES,
   PROVIDER_SEND_TURN_MAX_PDF_BYTES,
   ProjectCreateCommand,
   ThreadMetaUpdatedPayload,
@@ -356,7 +356,7 @@ it.effect("rejects invalid assistant image attachment metadata", () =>
             id: "thread-1-attachment-1",
             name: "result.png",
             mimeType: "image/png",
-            sizeBytes: PROVIDER_SEND_TURN_MAX_IMAGE_BYTES + 1,
+            sizeBytes: CHAT_IMAGE_ATTACHMENT_MAX_BYTES + 1,
           },
         ],
         createdAt: "2026-01-01T00:00:00.000Z",
@@ -364,7 +364,7 @@ it.effect("rejects invalid assistant image attachment metadata", () =>
     );
 
     assert.match(failureText(invalidMime), /mimeType|image\/|text\/plain/i);
-    assert.match(failureText(oversized), /sizeBytes|10485760|less than or equal/i);
+    assert.match(failureText(oversized), /sizeBytes|67108864|less than or equal/i);
   }),
 );
 

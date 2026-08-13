@@ -39,6 +39,7 @@ import * as CodexRpc from "effect-codex-app-server/rpc";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { resolveSpawnCommand } from "@salchi/shared/shell";
 import { terminateChildProcess } from "@salchi/shared/childProcess";
+import { registerManagedChildProcess } from "../../process/ManagedChildProcessRegistry.ts";
 
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
@@ -71,7 +72,6 @@ const BENIGN_ERROR_LOG_SNIPPETS = [
   "state db record_discrepancy: find_thread_path_by_id_str_in_subdir, falling_back",
 ];
 const CODEX_APP_SERVER_FORCE_KILL_AFTER = "2 seconds" as const;
-const CODEX_USAGE_REFRESH_INTERVAL = Duration.seconds(30);
 export const CODEX_USAGE_REFRESH_TIMEOUT = Duration.seconds(10);
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
@@ -126,6 +126,7 @@ export interface CodexSessionRuntimeOptions {
   readonly homePath?: string;
   readonly environment?: NodeJS.ProcessEnv;
   readonly cwd: string;
+  readonly processRegistryDirectory?: string;
   readonly runtimeMode: RuntimeMode;
   readonly model?: string;
   readonly serviceTier?: CodexServiceTier | undefined;
@@ -889,6 +890,7 @@ export interface MakeCodexAppServerClientOptions {
   readonly binaryPath: string;
   readonly homePath?: string;
   readonly cwd: string;
+  readonly processRegistryDirectory?: string;
   readonly environment?: NodeJS.ProcessEnv;
 }
 
@@ -936,13 +938,19 @@ export const makeCodexAppServerClient = (
         ),
       );
 
-    yield* Scope.addFinalizer(
-      clientScope,
-      terminateChildProcess(child, {
-        gracefulTimeout: CODEX_APP_SERVER_FORCE_KILL_AFTER,
-        forceTimeout: CODEX_APP_SERVER_FORCE_KILL_AFTER,
-      }).pipe(Effect.ignore),
-    );
+    const terminate = terminateChildProcess(child, {
+      gracefulTimeout: CODEX_APP_SERVER_FORCE_KILL_AFTER,
+      forceTimeout: CODEX_APP_SERVER_FORCE_KILL_AFTER,
+    }).pipe(Effect.ignore);
+    if (options.processRegistryDirectory) {
+      yield* registerManagedChildProcess({
+        registryDirectory: options.processRegistryDirectory,
+        childPid: Number(child.pid),
+        terminate,
+      });
+    } else {
+      yield* Scope.addFinalizer(clientScope, terminate);
+    }
 
     const clientContext = yield* CodexClient.layerChildProcess(child).pipe(
       Layer.build,
@@ -982,6 +990,9 @@ export const makeCodexSessionRuntime = (
       binaryPath: options.binaryPath,
       ...(options.homePath ? { homePath: options.homePath } : {}),
       cwd: options.cwd,
+      ...(options.processRegistryDirectory
+        ? { processRegistryDirectory: options.processRegistryDirectory }
+        : {}),
       ...(options.environment ? { environment: options.environment } : {}),
     });
     const serverNotifications = yield* Queue.unbounded<CodexServerNotification>();
@@ -1092,14 +1103,9 @@ export const makeCodexSessionRuntime = (
       ),
     );
 
-    const startUsageRefreshLoop = refreshAccountRateLimitsBestEffort.pipe(
-      Effect.andThen(
-        Effect.forever(
-          Effect.sleep(CODEX_USAGE_REFRESH_INTERVAL).pipe(
-            Effect.andThen(refreshAccountRateLimitsBestEffort),
-          ),
-        ),
-      ),
+    // Ongoing usage polling is provider-scoped so opening more sessions cannot multiply account
+    // requests. Keep one non-blocking initial read to populate the session immediately.
+    const startInitialUsageRefresh = refreshAccountRateLimitsBestEffort.pipe(
       Effect.forkIn(runtimeScope),
     );
 
@@ -1667,7 +1673,7 @@ export const makeCodexSessionRuntime = (
       } satisfies ProviderSession;
       yield* Ref.set(sessionRef, session);
       yield* emitSessionEvent("session/ready", "Codex App Server session ready.");
-      yield* startUsageRefreshLoop;
+      yield* startInitialUsageRefresh;
       return session;
     });
 

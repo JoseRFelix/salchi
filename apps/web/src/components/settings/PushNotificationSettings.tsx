@@ -5,9 +5,9 @@ import {
   disablePushNotifications,
   enablePushNotifications,
   getBrowserPushSupport,
-  getCurrentPushSubscription,
   getNotificationPermission,
   pushSupportReasonLabel,
+  reconcileCurrentPushSubscription,
   sendTestPushNotification,
 } from "../../push/notifications";
 import { Button } from "../ui/button";
@@ -35,7 +35,7 @@ export function PushNotificationSettingsRow() {
 
     setIsLoading(true);
     try {
-      const subscription = await getCurrentPushSubscription();
+      const subscription = await reconcileCurrentPushSubscription();
       setIsSubscribed(subscription !== null);
       setPermission(getNotificationPermission());
     } catch {

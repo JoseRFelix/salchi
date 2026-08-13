@@ -30,7 +30,7 @@ class WebResumeLogAppendError extends Schema.TaggedErrorClass<WebResumeLogAppend
   "WebResumeLogAppendError",
   {
     message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
