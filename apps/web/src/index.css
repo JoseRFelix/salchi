@@ -421,7 +421,7 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown a {
-  color: var(--info-foreground);
+  color: var(--primary);
   text-decoration: none;
 }
 
