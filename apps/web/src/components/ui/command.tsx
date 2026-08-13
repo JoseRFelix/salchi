@@ -124,17 +124,10 @@ function CommandDialogViewport({
   );
 }
 
-function CommandDialogPopup({
-  className,
-  children,
-  onBackdropPointerDown,
-  ...props
-}: CommandDialogPrimitive.Popup.Props & {
-  onBackdropPointerDown?: React.PointerEventHandler<HTMLDivElement>;
-}) {
+function CommandDialogPopup({ className, children, ...props }: CommandDialogPrimitive.Popup.Props) {
   return (
     <CommandDialogPortal>
-      <CommandDialogBackdrop onPointerDown={onBackdropPointerDown} />
+      <CommandDialogBackdrop />
       <CommandDialogViewport>
         <CommandDialogPrimitive.Popup
           className={cn(

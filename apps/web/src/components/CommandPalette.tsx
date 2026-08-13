@@ -1486,9 +1486,6 @@ function OpenCommandPaletteDialog() {
         composerHandleRef?.current?.focusAtEnd();
         return false;
       }}
-      onBackdropPointerDown={() => {
-        setOpen(false);
-      }}
     >
       <Command
         key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${addProjectCloneFlow?.step ?? "none"}`}
