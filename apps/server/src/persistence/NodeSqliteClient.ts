@@ -186,6 +186,28 @@ const makeWithDatabase = Effect.fn("makeWithDatabase")(function* (
       executeValues(sql, params) {
         return runValues(sql, params);
       },
+      executeValuesUnprepared(sql, params) {
+        return Effect.try({
+          try: () => {
+            const statement = db.prepare(sql);
+            if (hasRows(statement)) {
+              statement.setReturnArrays(true);
+              return statement.all(...(params as any)) as unknown as ReadonlyArray<
+                ReadonlyArray<unknown>
+              >;
+            }
+            statement.run(...(params as any));
+            return [];
+          },
+          catch: (cause) =>
+            new SqlError({
+              reason: classifySqliteError(cause, {
+                message: "Failed to execute statement",
+                operation: "execute",
+              }),
+            }),
+        });
+      },
       executeUnprepared(sql, params, rowTransform) {
         const effect = runStatement(db.prepare(sql), params ?? [], false);
         return rowTransform ? Effect.map(effect, rowTransform) : effect;

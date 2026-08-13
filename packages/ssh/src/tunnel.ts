@@ -49,6 +49,15 @@ import {
   SshReadinessError,
 } from "./errors.ts";
 
+function isSshReadinessError(cause: unknown): cause is SshReadinessError {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "_tag" in cause &&
+    cause._tag === "SshReadinessError"
+  );
+}
+
 export const DEFAULT_REMOTE_PORT = 3773;
 const REMOTE_PORT_SCAN_WINDOW = 200;
 const SSH_READY_TIMEOUT_MS = 20_000;
@@ -238,7 +247,7 @@ function applyScriptPlaceholders(
 }
 
 export function describeReadinessCause(cause: unknown): unknown {
-  if (cause instanceof SshReadinessError) {
+  if (isSshReadinessError(cause)) {
     return {
       _tag: cause._tag,
       message: cause.message,
@@ -879,8 +888,9 @@ export const waitForHttpReady = Effect.fn("ssh/tunnel.waitForHttpReady")(functio
   const timeoutMs = input.timeoutMs ?? 30_000;
   const intervalMs = input.intervalMs ?? 100;
   const probeTimeoutMs = input.probeTimeoutMs ?? SSH_READY_PROBE_TIMEOUT_MS;
-  const retryPolicy = Schedule.spaced(Duration.millis(intervalMs)).pipe(
-    Schedule.take(Math.max(0, Math.ceil(timeoutMs / intervalMs))),
+  const retryPolicy = Schedule.addDelay(
+    Schedule.recurs(Math.max(0, Math.ceil(timeoutMs / intervalMs))),
+    () => Effect.succeed(Duration.millis(intervalMs)),
   );
   const requestUrl = new URL(input.path ?? "/", input.baseUrl).toString();
   const client = yield* HttpClient.HttpClient;
@@ -926,7 +936,7 @@ export const waitForHttpReady = Effect.fn("ssh/tunnel.waitForHttpReady")(functio
         });
       }).pipe(
         Effect.mapError((cause) =>
-          cause instanceof SshReadinessError
+          isSshReadinessError(cause)
             ? cause
             : new SshReadinessError({
                 message: `Backend readiness probe failed at ${requestUrl}.`,
@@ -947,7 +957,7 @@ export const waitForHttpReady = Effect.fn("ssh/tunnel.waitForHttpReady")(functio
 
   const result = yield* readinessClient.execute(HttpClientRequest.get(requestUrl)).pipe(
     Effect.mapError((cause) =>
-      cause instanceof SshReadinessError
+      isSshReadinessError(cause)
         ? cause
         : new SshReadinessError({
             message: `Backend readiness probe failed at ${requestUrl}.`,

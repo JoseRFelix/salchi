@@ -3,7 +3,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as References from "effect/References";
 import * as Tracer from "effect/Tracer";
-import { OtlpMetrics, OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
+import {
+  OtlpExporter,
+  OtlpMetrics,
+  OtlpSerialization,
+  OtlpTracer,
+} from "effect/unstable/observability";
 
 import { ServerConfig } from "../../config.ts";
 import { ServerLoggerLive } from "../../serverLogger.ts";
@@ -83,4 +88,4 @@ export const ObservabilityLive = Layer.unwrap(
 
     return Layer.mergeAll(ServerLoggerLive, traceReferencesLayer, tracerLayer, metricsLayer);
   }),
-);
+).pipe(Layer.provideMerge(OtlpExporter.layerFlusher));
