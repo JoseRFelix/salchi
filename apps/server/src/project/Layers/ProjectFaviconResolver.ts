@@ -7,6 +7,7 @@ import {
   ProjectFaviconResolver,
   type ProjectFaviconResolverShape,
 } from "../Services/ProjectFaviconResolver.ts";
+import { isSafeImageFileName } from "../../imageMime.ts";
 
 // Well-known favicon paths checked in order.
 const FAVICON_CANDIDATES = [
@@ -77,7 +78,7 @@ export const makeProjectFaviconResolver = Effect.gen(function* () {
     candidates: ReadonlyArray<string>,
   ): Effect.fn.Return<string | null> {
     for (const candidate of candidates) {
-      if (!isPathWithinProject(projectCwd, candidate)) {
+      if (!isPathWithinProject(projectCwd, candidate) || !isSafeImageFileName(candidate)) {
         continue;
       }
       const stats = yield* fileSystem
