@@ -6514,14 +6514,35 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("does not trust a cached working state after an offline mobile PWA restart", async () => {
-    emulateStandalonePwa();
-
-    const snapshot = createSnapshotForTargetUser({
+  it("hydrates the last cached working state until the server reconciles it", async () => {
+    const runningSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-stale-working-cache-test" as MessageId,
-      targetText: "stale working cached conversation",
+      targetText: "working cached conversation",
       sessionStatus: "running",
     });
+    const snapshot: OrchestrationReadModel = {
+      ...runningSnapshot,
+      threads: runningSnapshot.threads.map((entry) =>
+        entry.id === THREAD_ID && entry.latestTurn
+          ? {
+              ...entry,
+              activities: [
+                ...entry.activities,
+                {
+                  id: EventId.make("activity-cached-working-state"),
+                  tone: "info",
+                  kind: "step",
+                  summary: "Inspecting cached thread state",
+                  payload: null,
+                  turnId: entry.latestTurn.turnId,
+                  sequence: 1,
+                  createdAt: isoAt(180),
+                },
+              ],
+            }
+          : entry,
+      ),
+    };
     const thread = snapshot.threads.find((entry) => entry.id === THREAD_ID);
     expect(thread?.latestTurn).not.toBeNull();
     const cachedSession: NonNullable<EnvironmentState["threadSessionById"][ThreadId]> = {
@@ -6553,13 +6574,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
     );
     hydrateOrchestrationStartupCache();
 
-    const originalOnlineDescriptor = Object.getOwnPropertyDescriptor(navigator, "onLine");
-    Object.defineProperty(navigator, "onLine", {
-      configurable: true,
-      get: () => false,
-    });
-    window.dispatchEvent(new Event("offline"));
-
     let mounted: MountedChatView | null = null;
     try {
       mounted = await mountChatView({
@@ -6578,21 +6592,53 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
       });
 
-      await expect.element(page.getByText("stale working cached conversation")).toBeInTheDocument();
-      expect(document.body.textContent).not.toContain("Working for");
+      await expect.element(page.getByText("working cached conversation")).toBeInTheDocument();
+      expect(document.body.textContent).toContain("Working for");
       const sidebarTrigger = document.querySelector<HTMLButtonElement>('[data-sidebar="trigger"]');
       expect(sidebarTrigger).not.toBeNull();
       sidebarTrigger?.click();
       await expect.element(page.getByTestId(`thread-title-${THREAD_ID}`)).toBeInTheDocument();
+      await expect.element(page.getByLabelText("Working")).toBeInTheDocument();
+
+      await waitForWsClient();
+      const completedAt = isoAt(240);
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        updatedAt: completedAt,
+        threads: fixture.snapshot.threads.map((entry) =>
+          entry.id === THREAD_ID
+            ? {
+                ...entry,
+                latestTurn: entry.latestTurn
+                  ? {
+                      ...entry.latestTurn,
+                      state: "completed",
+                      completedAt,
+                    }
+                  : null,
+                session: entry.session
+                  ? {
+                      ...entry.session,
+                      status: "ready",
+                      activeTurnId: null,
+                      updatedAt: completedAt,
+                    }
+                  : null,
+                updatedAt: completedAt,
+              }
+            : entry,
+        ),
+      };
+      sendShellThreadUpsert(THREAD_ID);
+
       await expect.element(page.getByLabelText("Working")).not.toBeInTheDocument();
+      await vi.waitFor(() => {
+        expect(document.body.textContent).not.toContain("Working for");
+        expect(document.body.textContent).toContain("Worked");
+      });
     } finally {
       await mounted?.cleanup();
-      if (originalOnlineDescriptor) {
-        Object.defineProperty(navigator, "onLine", originalOnlineDescriptor);
-      } else {
-        Reflect.deleteProperty(navigator, "onLine");
-      }
-      window.dispatchEvent(new Event("online"));
     }
   });
 
