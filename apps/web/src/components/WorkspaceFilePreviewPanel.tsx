@@ -83,6 +83,7 @@ import { Toggle } from "./ui/toggle";
 const FILE_PREVIEW_LINE_HEIGHT = 20;
 const FILE_PREVIEW_VIRTUALIZER_CLASS_NAME = "workspace-file-preview-virtualizer";
 const FILE_SAVE_DEBOUNCE_MS = 500;
+const WORKSPACE_VIDEO_PREVIEW_SIZE_CLASS_NAME = "max-h-[min(24rem,60vh)] max-w-[min(100%,32rem)]";
 // A tap counts as a click as long as the finger barely moves; anything larger is a scroll.
 const FILE_PREVIEW_GUTTER_TAP_SLOP_PX = 10;
 
@@ -635,8 +636,8 @@ function WorkspaceVideoPreview(props: { src: string; label: string }) {
           data-load-state={loadState}
           className={
             loadState === "loaded"
-              ? "max-h-full max-w-full bg-black object-contain"
-              : "invisible pointer-events-none max-h-full max-w-full bg-black object-contain opacity-0"
+              ? `${WORKSPACE_VIDEO_PREVIEW_SIZE_CLASS_NAME} rounded-md bg-black object-contain`
+              : `invisible pointer-events-none ${WORKSPACE_VIDEO_PREVIEW_SIZE_CLASS_NAME} rounded-md bg-black object-contain opacity-0`
           }
           onLoadedMetadata={() => setLoadState("loaded")}
           onCanPlay={() => setLoadState("loaded")}
