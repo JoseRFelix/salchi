@@ -112,6 +112,7 @@ function makeReadModel(
       hasActionableProposedPlan: false,
       latestTurn: null,
       messages: [],
+      queuedTurns: [],
       session: thread.session,
       activities: thread.activities ?? [],
       proposedPlans: [],
