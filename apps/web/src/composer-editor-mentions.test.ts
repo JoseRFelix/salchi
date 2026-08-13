@@ -65,6 +65,28 @@ describe("splitPromptIntoComposerSegments", () => {
     ]);
   });
 
+  it("accepts a file-link label at the length cap", () => {
+    const label = `${"a".repeat(508)}.tsx`;
+    expect(splitPromptIntoComposerSegments(`see [${label}](src/${label}) ok`)).toContainEqual({
+      type: "mention",
+      path: `src/${label}`,
+      source: `[${label}](src/${label})`,
+    });
+  });
+
+  it("leaves a file-link label past the cap as text", () => {
+    const label = `${"a".repeat(509)}.tsx`;
+    expect(splitPromptIntoComposerSegments(`see [${label}](src/${label}) ok`)).toEqual([
+      { type: "text", text: `see [${label}](src/${label}) ok` },
+    ]);
+  });
+
+  it("stays fast on unterminated bracket runs", () => {
+    const started = performance.now();
+    expect(splitPromptIntoComposerSegments(" [[".repeat(40_000))).toHaveLength(1);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
   it("does not turn normal web links into file mention segments", () => {
     expect(
       splitPromptIntoComposerSegments("Read [the docs](https://example.com/docs) first"),
