@@ -36,6 +36,18 @@ function activityIdentity(
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+function subagentActivityIsTerminal(activity: OrchestrationThreadActivity): boolean {
+  if (!isRecord(activity.payload)) {
+    return false;
+  }
+  return (
+    activity.payload.status === "completed" ||
+    activity.payload.status === "failed" ||
+    activity.payload.status === "stopped" ||
+    activity.payload.status === "interrupted"
+  );
+}
+
 export function hasLiveBackgroundActivity(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): boolean {
@@ -51,7 +63,13 @@ export function hasLiveBackgroundActivity(
       if (taskId) liveTasks.delete(taskId);
     } else if (activity.kind === "subagent.started" || activity.kind === "subagent.updated") {
       const subagentId = activityIdentity(activity, "subagentId");
-      if (subagentId) liveSubagents.add(subagentId);
+      if (subagentId) {
+        if (subagentActivityIsTerminal(activity)) {
+          liveSubagents.delete(subagentId);
+        } else {
+          liveSubagents.add(subagentId);
+        }
+      }
     } else if (activity.kind === "subagent.completed") {
       const subagentId = activityIdentity(activity, "subagentId");
       if (subagentId) liveSubagents.delete(subagentId);

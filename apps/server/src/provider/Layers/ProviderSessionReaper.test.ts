@@ -27,7 +27,10 @@ import { ProviderValidationError } from "../Errors.ts";
 import { ProviderSessionReaper } from "../Services/ProviderSessionReaper.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
-import { makeProviderSessionReaperLive } from "./ProviderSessionReaper.ts";
+import {
+  hasLiveBackgroundActivity,
+  makeProviderSessionReaperLive,
+} from "./ProviderSessionReaper.ts";
 
 const defaultModelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
@@ -244,6 +247,32 @@ describe("ProviderSessionReaper", () => {
     runtime = ManagedRuntime.make(layer);
     return { stopSession, stoppedThreadIds };
   }
+
+  it("treats terminal subagent updates as settled background work", () => {
+    const now = "2026-01-01T00:00:00.000Z";
+    expect(
+      hasLiveBackgroundActivity([
+        {
+          id: EventId.make("event-reaper-subagent-started"),
+          tone: "info",
+          kind: "subagent.started",
+          summary: "Subagent started",
+          payload: { subagentId: "background-agent", status: "running" },
+          turnId: null,
+          createdAt: now,
+        },
+        {
+          id: EventId.make("event-reaper-subagent-settled"),
+          tone: "info",
+          kind: "subagent.updated",
+          summary: "Subagent completed",
+          payload: { subagentId: "background-agent", status: "completed" },
+          turnId: null,
+          createdAt: now,
+        },
+      ]),
+    ).toBe(false);
+  });
 
   it("reaps stale persisted sessions without active turns", async () => {
     const threadId = ThreadId.make("thread-reaper-stale");
