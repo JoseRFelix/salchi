@@ -14,6 +14,7 @@ const {
   openWorkspaceFilePreviewSpy,
   parsePatchFilesMock,
   parsedFilesRef,
+  routeSearchRef,
   returnWorkspaceFilePanelBackSpy,
   sourceControlOpenRef,
   virtualizerRenderCalls,
@@ -36,6 +37,9 @@ const {
       unifiedLineCount: number;
     }>,
   },
+  routeSearchRef: {
+    current: { diff: "1", diffSource: "unstaged" } as Record<string, unknown>,
+  },
   returnWorkspaceFilePanelBackSpy: vi.fn(),
   sourceControlOpenRef: { current: false },
   virtualizerRenderCalls: [] as Array<{
@@ -57,7 +61,7 @@ vi.mock("@tanstack/react-router", () => ({
     return input?.select ? input.select(params) : params;
   }),
   useSearch: vi.fn((input?: { select?: (search: Record<string, unknown>) => unknown }) => {
-    const search = { diff: "1", diffSource: "unstaged" };
+    const search = routeSearchRef.current;
     return input?.select ? input.select(search) : search;
   }),
 }));
@@ -254,6 +258,7 @@ describe("DiffPanel", () => {
     openWorkspaceFilePreviewSpy.mockClear();
     parsePatchFilesMock.mockReset();
     parsedFilesRef.current = [];
+    routeSearchRef.current = { diff: "1", diffSource: "unstaged" };
     sourceControlOpenRef.current = false;
     workingTreeDiffRef.current = "diff --git a/src/App.tsx b/src/App.tsx";
     resetColorTheme();
@@ -282,6 +287,45 @@ describe("DiffPanel", () => {
         "src/utils.ts",
       ]);
     } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("retries selected-file scrolling after virtualized layout settles", async () => {
+    const selectedFilePath = "src/file-39.ts";
+    routeSearchRef.current = {
+      diff: "1",
+      diffFilePath: selectedFilePath,
+      diffSource: "unstaged",
+    };
+    parsedFilesRef.current = Array.from({ length: 40 }, (_, index) =>
+      fileDiff(`src/file-${String(index).padStart(2, "0")}.ts`),
+    );
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    let targetScrollAttempts = 0;
+    HTMLElement.prototype.scrollIntoView = function scrollIntoView() {
+      if (this.dataset.diffFilePath !== selectedFilePath) {
+        return;
+      }
+      targetScrollAttempts += 1;
+      if (targetScrollAttempts > 1) {
+        this.dataset.scrollTargetSettled = "true";
+      }
+    };
+
+    const screen = await render(<DiffPanel mode="sidebar" />);
+
+    try {
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector<HTMLElement>(
+            `[data-diff-file-path="${selectedFilePath}"][data-scroll-target-settled="true"]`,
+          ),
+        ).not.toBeNull();
+      });
+      expect(targetScrollAttempts).toBeGreaterThan(1);
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
       await screen.unmount();
     }
   });
