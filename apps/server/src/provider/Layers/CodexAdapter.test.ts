@@ -639,7 +639,6 @@ validationLayer("CodexAdapterLive validation", (it) => {
         binaryPath: "codex",
         cwd: process.cwd(),
         model: "gpt-5.3-codex",
-        processRegistryDirectory: path.join(process.cwd(), "caches", "codex-app-servers"),
         providerInstanceId: ProviderInstanceId.make("codex"),
         serviceTier: "priority",
         threadId: asThreadId("thread-1"),
