@@ -249,6 +249,29 @@ export async function getCurrentPushSubscription(): Promise<PushSubscription | n
   return registration.pushManager.getSubscription();
 }
 
+async function registerPushSubscription(
+  subscription: PushSubscription,
+): Promise<WebPushSubscriptionJson> {
+  const subscriptionJson = toWebPushSubscriptionJson(subscription);
+  await ensureLocalApi().server.registerPushSubscription({
+    subscription: subscriptionJson,
+    userAgent: navigator.userAgent,
+  });
+  return subscriptionJson;
+}
+
+/**
+ * Rebinds a browser-owned subscription to the current authenticated server session.
+ *
+ * Browser push subscriptions outlive Salchi's auth sessions. Registering the same endpoint is
+ * intentionally idempotent server-side and transfers it away from an expired session.
+ */
+export async function reconcileCurrentPushSubscription(): Promise<WebPushSubscriptionJson | null> {
+  const registration = await getInspectableServiceWorkerRegistration();
+  const subscription = registration ? await registration.pushManager.getSubscription() : null;
+  return subscription ? registerPushSubscription(subscription) : null;
+}
+
 export async function enablePushNotifications(): Promise<WebPushSubscriptionJson> {
   const registration = await ensureSalchiServiceWorkerRegistration();
   const permission = await Notification.requestPermission();
@@ -270,12 +293,7 @@ export async function enablePushNotifications(): Promise<WebPushSubscriptionJson
     userVisibleOnly: true,
     applicationServerKey: urlBase64ToUint8Array(config.publicVapidKey),
   });
-  const subscriptionJson = toWebPushSubscriptionJson(subscription);
-  await ensureLocalApi().server.registerPushSubscription({
-    subscription: subscriptionJson,
-    userAgent: navigator.userAgent,
-  });
-  return subscriptionJson;
+  return registerPushSubscription(subscription);
 }
 
 export async function disablePushNotifications(): Promise<void> {
@@ -291,7 +309,7 @@ export async function disablePushNotifications(): Promise<void> {
 }
 
 export async function sendTestPushNotification(): Promise<ServerPushSendResult> {
-  const subscription = await getCurrentPushSubscription();
+  const subscription = await reconcileCurrentPushSubscription();
   if (!subscription) {
     throw new Error("Push notifications are not enabled in this browser.");
   }
