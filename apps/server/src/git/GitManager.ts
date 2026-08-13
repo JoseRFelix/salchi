@@ -34,6 +34,7 @@ import {
 import {
   detectSourceControlProviderFromGitRemoteUrl,
   mergeGitStatusParts,
+  normalizeGitRemoteUrl,
   resolveAutoFeatureBranchName,
   sanitizeBranchFragment,
   sanitizeFeatureBranchName,
@@ -101,6 +102,16 @@ const SHORT_SHA_LENGTH = 7;
 const TOAST_DESCRIPTION_MAX = 72;
 const STATUS_RESULT_CACHE_TTL = Duration.seconds(1);
 const STATUS_RESULT_CACHE_CAPACITY = 2_048;
+const PR_LOOKUP_CACHE_TTL = Duration.minutes(2);
+const PR_LOOKUP_FAILURE_BASE_TTL = Duration.seconds(20);
+const PR_LOOKUP_FAILURE_MAX_TTL = Duration.minutes(15);
+const PR_LOOKUP_CACHE_CAPACITY = 2_048;
+
+export function prLookupFailureTtl(consecutiveFailures: number): Duration.Duration {
+  const exponent = Math.max(0, consecutiveFailures - 1);
+  const backoffMs = Duration.toMillis(PR_LOOKUP_FAILURE_BASE_TTL) * Math.pow(2, exponent);
+  return Duration.min(Duration.millis(backoffMs), PR_LOOKUP_FAILURE_MAX_TTL);
+}
 type StripProgressContext<T> = T extends any ? Omit<T, "actionId" | "cwd" | "action"> : never;
 type GitActionProgressPayload = StripProgressContext<GitActionProgressEvent>;
 type GitActionProgressEmitter = (event: GitActionProgressPayload) => Effect.Effect<void, never>;
@@ -148,6 +159,7 @@ interface BranchHeadContext {
   headSelectors: ReadonlyArray<string>;
   preferredHeadSelector: string;
   remoteName: string | null;
+  headRemoteUrlKey: string | null;
   headRepositoryNameWithOwner: string | null;
   headRepositoryOwnerLogin: string | null;
   isCrossRepository: boolean;
@@ -757,6 +769,139 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     normalizeStatusCacheKey(cwd).pipe(
       Effect.flatMap((cacheKey) => Cache.invalidate(localStatusResultCache, cacheKey)),
     );
+  // Provider lookups are slower and more rate-limit-sensitive than local git
+  // status, so cache them independently. Explicit refreshes bump the epoch.
+  const prLookupEpochByCwd = new Map<string, number>();
+  const prLookupEpoch = (cwd: string) => prLookupEpochByCwd.get(cwd) ?? 0;
+  const bumpPrLookupEpoch = (cwd: string) =>
+    normalizeStatusCacheKey(cwd).pipe(
+      Effect.map((cacheKey) => {
+        prLookupEpochByCwd.set(cacheKey, prLookupEpoch(cacheKey) + 1);
+      }),
+    );
+  const prLookupCacheKey = (cwd: string, details: { branch: string; upstreamRef: string | null }) =>
+    [cwd, details.branch, details.upstreamRef ?? "", String(prLookupEpoch(cwd))].join("\u0000");
+  const prLookupFailureStreakByKey = new Map<string, number>();
+  const nextPrLookupFailureTtl = (key: string) => {
+    if (
+      !prLookupFailureStreakByKey.has(key) &&
+      prLookupFailureStreakByKey.size >= PR_LOOKUP_CACHE_CAPACITY
+    ) {
+      const oldestKey = prLookupFailureStreakByKey.keys().next().value;
+      if (oldestKey !== undefined) prLookupFailureStreakByKey.delete(oldestKey);
+    }
+    const streak = (prLookupFailureStreakByKey.get(key) ?? 0) + 1;
+    prLookupFailureStreakByKey.set(key, streak);
+    return prLookupFailureTtl(streak);
+  };
+  const prLookupCache = yield* Cache.makeWith(
+    (key: string) => {
+      const [cwd = "", branch = "", upstreamRef = ""] = key.split("\u0000");
+      const details = {
+        branch,
+        upstreamRef: upstreamRef.length > 0 ? upstreamRef : null,
+      };
+      return Effect.gen(function* () {
+        const headContext = yield* resolveBranchHeadContext(cwd, details);
+        const latest = yield* findLatestPrForHeadContext(cwd, headContext);
+        return { latest, headContext };
+      });
+    },
+    {
+      capacity: PR_LOOKUP_CACHE_CAPACITY,
+      timeToLive: (exit, key) => {
+        if (Exit.isSuccess(exit)) {
+          prLookupFailureStreakByKey.delete(key);
+          return PR_LOOKUP_CACHE_TTL;
+        }
+        return nextPrLookupFailureTtl(key);
+      },
+    },
+  );
+  interface LastKnownPr {
+    readonly pr: ReturnType<typeof toStatusPr> | null;
+    readonly upstreamRef: string | null;
+    readonly headBranch: string;
+    readonly remoteName: string | null;
+    readonly headRemoteUrlKey: string | null;
+  }
+  const lastKnownPrByBranchKey = new Map<string, LastKnownPr>();
+  const rememberLastKnownPr = (branchKey: string, entry: LastKnownPr) => {
+    if (
+      !lastKnownPrByBranchKey.has(branchKey) &&
+      lastKnownPrByBranchKey.size >= PR_LOOKUP_CACHE_CAPACITY
+    ) {
+      const oldestKey = lastKnownPrByBranchKey.keys().next().value;
+      if (oldestKey !== undefined) lastKnownPrByBranchKey.delete(oldestKey);
+    }
+    lastKnownPrByBranchKey.set(branchKey, entry);
+  };
+  const resolveLastKnownPr = (
+    branchKey: string,
+    current: Pick<LastKnownPr, "upstreamRef" | "headBranch" | "remoteName" | "headRemoteUrlKey">,
+  ): ReturnType<typeof toStatusPr> | null => {
+    const lastKnown = lastKnownPrByBranchKey.get(branchKey);
+    if (!lastKnown || lastKnown.headBranch !== current.headBranch) return null;
+    if (lastKnown.headRemoteUrlKey !== null && current.headRemoteUrlKey !== null) {
+      return lastKnown.headRemoteUrlKey === current.headRemoteUrlKey ? lastKnown.pr : null;
+    }
+    if (
+      lastKnown.upstreamRef !== null &&
+      current.upstreamRef !== null &&
+      lastKnown.remoteName !== null &&
+      current.remoteName !== null
+    ) {
+      return lastKnown.remoteName === current.remoteName ? lastKnown.pr : null;
+    }
+    return lastKnown.pr;
+  };
+  const lookupStatusPr = Effect.fn("lookupStatusPr")(function* (
+    cwd: string,
+    details: { branch: string; upstreamRef: string | null; isDefaultBranch: boolean },
+  ) {
+    const branchKey = `${cwd}\u0000${details.branch}`;
+    return yield* Cache.get(prLookupCache, prLookupCacheKey(cwd, details)).pipe(
+      Effect.map(({ latest, headContext }) => {
+        if (!latest || (details.isDefaultBranch && latest.state !== "open")) {
+          return { pr: null, headContext };
+        }
+        return { pr: toStatusPr(latest), headContext };
+      }),
+      Effect.tap(({ pr, headContext }) =>
+        Effect.sync(() =>
+          rememberLastKnownPr(branchKey, {
+            pr,
+            upstreamRef: details.upstreamRef,
+            headBranch: headContext.headBranch,
+            remoteName: headContext.remoteName,
+            headRemoteUrlKey: headContext.headRemoteUrlKey,
+          }),
+        ),
+      ),
+      Effect.map(({ pr }) => pr),
+      Effect.catch((error) =>
+        Effect.logWarning("PR lookup failed; keeping last known PR state.").pipe(
+          Effect.annotateLogs({
+            operation: "lookupStatusPr",
+            branch: details.branch,
+            errorTag:
+              typeof error === "object" && error !== null && "_tag" in error
+                ? String(error._tag)
+                : typeof error,
+          }),
+          Effect.andThen(resolveBranchHeadContext(cwd, details)),
+          Effect.map((headContext) =>
+            resolveLastKnownPr(branchKey, {
+              upstreamRef: details.upstreamRef,
+              headBranch: headContext.headBranch,
+              remoteName: headContext.remoteName,
+              headRemoteUrlKey: headContext.headRemoteUrlKey,
+            }),
+          ),
+        ),
+      ),
+    );
+  });
   const readRemoteStatus = Effect.fn("readRemoteStatus")(function* (cwd: string) {
     const details = yield* gitCore
       .statusDetailsRemote(cwd)
@@ -767,19 +912,11 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
 
     const pr =
       details.branch !== null
-        ? yield* findLatestPr(cwd, {
+        ? yield* lookupStatusPr(cwd, {
             branch: details.branch,
             upstreamRef: details.upstreamRef,
-          }).pipe(
-            Effect.map((latest) => {
-              if (!latest) return null;
-              // On the default branch, only surface open PRs.
-              // Merged/closed matches are usually reverse-merge history, not the thread's PR context.
-              if (details.isDefaultBranch && latest.state !== "open") return null;
-              return toStatusPr(latest);
-            }),
-            Effect.catch(() => Effect.succeed(null)),
-          )
+            isDefaultBranch: details.isDefaultBranch,
+          })
         : null;
 
     return {
@@ -823,6 +960,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
   ) {
     if (!remoteName) {
       return {
+        remoteUrlKey: null,
         repositoryNameWithOwner: null,
         ownerLogin: null,
       };
@@ -831,6 +969,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     const remoteUrl = yield* readConfigValueNullable(cwd, `remote.${remoteName}.url`);
     const repositoryNameWithOwner = parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
     return {
+      remoteUrlKey: remoteUrl ? normalizeGitRemoteUrl(remoteUrl) : null,
       repositoryNameWithOwner,
       ownerLogin: parseRepositoryOwnerLogin(repositoryNameWithOwner),
     };
@@ -901,6 +1040,9 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
       preferredHeadSelector:
         ownerHeadSelector && isCrossRepository ? ownerHeadSelector : headBranch,
       remoteName,
+      headRemoteUrlKey:
+        remoteRepository.remoteUrlKey ??
+        (remoteName === null ? originRepository.remoteUrlKey : null),
       headRepositoryNameWithOwner: remoteRepository.repositoryNameWithOwner,
       headRepositoryOwnerLogin: remoteRepository.ownerLogin,
       isCrossRepository,
@@ -946,11 +1088,10 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     return null;
   });
 
-  const findLatestPr = Effect.fn("findLatestPr")(function* (
+  const findLatestPrForHeadContext = Effect.fn("findLatestPrForHeadContext")(function* (
     cwd: string,
-    details: { branch: string; upstreamRef: string | null },
+    headContext: BranchHeadContext,
   ) {
-    const headContext = yield* resolveBranchHeadContext(cwd, details);
     const parsedByNumber = new Map<number, PullRequestInfo>();
 
     for (const headSelector of headContext.headSelectors) {
@@ -1398,6 +1539,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     function* (cwd) {
       yield* invalidateLocalStatusResultCache(cwd);
       yield* invalidateRemoteStatusResultCache(cwd);
+      yield* bumpPrLookupEpoch(cwd);
     },
   );
 
