@@ -1,9 +1,22 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
-import { ServerProvider } from "./server.ts";
+import { ServerProvider, ServerProviders } from "./server.ts";
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
+const decodeServerProviders = Schema.decodeUnknownSync(ServerProviders);
+
+const baseProviderSnapshot = {
+  instanceId: "codex",
+  driver: "codex",
+  enabled: true,
+  installed: true,
+  version: "1.0.0",
+  status: "ready",
+  auth: { status: "authenticated" },
+  checkedAt: "2026-04-10T00:00:00.000Z",
+  models: [],
+};
 
 describe("ServerProvider", () => {
   it("defaults capability arrays when decoding provider snapshots", () => {
@@ -70,5 +83,15 @@ describe("ServerProvider", () => {
     });
 
     expect(parsed.continuation?.groupKey).toBe("codex:home:/Users/julius/.codex");
+  });
+
+  it("drops providers this build cannot decode instead of failing the array", () => {
+    const decodedBase = decodeServerProvider(baseProviderSnapshot);
+    const parsed = decodeServerProviders([
+      baseProviderSnapshot,
+      { ...baseProviderSnapshot, instanceId: "future", status: "some-future-status" },
+    ]);
+
+    expect(parsed).toEqual([decodedBase]);
   });
 });
