@@ -204,7 +204,11 @@ import {
   resolveEnvironmentOptionLabel,
 } from "./BranchToolbar.logic";
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
-import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
+import {
+  dismissThreadError,
+  isThreadErrorDismissed,
+  ThreadErrorBanner,
+} from "./chat/ThreadErrorBanner";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
@@ -1054,6 +1058,13 @@ export default function ChatView(props: ChatViewProps) {
     return activeParentThreadId;
   }, [activeParentThread, activeParentThreadId]);
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
+  const [, refreshThreadErrorDismissal] = useState(0);
+  const visibleThreadError =
+    activeThreadKey &&
+    activeThread?.error &&
+    !isThreadErrorDismissed(activeThreadKey, activeThread.error)
+      ? activeThread.error
+      : null;
   const activeThreadEnvironmentId = activeThreadRef?.environmentId ?? null;
   const activeThreadIdForTerminalSnapshot = activeThreadRef?.threadId ?? null;
   const navigateToActiveParentThread = useCallback(() => {
@@ -4945,8 +4956,13 @@ export default function ChatView(props: ChatViewProps) {
 
       {/* Thread error banner */}
       <ThreadErrorBanner
-        error={activeThread.error}
-        onDismiss={() => setThreadError(activeThread.id, null)}
+        error={visibleThreadError}
+        onDismiss={() => {
+          if (!activeThreadKey || !visibleThreadError) return;
+          dismissThreadError(activeThreadKey, visibleThreadError);
+          setThreadError(activeThread.id, null);
+          refreshThreadErrorDismissal((revision) => revision + 1);
+        }}
       />
       {/* Main content area with optional plan sidebar */}
       <div className="flex min-h-0 min-w-0 flex-1">
