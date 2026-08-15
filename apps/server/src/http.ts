@@ -640,6 +640,46 @@ export const cacheControlForStaticPath = (relativePath: string): string =>
     ? "public, max-age=31536000, immutable"
     : "no-cache";
 
+export type StaticContentEncoding = "br" | "gzip";
+
+const STATIC_CONTENT_ENCODINGS = ["br", "gzip"] as const;
+
+export function acceptedStaticContentEncodings(
+  acceptEncodingHeader: string | undefined,
+): ReadonlyArray<StaticContentEncoding> {
+  if (!acceptEncodingHeader?.trim()) return [];
+
+  const qualityByEncoding = new Map<string, number>();
+  for (const entry of acceptEncodingHeader.split(",")) {
+    const [rawEncoding, ...rawParameters] = entry.split(";");
+    const encoding = rawEncoding?.trim().toLowerCase();
+    if (!encoding) continue;
+
+    let quality = 1;
+    for (const rawParameter of rawParameters) {
+      const [rawName, rawValue] = rawParameter.split("=", 2);
+      if (rawName?.trim().toLowerCase() !== "q") continue;
+      const parsedQuality = Number(rawValue?.trim());
+      quality =
+        Number.isFinite(parsedQuality) && parsedQuality >= 0 && parsedQuality <= 1
+          ? parsedQuality
+          : 0;
+      break;
+    }
+    qualityByEncoding.set(encoding, Math.max(qualityByEncoding.get(encoding) ?? 0, quality));
+  }
+
+  const wildcardQuality = qualityByEncoding.get("*") ?? 0;
+  return STATIC_CONTENT_ENCODINGS.map((encoding, preference) => ({
+    encoding,
+    preference,
+    quality: qualityByEncoding.get(encoding) ?? wildcardQuality,
+  }))
+    .filter(({ quality }) => quality > 0)
+    .sort((left, right) => right.quality - left.quality || left.preference - right.preference)
+    .map(({ encoding }) => encoding);
+}
+
 export const staticAndDevRouteLayer = HttpRouter.add(
   "GET",
   "*",
@@ -668,6 +708,26 @@ export const staticAndDevRouteLayer = HttpRouter.add(
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const staticRoot = path.resolve(staticDir);
+    const acceptedContentEncodings = acceptedStaticContentEncodings(
+      request.headers["accept-encoding"],
+    );
+    const readStaticRepresentation = (sourcePath: string) =>
+      Effect.gen(function* () {
+        for (const contentEncoding of acceptedContentEncodings) {
+          const extension = contentEncoding === "gzip" ? "gz" : contentEncoding;
+          const compressedData = yield* fileSystem
+            .readFile(`${sourcePath}.${extension}`)
+            .pipe(Effect.catch(() => Effect.succeed(null)));
+          if (compressedData) {
+            return { data: compressedData, contentEncoding } as const;
+          }
+        }
+
+        const data = yield* fileSystem
+          .readFile(sourcePath)
+          .pipe(Effect.catch(() => Effect.succeed(null)));
+        return data ? ({ data, contentEncoding: null } as const) : null;
+      });
     const staticRequestPath = url.value.pathname === "/" ? "/index.html" : url.value.pathname;
     const rawStaticRelativePath = staticRequestPath.replace(/^[/\\]+/, "");
     const hasRawLeadingParentSegment = rawStaticRelativePath.startsWith("..");
@@ -704,34 +764,38 @@ export const staticAndDevRouteLayer = HttpRouter.add(
       .pipe(Effect.catch(() => Effect.succeed(null)));
     if (!fileInfo || fileInfo.type !== "File") {
       const indexPath = path.resolve(staticRoot, "index.html");
-      const indexData = yield* fileSystem
-        .readFile(indexPath)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-      if (!indexData) {
+      const indexRepresentation = yield* readStaticRepresentation(indexPath);
+      if (!indexRepresentation) {
         return HttpServerResponse.text("Not Found", { status: 404 });
       }
-      return HttpServerResponse.uint8Array(indexData, {
+      return HttpServerResponse.uint8Array(indexRepresentation.data, {
         status: 200,
         contentType: "text/html; charset=utf-8",
         headers: {
           "Cache-Control": "no-cache",
+          Vary: "Accept-Encoding",
+          ...(indexRepresentation.contentEncoding
+            ? { "Content-Encoding": indexRepresentation.contentEncoding }
+            : {}),
         },
       });
     }
 
     const contentType = Mime.getType(filePath) ?? "application/octet-stream";
-    const data = yield* fileSystem
-      .readFile(filePath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!data) {
+    const representation = yield* readStaticRepresentation(filePath);
+    if (!representation) {
       return HttpServerResponse.text("Internal Server Error", { status: 500 });
     }
 
-    return HttpServerResponse.uint8Array(data, {
+    return HttpServerResponse.uint8Array(representation.data, {
       status: 200,
       contentType,
       headers: {
         "Cache-Control": cacheControlForStaticPath(staticRelativePath),
+        Vary: "Accept-Encoding",
+        ...(representation.contentEncoding
+          ? { "Content-Encoding": representation.contentEncoding }
+          : {}),
       },
     });
   }),

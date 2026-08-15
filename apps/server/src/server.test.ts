@@ -1115,6 +1115,49 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("serves precompressed static assets using the requested content encoding", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const staticDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "salchi-router-static-compression-",
+      });
+      const assetsDir = path.join(staticDir, "assets");
+      const assetPath = path.join(assetsDir, "app-build123.js");
+      const source = "const mobilePayload = 'precompressed';\n".repeat(100);
+      yield* fileSystem.makeDirectory(assetsDir);
+      yield* fileSystem.writeFileString(assetPath, source);
+
+      const { brotliCompressSync, gzipSync } = yield* Effect.promise(() => import("node:zlib"));
+      yield* fileSystem.writeFile(`${assetPath}.br`, brotliCompressSync(source));
+      yield* fileSystem.writeFile(`${assetPath}.gz`, gzipSync(source));
+
+      yield* buildAppUnderTest({ config: { staticDir } });
+
+      const brotliResponse = yield* HttpClient.get("/assets/app-build123.js", {
+        headers: { "accept-encoding": "gzip, br" },
+      });
+      assert.equal(brotliResponse.status, 200);
+      assert.equal(brotliResponse.headers["content-encoding"], "br");
+      assert.equal(brotliResponse.headers.vary, "Accept-Encoding");
+      assert.equal(yield* brotliResponse.text, source);
+
+      const gzipResponse = yield* HttpClient.get("/assets/app-build123.js", {
+        headers: { "accept-encoding": "br;q=0.5, gzip;q=1" },
+      });
+      assert.equal(gzipResponse.status, 200);
+      assert.equal(gzipResponse.headers["content-encoding"], "gzip");
+      assert.equal(yield* gzipResponse.text, source);
+
+      const identityResponse = yield* HttpClient.get("/assets/app-build123.js", {
+        headers: { "accept-encoding": "br;q=0, gzip;q=0" },
+      });
+      assert.equal(identityResponse.status, 200);
+      assert.equal(identityResponse.headers["content-encoding"], undefined);
+      assert.equal(yield* identityResponse.text, source);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("redirects to dev URL when configured", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest({

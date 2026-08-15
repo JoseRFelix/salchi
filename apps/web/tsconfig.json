@@ -32,6 +32,7 @@
     "vercel.ts",
     "test",
     "../../scripts/lib/brand-assets.ts",
-    "../../scripts/lib/client-build-metadata.ts"
+    "../../scripts/lib/client-build-metadata.ts",
+    "../../scripts/lib/precompressed-assets.ts"
   ]
 }
