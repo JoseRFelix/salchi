@@ -277,6 +277,11 @@ const SourceProposedPlanReference = Schema.Struct({
   planId: OrchestrationProposedPlanId,
 });
 
+const RecoveryConfirmationRequired = Schema.Boolean.pipe(
+  Schema.withDecodingDefaultKey(Effect.succeed(false)),
+  Schema.withConstructorDefault(Effect.succeed(false)),
+);
+
 export const OrchestrationQueuedTurn = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
@@ -296,11 +301,7 @@ export const OrchestrationQueuedTurn = Schema.Struct({
       requestedAt: IsoDateTime,
     }),
   ),
-  recoveryConfirmationRequired: Schema.Boolean.pipe(
-    Schema.optionalKey,
-    Schema.withDecodingDefaultKey(Effect.succeed(false)),
-    Schema.withConstructorDefault(Effect.succeed(false)),
-  ),
+  recoveryConfirmationRequired: RecoveryConfirmationRequired,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1266,11 +1267,7 @@ export type ThreadQueuedTurnUpdatedPayload = typeof ThreadQueuedTurnUpdatedPaylo
 export const ThreadQueuedTurnCancelledPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
-  recoveryConfirmationRequired: Schema.Boolean.pipe(
-    Schema.optionalKey,
-    Schema.withDecodingDefaultKey(Effect.succeed(false)),
-    Schema.withConstructorDefault(Effect.succeed(false)),
-  ),
+  recoveryConfirmationRequired: RecoveryConfirmationRequired,
   cancelledAt: IsoDateTime,
 });
 export type ThreadQueuedTurnCancelledPayload = typeof ThreadQueuedTurnCancelledPayload.Type;

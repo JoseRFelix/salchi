@@ -243,6 +243,8 @@ const make = Effect.gen(function* () {
   const activeTurnStartThreadIds = new Set<string>();
   const observedRunningTurnThreadIds = new Set<string>();
   const queuedTurnPromotionMessageIdByThreadId = new Map<string, MessageId>();
+  const startupRecoveryBlockedThreadIds = new Set<string>();
+  let startupRecoveryInventoryUnavailable = false;
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -388,17 +390,24 @@ const make = Effect.gen(function* () {
   const dispatchQueuedTurnForThread = Effect.fn("dispatchQueuedTurnForThread")(function* (
     threadId: ThreadId,
   ) {
+    const threadKey = String(threadId);
+    // A failed startup recovery must keep the FIFO blocked. Reporting the
+    // queue as handled prevents later in-memory starts from overtaking it.
+    if (startupRecoveryInventoryUnavailable || startupRecoveryBlockedThreadIds.has(threadKey)) {
+      return true;
+    }
     if (yield* isThreadTurnBusy(threadId)) {
       return false;
     }
 
-    const threadKey = String(threadId);
     const queuedTurn = yield* projectionThreadQueuedTurnRepository.getOldestByThreadId({
       threadId,
     });
     if (Option.isNone(queuedTurn)) {
       return false;
     }
+    // A recovery-held turn owns the head of the FIFO until the user confirms
+    // or discards it, so later queued starts must remain blocked.
     if (queuedTurn.value.recoveryConfirmationRequired) {
       return true;
     }
@@ -1009,8 +1018,8 @@ const make = Effect.gen(function* () {
   const startNextAvailableTurnForThread = Effect.fn("startNextAvailableTurnForThread")(function* (
     threadId: ThreadId,
   ) {
-    const dispatchedQueuedTurn = yield* dispatchQueuedTurnForThread(threadId);
-    if (dispatchedQueuedTurn) {
+    const queuedTurnHandledOrBlocked = yield* dispatchQueuedTurnForThread(threadId);
+    if (queuedTurnHandledOrBlocked) {
       return;
     }
     yield* startNextQueuedTurnForThread(threadId);
@@ -1425,108 +1434,137 @@ const make = Effect.gen(function* () {
     }
 
     const recoveredAt = yield* nowIso;
-    for (const thread of recoveryThreads) {
-      const queuedMessageIds = new Set(thread.queuedTurns.map((turn) => String(turn.messageId)));
+    const recoverThreadAtStartup = Effect.fn("providerCommandReactor.recoverThreadAtStartup")(
+      function* (thread: (typeof recoveryThreads)[number]) {
+        const queuedMessageIds = new Set(thread.queuedTurns.map((turn) => String(turn.messageId)));
 
-      for (const queuedTurn of thread.queuedTurns) {
-        yield* orchestrationEngine.dispatch({
-          type: "thread.turn.hold-for-recovery",
-          commandId: yield* serverCommandId("startup-recovery-hold-queued-turn"),
-          threadId: thread.id,
-          message: {
-            messageId: queuedTurn.messageId,
-            role: "user",
-            text: queuedTurn.text,
-            attachments: queuedTurn.attachments,
-          },
-          ...(queuedTurn.modelSelection !== undefined
-            ? { modelSelection: queuedTurn.modelSelection }
-            : {}),
-          ...(queuedTurn.titleSeed !== undefined ? { titleSeed: queuedTurn.titleSeed } : {}),
-          runtimeMode: queuedTurn.runtimeMode,
-          interactionMode: queuedTurn.interactionMode,
-          ...(queuedTurn.sourceProposedPlan !== undefined
-            ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
-            : {}),
-          requestedAt: queuedTurn.createdAt,
-          createdAt: recoveredAt,
-        });
-      }
-
-      const pendingStarts = pendingStartsByThreadId.get(String(thread.id)) ?? [];
-      for (const pendingStart of pendingStarts) {
-        const messageId = pendingStart.messageId;
-        if (queuedMessageIds.has(String(messageId))) {
-          continue;
-        }
-        const projectedMessage = yield* projectionThreadMessageRepository.getByMessageId({
-          messageId,
-        });
-        if (Option.isNone(projectedMessage) || projectedMessage.value.role !== "user") {
-          yield* Effect.logWarning(
-            "discarding orphaned pending turn start without a user message",
-            {
-              threadId: thread.id,
-              messageId,
-            },
-          );
-          yield* projectionTurnRepository.deletePendingTurnStart({
+        for (const queuedTurn of thread.queuedTurns) {
+          yield* orchestrationEngine.dispatch({
+            type: "thread.turn.hold-for-recovery",
+            commandId: yield* serverCommandId("startup-recovery-hold-queued-turn"),
             threadId: thread.id,
+            message: {
+              messageId: queuedTurn.messageId,
+              role: "user",
+              text: queuedTurn.text,
+              attachments: queuedTurn.attachments,
+            },
+            ...(queuedTurn.modelSelection !== undefined
+              ? { modelSelection: queuedTurn.modelSelection }
+              : {}),
+            ...(queuedTurn.titleSeed !== undefined ? { titleSeed: queuedTurn.titleSeed } : {}),
+            runtimeMode: queuedTurn.runtimeMode,
+            interactionMode: queuedTurn.interactionMode,
+            ...(queuedTurn.sourceProposedPlan !== undefined
+              ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
+              : {}),
+            requestedAt: queuedTurn.createdAt,
+            createdAt: recoveredAt,
+          });
+        }
+
+        const pendingStarts = pendingStartsByThreadId.get(String(thread.id)) ?? [];
+        for (const pendingStart of pendingStarts) {
+          const messageId = pendingStart.messageId;
+          if (queuedMessageIds.has(String(messageId))) {
+            continue;
+          }
+          const projectedMessage = yield* projectionThreadMessageRepository.getByMessageId({
             messageId,
           });
-          continue;
+          if (Option.isNone(projectedMessage) || projectedMessage.value.role !== "user") {
+            yield* Effect.logWarning(
+              "discarding orphaned pending turn start without a user message",
+              {
+                threadId: thread.id,
+                messageId,
+              },
+            );
+            yield* projectionTurnRepository.deletePendingTurnStart({
+              threadId: thread.id,
+              messageId,
+            });
+            continue;
+          }
+
+          const message = projectedMessage.value;
+          yield* orchestrationEngine.dispatch({
+            type: "thread.turn.hold-for-recovery",
+            commandId: yield* serverCommandId("startup-recovery-hold-pending-turn"),
+            threadId: thread.id,
+            message: {
+              messageId,
+              role: "user",
+              text: message.text,
+              attachments: message.attachments ?? [],
+            },
+            modelSelection: thread.modelSelection,
+            runtimeMode: thread.runtimeMode,
+            interactionMode: thread.interactionMode,
+            ...(pendingStart.sourceProposedPlanThreadId !== null &&
+            pendingStart.sourceProposedPlanId !== null
+              ? {
+                  sourceProposedPlan: {
+                    threadId: pendingStart.sourceProposedPlanThreadId,
+                    planId: pendingStart.sourceProposedPlanId,
+                  },
+                }
+              : {}),
+            requestedAt: pendingStart.requestedAt,
+            createdAt: recoveredAt,
+          });
         }
 
-        const message = projectedMessage.value;
+        const projectedSession = thread.session;
+        if (!projectedSession || !hasProjectedActiveWork(projectedSession)) {
+          return;
+        }
         yield* orchestrationEngine.dispatch({
-          type: "thread.turn.hold-for-recovery",
-          commandId: yield* serverCommandId("startup-recovery-hold-pending-turn"),
+          type: "thread.session.set",
+          commandId: yield* serverCommandId("startup-recovery-interrupt-session"),
           threadId: thread.id,
-          message: {
-            messageId,
-            role: "user",
-            text: message.text,
-            attachments: message.attachments ?? [],
+          session: {
+            ...projectedSession,
+            status: "interrupted",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: recoveredAt,
           },
-          modelSelection: thread.modelSelection,
-          runtimeMode: thread.runtimeMode,
-          interactionMode: thread.interactionMode,
-          ...(pendingStart.sourceProposedPlanThreadId !== null &&
-          pendingStart.sourceProposedPlanId !== null
-            ? {
-                sourceProposedPlan: {
-                  threadId: pendingStart.sourceProposedPlanThreadId,
-                  planId: pendingStart.sourceProposedPlanId,
-                },
-              }
-            : {}),
-          requestedAt: pendingStart.requestedAt,
           createdAt: recoveredAt,
         });
-      }
+      },
+    );
 
-      const projectedSession = thread.session;
-      if (!projectedSession || !hasProjectedActiveWork(projectedSession)) {
-        continue;
-      }
-      yield* orchestrationEngine.dispatch({
-        type: "thread.session.set",
-        commandId: yield* serverCommandId("startup-recovery-interrupt-session"),
-        threadId: thread.id,
-        session: {
-          ...projectedSession,
-          status: "interrupted",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: recoveredAt,
-        },
-        createdAt: recoveredAt,
-      });
-    }
+    const recoveryResults = yield* Effect.forEach(
+      recoveryThreads,
+      (thread) =>
+        recoverThreadAtStartup(thread).pipe(
+          Effect.as(true),
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) {
+              return Effect.interrupt;
+            }
+            return Effect.sync(() => {
+              startupRecoveryBlockedThreadIds.add(String(thread.id));
+            }).pipe(
+              Effect.andThen(
+                Effect.logWarning("failed to recover provider thread during server startup", {
+                  threadId: thread.id,
+                  cause: Cause.pretty(cause),
+                }),
+              ),
+              Effect.as(false),
+            );
+          }),
+        ),
+      { concurrency: 1 },
+    );
+    const recoveredThreads = recoveryThreads.filter((_, index) => recoveryResults[index] === true);
 
     yield* Effect.logInfo("recovered orphaned provider work during server startup", {
-      threadCount: recoveryThreads.length,
-      threadIds: recoveryThreads.map((thread) => thread.id),
+      threadCount: recoveredThreads.length,
+      threadIds: recoveredThreads.map((thread) => thread.id),
+      blockedThreadIds: [...startupRecoveryBlockedThreadIds],
     });
   });
 
@@ -1554,7 +1592,27 @@ const make = Effect.gen(function* () {
       Stream.runForEach(orchestrationEngine.streamDomainEvents, processEvent),
     );
 
-    yield* recoverInterruptedThreadsAtStartup().pipe(Effect.orDie);
+    const startupRecoveryAvailable = yield* recoverInterruptedThreadsAtStartup().pipe(
+      Effect.as(true),
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.interrupt;
+        }
+        return Effect.sync(() => {
+          startupRecoveryInventoryUnavailable = true;
+        }).pipe(
+          Effect.andThen(
+            Effect.logWarning("provider command reactor could not inspect startup recovery work", {
+              cause: Cause.pretty(cause),
+            }),
+          ),
+          Effect.as(false),
+        );
+      }),
+    );
+    if (!startupRecoveryAvailable) {
+      return;
+    }
 
     yield* Effect.gen(function* () {
       const queuedThreadIds =

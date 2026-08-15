@@ -293,6 +293,7 @@ function mapQueuedTurn(
       ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
       : {}),
     ...(queuedTurn.steering !== undefined ? { steering: queuedTurn.steering } : {}),
+    recoveryConfirmationRequired: queuedTurn.recoveryConfirmationRequired,
     createdAt: queuedTurn.createdAt,
     updatedAt: queuedTurn.updatedAt,
   };

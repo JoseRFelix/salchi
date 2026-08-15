@@ -59,6 +59,7 @@ import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
+import { OrchestrationCommandInvariantError } from "../Errors.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -189,6 +190,7 @@ describe("ProviderCommandReactor", () => {
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     readonly autoCompleteTurns?: boolean;
     readonly startReactor?: boolean;
+    readonly listSessionsDefect?: Error;
     readonly requiresNewThreadForModelChange?: boolean;
     readonly providerSnapshotOverrides?: Partial<ServerProvider>;
   }) {
@@ -401,7 +403,10 @@ describe("ProviderCommandReactor", () => {
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
-      listSessions: () => Effect.succeed(runtimeSessions),
+      listSessions: () =>
+        input?.listSessionsDefect
+          ? Effect.die(input.listSessionsDefect)
+          : Effect.succeed(runtimeSessions),
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
@@ -1516,6 +1521,129 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("keeps persisted queued turns blocked when startup recovery inventory is unavailable", async () => {
+    const harness = await createHarness({
+      startReactor: false,
+      listSessionsDefect: new Error("provider inventory unavailable"),
+    });
+    const threadId = ThreadId.make("thread-1");
+    const messageId = asMessageId("user-message-blocked-without-inventory");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.queue",
+        commandId: CommandId.make("cmd-queue-without-inventory"),
+        threadId,
+        message: {
+          messageId,
+          role: "user",
+          text: "do not dispatch without recovery inventory",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+
+    await expect(harness.startReactor()).resolves.toBeUndefined();
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.queuedTurns).toMatchObject([{ messageId, recoveryConfirmationRequired: false }]);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it("isolates startup recovery failure to its thread and blocks the unsafe FIFO", async () => {
+    const harness = await createHarness({ autoCompleteTurns: false, startReactor: false });
+    const firstThreadId = ThreadId.make("thread-1");
+    const secondThreadId = ThreadId.make("thread-2");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-create-second-recovery-thread"),
+        threadId: secondThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Second recovery thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: "2026-01-01T00:00:00.500Z",
+      }),
+    );
+
+    for (const [index, threadId] of [firstThreadId, secondThreadId].entries()) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make(`cmd-recovery-session-${index + 1}`),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId(`turn-recovery-${index + 1}`),
+            lastError: null,
+            updatedAt: `2026-01-01T00:00:0${index + 1}.000Z`,
+          },
+          createdAt: `2026-01-01T00:00:0${index + 1}.000Z`,
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.queue",
+          commandId: CommandId.make(`cmd-recovery-queue-${index + 1}`),
+          threadId,
+          message: {
+            messageId: asMessageId(`user-message-recovery-${index + 1}`),
+            role: "user",
+            text: `recover thread ${index + 1}`,
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: `2026-01-01T00:00:0${index + 3}.000Z`,
+        }),
+      );
+    }
+
+    const originalDispatch = harness.engine.dispatch;
+    const dispatchSpy = vi.spyOn(harness.engine, "dispatch").mockImplementation((command) => {
+      if (command.type === "thread.turn.hold-for-recovery" && command.threadId === firstThreadId) {
+        return Effect.fail(
+          new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "simulated per-thread startup recovery failure",
+          }),
+        );
+      }
+      return originalDispatch(command);
+    });
+
+    try {
+      await expect(harness.startReactor()).resolves.toBeUndefined();
+      await harness.drain();
+    } finally {
+      dispatchSpy.mockRestore();
+    }
+
+    const readModel = await harness.readModel();
+    const firstThread = readModel.threads.find((thread) => thread.id === firstThreadId);
+    const secondThread = readModel.threads.find((thread) => thread.id === secondThreadId);
+    expect(firstThread?.session).toMatchObject({ status: "running" });
+    expect(firstThread?.queuedTurns).toMatchObject([{ recoveryConfirmationRequired: false }]);
+    expect(secondThread?.session).toMatchObject({ status: "interrupted", activeTurnId: null });
+    expect(secondThread?.queuedTurns).toMatchObject([{ recoveryConfirmationRequired: true }]);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
   it("holds a pre-crash queued turn during startup recovery", async () => {
     const harness = await createHarness({ autoCompleteTurns: false, startReactor: false });
     const threadId = ThreadId.make("thread-1");
@@ -1580,7 +1708,10 @@ describe("ProviderCommandReactor", () => {
           createdAt: "2026-01-01T00:00:02.500Z",
         }),
       ),
-    ).rejects.toThrow("requires recovery confirmation before it can be steered");
+    ).rejects.toMatchObject({
+      _tag: "OrchestrationCommandInvariantError",
+      detail: expect.stringContaining("requires recovery confirmation"),
+    });
     expect(harness.steerTurn).not.toHaveBeenCalled();
 
     await expect(
@@ -1594,7 +1725,7 @@ describe("ProviderCommandReactor", () => {
           createdAt: "2026-01-01T00:00:02.600Z",
         }),
       ),
-    ).rejects.toThrow("requires recovery confirmation before it can be updated");
+    ).rejects.toMatchObject({ _tag: "OrchestrationCommandInvariantError" });
 
     await expect(
       Effect.runPromise(
@@ -1606,7 +1737,7 @@ describe("ProviderCommandReactor", () => {
           createdAt: "2026-01-01T00:00:02.700Z",
         }),
       ),
-    ).rejects.toThrow("requires explicit recovery confirmation before it can be dispatched");
+    ).rejects.toMatchObject({ _tag: "OrchestrationCommandInvariantError" });
     expect(harness.sendTurn).not.toHaveBeenCalled();
 
     await Effect.runPromise(

@@ -14,7 +14,7 @@ describe("RecoveryQueuedTurnBanner", () => {
     await page.viewport(1024, 768);
   });
 
-  it("shows the recovery decision and captures its preview", async () => {
+  it("shows the recovery decision and invokes its actions", async () => {
     await page.viewport(960, 540);
     const onSend = vi.fn();
     const onDiscard = vi.fn();
@@ -46,6 +46,39 @@ describe("RecoveryQueuedTurnBanner", () => {
       await page.getByRole("button", { name: "Discard" }).click();
       expect(onSend).toHaveBeenCalledOnce();
       expect(onDiscard).toHaveBeenCalledOnce();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("disables both actions while a recovery send is in flight", async () => {
+    const onSend = vi.fn();
+    const onDiscard = vi.fn();
+    const screen = await render(
+      <ComposerBannerStack
+        items={[
+          createRecoveryQueuedTurnBannerItem({
+            messageId: MessageId.make("busy-recovery-message"),
+            text: "Continue with the reliability fixes.",
+            isSending: true,
+            isDiscarding: false,
+            onSend,
+            onDiscard,
+          }),
+        ]}
+      />,
+    );
+
+    try {
+      const sendingButton = document.querySelector<HTMLButtonElement>("button");
+      const discardButton = document.querySelectorAll<HTMLButtonElement>("button")[1];
+      await expect.element(page.getByRole("button", { name: "Sending…" })).toBeDisabled();
+      await expect.element(page.getByRole("button", { name: "Discard" })).toBeDisabled();
+
+      sendingButton?.click();
+      discardButton?.click();
+      expect(onSend).not.toHaveBeenCalled();
+      expect(onDiscard).not.toHaveBeenCalled();
     } finally {
       await screen.unmount();
     }
