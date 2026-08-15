@@ -64,6 +64,38 @@ it("maps current Codex model capability fields", () => {
   ]);
 });
 
+it("capitalizes max and ultra Codex reasoning effort labels", () => {
+  const capabilities = mapCodexModelCapabilities({
+    additionalSpeedTiers: [],
+    defaultReasoningEffort: "max",
+    description: "Test model",
+    displayName: "GPT Test",
+    hidden: false,
+    id: "gpt-test",
+    isDefault: true,
+    model: "gpt-test",
+    defaultServiceTier: null,
+    serviceTiers: [],
+    supportedReasoningEfforts: [
+      { description: "Maximum reasoning", reasoningEffort: "max" },
+      { description: "Ultra reasoning", reasoningEffort: "ultra" },
+    ],
+  });
+
+  assert.deepStrictEqual(capabilities.optionDescriptors, [
+    {
+      id: "reasoningEffort",
+      label: "Reasoning",
+      type: "select",
+      options: [
+        { id: "max", label: "Max", isDefault: true },
+        { id: "ultra", label: "Ultra" },
+      ],
+      currentValue: "max",
+    },
+  ]);
+});
+
 it("uses standard routing when the catalog has no default service tier", () => {
   const capabilities = mapCodexModelCapabilities({
     additionalSpeedTiers: ["fast"],
