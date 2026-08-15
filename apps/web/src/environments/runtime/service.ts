@@ -11,6 +11,7 @@ import {
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
   type ServerConfig,
+  type ServerLifecycleWelcomePayload,
   type TerminalEvent,
   ThreadId,
 } from "@salchi/contracts";
@@ -83,7 +84,7 @@ import { isOrchestrationThreadDetailEvent } from "@salchi/shared/orchestrationTh
 import { selectThreadTerminalState, useTerminalStateStore } from "~/terminalStateStore";
 import { useUiStateStore } from "~/uiStateStore";
 import type { WsProtocolCloseContext } from "../../rpc/protocol";
-import { getServerConfig } from "../../rpc/serverState";
+import { getServerConfig, onWelcome as onPrimaryServerWelcome } from "../../rpc/serverState";
 import { isTransportConnectionErrorMessage } from "../../rpc/transportError";
 import { getWsConnectionStatus, getWsConnectionUiState } from "../../rpc/wsConnectionState";
 import { WsTransport } from "../../rpc/wsTransport";
@@ -300,6 +301,7 @@ const browserResumeShellBootstrapTimeoutByEnvironment = new Map<
   BrowserResumeShellBootstrapTimeoutState
 >();
 const browserResumeReconnectRetryTimeoutIds = new Set<ReturnType<typeof setTimeout>>();
+const serverBootIdByEnvironment = new Map<EnvironmentId, string>();
 
 // Thread detail subscription cache policy:
 // - Active consumers keep a subscription retained via refCount.
@@ -1485,6 +1487,69 @@ function clearThreadDetailSubscriptionActiveReconcile(entry: ThreadDetailSubscri
   entry.lastActiveReconcileTickAt = null;
   entry.lastActiveWakeRefreshAt = null;
   entry.lastActiveDetailReconcileAt = null;
+}
+
+async function reconcileThreadDetailAfterServerRestart(
+  entry: ThreadDetailSubscriptionEntry,
+): Promise<void> {
+  const connection = readEnvironmentConnection(entry.environmentId);
+  if (!connection) {
+    return;
+  }
+
+  try {
+    const result = await connection.client.orchestration.reconcileThreadDetail({
+      threadId: entry.threadId,
+      clientSequence: entry.latestDetailSequence,
+      verifiedSequence: entry.verifiedDetailSequence,
+      verifiedFingerprint: entry.verifiedDetailFingerprint,
+    });
+    const current = threadDetailSubscriptions.get(
+      getThreadDetailSubscriptionKey(entry.environmentId, entry.threadId),
+    );
+    if (current !== entry || readEnvironmentConnection(entry.environmentId) !== connection) {
+      return;
+    }
+    if (entry.latestDetailSequence !== null && result.serverSequence < entry.latestDetailSequence) {
+      return;
+    }
+
+    applyThreadDetailReconcileResult(entry, result);
+  } catch (error) {
+    console.warn("Server restart thread detail reconcile failed", {
+      environmentId: entry.environmentId,
+      threadId: entry.threadId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function beginThreadDetailRecoveryAfterServerRestart(environmentId: EnvironmentId): void {
+  for (const entry of threadDetailSubscriptions.values()) {
+    if (
+      entry.environmentId !== environmentId ||
+      entry.activeRefCount <= 0 ||
+      entry.latestDetailSequence === null
+    ) {
+      continue;
+    }
+    void reconcileThreadDetailAfterServerRestart(entry);
+  }
+}
+
+function observeEnvironmentServerWelcome(
+  environmentId: EnvironmentId,
+  payload: ServerLifecycleWelcomePayload,
+): void {
+  const serverBootId = payload.serverBootId;
+  if (!serverBootId) {
+    return;
+  }
+  const previousServerBootId = serverBootIdByEnvironment.get(environmentId);
+  serverBootIdByEnvironment.set(environmentId, serverBootId);
+  if (previousServerBootId && previousServerBootId !== serverBootId) {
+    beginThreadDetailRecoveryAfterServerRestart(environmentId);
+  }
 }
 
 function markThreadDetailSequence(entry: ThreadDetailSubscriptionEntry, sequence: number): void {
@@ -3175,7 +3240,6 @@ function createPrimaryEnvironmentConnection(): EnvironmentConnection {
   if (!knownEnvironment?.environmentId) {
     throw new Error("Unable to resolve the primary environment.");
   }
-
   const stalePrimaryConnections = [...environmentConnections.values()].filter(
     (connection) =>
       connection.kind === "primary" && connection.environmentId !== knownEnvironment.environmentId,
@@ -3305,6 +3369,7 @@ async function ensureSavedEnvironmentConnection(
           });
         },
         onWelcome: (payload) => {
+          observeEnvironmentServerWelcome(activeRecord.environmentId, payload);
           useSavedEnvironmentRuntimeStore.getState().patch(activeRecord.environmentId, {
             descriptor: payload.environment,
           });
@@ -4654,6 +4719,9 @@ export function startEnvironmentConnectionService(queryClient: QueryClient): () 
 
   hydratePendingNotificationThreadReconciles(Date.now());
   maybeCreatePrimaryEnvironmentConnection();
+  const unsubscribePrimaryServerWelcome = onPrimaryServerWelcome((payload) => {
+    observeEnvironmentServerWelcome(payload.environment.environmentId, payload);
+  });
 
   const unsubscribeSavedEnvironments = useSavedEnvironmentRegistryStore.subscribe(() => {
     if (!hasSavedEnvironmentRegistryHydrated()) {
@@ -4675,6 +4743,7 @@ export function startEnvironmentConnectionService(queryClient: QueryClient): () 
     refCount: 1,
     stop: () => {
       unsubscribeSavedEnvironments();
+      unsubscribePrimaryServerWelcome();
       unsubscribeBrowserResumeReconnects();
       unsubscribeTerminalOutputStallRecovery();
       queryInvalidationThrottler.cancel();
@@ -4694,6 +4763,7 @@ export function startEnvironmentConnectionService(queryClient: QueryClient): () 
 
 export async function resetEnvironmentServiceForTests(): Promise<void> {
   stopActiveService();
+  serverBootIdByEnvironment.clear();
   lastBrowserHiddenAt = null;
   recentBrowserResumeContext = null;
   lastBrowserResumeReconcileAt = Number.NEGATIVE_INFINITY;

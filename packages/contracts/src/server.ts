@@ -522,6 +522,7 @@ export const ServerLifecycleWelcomePayload = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
   cwd: TrimmedNonEmptyString,
   projectName: TrimmedNonEmptyString,
+  serverBootId: Schema.optional(TrimmedNonEmptyString),
   bootstrapProjectId: Schema.optional(ProjectId),
   bootstrapThreadId: Schema.optional(ThreadId),
 });

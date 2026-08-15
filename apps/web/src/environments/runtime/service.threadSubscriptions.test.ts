@@ -337,6 +337,25 @@ function readThreadDetailSubscriptionListener(
   return listener!;
 }
 
+async function emitServerWelcome(
+  environmentId: EnvironmentId,
+  serverBootId: string,
+): Promise<void> {
+  const { emitWelcome } = await import("../../rpc/serverState");
+  emitWelcome({
+    serverBootId,
+    environment: {
+      environmentId,
+      label: "Primary environment",
+      platform: { os: "linux", arch: "x64" },
+      serverVersion: "0.0.0-test",
+      capabilities: { repositoryIdentity: true },
+    },
+    cwd: "/tmp/project",
+    projectName: "project",
+  });
+}
+
 function readHeartbeatFreshMock(callIndex = 0): ReturnType<typeof vi.fn> {
   const client = mockCreateWsRpcClient.mock.results[callIndex]?.value as
     | { readonly isHeartbeatFresh: ReturnType<typeof vi.fn> }
@@ -2277,6 +2296,261 @@ describe("retainThreadDetailSubscription", () => {
     expect(mockSubscribeThread).toHaveBeenCalledTimes(1);
 
     release();
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
+  it("does not enter recovery during a healthy active subscription", async () => {
+    const {
+      retainActiveThreadDetailSubscription,
+      resetEnvironmentServiceForTests,
+      startEnvironmentConnectionService,
+    } = await import("./service");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const environmentId = EnvironmentId.make("env-1");
+    const threadId = ThreadId.make("thread-healthy-active-subscription");
+    const connectionInput = mockCreateEnvironmentConnection.mock.calls[0]?.[0];
+    expect(connectionInput).toBeDefined();
+    expect(connectionInput.onWelcome).toBeUndefined();
+
+    connectionInput.syncShellSnapshot(
+      makeThreadShellSnapshot({ threadId, sessionStatus: "running" }),
+      environmentId,
+    );
+    const release = retainActiveThreadDetailSubscription(environmentId, threadId);
+    expect(mockSubscribeThread.mock.calls[0]?.[2]).toBeUndefined();
+    readThreadDetailSubscriptionListener(0)({
+      kind: "snapshot",
+      snapshot: makeThreadDetailSnapshot({
+        snapshotSequence: 1,
+        threadId,
+        sessionStatus: "running",
+      }),
+    });
+
+    await emitServerWelcome(environmentId, "server-boot-healthy");
+    await emitServerWelcome(environmentId, "server-boot-healthy");
+    await vi.advanceTimersByTimeAsync(10_300);
+    await expectThreadDetailReconcileCallCount(1);
+
+    release();
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
+  it("recovers assistant output once after a changed server boot without a route change", async () => {
+    const {
+      retainActiveThreadDetailSubscription,
+      resetEnvironmentServiceForTests,
+      startEnvironmentConnectionService,
+    } = await import("./service");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
+    const { selectThreadByRef, useStore } = await import("~/store");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const environmentId = EnvironmentId.make("env-1");
+    const threadId = ThreadId.make("thread-resubscribe-delayed-snapshot");
+    const userMessageId = MessageId.make("message-resubscribe-user");
+    const assistantMessageId = MessageId.make("message-resubscribe-assistant");
+    const turnId = TurnId.make("turn-resubscribe");
+    const connectionInput = mockCreateEnvironmentConnection.mock.calls[0]?.[0];
+    expect(connectionInput).toBeDefined();
+
+    connectionInput.syncShellSnapshot(
+      makeThreadShellSnapshot({ threadId, sessionStatus: "running" }),
+      environmentId,
+    );
+    const release = retainActiveThreadDetailSubscription(environmentId, threadId);
+    const detailListener = readThreadDetailSubscriptionListener(0);
+    detailListener({
+      kind: "snapshot",
+      snapshot: makeThreadDetailSnapshot({
+        snapshotSequence: 1,
+        threadId,
+        sessionStatus: "running",
+        messages: [
+          {
+            id: userMessageId,
+            role: "user",
+            text: "Will the response recover?",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-04-13T00:00:01.000Z",
+            updatedAt: "2026-04-13T00:00:01.000Z",
+          },
+        ],
+      }),
+    });
+
+    const recoveredSnapshot = makeThreadDetailSnapshot({
+      snapshotSequence: 2,
+      threadId,
+      sessionStatus: "ready",
+      messages: [
+        {
+          id: userMessageId,
+          role: "user",
+          text: "Will the response recover?",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-04-13T00:00:01.000Z",
+          updatedAt: "2026-04-13T00:00:01.000Z",
+        },
+        {
+          id: assistantMessageId,
+          role: "assistant",
+          text: "Recovered without leaving the conversation.",
+          turnId,
+          streaming: false,
+          createdAt: "2026-04-13T00:00:02.000Z",
+          updatedAt: "2026-04-13T00:00:02.000Z",
+        },
+      ],
+    });
+    mockReconcileThreadDetail.mockResolvedValueOnce(
+      makeThreadDetailReconcileSnapshotResult(recoveredSnapshot),
+    );
+
+    await emitServerWelcome(environmentId, "server-boot-before-restart");
+    expect(mockReconcileThreadDetail).not.toHaveBeenCalled();
+    await emitServerWelcome(environmentId, "server-boot-after-restart");
+    await vi.waitFor(() => expect(mockReconcileThreadDetail).toHaveBeenCalledTimes(1));
+
+    const thread = selectThreadByRef(useStore.getState(), scopeThreadRef(environmentId, threadId));
+    expect(thread?.messages.map((message) => message.text)).toEqual([
+      "Will the response recover?",
+      "Recovered without leaving the conversation.",
+    ]);
+    expect(mockSubscribeThread).toHaveBeenCalledTimes(1);
+    expect(mockConnectionReconnects[0]).not.toHaveBeenCalled();
+    release();
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
+  it("does not overwrite a newer stream snapshot with a stale restart reconcile", async () => {
+    const {
+      retainActiveThreadDetailSubscription,
+      resetEnvironmentServiceForTests,
+      startEnvironmentConnectionService,
+    } = await import("./service");
+    const { scopeThreadRef } = await import("@salchi/client-runtime");
+    const { selectThreadByRef, useStore } = await import("~/store");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const environmentId = EnvironmentId.make("env-1");
+    const threadId = ThreadId.make("thread-restart-reconcile-race");
+    const connectionInput = mockCreateEnvironmentConnection.mock.calls[0]?.[0];
+    expect(connectionInput).toBeDefined();
+
+    connectionInput.syncShellSnapshot(
+      makeThreadShellSnapshot({ threadId, sessionStatus: "running" }),
+      environmentId,
+    );
+    const release = retainActiveThreadDetailSubscription(environmentId, threadId);
+    const detailListener = readThreadDetailSubscriptionListener(0);
+    detailListener({
+      kind: "snapshot",
+      snapshot: makeThreadDetailSnapshot({
+        snapshotSequence: 1,
+        threadId,
+        sessionStatus: "running",
+      }),
+    });
+
+    let resolveRestartReconcile: ((result: unknown) => void) | undefined;
+    mockReconcileThreadDetail.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRestartReconcile = resolve;
+        }),
+    );
+    await emitServerWelcome(environmentId, "server-boot-race-before");
+    await emitServerWelcome(environmentId, "server-boot-race-after");
+    await vi.waitFor(() => expect(mockReconcileThreadDetail).toHaveBeenCalledTimes(1));
+
+    detailListener({
+      kind: "snapshot",
+      snapshot: makeThreadDetailSnapshot({
+        snapshotSequence: 3,
+        threadId,
+        sessionStatus: "ready",
+        messages: [
+          {
+            id: MessageId.make("message-newer-stream-snapshot"),
+            role: "assistant",
+            text: "Newer stream snapshot",
+            turnId: TurnId.make("turn-restart-reconcile-race"),
+            streaming: false,
+            createdAt: "2026-04-13T00:00:03.000Z",
+            updatedAt: "2026-04-13T00:00:03.000Z",
+          },
+        ],
+      }),
+    });
+    resolveRestartReconcile?.(
+      makeThreadDetailReconcileSnapshotResult(
+        makeThreadDetailSnapshot({
+          snapshotSequence: 2,
+          threadId,
+          sessionStatus: "running",
+          messages: [
+            {
+              id: MessageId.make("message-stale-reconcile-snapshot"),
+              role: "assistant",
+              text: "Stale reconcile snapshot",
+              turnId: TurnId.make("turn-restart-reconcile-race"),
+              streaming: false,
+              createdAt: "2026-04-13T00:00:02.000Z",
+              updatedAt: "2026-04-13T00:00:02.000Z",
+            },
+          ],
+        }),
+      ),
+    );
+    await Promise.resolve();
+
+    const thread = selectThreadByRef(useStore.getState(), scopeThreadRef(environmentId, threadId));
+    expect(thread?.messages.map((message) => message.text)).toEqual(["Newer stream snapshot"]);
+
+    release();
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
+  it("does not reconcile a warm inactive thread after a changed server boot", async () => {
+    const {
+      retainActiveThreadDetailSubscription,
+      resetEnvironmentServiceForTests,
+      startEnvironmentConnectionService,
+    } = await import("./service");
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const environmentId = EnvironmentId.make("env-1");
+    const threadId = ThreadId.make("thread-resubscribe-fresh-snapshot");
+    const connectionInput = mockCreateEnvironmentConnection.mock.calls[0]?.[0];
+    expect(connectionInput).toBeDefined();
+
+    connectionInput.syncShellSnapshot(
+      makeThreadShellSnapshot({ threadId, sessionStatus: "running" }),
+      environmentId,
+    );
+    const release = retainActiveThreadDetailSubscription(environmentId, threadId);
+    readThreadDetailSubscriptionListener(0)({
+      kind: "snapshot",
+      snapshot: makeThreadDetailSnapshot({
+        snapshotSequence: 1,
+        threadId,
+        sessionStatus: "running",
+      }),
+    });
+    release();
+
+    await emitServerWelcome(environmentId, "server-boot-before-restart");
+    await emitServerWelcome(environmentId, "server-boot-after-restart");
+    await Promise.resolve();
+    expect(mockReconcileThreadDetail).not.toHaveBeenCalled();
+
     stop();
     await resetEnvironmentServiceForTests();
   });
