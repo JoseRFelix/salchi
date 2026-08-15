@@ -2813,6 +2813,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
         "Unable to find branch toolbar before git status refresh.",
       );
       const toolbarHeight = toolbar.getBoundingClientRect().height;
+      const runContextControl = toolbar.firstElementChild as HTMLElement | null;
+      const branchControl = findButtonByText("main");
+      expect(runContextControl?.textContent).toContain("Local checkout");
+      expect(branchControl?.textContent).toContain("main");
+      const runContextRect = runContextControl!.getBoundingClientRect();
+      const branchRect = branchControl!.getBoundingClientRect();
 
       useGitStatusMock.mockReturnValue({
         data: null,
@@ -2845,12 +2851,24 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const skeletonPieces = Array.from(
         skeleton.querySelectorAll<HTMLElement>('[data-slot="skeleton"]'),
       );
+      const skeletonRunContext = skeleton.querySelector<HTMLElement>(
+        '[data-testid="branch-toolbar-skeleton-run-context"]',
+      );
+      const skeletonBranch = skeleton.querySelector<HTMLElement>(
+        '[data-testid="branch-toolbar-skeleton-branch"]',
+      );
 
       expect(skeleton.getBoundingClientRect().height).toBe(toolbarHeight);
-      expect(skeletonPieces).toHaveLength(4);
+      expect(skeletonPieces).toHaveLength(6);
       expect(Math.max(...skeletonPieces.map((piece) => piece.getBoundingClientRect().width))).toBe(
         64,
       );
+      expect(skeletonRunContext).not.toBeNull();
+      expect(skeletonBranch).not.toBeNull();
+      expect(Math.abs(skeletonRunContext!.getBoundingClientRect().left - runContextRect.left)).toBe(
+        0,
+      );
+      expect(Math.abs(skeletonBranch!.getBoundingClientRect().right - branchRect.right)).toBe(0);
       expect(
         skeletonPieces.every((piece) => {
           const { height } = piece.getBoundingClientRect();

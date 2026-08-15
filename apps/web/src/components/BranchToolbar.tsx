@@ -49,13 +49,21 @@ export const BranchToolbarSkeleton = memo(function BranchToolbarSkeleton() {
       className={BRANCH_TOOLBAR_LAYOUT_CLASS_NAME}
       data-testid="branch-toolbar-skeleton"
     >
-      <div className="flex h-7 shrink-0 items-center gap-1.5 sm:h-6">
-        <Skeleton className="size-3.5 rounded-full sm:size-3" />
+      <div
+        className="flex h-7 min-w-0 max-w-[48%] flex-1 items-center justify-start gap-1 px-[calc(--spacing(2)-1px)] md:h-6 md:max-w-none md:flex-none md:gap-1.5 md:px-0"
+        data-testid="branch-toolbar-skeleton-run-context"
+      >
+        <Skeleton className="size-3 shrink-0 rounded-full" />
         <Skeleton className="h-3 w-16 rounded-full sm:w-14" />
+        <Skeleton className="size-3 shrink-0 rounded-full" />
       </div>
-      <div className="ml-auto flex h-7 shrink-0 items-center gap-1.5 sm:h-6">
-        <Skeleton className="size-3.5 rounded-full sm:size-3" />
+      <div
+        className="ml-auto flex h-7 min-w-0 flex-1 items-center justify-end gap-1 px-[calc(--spacing(2)-1px)] md:h-6 md:flex-none md:gap-1.5 md:px-0"
+        data-testid="branch-toolbar-skeleton-branch"
+      >
+        <Skeleton className="size-3 shrink-0 rounded-full" />
         <Skeleton className="h-3 w-14 rounded-full sm:w-12" />
+        <Skeleton className="size-3 shrink-0 rounded-full" />
       </div>
     </div>
   );
