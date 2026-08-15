@@ -546,6 +546,42 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.turn.hold-for-recovery": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.turn-queued",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.message.messageId,
+          role: command.message.role,
+          text: command.message.text,
+          attachments: command.message.attachments,
+          ...(command.modelSelection !== undefined
+            ? { modelSelection: command.modelSelection }
+            : {}),
+          ...(command.titleSeed !== undefined ? { titleSeed: command.titleSeed } : {}),
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          ...(command.sourceProposedPlan !== undefined
+            ? { sourceProposedPlan: command.sourceProposedPlan }
+            : {}),
+          recoveryConfirmationRequired: true,
+          createdAt: command.requestedAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.queued-turn.update": {
       const targetThread = yield* requireThread({
         readModel,
@@ -559,6 +595,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Queued turn '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      if (queuedTurn.recoveryConfirmationRequired) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued turn '${command.messageId}' requires recovery confirmation before it can be updated.`,
         });
       }
       if (queuedTurn.steering !== undefined) {
@@ -622,6 +664,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           messageId: command.messageId,
+          ...(queuedTurn.recoveryConfirmationRequired
+            ? { recoveryConfirmationRequired: true }
+            : {}),
           cancelledAt: command.createdAt,
         },
       };
@@ -640,6 +685,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Queued turn '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      if (queuedTurn.recoveryConfirmationRequired) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued turn '${command.messageId}' requires recovery confirmation before it can be steered.`,
         });
       }
       if (queuedTurn.steering !== undefined) {
@@ -674,6 +725,102 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.queued-turn.confirm": {
+      const targetThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const queuedTurn = targetThread.queuedTurns.find(
+        (entry) => entry.messageId === command.messageId,
+      );
+      if (!queuedTurn) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued turn '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      if (queuedTurn.steering !== undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued turn '${command.messageId}' is being steered into turn '${queuedTurn.steering.expectedTurnId}' and cannot be dispatched.`,
+        });
+      }
+      if (!queuedTurn.recoveryConfirmationRequired) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued turn '${command.messageId}' does not require recovery confirmation.`,
+        });
+      }
+      const messageAlreadyPersisted = targetThread.messages.some(
+        (message) => message.id === queuedTurn.messageId && message.role === "user",
+      );
+      const dispatchedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.queued-turn-dispatched",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          dispatchedAt: command.createdAt,
+        },
+      };
+      const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: dispatchedEvent.eventId,
+        type: "thread.message-sent",
+        payload: {
+          threadId: command.threadId,
+          messageId: queuedTurn.messageId,
+          role: queuedTurn.role,
+          text: queuedTurn.text,
+          attachments: queuedTurn.attachments,
+          turnId: null,
+          streaming: false,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+      const turnStartRequestedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: messageAlreadyPersisted
+          ? dispatchedEvent.eventId
+          : userMessageEvent.eventId,
+        type: "thread.turn-start-requested",
+        payload: {
+          threadId: command.threadId,
+          messageId: queuedTurn.messageId,
+          ...(queuedTurn.modelSelection !== undefined
+            ? { modelSelection: queuedTurn.modelSelection }
+            : {}),
+          ...(queuedTurn.titleSeed !== undefined ? { titleSeed: queuedTurn.titleSeed } : {}),
+          runtimeMode: queuedTurn.runtimeMode,
+          interactionMode: queuedTurn.interactionMode,
+          ...(queuedTurn.sourceProposedPlan !== undefined
+            ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
+            : {}),
+          createdAt: command.createdAt,
+        },
+      };
+      return messageAlreadyPersisted
+        ? [dispatchedEvent, turnStartRequestedEvent]
+        : [dispatchedEvent, userMessageEvent, turnStartRequestedEvent];
+    }
+
     case "thread.queued-turn.dispatch": {
       const targetThread = yield* requireThread({
         readModel,
@@ -687,6 +834,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Queued turn '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      if (queuedTurn.recoveryConfirmationRequired) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued turn '${command.messageId}' requires explicit recovery confirmation before it can be dispatched.`,
         });
       }
       if (queuedTurn.steering !== undefined) {

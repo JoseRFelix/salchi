@@ -296,6 +296,11 @@ export const OrchestrationQueuedTurn = Schema.Struct({
       requestedAt: IsoDateTime,
     }),
   ),
+  recoveryConfirmationRequired: Schema.Boolean.pipe(
+    Schema.optionalKey,
+    Schema.withDecodingDefaultKey(Effect.succeed(false)),
+    Schema.withConstructorDefault(Effect.succeed(false)),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -836,6 +841,14 @@ const ThreadQueuedTurnCancelCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadQueuedTurnConfirmCommand = Schema.Struct({
+  type: Schema.Literal("thread.queued-turn.confirm"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadQueuedTurnUpdateCommand = Schema.Struct({
   type: Schema.Literal("thread.queued-turn.update"),
   commandId: CommandId,
@@ -910,6 +923,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadTurnQueueCommand,
   ThreadQueuedTurnUpdateCommand,
   ThreadQueuedTurnCancelCommand,
+  ThreadQueuedTurnConfirmCommand,
   ThreadQueuedTurnSteerCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -935,6 +949,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ClientThreadTurnQueueCommand,
   ThreadQueuedTurnUpdateCommand,
   ThreadQueuedTurnCancelCommand,
+  ThreadQueuedTurnConfirmCommand,
   ThreadQueuedTurnSteerCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -1029,6 +1044,25 @@ const ThreadQueuedTurnDispatchCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadTurnHoldForRecoveryCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.hold-for-recovery"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  message: Schema.Struct({
+    messageId: MessageId,
+    role: Schema.Literal("user"),
+    text: Schema.String,
+    attachments: Schema.Array(ChatAttachment),
+  }),
+  modelSelection: Schema.optional(ModelSelection),
+  titleSeed: Schema.optional(TrimmedNonEmptyString),
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  requestedAt: IsoDateTime,
+  createdAt: IsoDateTime,
+});
+
 const ThreadQueuedTurnSteerCompleteCommand = Schema.Struct({
   type: Schema.Literal("thread.queued-turn.steer.complete"),
   commandId: CommandId,
@@ -1057,6 +1091,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
+  ThreadTurnHoldForRecoveryCommand,
   ThreadQueuedTurnDispatchCommand,
   ThreadQueuedTurnSteerCompleteCommand,
   ThreadQueuedTurnSteerFailCommand,
@@ -1231,6 +1266,11 @@ export type ThreadQueuedTurnUpdatedPayload = typeof ThreadQueuedTurnUpdatedPaylo
 export const ThreadQueuedTurnCancelledPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
+  recoveryConfirmationRequired: Schema.Boolean.pipe(
+    Schema.optionalKey,
+    Schema.withDecodingDefaultKey(Effect.succeed(false)),
+    Schema.withConstructorDefault(Effect.succeed(false)),
+  ),
   cancelledAt: IsoDateTime,
 });
 export type ThreadQueuedTurnCancelledPayload = typeof ThreadQueuedTurnCancelledPayload.Type;

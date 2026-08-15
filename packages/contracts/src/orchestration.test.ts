@@ -504,6 +504,13 @@ it.effect("decodes queued turn commands", () =>
       messageId: "msg-queued-1",
       createdAt: "2026-01-01T00:00:01.000Z",
     });
+    const confirm = yield* decodeClientOrchestrationCommand({
+      type: "thread.queued-turn.confirm",
+      commandId: "cmd-queue-confirm",
+      threadId: "thread-1",
+      messageId: "msg-queued-1",
+      createdAt: "2026-01-01T00:00:01.250Z",
+    });
     const update = yield* decodeClientOrchestrationCommand({
       type: "thread.queued-turn.update",
       commandId: "cmd-queue-update",
@@ -554,6 +561,7 @@ it.effect("decodes queued turn commands", () =>
       assert.strictEqual(update.text, "edited queued prompt");
     }
     assert.strictEqual(cancel.type, "thread.queued-turn.cancel");
+    assert.strictEqual(confirm.type, "thread.queued-turn.confirm");
     assert.strictEqual(dispatch.type, "thread.queued-turn.dispatch");
     assert.strictEqual(steer.type, "thread.queued-turn.steer");
     assert.strictEqual(steerComplete.type, "thread.queued-turn.steer.complete");
@@ -1118,16 +1126,23 @@ it.effect("decodes queued turn events and thread snapshots", () =>
     });
 
     assert.strictEqual(queued.type, "thread.turn-queued");
+    if (queued.type === "thread.turn-queued") {
+      assert.strictEqual(queued.payload.recoveryConfirmationRequired, false);
+    }
     assert.strictEqual(updated.type, "thread.queued-turn-updated");
     if (updated.type === "thread.queued-turn-updated") {
       assert.strictEqual(updated.payload.text, "edited queued prompt");
     }
     assert.strictEqual(cancelled.type, "thread.queued-turn-cancelled");
+    if (cancelled.type === "thread.queued-turn-cancelled") {
+      assert.strictEqual(cancelled.payload.recoveryConfirmationRequired, false);
+    }
     assert.strictEqual(dispatched.type, "thread.queued-turn-dispatched");
     assert.strictEqual(steerRequested.type, "thread.queued-turn-steer-requested");
     assert.strictEqual(steerFailed.type, "thread.queued-turn-steer-failed");
     assert.strictEqual(steered.type, "thread.queued-turn-steered");
     assert.strictEqual(snapshot.threads[0]?.queuedTurns[0]?.messageId, "msg-queued-1");
+    assert.strictEqual(snapshot.threads[0]?.queuedTurns[0]?.recoveryConfirmationRequired, false);
   }),
 );
 

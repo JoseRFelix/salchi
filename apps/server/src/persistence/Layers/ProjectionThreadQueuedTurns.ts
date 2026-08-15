@@ -38,6 +38,7 @@ const ProjectionThreadQueuedTurnDbRow = Schema.Struct({
   sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
   steeringExpectedTurnId: Schema.NullOr(TurnId),
   steeringRequestedAt: Schema.NullOr(IsoDateTime),
+  recoveryConfirmationRequired: Schema.Number,
   createdAt: ProjectionThreadQueuedTurn.fields.createdAt,
   updatedAt: ProjectionThreadQueuedTurn.fields.updatedAt,
 });
@@ -75,6 +76,7 @@ function toProjectionThreadQueuedTurn(
           },
         }
       : {}),
+    recoveryConfirmationRequired: row.recoveryConfirmationRequired === 1,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -101,6 +103,7 @@ const makeProjectionThreadQueuedTurnRepository = Effect.gen(function* () {
           source_proposed_plan_id,
           steering_expected_turn_id,
           steering_requested_at,
+          recovery_confirmation_required,
           created_at,
           updated_at
         )
@@ -118,6 +121,7 @@ const makeProjectionThreadQueuedTurnRepository = Effect.gen(function* () {
           ${row.sourceProposedPlan?.planId ?? null},
           ${row.steering?.expectedTurnId ?? null},
           ${row.steering?.requestedAt ?? null},
+          ${row.recoveryConfirmationRequired ? 1 : 0},
           ${row.createdAt},
           ${row.updatedAt}
         )
@@ -135,6 +139,7 @@ const makeProjectionThreadQueuedTurnRepository = Effect.gen(function* () {
           source_proposed_plan_id = excluded.source_proposed_plan_id,
           steering_expected_turn_id = excluded.steering_expected_turn_id,
           steering_requested_at = excluded.steering_requested_at,
+          recovery_confirmation_required = excluded.recovery_confirmation_required,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at
       `,
@@ -159,6 +164,7 @@ const makeProjectionThreadQueuedTurnRepository = Effect.gen(function* () {
           source_proposed_plan_id AS "sourceProposedPlanId",
           steering_expected_turn_id AS "steeringExpectedTurnId",
           steering_requested_at AS "steeringRequestedAt",
+          recovery_confirmation_required AS "recoveryConfirmationRequired",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_queued_turns
@@ -186,6 +192,7 @@ const makeProjectionThreadQueuedTurnRepository = Effect.gen(function* () {
           source_proposed_plan_id AS "sourceProposedPlanId",
           steering_expected_turn_id AS "steeringExpectedTurnId",
           steering_requested_at AS "steeringRequestedAt",
+          recovery_confirmation_required AS "recoveryConfirmationRequired",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_queued_turns
@@ -214,6 +221,7 @@ const makeProjectionThreadQueuedTurnRepository = Effect.gen(function* () {
           source_proposed_plan_id AS "sourceProposedPlanId",
           steering_expected_turn_id AS "steeringExpectedTurnId",
           steering_requested_at AS "steeringRequestedAt",
+          recovery_confirmation_required AS "recoveryConfirmationRequired",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_queued_turns
@@ -242,6 +250,7 @@ const makeProjectionThreadQueuedTurnRepository = Effect.gen(function* () {
           source_proposed_plan_id AS "sourceProposedPlanId",
           steering_expected_turn_id AS "steeringExpectedTurnId",
           steering_requested_at AS "steeringRequestedAt",
+          recovery_confirmation_required AS "recoveryConfirmationRequired",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_queued_turns
