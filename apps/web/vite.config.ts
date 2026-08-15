@@ -22,6 +22,7 @@ import {
   CLIENT_BUILD_METADATA_FILENAME,
   encodeClientBuildMetadata,
 } from "../../scripts/lib/client-build-metadata.ts";
+import { precompressAssets } from "../../scripts/lib/precompressed-assets.ts";
 import pkg from "./package.json" with { type: "json" };
 
 const port = Number(process.env.PORT ?? 5733);
@@ -177,6 +178,16 @@ function clientBuildMetadataPlugin(): Plugin {
   };
 }
 
+function precompressedAssetsPlugin(): Plugin {
+  return {
+    name: "salchi-precompressed-assets",
+    enforce: "post",
+    async closeBundle() {
+      await precompressAssets(path.join(repoRoot, "apps/web/dist"));
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     tanstackRouter({
@@ -240,6 +251,7 @@ export default defineConfig({
         ],
       },
     }),
+    precompressedAssetsPlugin(),
   ],
   optimizeDeps: {
     include: [

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  acceptedStaticContentEncodings,
   cacheControlForStaticPath,
   isLoopbackHostname,
   resolveDevRedirectUrl,
@@ -48,6 +49,26 @@ describe("static cache control", () => {
 
   it("does not treat assetsy as the assets directory", () => {
     expect(cacheControlForStaticPath("assetsy/file.js")).toBe("no-cache");
+  });
+});
+
+describe("static content encoding negotiation", () => {
+  it("prefers Brotli when supported encodings have equal quality", () => {
+    expect(acceptedStaticContentEncodings("gzip, deflate, br")).toEqual(["br", "gzip"]);
+  });
+
+  it("honors quality weights and exclusions", () => {
+    expect(acceptedStaticContentEncodings("br;q=0.4, gzip;q=0.8")).toEqual(["gzip", "br"]);
+    expect(acceptedStaticContentEncodings("br;q=0, gzip;q=1")).toEqual(["gzip"]);
+  });
+
+  it("applies wildcard quality only to encodings without an explicit value", () => {
+    expect(acceptedStaticContentEncodings("*;q=0.5, br;q=0")).toEqual(["gzip"]);
+  });
+
+  it("uses the identity response when the header is absent or invalid", () => {
+    expect(acceptedStaticContentEncodings(undefined)).toEqual([]);
+    expect(acceptedStaticContentEncodings("br;q=invalid, gzip;q=2")).toEqual([]);
   });
 });
 
