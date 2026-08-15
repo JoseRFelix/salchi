@@ -23,11 +23,22 @@ interface MockClientState {
     readonly url: string;
     readonly openedAt: number;
   }>;
+  readonly diagnosticMessageCalls: Array<{
+    readonly type: string;
+    readonly url: string;
+    readonly openedAt: number;
+    readonly reason: string;
+    readonly data: unknown;
+  }>;
 }
 
 interface ServiceWorkerTestHarness {
   readonly context: vm.Context;
   readonly openWindowCalls: string[];
+  readonly matchAllCalls: Array<{
+    readonly type?: string;
+    readonly includeUncontrolled?: boolean;
+  }>;
   readonly operationLog: string[];
   readonly getClients: () => MockClientState[];
   readonly getBroadcastMessages: () => Array<{
@@ -35,6 +46,12 @@ interface ServiceWorkerTestHarness {
     readonly message: unknown;
   }>;
   readonly getBroadcastCloseCalls: () => string[];
+  readonly getDirectDiagnostics: () => Array<{
+    readonly ts: number;
+    readonly kind: string;
+    readonly reason: string;
+    readonly data: unknown;
+  }>;
   readonly getPendingClickWrites: () => Array<{
     readonly cacheName: string;
     readonly requestUrl: string;
@@ -50,6 +67,7 @@ interface ServiceWorkerTestHarness {
   readonly dispatchNotificationClick: (index?: number) => Promise<void>;
   readonly dispatchNotificationClose: (index?: number) => Promise<void>;
   readonly removeAppBadgeSupport: () => void;
+  readonly setGetNotificationsResult: (result: "success" | "throw") => void;
   readonly addClient: (options: {
     readonly ackNotificationClick?: boolean;
     readonly url: string;
@@ -58,6 +76,7 @@ interface ServiceWorkerTestHarness {
     readonly focused?: boolean;
     readonly visibilityState?: "hidden" | "visible";
     readonly navigateResult?: "self" | "null" | "throw";
+    readonly postMessageResult?: "success" | "throw";
   }) => void;
   readonly setOpenWindowResult: (
     result: "undefined" | "client-at-url" | "client-at-home" | "throw",
@@ -67,12 +86,22 @@ interface ServiceWorkerTestHarness {
 
 function createServiceWorkerTestHarness(): ServiceWorkerTestHarness {
   const openWindowCalls: string[] = [];
+  const matchAllCalls: Array<{
+    type?: string;
+    includeUncontrolled?: boolean;
+  }> = [];
   const operationLog: string[] = [];
   const broadcastMessages: Array<{
     name: string;
     message: unknown;
   }> = [];
   const broadcastCloseCalls: string[] = [];
+  const directDiagnostics: Array<{
+    ts: number;
+    kind: string;
+    reason: string;
+    data: unknown;
+  }> = [];
   const pendingClickWrites: Array<{
     cacheName: string;
     requestUrl: string;
@@ -100,6 +129,7 @@ function createServiceWorkerTestHarness(): ServiceWorkerTestHarness {
     }
   > = [];
   let openWindowResult: "undefined" | "client-at-url" | "client-at-home" | "throw" = "undefined";
+  let getNotificationsResult: "success" | "throw" = "success";
   let nextClientId = 1;
   const makeClient = (options: {
     readonly ackNotificationClick?: boolean;
@@ -109,6 +139,7 @@ function createServiceWorkerTestHarness(): ServiceWorkerTestHarness {
     readonly focused?: boolean;
     readonly visibilityState?: "hidden" | "visible";
     readonly navigateResult?: "self" | "null" | "throw";
+    readonly postMessageResult?: "success" | "throw";
   }) => {
     const client: Record<string, unknown> = {
       id: `client-${nextClientId++}`,
@@ -143,6 +174,9 @@ function createServiceWorkerTestHarness(): ServiceWorkerTestHarness {
       };
     }
     client.postMessage = (message: unknown) => {
+      if (options.postMessageResult === "throw") {
+        throw new Error("postMessage failed");
+      }
       (client.postMessageCalls as unknown[]).push(message);
       if (
         options.ackNotificationClick !== false &&
@@ -202,6 +236,17 @@ function createServiceWorkerTestHarness(): ServiceWorkerTestHarness {
     Request,
     Response,
     URL,
+    fetch: async (_url: URL, init?: { readonly body?: string }) => {
+      operationLog.push("diagnostic");
+      const body = JSON.parse(init?.body ?? "[]") as Array<{
+        ts: number;
+        kind: string;
+        reason: string;
+        data: unknown;
+      }>;
+      directDiagnostics.push(...body);
+      return new Response(null, { status: 204 });
+    },
     clearTimeout: (...args: Parameters<typeof clearTimeout>) => clearTimeout(...args),
     console,
     setTimeout: (...args: Parameters<typeof setTimeout>) => setTimeout(...args),
@@ -239,11 +284,21 @@ function createServiceWorkerTestHarness(): ServiceWorkerTestHarness {
           }
           displayedNotifications.push(notification);
         },
-        getNotifications: async () =>
-          displayedNotifications.filter((notification) => notification.__closed !== true),
+        getNotifications: async () => {
+          operationLog.push("getNotifications");
+          if (getNotificationsResult === "throw") {
+            throw new Error("getNotifications failed");
+          }
+          return displayedNotifications.filter((notification) => notification.__closed !== true);
+        },
       },
       clients: {
-        matchAll: async (options?: { readonly includeUncontrolled?: boolean }) => {
+        matchAll: async (options?: {
+          readonly type?: string;
+          readonly includeUncontrolled?: boolean;
+        }) => {
+          operationLog.push("matchAll");
+          matchAllCalls.push(options ?? {});
           const clients = context.__windowClients as Array<Record<string, unknown>>;
           if (options?.includeUncontrolled === true) {
             return clients;
@@ -301,19 +356,29 @@ this.__salchiServiceWorkerTestExports = {
   return {
     context,
     openWindowCalls,
+    matchAllCalls,
     operationLog,
     getClients: () =>
-      (context.__windowClients as Array<Record<string, unknown>>).map((client) => ({
-        id: String(client.id),
-        url: String(client.url),
-        controlled: client.__controlled === true,
-        focusCalls: Number(client.focusCalls ?? 0),
-        navigateCalls: (client.navigateCalls as string[] | undefined) ?? [],
-        postMessageCalls:
-          (client.postMessageCalls as MockClientState["postMessageCalls"] | undefined) ?? [],
-      })),
+      (context.__windowClients as Array<Record<string, unknown>>).map((client) => {
+        const messages =
+          (client.postMessageCalls as Array<Record<string, unknown>> | undefined) ?? [];
+        return {
+          id: String(client.id),
+          url: String(client.url),
+          controlled: client.__controlled === true,
+          focusCalls: Number(client.focusCalls ?? 0),
+          navigateCalls: (client.navigateCalls as string[] | undefined) ?? [],
+          postMessageCalls: messages.filter(
+            (message) => message.type === "salchi.notification-click",
+          ) as MockClientState["postMessageCalls"],
+          diagnosticMessageCalls: messages.filter(
+            (message) => message.type === "salchi.notification-click-diagnostic",
+          ) as MockClientState["diagnosticMessageCalls"],
+        };
+      }),
     getBroadcastMessages: () => broadcastMessages,
     getBroadcastCloseCalls: () => broadcastCloseCalls,
+    getDirectDiagnostics: () => directDiagnostics,
     getPendingClickWrites: () => pendingClickWrites,
     getBadgeSetCalls: () => badgeSetCalls,
     getBadgeClearCallCount: () => badgeClearCallCount,
@@ -411,6 +476,9 @@ this.__salchiServiceWorkerTestExports = {
     },
     setOpenWindowResult: (result) => {
       openWindowResult = result;
+    },
+    setGetNotificationsResult: (result) => {
+      getNotificationsResult = result;
     },
     removeBroadcastChannel: () => {
       delete (context.self as Record<string, unknown>).BroadcastChannel;
@@ -511,6 +579,66 @@ describe("salchi-service-worker app badge", () => {
 
     expect(harness.getDisplayedNotificationCount()).toBe(1);
     expect(harness.getBadgeSetCalls()).toEqual([1]);
+  });
+
+  it("shows the pushed notification before querying or closing older notifications", async () => {
+    await harness.dispatchPush({
+      tag: "thread:thread-1:approval:activity-1",
+      url: TARGET_URL,
+    });
+    const operationStart = harness.operationLog.length;
+
+    await harness.dispatchPush({
+      tag: "thread:thread-1:turn:turn-1",
+      url: TARGET_URL,
+    });
+
+    const operations = harness.operationLog.slice(operationStart);
+    expect(operations.indexOf("showNotification")).toBeLessThan(
+      operations.indexOf("getNotifications"),
+    );
+    expect(operations.indexOf("showNotification")).toBeLessThan(
+      operations.indexOf("notification-close"),
+    );
+  });
+
+  it("keeps the pushed notification when notification maintenance fails", async () => {
+    harness.setGetNotificationsResult("throw");
+
+    await expect(
+      harness.dispatchPush({
+        title: "Completed task",
+        body: "The task completed successfully.",
+        tag: "thread:thread-1:turn:turn-1",
+        url: TARGET_URL,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(harness.getDisplayedNotificationCount()).toBe(1);
+    expect(harness.operationLog[0]).toBe("showNotification");
+  });
+
+  it("records notification display directly after Chrome accepts it", async () => {
+    await harness.dispatchPush({
+      tag: "thread:thread-1:turn:turn-1",
+      url: TARGET_URL,
+    });
+
+    expect(harness.getDirectDiagnostics()).toEqual([
+      {
+        ts: expect.any(Number),
+        kind: "push-service-worker",
+        reason: "notification-shown",
+        data: {
+          display: { mode: "full" },
+          tag: "thread:thread-1:turn:turn-1",
+          url: TARGET_URL,
+        },
+      },
+    ]);
+    expect(harness.operationLog.indexOf("showNotification")).toBeLessThan(
+      harness.operationLog.indexOf("diagnostic"),
+    );
   });
 
   it("syncs push badge writes even while a visible same-origin page is open", async () => {
@@ -657,7 +785,7 @@ describe("salchi-service-worker notification click navigation", () => {
     expect(harness.openWindowCalls).toEqual([TARGET_URL]);
   });
 
-  it("broadcasts the notification click and closes the channel before window operations", async () => {
+  it("performs the window interaction before broadcast and persistence work", async () => {
     await openNotificationUrl(harness, TARGET_URL);
 
     expect(harness.getBroadcastMessages()).toEqual([
@@ -671,12 +799,27 @@ describe("salchi-service-worker notification click navigation", () => {
       },
     ]);
     expect(harness.getBroadcastCloseCalls()).toEqual(["salchi-notification-click"]);
-    expect(harness.operationLog.indexOf("persist")).toBeLessThan(
+    expect(harness.operationLog.indexOf("openWindow")).toBeLessThan(
+      harness.operationLog.indexOf("diagnostic"),
+    );
+    expect(harness.operationLog.indexOf("diagnostic")).toBeLessThan(
       harness.operationLog.indexOf("broadcast"),
     );
     expect(harness.operationLog.indexOf("broadcast")).toBeLessThan(
-      harness.operationLog.indexOf("openWindow"),
+      harness.operationLog.indexOf("persist"),
     );
+    expect(harness.matchAllCalls).toEqual([{ type: "window", includeUncontrolled: true }]);
+    expect(harness.getDirectDiagnostics()).toEqual([
+      {
+        ts: expect.any(Number),
+        kind: "notification-click-service-worker-direct",
+        reason: "window-interaction-complete",
+        data: {
+          client: null,
+          url: TARGET_URL,
+        },
+      },
+    ]);
   });
 
   it("broadcasts the notification click when an existing client handles the click", async () => {
@@ -723,7 +866,7 @@ describe("salchi-service-worker notification click navigation", () => {
     ]);
   });
 
-  it("persists the notification click before window operations", async () => {
+  it("persists the notification click after the window interaction", async () => {
     harness.addClient({ url: TARGET_URL, focused: true, navigateResult: "self" });
 
     await openNotificationUrl(harness, TARGET_URL);
@@ -737,8 +880,8 @@ describe("salchi-service-worker notification click navigation", () => {
         openedAt: expect.any(Number),
       },
     });
-    expect(harness.operationLog.indexOf("persist")).toBeLessThan(
-      harness.operationLog.indexOf("focus"),
+    expect(harness.operationLog.indexOf("focus")).toBeLessThan(
+      harness.operationLog.indexOf("persist"),
     );
   });
 
@@ -806,8 +949,7 @@ describe("salchi-service-worker notification click navigation", () => {
     expect(harness.openWindowCalls).toEqual([]);
   });
 
-  it("fallback navigates a controlled client when the page does not ack", async () => {
-    vi.useFakeTimers();
+  it("does not wait for an acknowledgement or navigate after focusing", async () => {
     harness.addClient({
       ackNotificationClick: false,
       url: HOME_URL,
@@ -815,15 +957,12 @@ describe("salchi-service-worker notification click navigation", () => {
       navigateResult: "self",
     });
 
-    const openPromise = openNotificationUrl(harness, TARGET_URL);
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(2000);
-    await openPromise;
+    await openNotificationUrl(harness, TARGET_URL);
 
     const [client] = harness.getClients();
-    expect(client?.url).toBe(TARGET_URL);
-    expect(client?.navigateCalls).toEqual([TARGET_URL]);
-    expect(client?.focusCalls).toBe(2);
+    expect(client?.url).toBe(HOME_URL);
+    expect(client?.navigateCalls).toEqual([]);
+    expect(client?.focusCalls).toBe(1);
     expect(client?.postMessageCalls).toEqual([
       {
         type: "salchi.notification-click",
@@ -834,8 +973,7 @@ describe("salchi-service-worker notification click navigation", () => {
     expect(harness.openWindowCalls).toEqual([]);
   });
 
-  it("does not fallback navigate a controlled client already at the target URL", async () => {
-    vi.useFakeTimers();
+  it("uses one focus interaction for a target client that does not acknowledge", async () => {
     harness.addClient({
       ackNotificationClick: false,
       url: TARGET_URL,
@@ -843,10 +981,7 @@ describe("salchi-service-worker notification click navigation", () => {
       navigateResult: "self",
     });
 
-    const openPromise = openNotificationUrl(harness, TARGET_URL);
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(2000);
-    await openPromise;
+    await openNotificationUrl(harness, TARGET_URL);
 
     const [client] = harness.getClients();
     expect(client?.url).toBe(TARGET_URL);
@@ -856,7 +991,7 @@ describe("salchi-service-worker notification click navigation", () => {
     expect(harness.openWindowCalls).toEqual([]);
   });
 
-  it("navigates a focused same-origin client before posting the click message", async () => {
+  it("focuses an uncontrolled same-origin client and lets the page route the click", async () => {
     harness.addClient({
       url: HOME_URL,
       controlled: false,
@@ -867,8 +1002,8 @@ describe("salchi-service-worker notification click navigation", () => {
     await openNotificationUrl(harness, TARGET_URL);
 
     const [client] = harness.getClients();
-    expect(client?.url).toBe(TARGET_URL);
-    expect(client?.navigateCalls).toEqual([TARGET_URL]);
+    expect(client?.url).toBe(HOME_URL);
+    expect(client?.navigateCalls).toEqual([]);
     expect(client?.focusCalls).toBe(1);
     expect(client?.postMessageCalls).toEqual([
       {
@@ -880,7 +1015,7 @@ describe("salchi-service-worker notification click navigation", () => {
     expect(harness.openWindowCalls).toEqual([]);
   });
 
-  it("navigates a hidden same-origin client without opening a new window", async () => {
+  it("focuses a hidden same-origin client without opening a new window", async () => {
     harness.addClient({
       url: HOME_URL,
       controlled: false,
@@ -891,8 +1026,8 @@ describe("salchi-service-worker notification click navigation", () => {
     await openNotificationUrl(harness, TARGET_URL);
 
     const [client] = harness.getClients();
-    expect(client?.url).toBe(TARGET_URL);
-    expect(client?.navigateCalls).toEqual([TARGET_URL]);
+    expect(client?.url).toBe(HOME_URL);
+    expect(client?.navigateCalls).toEqual([]);
     expect(client?.focusCalls).toBe(1);
     expect(client?.postMessageCalls).toEqual([
       {
@@ -927,7 +1062,7 @@ describe("salchi-service-worker notification click navigation", () => {
     expect(harness.openWindowCalls).toEqual([]);
   });
 
-  it("focuses and posts without opening a new window when navigation returns null", async () => {
+  it("does not call client navigation when the page router can handle the click", async () => {
     harness.addClient({
       url: HOME_URL,
       controlled: false,
@@ -939,7 +1074,7 @@ describe("salchi-service-worker notification click navigation", () => {
 
     const [client] = harness.getClients();
     expect(client?.url).toBe(HOME_URL);
-    expect(client?.navigateCalls).toEqual([TARGET_URL]);
+    expect(client?.navigateCalls).toEqual([]);
     expect(client?.focusCalls).toBe(1);
     expect(client?.postMessageCalls).toEqual([
       {
@@ -951,7 +1086,7 @@ describe("salchi-service-worker notification click navigation", () => {
     expect(harness.openWindowCalls).toEqual([]);
   });
 
-  it("focuses and posts without opening a new window when navigation throws", async () => {
+  it("does not invoke a throwing client navigation method", async () => {
     harness.addClient({
       url: HOME_URL,
       controlled: false,
@@ -963,7 +1098,7 @@ describe("salchi-service-worker notification click navigation", () => {
 
     const [client] = harness.getClients();
     expect(client?.url).toBe(HOME_URL);
-    expect(client?.navigateCalls).toEqual([TARGET_URL]);
+    expect(client?.navigateCalls).toEqual([]);
     expect(client?.focusCalls).toBe(1);
     expect(client?.postMessageCalls).toEqual([
       {
@@ -975,7 +1110,8 @@ describe("salchi-service-worker notification click navigation", () => {
     expect(harness.openWindowCalls).toEqual([]);
   });
 
-  it("posts the notification click when focus throws", async () => {
+  it("does not spend a second interaction token when focus throws", async () => {
+    harness.setOpenWindowResult("client-at-url");
     harness.addClient({
       url: TARGET_URL,
       focused: true,
@@ -994,6 +1130,43 @@ describe("salchi-service-worker notification click navigation", () => {
         openedAt: expect.any(Number),
       },
     ]);
+    expect(client?.diagnosticMessageCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reason: "client-selected",
+          data: expect.objectContaining({
+            candidateCount: 1,
+            selectionReason: "exact-url",
+          }),
+        }),
+        expect.objectContaining({
+          reason: "client-focus",
+          data: expect.objectContaining({
+            outcome: "rejected",
+            error: {
+              name: "Error",
+              message: "focus failed",
+            },
+          }),
+        }),
+      ]),
+    );
+    expect(harness.openWindowCalls).toEqual([]);
+  });
+
+  it("does not open a fallback when focus and postMessage both reject", async () => {
+    harness.setOpenWindowResult("client-at-url");
+    harness.addClient({
+      url: TARGET_URL,
+      focusResult: "throw",
+      postMessageResult: "throw",
+    });
+
+    await openNotificationUrl(harness, TARGET_URL);
+
+    const [client] = harness.getClients();
+    expect(client?.focusCalls).toBe(1);
+    expect(client?.postMessageCalls).toEqual([]);
     expect(harness.openWindowCalls).toEqual([]);
   });
 

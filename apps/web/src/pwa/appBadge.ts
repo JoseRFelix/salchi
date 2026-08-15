@@ -19,7 +19,11 @@ let appStoreUnsubscribe: (() => void) | null = null;
 let uiStateStoreUnsubscribe: (() => void) | null = null;
 let clearRetryTimerIds: Array<ReturnType<typeof setTimeout>> = [];
 
-const COMPLETED_TURN_ALERT_CLEAR_RETRY_DELAYS_MS = [0, 250, 1000] as const;
+// Chrome can focus/show a page before it dispatches the service worker's
+// notificationclick event. Closing displayed notifications in that window can
+// delete the notification Chrome is still trying to activate. Give the click
+// handler time to run; it clears the notifications itself once dispatched.
+const COMPLETED_TURN_ALERT_CLEAR_RETRY_DELAYS_MS = [5000, 1000, 3000] as const;
 
 function readBadgeNavigator(): AppBadgeNavigator | null {
   return typeof navigator === "undefined" ? null : (navigator as AppBadgeNavigator);
@@ -132,11 +136,6 @@ function scheduleCompletedTurnAlertClearAttempt(generation: number, attemptIndex
       }
     })();
   };
-
-  if (delay === 0) {
-    queueMicrotask(runAttempt);
-    return;
-  }
 
   const timerId = setTimeout(() => {
     removeClearRetryTimer(timerId);
