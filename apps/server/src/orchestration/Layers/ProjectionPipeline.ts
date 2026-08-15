@@ -902,6 +902,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.sourceProposedPlan !== undefined
               ? { sourceProposedPlan: event.payload.sourceProposedPlan }
               : {}),
+            recoveryConfirmationRequired: event.payload.recoveryConfirmationRequired ?? false,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
           });
@@ -1219,6 +1220,17 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             sourceProposedPlanThreadId: event.payload.sourceProposedPlan?.threadId ?? null,
             sourceProposedPlanId: event.payload.sourceProposedPlan?.planId ?? null,
             requestedAt: event.payload.createdAt,
+          });
+          return;
+        }
+
+        case "thread.turn-queued": {
+          if (!event.payload.recoveryConfirmationRequired) {
+            return;
+          }
+          yield* projectionTurnRepository.deletePendingTurnStart({
+            threadId: event.payload.threadId,
+            messageId: event.payload.messageId,
           });
           return;
         }

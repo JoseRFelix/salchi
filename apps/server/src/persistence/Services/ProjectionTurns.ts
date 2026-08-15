@@ -139,6 +139,14 @@ export interface ProjectionTurnRepositoryShape {
   ) => Effect.Effect<Option.Option<ProjectionPendingTurnStart>, ProjectionRepositoryError>;
 
   /**
+   * Lists every pending-start placeholder across threads for startup recovery.
+   */
+  readonly listPendingTurnStarts: () => Effect.Effect<
+    ReadonlyArray<ProjectionPendingTurnStart>,
+    ProjectionRepositoryError
+  >;
+
+  /**
    * Deletes one pending-start placeholder row after it has been associated with a concrete provider turn.
    */
   readonly deletePendingTurnStart: (

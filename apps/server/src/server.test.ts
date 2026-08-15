@@ -3799,6 +3799,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               attachments: [],
               runtimeMode: "full-access" as const,
               interactionMode: "default" as const,
+              recoveryConfirmationRequired: false,
               createdAt: initialUpdatedAt,
               updatedAt: initialUpdatedAt,
             },

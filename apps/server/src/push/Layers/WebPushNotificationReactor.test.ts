@@ -169,6 +169,7 @@ function makeQueuedTurn(messageId: string): OrchestrationQueuedTurn {
     attachments: [],
     runtimeMode: "full-access",
     interactionMode: "default",
+    recoveryConfirmationRequired: false,
     createdAt: now,
     updatedAt: now,
   };

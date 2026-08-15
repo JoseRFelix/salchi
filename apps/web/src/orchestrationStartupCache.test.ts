@@ -184,6 +184,7 @@ function makeEnvironmentState(
         attachments: [],
         runtimeMode: DEFAULT_RUNTIME_MODE,
         interactionMode: DEFAULT_INTERACTION_MODE,
+        recoveryConfirmationRequired: false,
         createdAt,
         updatedAt: createdAt,
       },

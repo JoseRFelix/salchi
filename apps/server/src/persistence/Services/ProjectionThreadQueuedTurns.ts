@@ -68,6 +68,7 @@ export const ProjectionThreadQueuedTurnDbRow = Schema.Struct({
   sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
   steeringExpectedTurnId: Schema.NullOr(TurnId),
   steeringRequestedAt: Schema.NullOr(IsoDateTime),
+  recoveryConfirmationRequired: Schema.Number,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

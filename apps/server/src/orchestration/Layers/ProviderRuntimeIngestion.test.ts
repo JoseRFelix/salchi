@@ -419,6 +419,179 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBe("turn failed");
   });
 
+  it("never treats a provider thread idle event as server recovery", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-stale-after-crash");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-stale-turn-started-before-crash"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      turnId,
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.status === "running" && thread.session.activeTurnId === turnId,
+    );
+
+    harness.emit({
+      type: "thread.state.changed",
+      eventId: asEventId("evt-resumed-thread-idle-after-crash"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:05.000Z",
+      payload: {
+        state: "idle",
+      },
+    });
+
+    await harness.drain();
+    let thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session?.status).toBe("running");
+    expect(thread?.session?.activeTurnId).toBe(turnId);
+    expect(thread?.latestTurn?.state).toBe("running");
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-stale-turn-completed-after-idle"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:06.000Z",
+      turnId,
+      payload: { state: "completed" },
+    });
+
+    thread = await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.status === "ready" && thread.session.activeTurnId === null,
+    );
+    expect(thread.latestTurn?.state).toBe("completed");
+  });
+
+  it("leaves a normally completed turn settled when the provider reports idle afterward", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-completed-before-idle");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-normal-turn-started-before-idle"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      turnId,
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.status === "running" && thread.session.activeTurnId === turnId,
+    );
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-normal-turn-completed-before-idle"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:01.000Z",
+      turnId,
+      payload: { state: "completed" },
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.status === "ready" && thread.session.activeTurnId === null,
+    );
+
+    harness.emit({
+      type: "thread.state.changed",
+      eventId: asEventId("evt-normal-thread-idle-after-completion"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:02.000Z",
+      payload: { state: "idle" },
+    });
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session?.status).toBe("ready");
+    expect(thread?.session?.activeTurnId).toBeNull();
+    expect(thread?.latestTurn?.state).toBe("completed");
+  });
+
+  it("does not interrupt a live provider turn when idle arrives just before completion", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-live-idle-before-completion");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-live-turn-started-before-idle"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      turnId,
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.status === "running" && thread.session.activeTurnId === turnId,
+    );
+    harness.setProviderSession({
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      status: "running",
+      runtimeMode: "approval-required",
+      threadId,
+      activeTurnId: turnId,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    harness.emit({
+      type: "thread.state.changed",
+      eventId: asEventId("evt-live-thread-idle-before-completion"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:01.000Z",
+      payload: { state: "idle" },
+    });
+    await harness.drain();
+
+    let thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session?.status).toBe("running");
+    expect(thread?.session?.activeTurnId).toBe(turnId);
+    expect(thread?.latestTurn?.state).toBe("running");
+
+    harness.setProviderSession({
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      status: "ready",
+      runtimeMode: "approval-required",
+      threadId,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:02.000Z",
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-live-turn-completed-after-idle"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:02.000Z",
+      turnId,
+      payload: { state: "completed" },
+    });
+
+    thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.status === "ready" &&
+        entry.session.activeTurnId === null &&
+        entry.latestTurn?.state === "completed",
+    );
+    expect(thread.latestTurn?.state).toBe("completed");
+  });
+
   it("ignores an untargeted completion when no turn is active", async () => {
     const harness = await createHarness();
 

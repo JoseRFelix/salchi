@@ -146,6 +146,7 @@ function makeQueuedTurn(index: number): Thread["queuedTurns"][number] {
     },
     runtimeMode: DEFAULT_RUNTIME_MODE,
     interactionMode: DEFAULT_INTERACTION_MODE,
+    recoveryConfirmationRequired: false,
     createdAt,
     updatedAt: createdAt,
   };
@@ -257,6 +258,7 @@ function makeOrchestrationThread(
       ...(queuedTurn.sourceProposedPlan !== undefined
         ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
         : {}),
+      recoveryConfirmationRequired: queuedTurn.recoveryConfirmationRequired,
       createdAt: queuedTurn.createdAt,
       updatedAt: queuedTurn.updatedAt,
     })),
@@ -2260,6 +2262,7 @@ describe("incremental orchestration updates", () => {
       makeEvent("thread.queued-turn-cancelled", {
         threadId: thread.id,
         messageId: queuedTurn.messageId,
+        recoveryConfirmationRequired: false,
         cancelledAt: "2026-02-13T00:02:00.000Z",
       }),
       localEnvironmentId,

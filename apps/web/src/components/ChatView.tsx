@@ -210,6 +210,7 @@ import {
   ThreadErrorBanner,
 } from "./chat/ThreadErrorBanner";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import { createRecoveryQueuedTurnBannerItem } from "./chat/RecoveryQueuedTurnBanner";
 import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   buildExpiredTerminalContextToastCopy,
@@ -882,6 +883,7 @@ export default function ChatView(props: ChatViewProps) {
   const optimisticQueuedTurnsRef = useRef(optimisticQueuedTurns);
   optimisticQueuedTurnsRef.current = optimisticQueuedTurns;
   const [cancelingQueuedMessageIds, setCancelingQueuedMessageIds] = useState<MessageId[]>([]);
+  const [confirmingRecoveryMessageIds, setConfirmingRecoveryMessageIds] = useState<MessageId[]>([]);
   const [steeringQueuedMessageIds, setSteeringQueuedMessageIds] = useState<MessageId[]>([]);
   const [updatingQueuedMessageIds, setUpdatingQueuedMessageIds] = useState<MessageId[]>([]);
   const [queuedTurnTextOverrides, setQueuedTurnTextOverrides] = useState<Record<string, string>>(
@@ -2097,6 +2099,20 @@ export default function ChatView(props: ChatViewProps) {
     () => new Set(cancelingQueuedMessageIds),
     [cancelingQueuedMessageIds],
   );
+  const confirmingRecoveryMessageIdSet = useMemo(
+    () => new Set(confirmingRecoveryMessageIds),
+    [confirmingRecoveryMessageIds],
+  );
+  const { recoveryConfirmationQueuedTurn, ordinaryQueuedTurnsForComposer } = useMemo(() => {
+    const recoveryQueuedTurn =
+      queuedTurnsForComposer.find((queuedTurn) => queuedTurn.recoveryConfirmationRequired) ?? null;
+    return {
+      recoveryConfirmationQueuedTurn: recoveryQueuedTurn,
+      ordinaryQueuedTurnsForComposer: recoveryQueuedTurn
+        ? queuedTurnsForComposer.filter((queuedTurn) => !queuedTurn.recoveryConfirmationRequired)
+        : queuedTurnsForComposer,
+    };
+  }, [queuedTurnsForComposer]);
   const steeringQueuedMessageIdSet = useMemo(
     () => new Set(steeringQueuedMessageIds),
     [steeringQueuedMessageIds],
@@ -3454,6 +3470,7 @@ export default function ChatView(props: ChatViewProps) {
       return [];
     });
     setCancelingQueuedMessageIds([]);
+    setConfirmingRecoveryMessageIds([]);
     setSteeringQueuedMessageIds([]);
     setUpdatingQueuedMessageIds([]);
     setQueuedTurnTextOverrides({});
@@ -3960,6 +3977,7 @@ export default function ChatView(props: ChatViewProps) {
         titleSeed: title,
         runtimeMode,
         interactionMode,
+        recoveryConfirmationRequired: false,
         createdAt: messageCreatedAt,
         updatedAt: messageCreatedAt,
       };
@@ -4295,6 +4313,58 @@ export default function ChatView(props: ChatViewProps) {
     },
     [activeThread, environmentId, setThreadError],
   );
+
+  const onConfirmRecoveryQueuedTurn = useCallback(
+    async (messageId: MessageId) => {
+      const api = readEnvironmentApi(environmentId);
+      if (!api || !activeThread) return;
+
+      setConfirmingRecoveryMessageIds((existing) =>
+        existing.includes(messageId) ? existing : [...existing, messageId],
+      );
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.queued-turn.confirm",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          messageId,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        setThreadError(
+          activeThread.id,
+          err instanceof Error ? err.message : "Failed to send the recovered queued message.",
+        );
+      } finally {
+        setConfirmingRecoveryMessageIds((existing) => existing.filter((id) => id !== messageId));
+      }
+    },
+    [activeThread, environmentId, setThreadError],
+  );
+
+  const recoveryComposerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
+    if (!recoveryConfirmationQueuedTurn) {
+      return composerBannerItems;
+    }
+    return [
+      createRecoveryQueuedTurnBannerItem({
+        messageId: recoveryConfirmationQueuedTurn.messageId,
+        text: recoveryConfirmationQueuedTurn.text,
+        isSending: confirmingRecoveryMessageIdSet.has(recoveryConfirmationQueuedTurn.messageId),
+        isDiscarding: cancelingQueuedMessageIdSet.has(recoveryConfirmationQueuedTurn.messageId),
+        onSend: () => void onConfirmRecoveryQueuedTurn(recoveryConfirmationQueuedTurn.messageId),
+        onDiscard: () => void onCancelQueuedTurn(recoveryConfirmationQueuedTurn.messageId),
+      }),
+      ...composerBannerItems,
+    ];
+  }, [
+    cancelingQueuedMessageIdSet,
+    composerBannerItems,
+    confirmingRecoveryMessageIdSet,
+    onCancelQueuedTurn,
+    onConfirmRecoveryQueuedTurn,
+    recoveryConfirmationQueuedTurn,
+  ]);
 
   const onSteerQueuedTurn = useCallback(
     async (messageId: MessageId) => {
@@ -5028,7 +5098,7 @@ export default function ChatView(props: ChatViewProps) {
             )}
           >
             <div className="relative isolate">
-              <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
+              <ComposerBannerStack className="relative z-0" items={recoveryComposerBannerItems} />
               <div className="relative z-10">
                 <ChatComposer
                   composerRef={composerRef}
@@ -5047,7 +5117,7 @@ export default function ChatView(props: ChatViewProps) {
                   isSendBusy={isSendBusy}
                   isPreparingWorktree={isPreparingWorktree}
                   environmentUnavailable={activeEnvironmentUnavailableState}
-                  queuedTurns={queuedTurnsForComposer}
+                  queuedTurns={ordinaryQueuedTurnsForComposer}
                   cancelingQueuedMessageIds={cancelingQueuedMessageIdSet}
                   steeringQueuedMessageIds={steeringQueuedMessageIdSet}
                   updatingQueuedMessageIds={updatingQueuedMessageIdSet}
