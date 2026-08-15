@@ -8,7 +8,8 @@ export interface RightPanelRegistration {
 }
 
 const registeredPanels = new Map<RightPanelKind, RightPanelRegistration>();
-let lastUsedRightPanel: RightPanelKind = "file";
+const DEFAULT_RIGHT_PANEL: RightPanelKind = "diff";
+let lastUsedRightPanel: RightPanelKind = DEFAULT_RIGHT_PANEL;
 const WORKSPACE_PANEL_KINDS = new Set<RightPanelKind>(["diff", "file", "source-control"]);
 
 function shareWorkspacePanelStack(left: RightPanelKind, right: RightPanelKind): boolean {
@@ -48,7 +49,7 @@ export function openLastUsedRightPanel(): boolean {
     return true;
   }
 
-  return openRightPanel("file") || openRightPanel("diff") || openRightPanel("plan");
+  return openRightPanel("diff") || openRightPanel("file") || openRightPanel("plan");
 }
 
 export function useRegisterRightPanel({
@@ -92,5 +93,5 @@ export function __registerRightPanelForTests(
 
 export function __resetRightPanelGestureStateForTests(): void {
   registeredPanels.clear();
-  lastUsedRightPanel = "file";
+  lastUsedRightPanel = DEFAULT_RIGHT_PANEL;
 }
