@@ -183,6 +183,7 @@ const NON_REPOSITORY_STATUS: VcsStatusResult = {
 
 function createMockEnvironmentApi(
   input: {
+    directoryEntriesByPath?: Readonly<Record<string, ProjectEntry[]>>;
     rootEntries?: ProjectEntry[];
     searchEntries?: ProjectEntry[];
     srcEntries?: ProjectEntry[];
@@ -196,10 +197,16 @@ function createMockEnvironmentApi(
   const searchEntries = input.searchEntries ?? [
     { kind: "file", path: "src/App.tsx", parentPath: "src" },
   ];
+  const directoryEntriesByPath: Readonly<Record<string, ProjectEntry[]>> = {
+    src: srcEntries,
+    ...input.directoryEntriesByPath,
+  };
   return {
     projects: {
       listDirectoryEntries: vi.fn(async (input: { directoryPath?: string }) => ({
-        entries: input.directoryPath === "src" ? srcEntries : rootEntries,
+        entries: input.directoryPath
+          ? (directoryEntriesByPath[input.directoryPath] ?? [])
+          : rootEntries,
         truncated: false,
       })),
       readFile: vi.fn(async (input: { relativePath: string }) => ({
@@ -248,6 +255,30 @@ function createComposerHandle(overrides: Partial<ChatComposerHandle> = {}): Chat
     toggleModelPicker: vi.fn(),
     ...overrides,
   } as unknown as ChatComposerHandle;
+}
+
+function dispatchTouchTap(element: HTMLElement, pointerId: number): void {
+  element.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      bubbles: true,
+      button: 0,
+      isPrimary: true,
+      pointerId,
+      pointerType: "touch",
+    }),
+  );
+  element.dispatchEvent(
+    new PointerEvent("pointerup", {
+      bubbles: true,
+      button: 0,
+      isPrimary: true,
+      pointerId,
+      pointerType: "touch",
+    }),
+  );
+  element.dispatchEvent(
+    new MouseEvent("click", { bubbles: true, button: 0, cancelable: true, detail: 1 }),
+  );
 }
 
 async function renderFilesPanel(
@@ -454,7 +485,7 @@ describe("WorkspaceFilesPanel", () => {
     }
   });
 
-  it("covers the complete visible mobile explorer row with its button", async () => {
+  it("uses non-overlapping 44px mobile explorer tap targets", async () => {
     await page.viewport(390, 844);
     __setEnvironmentApiOverrideForTests(ENVIRONMENT_ID, createMockEnvironmentApi());
     const mounted = await renderFilesPanel();
@@ -462,17 +493,81 @@ describe("WorkspaceFilesPanel", () => {
     try {
       await expect.element(page.getByRole("button", { name: /^src$/ })).toBeVisible();
       const button = document.querySelector<HTMLButtonElement>('button[title="src"]');
+      const nextButton = document.querySelector<HTMLButtonElement>('button[title="README.md"]');
       const row = button?.parentElement;
       expect(button).not.toBeNull();
+      expect(nextButton).not.toBeNull();
       expect(row).not.toBeNull();
 
       const buttonRect = button!.getBoundingClientRect();
+      const nextButtonRect = nextButton!.getBoundingClientRect();
       const rowRect = row!.getBoundingClientRect();
-      expect(rowRect.height).toBe(32);
+      expect(rowRect.height).toBe(44);
+      expect(buttonRect.height).toBe(44);
+      expect(nextButtonRect.height).toBe(44);
       expect(buttonRect.left).toBe(rowRect.left);
       expect(buttonRect.right).toBe(rowRect.right);
       expect(buttonRect.top).toBe(rowRect.top);
       expect(buttonRect.bottom).toBe(rowRect.bottom);
+      expect(buttonRect.bottom).toBe(nextButtonRect.top);
+
+      const hitTestX = buttonRect.left + buttonRect.width / 2;
+      expect(document.elementFromPoint(hitTestX, buttonRect.bottom - 1)?.closest("button")).toBe(
+        button,
+      );
+      expect(document.elementFromPoint(hitTestX, nextButtonRect.top + 1)?.closest("button")).toBe(
+        nextButton,
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps compact explorer rows on desktop fine pointers", async () => {
+    await page.viewport(1024, 768);
+    __setEnvironmentApiOverrideForTests(ENVIRONMENT_ID, createMockEnvironmentApi());
+    const mounted = await renderFilesPanel();
+
+    try {
+      expect(window.matchMedia("(pointer: fine)").matches).toBe(true);
+      await expect.element(page.getByRole("button", { name: /^src$/ })).toBeVisible();
+      const button = document.querySelector<HTMLButtonElement>('button[title="src"]');
+      expect(button).not.toBeNull();
+      expect(button!.getBoundingClientRect().height).toBe(28);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps rapid touch collapse-then-expand taps on the latest directory state", async () => {
+    __setEnvironmentApiOverrideForTests(
+      ENVIRONMENT_ID,
+      createMockEnvironmentApi({
+        directoryEntriesByPath: {
+          alpha: [{ kind: "file", path: "alpha/a.ts", parentPath: "alpha" }],
+          beta: [{ kind: "file", path: "beta/b.ts", parentPath: "beta" }],
+        },
+        rootEntries: [
+          { kind: "directory", path: "alpha" },
+          { kind: "directory", path: "beta" },
+        ],
+      }),
+    );
+    const mounted = await renderFilesPanel();
+
+    try {
+      await page.getByRole("button", { name: "alpha" }).click();
+      await expect.element(page.getByRole("button", { name: "a.ts" })).toBeVisible();
+
+      const alphaButton = document.querySelector<HTMLButtonElement>('button[title="alpha"]');
+      const betaButton = document.querySelector<HTMLButtonElement>('button[title="beta"]');
+      expect(alphaButton).not.toBeNull();
+      expect(betaButton).not.toBeNull();
+      dispatchTouchTap(alphaButton!, 1);
+      dispatchTouchTap(betaButton!, 2);
+
+      await expect.element(page.getByRole("button", { name: "b.ts" })).toBeVisible();
+      await expect.element(page.getByRole("button", { name: "a.ts" })).not.toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }
