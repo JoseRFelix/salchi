@@ -398,9 +398,8 @@ describe("WorkspaceFilesPanel", () => {
       const srcDirectoryButton = document.querySelector<HTMLButtonElement>('button[title="src"]');
       expect(srcDirectoryButton?.className).toContain("select-none");
       const readmeButton = document.querySelector<HTMLButtonElement>('button[title="README.md"]');
-      const readmeRow = readmeButton?.parentElement;
-      expect(readmeRow?.className).toContain("py-1");
-      expect(readmeRow?.className).toContain("text-base");
+      expect(readmeButton?.className).toContain("py-1");
+      expect(readmeButton?.className).toContain("text-base");
       expect(readmeButton?.querySelector("svg,img")?.getAttribute("class")).toContain("size-5");
       srcDirectoryButton?.dispatchEvent(
         new MouseEvent("contextmenu", {
@@ -450,6 +449,49 @@ describe("WorkspaceFilesPanel", () => {
           description: "@src/App.tsx",
         });
       });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("covers the complete visible mobile explorer row with its button", async () => {
+    await page.viewport(390, 844);
+    __setEnvironmentApiOverrideForTests(ENVIRONMENT_ID, createMockEnvironmentApi());
+    const mounted = await renderFilesPanel();
+
+    try {
+      await expect.element(page.getByRole("button", { name: /^src$/ })).toBeVisible();
+      const button = document.querySelector<HTMLButtonElement>('button[title="src"]');
+      const row = button?.parentElement;
+      expect(button).not.toBeNull();
+      expect(row).not.toBeNull();
+
+      const buttonRect = button!.getBoundingClientRect();
+      const rowRect = row!.getBoundingClientRect();
+      expect(rowRect.height).toBe(32);
+      expect(buttonRect.left).toBe(rowRect.left);
+      expect(buttonRect.right).toBe(rowRect.right);
+      expect(buttonRect.top).toBe(rowRect.top);
+      expect(buttonRect.bottom).toBe(rowRect.bottom);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("uses the shared source-control spinner while explorer entries load", async () => {
+    const api = createMockEnvironmentApi();
+    __setEnvironmentApiOverrideForTests(ENVIRONMENT_ID, {
+      ...api,
+      projects: {
+        ...api.projects,
+        listDirectoryEntries: vi.fn(async () => await new Promise<never>(() => undefined)),
+      },
+    } as EnvironmentApi);
+    const mounted = await renderFilesPanel();
+    try {
+      const spinner = page.getByRole("status", { name: "Loading" });
+      await expect.element(spinner).toBeVisible();
+      await expect.element(spinner).toHaveClass(/size-3\.5/);
     } finally {
       await mounted.cleanup();
     }
