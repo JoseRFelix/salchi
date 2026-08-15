@@ -5,6 +5,7 @@ import {
   buildExpandedImagePreview,
   type ExpandedImagePreview,
 } from "./ExpandedImagePreview";
+import { StableChatImage } from "./StableChatImage";
 import { DownloadIcon, ExternalLinkIcon, FileTextIcon } from "lucide-react";
 
 interface MessageAttachmentsProps {
@@ -48,15 +49,12 @@ function MessageImageGridOnly({
       )}
     >
       {images.map((image) => (
-        <div
-          key={image.id}
-          className="group relative overflow-hidden rounded-lg border border-border/80 bg-background/70"
-        >
+        <div key={image.id} className="group relative">
           {image.previewUrl ? (
             <>
               <button
                 type="button"
-                className="h-full w-full cursor-zoom-in"
+                className="block w-full cursor-zoom-in rounded-lg"
                 aria-label={`Preview ${image.name}`}
                 onClick={() => {
                   const preview = buildExpandedImagePreview(images, image.id);
@@ -64,12 +62,7 @@ function MessageImageGridOnly({
                   onImageExpand(preview);
                 }}
               >
-                <img
-                  src={image.previewUrl}
-                  alt={image.name}
-                  className="block h-auto max-h-[220px] w-full object-cover"
-                  loading="lazy"
-                />
+                <StableChatImage src={image.previewUrl} alt={image.name} />
               </button>
               <a
                 href={buildAttachmentDownloadUrl(image.previewUrl)}
@@ -101,12 +94,12 @@ function MessageImageAttachment({
   onImageExpand: (preview: ExpandedImagePreview) => void;
 }) {
   return (
-    <div className="group relative max-w-[420px] overflow-hidden rounded-lg border border-border/80 bg-background/70">
+    <div className="group relative max-w-[420px]">
       {image.previewUrl ? (
         <>
           <button
             type="button"
-            className="h-full w-full cursor-zoom-in"
+            className="block w-full cursor-zoom-in rounded-lg"
             aria-label={`Preview ${image.name}`}
             onClick={() => {
               const preview = buildExpandedImagePreview(images, image.id);
@@ -114,12 +107,7 @@ function MessageImageAttachment({
               onImageExpand(preview);
             }}
           >
-            <img
-              src={image.previewUrl}
-              alt={image.name}
-              className="block h-auto max-h-[220px] w-full object-cover"
-              loading="lazy"
-            />
+            <StableChatImage src={image.previewUrl} alt={image.name} />
           </button>
           <a
             href={buildAttachmentDownloadUrl(image.previewUrl)}
