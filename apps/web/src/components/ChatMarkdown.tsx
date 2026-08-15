@@ -996,15 +996,6 @@ function leadingExternalLinkTextLength(text: string): number {
   return Math.min(text.length, 1);
 }
 
-function breakableExternalLinkText(text: string): ReactNode[] {
-  return Array.from(text, (character, index) => (
-    <React.Fragment key={`${index}:${character}`}>
-      {character}
-      <wbr />
-    </React.Fragment>
-  ));
-}
-
 function plainHastText(node: unknown): string | null {
   if (!node || typeof node !== "object" || !("children" in node) || !Array.isArray(node.children)) {
     return null;
@@ -1102,7 +1093,7 @@ function MarkdownExternalLinkContent({
           <MarkdownLinkFavicon host={host} />
           {plainText.slice(0, leadingLength)}
         </span>
-        {breakableExternalLinkText(plainText.slice(leadingLength))}
+        {plainText.slice(leadingLength)}
       </>
     );
   }
@@ -1118,7 +1109,7 @@ function MarkdownExternalLinkContent({
           <MarkdownLinkFavicon host={host} />
           {firstChild.slice(0, leadingLength)}
         </span>
-        {breakableExternalLinkText(firstChild.slice(leadingLength))}
+        {firstChild.slice(leadingLength)}
         {childNodes.slice(1)}
       </>
     );
@@ -1355,6 +1346,7 @@ function ChatMarkdownAnchor({
     const link = (
       <a
         {...props}
+        className={cn(props.className, faviconHost && "chat-markdown-external-link")}
         href={href}
         target={isSameDocumentLink ? undefined : "_blank"}
         rel={isSameDocumentLink ? undefined : "noopener noreferrer"}
