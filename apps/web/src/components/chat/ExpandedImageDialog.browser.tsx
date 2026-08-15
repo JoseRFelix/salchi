@@ -46,11 +46,6 @@ describe("ExpandedImageDialog", () => {
         imageElement!.getBoundingClientRect().top,
       );
       expect(actions!.contains(imageElement)).toBe(false);
-
-      await page.screenshot({
-        path: "../../../../../artifacts/expanded-image-toolbar-preview.png",
-        element: dialog,
-      });
     } finally {
       await screen.unmount();
     }
