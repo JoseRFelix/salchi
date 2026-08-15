@@ -1,7 +1,6 @@
 import { registerSW } from "virtual:pwa-register";
 
 import { isElectron } from "../env";
-import { clearTurnCompletionAlerts } from "../push/notifications";
 import {
   setPwaServiceWorkerUpdateCheckPhase,
   showPwaServiceWorkerUpdateAvailable,
@@ -70,7 +69,6 @@ export function registerPwaServiceWorker(): void {
       if (!registration) {
         return;
       }
-      void clearTurnCompletionAlerts(registration);
 
       let checkInFlight = false;
       const checkForUpdate = async (): Promise<void> => {
@@ -102,7 +100,6 @@ export function registerPwaServiceWorker(): void {
       // surfaces updates soon after the user returns to it.
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") {
-          void clearTurnCompletionAlerts(registration);
           void checkForUpdate();
         }
       });

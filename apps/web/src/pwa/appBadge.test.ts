@@ -185,6 +185,7 @@ afterEach(() => {
   __resetPwaAppBadgeSyncForTests();
   resetBadgeStoreState();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -322,6 +323,7 @@ describe("installPwaAppBadgeSync", () => {
   });
 
   it("does not let stale async notification reads overwrite newer badge syncs", async () => {
+    vi.useFakeTimers();
     const thread1 = makeCompletedThread("thread-1", "2026-06-12T12:00:00.000Z");
     const thread2 = makeCompletedThread("thread-2", "2026-06-12T12:01:00.000Z");
     setBadgeStoreState([thread1, thread2]);
@@ -338,6 +340,7 @@ describe("installPwaAppBadgeSync", () => {
     });
 
     installPwaAppBadgeSync();
+    await vi.advanceTimersByTimeAsync(5000);
     await flushBadgeSync();
     expect(getRegistration).toHaveBeenCalledTimes(2);
     navigatorLike.clearAppBadge.mockClear();
@@ -388,6 +391,25 @@ describe("installPwaAppBadgeSync", () => {
 
     expect(navigatorLike.setAppBadge).not.toHaveBeenCalled();
     expect(navigatorLike.clearAppBadge).toHaveBeenCalled();
+  });
+
+  it("defers closing displayed notifications during notification-click activation", async () => {
+    vi.useFakeTimers();
+    const { getRegistration, windowStub } = installBadgeGlobals();
+
+    installPwaAppBadgeSync();
+    windowStub.dispatchEvent(new Event("focus"));
+    await flushBadgeSync();
+
+    expect(getRegistration).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(getRegistration).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await flushBadgeSync();
+
+    expect(getRegistration).toHaveBeenCalled();
   });
 
   it("clears completed-turn alerts when the document becomes visible", async () => {

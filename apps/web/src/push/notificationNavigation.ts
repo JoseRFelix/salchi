@@ -13,6 +13,9 @@ import {
 export const NOTIFICATION_CLICK_MESSAGE_TYPE = "salchi.notification-click";
 // Mirrored in public/salchi-push-service-worker.js. The service worker is a plain
 // public asset, so it cannot import this TypeScript helper directly.
+export const NOTIFICATION_CLICK_DIAGNOSTIC_MESSAGE_TYPE = "salchi.notification-click-diagnostic";
+// Mirrored in public/salchi-push-service-worker.js. The service worker is a plain
+// public asset, so it cannot import this TypeScript helper directly.
 export const NOTIFICATION_CLICK_ACK_MESSAGE_TYPE = "salchi.notification-click-ack";
 export const NOTIFICATION_CLICK_HANDLED_MESSAGE_TYPE = "salchi.notification-click-handled";
 // Mirrored in public/salchi-push-service-worker.js. The service worker is a plain
@@ -36,6 +39,14 @@ interface NotificationClickHandledMessage {
   readonly type: typeof NOTIFICATION_CLICK_HANDLED_MESSAGE_TYPE;
   readonly url: string;
   readonly openedAt: number;
+}
+
+interface NotificationClickDiagnosticMessage {
+  readonly type: typeof NOTIFICATION_CLICK_DIAGNOSTIC_MESSAGE_TYPE;
+  readonly url: string;
+  readonly openedAt: number;
+  readonly reason: string;
+  readonly data: Record<string, unknown>;
 }
 
 export type NotificationNavigationTarget =
@@ -94,6 +105,27 @@ function isNotificationClickHandledMessage(data: unknown): data is NotificationC
     "openedAt" in data &&
     typeof data.openedAt === "number" &&
     Number.isFinite(data.openedAt)
+  );
+}
+
+function isNotificationClickDiagnosticMessage(
+  data: unknown,
+): data is NotificationClickDiagnosticMessage {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "type" in data &&
+    data.type === NOTIFICATION_CLICK_DIAGNOSTIC_MESSAGE_TYPE &&
+    "url" in data &&
+    typeof data.url === "string" &&
+    "openedAt" in data &&
+    typeof data.openedAt === "number" &&
+    Number.isFinite(data.openedAt) &&
+    "reason" in data &&
+    typeof data.reason === "string" &&
+    "data" in data &&
+    typeof data.data === "object" &&
+    data.data !== null
   );
 }
 
@@ -221,6 +253,18 @@ export function installServiceWorkerNotificationNavigation(router: AppRouter): (
     void replayWithCleanup;
   };
   const handleMessage = (event: MessageEvent<unknown>) => {
+    if (isNotificationClickDiagnosticMessage(event.data)) {
+      recordResumeDiagnostic("notification-click-service-worker", {
+        reason: event.data.reason,
+        data: {
+          url: event.data.url,
+          openedAt: event.data.openedAt,
+          ...event.data.data,
+        },
+      });
+      return;
+    }
+
     if (!isNotificationClickClientMessage(event.data)) {
       return;
     }
@@ -230,6 +274,14 @@ export function installServiceWorkerNotificationNavigation(router: AppRouter): (
       data: {
         url: event.data.url,
         openedAt: event.data.openedAt,
+        documentHasFocus:
+          typeof document !== "undefined" && typeof document.hasFocus === "function"
+            ? document.hasFocus()
+            : null,
+        visibilityState:
+          typeof document !== "undefined" && typeof document.visibilityState === "string"
+            ? document.visibilityState
+            : null,
       },
     });
     void handleNotificationClickNavigation(router, {

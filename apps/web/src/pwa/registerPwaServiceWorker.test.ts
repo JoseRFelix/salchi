@@ -183,7 +183,7 @@ describe("registerPwaServiceWorker", () => {
     expect(usePwaServiceWorkerUpdateStore.getState().checkPhase).toBe("idle");
   });
 
-  it("asks the active service worker to clear completed-turn alerts on registration and visibility", async () => {
+  it("does not close notifications while Chrome may still be dispatching their click", async () => {
     const browserEnvironment = installBrowserEnvironment();
     const postMessage = vi.fn();
     const registration = createRegistration(() => Promise.resolve(), null, { postMessage });
@@ -191,16 +191,11 @@ describe("registerPwaServiceWorker", () => {
     registerPwaServiceWorker();
     readRegisterSWOptions().onRegisteredSW?.("/salchi-service-worker.js", registration);
 
-    expect(postMessage).toHaveBeenCalledWith({
-      type: "salchi.clear-turn-completion-notifications",
-    });
-    postMessage.mockClear();
+    expect(postMessage).not.toHaveBeenCalled();
 
     browserEnvironment.dispatchVisibilityChange();
 
-    expect(postMessage).toHaveBeenCalledWith({
-      type: "salchi.clear-turn-completion-notifications",
-    });
+    expect(postMessage).not.toHaveBeenCalled();
   });
 
   it("skips the startup update check while offline", () => {

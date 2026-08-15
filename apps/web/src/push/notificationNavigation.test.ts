@@ -13,6 +13,7 @@ import {
   isNotificationClickClientMessage,
   NOTIFICATION_CLICK_ACK_MESSAGE_TYPE,
   NOTIFICATION_CLICK_BROADCAST_CHANNEL_NAME,
+  NOTIFICATION_CLICK_DIAGNOSTIC_MESSAGE_TYPE,
   NOTIFICATION_CLICK_HANDLED_MESSAGE_TYPE,
   parseNotificationNavigationTarget,
   resetNotificationNavigationStateForTests,
@@ -262,6 +263,8 @@ describe("notificationNavigation", () => {
   });
 
   it("navigates service worker click messages through the app router", async () => {
+    const resumeDiagnostics = await import("../environments/runtime/resumeDiagnostics");
+    const diagnosticSpy = vi.spyOn(resumeDiagnostics, "recordResumeDiagnostic");
     const service = await import("../environments/runtime/service");
     const reconcileSpy = vi
       .spyOn(service, "reconcileAfterNotificationClick")
@@ -306,6 +309,16 @@ describe("notificationNavigation", () => {
         openedAt,
       },
     );
+    expect(diagnosticSpy).toHaveBeenCalledWith(
+      "notification-navigation-message",
+      expect.objectContaining({
+        reason: "service-worker-message",
+        data: expect.objectContaining({
+          documentHasFocus: true,
+          visibilityState: "visible",
+        }),
+      }),
+    );
 
     cleanup();
     serviceWorker.dispatch({
@@ -313,6 +326,45 @@ describe("notificationNavigation", () => {
       url: "/env-2/thread-2",
     });
     expect(router.navigate).toHaveBeenCalledTimes(1);
+  });
+
+  it("records service worker activation diagnostics without navigating", async () => {
+    const resumeDiagnostics = await import("../environments/runtime/resumeDiagnostics");
+    const diagnosticSpy = vi.spyOn(resumeDiagnostics, "recordResumeDiagnostic");
+    const serviceWorker = stubServiceWorker();
+    const router = makeRouter();
+    const openedAt = Date.now();
+
+    const cleanup = installServiceWorkerNotificationNavigation(router);
+    serviceWorker.dispatch({
+      type: NOTIFICATION_CLICK_DIAGNOSTIC_MESSAGE_TYPE,
+      url: "/env-1/thread-1",
+      openedAt,
+      reason: "client-focus",
+      data: {
+        outcome: "rejected",
+        error: {
+          name: "InvalidAccessError",
+          message: "Window interaction is not allowed",
+        },
+      },
+    });
+
+    expect(diagnosticSpy).toHaveBeenCalledWith("notification-click-service-worker", {
+      reason: "client-focus",
+      data: {
+        url: "/env-1/thread-1",
+        openedAt,
+        outcome: "rejected",
+        error: {
+          name: "InvalidAccessError",
+          message: "Window interaction is not allowed",
+        },
+      },
+    });
+    expect(router.navigate).not.toHaveBeenCalled();
+
+    cleanup();
   });
 
   it("navigates broadcast click messages through the app router and clears pending clicks", async () => {
