@@ -4,7 +4,6 @@ import {
   ArrowLeftIcon,
   ChevronRightIcon,
   FolderTreeIcon,
-  LoaderIcon,
   PanelRightCloseIcon,
   RefreshCwIcon,
   SearchIcon,
@@ -44,6 +43,7 @@ import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { Spinner } from "./ui/spinner";
 import { toastManager } from "./ui/toast";
 
 const EXPLORER_ROW_HEIGHT_CLASS_NAME = "py-1";
@@ -107,7 +107,7 @@ const WorkspaceExplorerLoadingRows = memo(function WorkspaceExplorerLoadingRows(
         )}
         style={{ paddingLeft: 10 + props.depth * 14 }}
       >
-        <LoaderIcon className="size-4 animate-spin" />
+        <Spinner className="size-3.5" />
         <div className="h-3.5 w-32 rounded-full bg-muted/60" />
       </div>
     </div>
@@ -240,60 +240,57 @@ const WorkspaceExplorerEntryRow = memo(function WorkspaceExplorerEntryRow(props:
   });
 
   return (
-    <div
+    <button
+      type="button"
       className={cn(
         EXPLORER_ROW_HEIGHT_CLASS_NAME,
-        "group flex w-full min-w-0 select-none items-center pr-2 text-base transition-colors [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] [-webkit-user-select:none] hover:bg-accent/70 focus-within:bg-accent focus-within:ring-2 focus-within:ring-ring md:text-xs",
+        "group flex w-full min-w-0 select-none items-center gap-2 pr-2 text-left text-base outline-none transition-colors [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] [-webkit-user-select:none] hover:bg-accent/70 focus:bg-accent focus:ring-2 focus:ring-ring md:text-xs",
       )}
       style={{ paddingLeft: 8 + depth * 14 }}
+      aria-label={title}
+      title={entry.path}
+      onClick={onClick}
+      onClickCapture={handleLongPressClickCapture}
+      onContextMenu={handleContextMenu}
+      onContextMenuCapture={handleLongPressContextMenuCapture}
+      onPointerCancelCapture={handleLongPressPointerCancelCapture}
+      onPointerDownCapture={handleLongPressPointerDownCapture}
+      onPointerMoveCapture={handleLongPressPointerMoveCapture}
+      onPointerUpCapture={handleLongPressPointerUpCapture}
     >
-      <button
-        type="button"
-        className="flex h-full min-w-0 flex-1 select-none items-center gap-2 text-left outline-none [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] [-webkit-user-select:none]"
-        title={entry.path}
-        onClick={onClick}
-        onClickCapture={handleLongPressClickCapture}
-        onContextMenu={handleContextMenu}
-        onContextMenuCapture={handleLongPressContextMenuCapture}
-        onPointerCancelCapture={handleLongPressPointerCancelCapture}
-        onPointerDownCapture={handleLongPressPointerDownCapture}
-        onPointerMoveCapture={handleLongPressPointerMoveCapture}
-        onPointerUpCapture={handleLongPressPointerUpCapture}
+      <span
+        className={cn(
+          "flex size-5 shrink-0 items-center justify-center",
+          isIgnored ? "text-muted-foreground/45" : "text-muted-foreground/65",
+        )}
       >
-        <span
-          className={cn(
-            "flex size-5 shrink-0 items-center justify-center",
-            isIgnored ? "text-muted-foreground/45" : "text-muted-foreground/65",
-          )}
-        >
-          {isDirectory ? (
-            <ChevronRightIcon
-              className={cn(
-                "size-4 transition-transform",
-                expanded && mode === "tree" && "rotate-90",
-              )}
-            />
-          ) : null}
-        </span>
-        <PierreEntryIcon
-          pathValue={entry.path}
-          kind={entry.kind}
-          theme={resolvedTheme}
-          className={cn("size-5 shrink-0", isIgnored && "opacity-45 grayscale")}
-        />
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate",
-            isIgnored
-              ? "text-muted-foreground/55"
-              : statusBadge
-                ? statusBadge.className
-                : "text-foreground/88",
-          )}
-        >
-          {title}
-        </span>
-      </button>
+        {isDirectory ? (
+          <ChevronRightIcon
+            className={cn(
+              "size-4 transition-transform",
+              expanded && mode === "tree" && "rotate-90",
+            )}
+          />
+        ) : null}
+      </span>
+      <PierreEntryIcon
+        pathValue={entry.path}
+        kind={entry.kind}
+        theme={resolvedTheme}
+        className={cn("size-5 shrink-0", isIgnored && "opacity-45 grayscale")}
+      />
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate",
+          isIgnored
+            ? "text-muted-foreground/55"
+            : statusBadge
+              ? statusBadge.className
+              : "text-foreground/88",
+        )}
+      >
+        {title}
+      </span>
       {statusBadge ? (
         <span
           aria-label={statusBadgeLabel}
@@ -306,7 +303,7 @@ const WorkspaceExplorerEntryRow = memo(function WorkspaceExplorerEntryRow(props:
           {statusBadge.letter}
         </span>
       ) : null}
-    </div>
+    </button>
   );
 });
 
