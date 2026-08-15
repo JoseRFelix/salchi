@@ -1532,6 +1532,65 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("maps completed Codex image-view items to generated images", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "salchi-codex-image-view-"));
+      const imagePath = path.join(tempDir, "latest-screenshot.png");
+      const imageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+      fs.writeFileSync(imagePath, imageBytes);
+
+      try {
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 2)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* runtime.emit({
+          id: asEventId("evt-image-view-item-completed"),
+          kind: "notification",
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          method: "item/completed",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-1"),
+          itemId: asItemId("image_view_1"),
+          payload: {
+            completedAtMs: 1_778_000_000_000,
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              type: "imageView",
+              id: "image_view_1",
+              path: imagePath,
+            },
+          },
+        } satisfies ProviderEvent);
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+
+        assert.equal(events.length, 2);
+        const generatedEvent = events[0];
+        assert.equal(generatedEvent?.type, "image.generated");
+        if (generatedEvent?.type === "image.generated") {
+          assert.equal(generatedEvent.turnId, "turn-1");
+          assert.equal(generatedEvent.itemId, "image_view_1");
+          assert.equal(generatedEvent.payload.name, "latest-screenshot.png");
+          assert.equal(
+            generatedEvent.payload.dataUrl,
+            `data:image/png;base64,${imageBytes.toString("base64")}`,
+          );
+        }
+
+        const completedEvent = events[1];
+        assert.equal(completedEvent?.type, "item.completed");
+        if (completedEvent?.type === "item.completed") {
+          assert.equal(completedEvent.payload.itemType, "image_view");
+        }
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }),
+  );
+
   it.effect("maps started Codex image generation lifecycle items to generated images", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

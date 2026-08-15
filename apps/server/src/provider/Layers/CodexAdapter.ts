@@ -10,6 +10,7 @@
 import {
   type CanonicalItemType,
   type CanonicalRequestType,
+  CHAT_IMAGE_ATTACHMENT_MAX_BYTES,
   type CodexSettings,
   EventId,
   MessageId,
@@ -66,6 +67,7 @@ import {
 import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { imageMimeTypeFromFileName } from "../../imageMime.ts";
 import { reapManagedChildProcesses } from "../../process/ManagedChildProcessRegistry.ts";
 import {
   formatPdfAttachmentReferenceText,
@@ -2157,6 +2159,62 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       }
     | undefined;
 
+  const materializeImageViewRuntimeEvents = Effect.fn("codex.materializeImageView")(function* (
+    event: ProviderEvent,
+    canonicalThreadId: ThreadId,
+  ): Effect.fn.Return<ReadonlyArray<ProviderRuntimeEvent>> {
+    if (event.method !== "item/completed") {
+      return [];
+    }
+
+    const payload = readPayload(EffectCodexSchema.V2ItemCompletedNotification, event.payload);
+    const item = payload?.item;
+    if (!item || item.type !== "imageView") {
+      return [];
+    }
+
+    const imagePath = item.path;
+    const mimeType = imageMimeTypeFromFileName(imagePath);
+    if (!path.isAbsolute(imagePath) || !mimeType) {
+      return [];
+    }
+
+    const fileInfo = yield* fileSystem
+      .stat(imagePath)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!fileInfo || fileInfo.type !== "File") {
+      return [];
+    }
+
+    const fileSize = Number(fileInfo.size);
+    if (
+      !Number.isSafeInteger(fileSize) ||
+      fileSize <= 0 ||
+      fileSize > CHAT_IMAGE_ATTACHMENT_MAX_BYTES
+    ) {
+      return [];
+    }
+
+    const bytes = yield* fileSystem
+      .readFile(imagePath)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!bytes || bytes.byteLength === 0) {
+      return [];
+    }
+
+    return [
+      {
+        ...runtimeEventBase(event, canonicalThreadId),
+        eventId: EventId.make(`${event.id}:image-view`),
+        type: "image.generated",
+        payload: {
+          name: path.basename(imagePath),
+          dataUrl: `data:${mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
+        },
+      },
+    ];
+  });
+
   const childThreadStartedMetadataKey = (input: {
     readonly providerThreadId: string;
     readonly providerParentThreadId: string;
@@ -2644,7 +2702,14 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             if (root && hydrationInput) {
               yield* ensureMaterializedCandidateChildSessions(root, event, hydrationInput);
             }
-            const runtimeEvents = mapToRuntimeEvents(event, event.threadId);
+            const imageViewRuntimeEvents = yield* materializeImageViewRuntimeEvents(
+              event,
+              event.threadId,
+            );
+            const runtimeEvents = [
+              ...imageViewRuntimeEvents,
+              ...mapToRuntimeEvents(event, event.threadId),
+            ];
             if (runtimeEvents.length === 0) {
               yield* Effect.logDebug("ignoring unhandled Codex provider event", {
                 method: event.method,
