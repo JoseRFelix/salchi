@@ -304,6 +304,7 @@ const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>)
   );
 
 export const makeServerRuntimeStartup = Effect.gen(function* () {
+  const crypto = yield* Crypto.Crypto;
   const serverConfig = yield* ServerConfig;
   const keybindings = yield* Keybindings;
   const orchestrationReactor = yield* OrchestrationReactor;
@@ -311,6 +312,7 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
   const lifecycleEvents = yield* ServerLifecycleEvents;
   const serverSettings = yield* ServerSettingsService;
   const serverEnvironment = yield* ServerEnvironment;
+  const serverBootId = yield* crypto.randomUUIDv4;
 
   const commandGate = yield* makeCommandGate;
   const httpListening = yield* Deferred.make<void>();
@@ -363,6 +365,7 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
     yield* Effect.logDebug("startup phase: preparing welcome payload");
     yield* Effect.logDebug("startup phase: publishing welcome event", {
       environmentId: environment.environmentId,
+      serverBootId,
       cwd: welcomeBase.cwd,
       projectName: welcomeBase.projectName,
     });
@@ -374,6 +377,7 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
         payload: {
           environment,
           ...welcomeBase,
+          serverBootId,
         },
       }),
     );
@@ -401,6 +405,7 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
               payload: {
                 environment,
                 ...welcomeBase,
+                serverBootId,
                 ...bootstrapTargets,
               },
             });
