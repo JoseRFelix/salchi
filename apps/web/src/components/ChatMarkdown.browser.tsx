@@ -319,6 +319,8 @@ describe("ChatMarkdown", () => {
       expect(getComputedStyle(favicon!).verticalAlign).not.toBe("baseline");
       expect(link.element().textContent).toBe(url);
       expect(link.element().querySelectorAll("wbr")).toHaveLength(0);
+      expect(link.element().classList.contains("chat-markdown-external-link")).toBe(true);
+      expect(getComputedStyle(link.element()).overflowWrap).toBe("anywhere");
       const markdownRoot = link.element().closest<HTMLElement>(".chat-markdown");
       expect(markdownRoot).not.toBeNull();
       expect(markdownRoot!.scrollWidth).toBeLessThanOrEqual(markdownRoot!.clientWidth);
