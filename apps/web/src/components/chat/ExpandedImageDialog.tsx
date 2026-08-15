@@ -8,6 +8,9 @@ interface ExpandedImageDialogProps {
   onClose: () => void;
 }
 
+const IMAGE_ACTION_BUTTON_CLASS_NAME =
+  "size-8 rounded-md border-transparent bg-background/80 text-foreground shadow-sm hover:bg-background";
+
 export const ExpandedImageDialog = memo(function ExpandedImageDialog({
   preview: initialPreview,
   onClose,
@@ -81,29 +84,32 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
           <ChevronLeftIcon className="size-5" />
         </Button>
       )}
-      <div className="relative isolate z-10 max-h-[92vh] max-w-[92vw] animate-expanded-image-open motion-reduce:animate-none">
-        <Button
-          type="button"
-          size="icon-xs"
-          variant="ghost"
-          className="absolute right-2 top-2"
-          onClick={onClose}
-          aria-label="Close image preview"
-        >
-          <XIcon />
-        </Button>
-        <a
-          href={buildAttachmentDownloadUrl(item.src)}
-          download={item.name}
-          className="absolute right-12 top-2 inline-flex size-8 items-center justify-center rounded-md bg-background/80 text-foreground shadow-sm hover:bg-background"
-          aria-label={`Download ${item.name}`}
-        >
-          <DownloadIcon className="size-4" aria-hidden />
-        </a>
+      <div className="relative isolate z-10 flex max-h-[92vh] max-w-[92vw] flex-col animate-expanded-image-open motion-reduce:animate-none">
+        <div className="mb-2 flex shrink-0 justify-end gap-2" data-slot="expanded-image-actions">
+          <Button
+            render={<a href={buildAttachmentDownloadUrl(item.src)} download={item.name} />}
+            size="icon"
+            variant="ghost"
+            className={IMAGE_ACTION_BUTTON_CLASS_NAME}
+            aria-label={`Download ${item.name}`}
+          >
+            <DownloadIcon className="size-4" aria-hidden />
+          </Button>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className={IMAGE_ACTION_BUTTON_CLASS_NAME}
+            onClick={onClose}
+            aria-label="Close image preview"
+          >
+            <XIcon className="size-4" aria-hidden />
+          </Button>
+        </div>
         <img
           src={item.src}
           alt={item.name}
-          className="max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-border/70 bg-background object-contain shadow-2xl"
+          className="max-h-[calc(92vh-4.5rem)] max-w-[92vw] select-none rounded-lg border border-border/70 bg-background object-contain shadow-2xl"
           draggable={false}
         />
         <p className="mt-2 max-w-[92vw] truncate text-center text-xs text-muted-foreground/80">

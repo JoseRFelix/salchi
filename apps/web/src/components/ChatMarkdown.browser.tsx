@@ -442,6 +442,30 @@ describe("ChatMarkdown", () => {
     }
   });
 
+  it("renders an image path fallback for absolute paths outside the workspace", async () => {
+    const screen = await render(
+      <ChatMarkdown
+        text="![Generated screenshot](</repo/visualizations/generated-screenshot.png>)"
+        cwd="/repo/project"
+        environmentId={EnvironmentId.make("environment-local")}
+      />,
+    );
+
+    try {
+      const fallback = page.getByLabelText(
+        "Generated screenshot: /repo/visualizations/generated-screenshot.png",
+      );
+      await expect.element(fallback).toBeVisible();
+      await expect
+        .element(fallback)
+        .toHaveTextContent("/repo/visualizations/generated-screenshot.png");
+      await expect.element(page.getByAltText("Generated screenshot")).not.toBeInTheDocument();
+      expect(resolveEnvironmentHttpUrlMock).not.toHaveBeenCalled();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("does not auto-render non-image markdown file links as images", async () => {
     const screen = await render(
       <ChatMarkdown

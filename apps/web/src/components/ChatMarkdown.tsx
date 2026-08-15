@@ -3,6 +3,7 @@ import {
   ChevronRightIcon,
   CopyIcon,
   GlobeIcon,
+  ImageIcon,
   Maximize2Icon,
   Minimize2Icon,
   WrapTextIcon,
@@ -76,6 +77,7 @@ import {
 } from "../codeHighlighting";
 import { useSelectedSyntaxTheme, type SyntaxThemeName } from "../syntaxThemes";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
+import { StableChatImage } from "./chat/StableChatImage";
 
 class CodeHighlightErrorBoundary extends React.Component<
   { fallback: ReactNode; children: ReactNode },
@@ -903,6 +905,54 @@ function resolveMarkdownImagePreview(input: {
     : null;
 }
 
+function resolveMarkdownImageFallback(input: {
+  src: string | undefined;
+  alt: string | undefined;
+  cwd: string | undefined;
+}): { label: string; path: string } | null {
+  if (!input.src) {
+    return null;
+  }
+
+  const href = normalizeMarkdownLinkHrefKey(input.src);
+  if (href.startsWith(MARKDOWN_ATTACHMENTS_ROUTE_PREFIX)) {
+    return {
+      label: input.alt || basenameFromPath(href),
+      path: href,
+    };
+  }
+
+  const fileLinkMeta = resolveMarkdownFileLinkMeta(href, input.cwd);
+  if (fileLinkMeta && isWorkspaceImagePreviewPath(fileLinkMeta.filePath)) {
+    return {
+      label: input.alt || fileLinkMeta.basename || basenameFromPath(href),
+      path: fileLinkMeta.displayPath,
+    };
+  }
+
+  try {
+    const url = new URL(href);
+    if (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      isWorkspaceImagePreviewPath(url.pathname)
+    ) {
+      return {
+        label: input.alt || basenameFromPath(url.pathname),
+        path: href,
+      };
+    }
+  } catch {
+    if (isWorkspaceImagePreviewPath(href)) {
+      return {
+        label: input.alt || basenameFromPath(href),
+        path: href,
+      };
+    }
+  }
+
+  return null;
+}
+
 const MarkdownLinkFavicon = memo(function MarkdownLinkFavicon({ host }: { host: string }) {
   const [status, setStatus] = useState<"loading" | "loaded" | "error">(() =>
     markdownFaviconStatus(host),
@@ -1381,7 +1431,21 @@ function ChatMarkdownImage({
     environmentId,
   });
   if (!image) {
-    return null;
+    const fallback = resolveMarkdownImageFallback({ src, alt, cwd });
+    if (!fallback) {
+      return null;
+    }
+
+    return (
+      <span
+        className="chat-markdown-image-fallback"
+        aria-label={`${fallback.label}: ${fallback.path}`}
+        title={fallback.path}
+      >
+        <ImageIcon className="size-4 shrink-0" aria-hidden="true" />
+        <span className="chat-markdown-image-fallback-path">{fallback.path}</span>
+      </span>
+    );
   }
 
   const preview = {
@@ -1396,7 +1460,12 @@ function ChatMarkdownImage({
       aria-label={`Preview ${image.name}`}
       onClick={() => onImageExpand?.(preview)}
     >
-      <img src={image.src} alt={alt ?? image.name} className="chat-markdown-image" loading="lazy" />
+      <StableChatImage
+        src={image.src}
+        alt={alt ?? image.name}
+        className="chat-markdown-image-frame"
+        imageClassName="chat-markdown-image"
+      />
     </button>
   );
 }
