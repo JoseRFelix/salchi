@@ -137,6 +137,13 @@ function buildUserTimelineEntry(text: string) {
 }
 
 describe("MessagesTimeline", () => {
+  it("uses a taller row estimate for narrow mobile layouts", async () => {
+    const { resolveTimelineEstimatedRowSize } = await import("./MessagesTimeline");
+
+    expect(resolveTimelineEstimatedRowSize(false)).toBe(150);
+    expect(resolveTimelineEstimatedRowSize(true)).toBe(300);
+  });
+
   it("renders collapse controls for long user messages", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
