@@ -46,11 +46,6 @@ describe("RecoveryQueuedTurnBanner", () => {
       await page.getByRole("button", { name: "Discard" }).click();
       expect(onSend).toHaveBeenCalledOnce();
       expect(onDiscard).toHaveBeenCalledOnce();
-
-      await page.screenshot({
-        path: "../../../../../artifacts/recovery-queued-message-alert.png",
-        element: page.getByRole("alert"),
-      });
     } finally {
       await screen.unmount();
     }
