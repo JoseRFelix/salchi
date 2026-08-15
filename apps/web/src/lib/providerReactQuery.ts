@@ -15,6 +15,7 @@ const decodeTurnDiffInput = Schema.decodeUnknownOption(OrchestrationGetTurnDiffI
 interface CheckpointDiffQueryInput {
   environmentId: EnvironmentId | null;
   threadId: ThreadId | null;
+  requestKind: "turn" | "full-thread";
   fromTurnCount: number | null;
   toTurnCount: number | null;
   ignoreWhitespace: boolean;
@@ -30,6 +31,7 @@ export const providerQueryKeys = {
       "checkpointDiff",
       input.environmentId ?? null,
       input.threadId,
+      input.requestKind,
       input.fromTurnCount,
       input.toTurnCount,
       input.ignoreWhitespace,
@@ -38,7 +40,7 @@ export const providerQueryKeys = {
 };
 
 function decodeCheckpointDiffRequest(input: CheckpointDiffQueryInput) {
-  if (input.fromTurnCount === 0) {
+  if (input.requestKind === "full-thread") {
     return decodeFullThreadDiffInput({
       threadId: input.threadId,
       toTurnCount: input.toTurnCount,
