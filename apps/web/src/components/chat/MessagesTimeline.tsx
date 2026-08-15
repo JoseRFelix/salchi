@@ -105,6 +105,7 @@ import {
   type ScheduledTimelineScrollAnchorRestore,
 } from "./timelineScrollAnchor";
 import { createTouchScrollIntentTracker, isWheelScrollAwayIntent } from "./timelineScrollIntent";
+import { useIsMobile } from "../../hooks/useMediaQuery";
 
 // ---------------------------------------------------------------------------
 // Context — shared state consumed by every row component via Context.
@@ -151,7 +152,15 @@ const MAINTAIN_VISIBLE_CONTENT_POSITION_DATA_ANCHORED = {
 // measured during scroll, but mounting the whole page is far more expensive than
 // the rare correction, so prefer a tight window (~a couple screens of rows).
 const TIMELINE_DRAW_DISTANCE_PX = 2_000;
-const TIMELINE_ESTIMATED_ROW_SIZE_PX = 150;
+const TIMELINE_DESKTOP_ESTIMATED_ROW_SIZE_PX = 150;
+// Markdown-heavy rows are substantially taller at phone widths. Using the
+// desktop estimate makes the initial end-of-thread render mount many screens
+// of content before those rows can be measured.
+const TIMELINE_MOBILE_ESTIMATED_ROW_SIZE_PX = 300;
+
+export function resolveTimelineEstimatedRowSize(isMobile: boolean): number {
+  return isMobile ? TIMELINE_MOBILE_ESTIMATED_ROW_SIZE_PX : TIMELINE_DESKTOP_ESTIMATED_ROW_SIZE_PX;
+}
 
 /** Tracks which work entries have already been displayed, so the fade-in-down
  *  animation only plays the first time an entry appears. */
@@ -224,6 +233,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const selectedSyntaxTheme = useSelectedSyntaxTheme();
+  const isMobile = useIsMobile();
+  const estimatedRowSize = resolveTimelineEstimatedRowSize(isMobile);
 
   // Toggling a fold inserts/removes rows between the fold row and the final
   // message — everything above the trigger is unchanged, so the trigger stays
@@ -555,7 +566,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             keyExtractor={keyExtractor}
             getItemType={getTimelineRowItemType}
             renderItem={renderItem}
-            estimatedItemSize={TIMELINE_ESTIMATED_ROW_SIZE_PX}
+            estimatedItemSize={estimatedRowSize}
             increaseViewportBy={TIMELINE_DRAW_DISTANCE_PX}
             initialScrollAtEnd
             maintainScrollAtEnd={foldToggleSettling ? false : MAINTAIN_SCROLL_AT_END_ANIMATED}
