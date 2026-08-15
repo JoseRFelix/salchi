@@ -579,6 +579,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     checkpointDiffQueryOptions({
       environmentId: activeDiffContext?.environmentId ?? null,
       threadId: activeThreadId,
+      requestKind: selectedTurn ? "turn" : "full-thread",
       fromTurnCount: activeCheckpointRange?.fromTurnCount ?? null,
       toTurnCount: activeCheckpointRange?.toTurnCount ?? null,
       ignoreWhitespace: diffIgnoreWhitespace,

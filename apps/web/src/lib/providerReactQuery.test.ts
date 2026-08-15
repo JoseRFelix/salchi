@@ -28,6 +28,7 @@ describe("providerQueryKeys.checkpointDiff", () => {
     const baseInput = {
       environmentId,
       threadId,
+      requestKind: "turn",
       fromTurnCount: 1,
       toTurnCount: 2,
       ignoreWhitespace: false,
@@ -50,6 +51,7 @@ describe("providerQueryKeys.checkpointDiff", () => {
     const baseInput = {
       environmentId,
       threadId,
+      requestKind: "turn",
       fromTurnCount: 1,
       toTurnCount: 2,
       cacheScope: "turn:abc",
@@ -67,6 +69,29 @@ describe("providerQueryKeys.checkpointDiff", () => {
       }),
     );
   });
+
+  it("includes requestKind so first-turn and full-thread requests do not collide", () => {
+    const baseInput = {
+      environmentId,
+      threadId,
+      fromTurnCount: 0,
+      toTurnCount: 1,
+      ignoreWhitespace: true,
+      cacheScope: "turn:first",
+    } as const;
+
+    expect(
+      providerQueryKeys.checkpointDiff({
+        ...baseInput,
+        requestKind: "turn",
+      }),
+    ).not.toEqual(
+      providerQueryKeys.checkpointDiff({
+        ...baseInput,
+        requestKind: "full-thread",
+      }),
+    );
+  });
 });
 
 describe("checkpointDiffQueryOptions", () => {
@@ -78,6 +103,7 @@ describe("checkpointDiffQueryOptions", () => {
     const options = checkpointDiffQueryOptions({
       environmentId,
       threadId,
+      requestKind: "turn",
       fromTurnCount: 3,
       toTurnCount: 4,
       ignoreWhitespace: false,
@@ -104,6 +130,7 @@ describe("checkpointDiffQueryOptions", () => {
     const options = checkpointDiffQueryOptions({
       environmentId,
       threadId,
+      requestKind: "turn",
       fromTurnCount: 3,
       toTurnCount: 4,
       ignoreWhitespace: true,
@@ -122,7 +149,7 @@ describe("checkpointDiffQueryOptions", () => {
     expect(getFullThreadDiff).not.toHaveBeenCalled();
   });
 
-  it("uses explicit full thread diff API when range starts from zero", async () => {
+  it("uses the turn diff API for the first turn", async () => {
     const getTurnDiff = vi.fn().mockResolvedValue({ diff: "patch" });
     const getFullThreadDiff = vi.fn().mockResolvedValue({ diff: "patch" });
     mockNativeApi({ getTurnDiff, getFullThreadDiff });
@@ -130,6 +157,34 @@ describe("checkpointDiffQueryOptions", () => {
     const options = checkpointDiffQueryOptions({
       environmentId,
       threadId,
+      requestKind: "turn",
+      fromTurnCount: 0,
+      toTurnCount: 1,
+      ignoreWhitespace: true,
+      cacheScope: "turn:first",
+    });
+
+    const queryClient = new QueryClient();
+    await queryClient.fetchQuery(options);
+
+    expect(getTurnDiff).toHaveBeenCalledWith({
+      threadId,
+      fromTurnCount: 0,
+      toTurnCount: 1,
+      ignoreWhitespace: true,
+    });
+    expect(getFullThreadDiff).not.toHaveBeenCalled();
+  });
+
+  it("uses the explicit full thread diff API", async () => {
+    const getTurnDiff = vi.fn().mockResolvedValue({ diff: "patch" });
+    const getFullThreadDiff = vi.fn().mockResolvedValue({ diff: "patch" });
+    mockNativeApi({ getTurnDiff, getFullThreadDiff });
+
+    const options = checkpointDiffQueryOptions({
+      environmentId,
+      threadId,
+      requestKind: "full-thread",
       fromTurnCount: 0,
       toTurnCount: 2,
       ignoreWhitespace: true,
@@ -155,6 +210,7 @@ describe("checkpointDiffQueryOptions", () => {
     const options = checkpointDiffQueryOptions({
       environmentId,
       threadId,
+      requestKind: "turn",
       fromTurnCount: 4,
       toTurnCount: 3,
       ignoreWhitespace: false,
@@ -174,6 +230,7 @@ describe("checkpointDiffQueryOptions", () => {
     const options = checkpointDiffQueryOptions({
       environmentId,
       threadId,
+      requestKind: "turn",
       fromTurnCount: 1,
       toTurnCount: 2,
       ignoreWhitespace: false,
@@ -200,6 +257,7 @@ describe("checkpointDiffQueryOptions", () => {
     const options = checkpointDiffQueryOptions({
       environmentId,
       threadId,
+      requestKind: "turn",
       fromTurnCount: 1,
       toTurnCount: 2,
       ignoreWhitespace: false,
