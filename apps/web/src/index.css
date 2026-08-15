@@ -425,6 +425,10 @@ label:has(> select#reasoning-effort) select {
   text-decoration: none;
 }
 
+.chat-markdown a.chat-markdown-external-link {
+  overflow-wrap: anywhere;
+}
+
 .chat-markdown a:not(.chat-markdown-file-link):hover,
 .chat-markdown a:not(.chat-markdown-file-link):focus-visible {
   background-image: radial-gradient(circle, currentcolor 0.75px, transparent 1px);

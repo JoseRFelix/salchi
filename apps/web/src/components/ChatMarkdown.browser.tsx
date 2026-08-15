@@ -318,7 +318,7 @@ describe("ChatMarkdown", () => {
       expect(getComputedStyle(leading!).whiteSpace).toBe("nowrap");
       expect(getComputedStyle(favicon!).verticalAlign).not.toBe("baseline");
       expect(link.element().textContent).toBe(url);
-      expect(link.element().querySelectorAll("wbr").length).toBeGreaterThan(0);
+      expect(link.element().querySelectorAll("wbr")).toHaveLength(0);
       const markdownRoot = link.element().closest<HTMLElement>(".chat-markdown");
       expect(markdownRoot).not.toBeNull();
       expect(markdownRoot!.scrollWidth).toBeLessThanOrEqual(markdownRoot!.clientWidth);
