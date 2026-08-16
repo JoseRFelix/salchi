@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { shouldOfferPwaPushPrompt } from "./pwa-push-prompt";
+import {
+  isPushPromptDismissalActive,
+  PUSH_PROMPT_DISMISS_COOLDOWN_MS,
+  shouldOfferPwaPushPrompt,
+} from "./pwa-push-prompt";
 
 const eligibleInput = {
-  isStandalonePwa: true,
+  surface: "standalone-pwa" as const,
+  hasRunningTurn: false,
   pushSupported: true,
   permission: "default" as NotificationPermission,
   isSubscribed: false,
@@ -15,11 +20,31 @@ describe("shouldOfferPwaPushPrompt", () => {
     expect(shouldOfferPwaPushPrompt(eligibleInput)).toBe(true);
   });
 
-  it("does not offer the prompt in the browser tab", () => {
+  it("offers the prompt in desktop web while a turn is running", () => {
     expect(
       shouldOfferPwaPushPrompt({
         ...eligibleInput,
-        isStandalonePwa: false,
+        surface: "desktop-web",
+        hasRunningTurn: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not offer the desktop prompt before a turn is running", () => {
+    expect(
+      shouldOfferPwaPushPrompt({
+        ...eligibleInput,
+        surface: "desktop-web",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not offer the prompt on other web surfaces", () => {
+    expect(
+      shouldOfferPwaPushPrompt({
+        ...eligibleInput,
+        surface: "other",
+        hasRunningTurn: true,
       }),
     ).toBe(false);
   });
@@ -76,5 +101,23 @@ describe("shouldOfferPwaPushPrompt", () => {
         permission: "granted",
       }),
     ).toBe(true);
+  });
+});
+
+describe("isPushPromptDismissalActive", () => {
+  const now = Date.UTC(2026, 7, 16);
+
+  it("keeps a recent dismissal active", () => {
+    expect(isPushPromptDismissalActive(now - PUSH_PROMPT_DISMISS_COOLDOWN_MS + 1, now)).toBe(true);
+  });
+
+  it("allows the prompt again after the cooldown", () => {
+    expect(isPushPromptDismissalActive(now - PUSH_PROMPT_DISMISS_COOLDOWN_MS, now)).toBe(false);
+  });
+
+  it("ignores missing, invalid, and future timestamps", () => {
+    expect(isPushPromptDismissalActive(null, now)).toBe(false);
+    expect(isPushPromptDismissalActive(Number.NaN, now)).toBe(false);
+    expect(isPushPromptDismissalActive(now + 1, now)).toBe(false);
   });
 });

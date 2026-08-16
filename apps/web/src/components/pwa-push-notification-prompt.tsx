@@ -1,12 +1,15 @@
 import { LoaderIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { isStandalonePwa } from "../env";
+import { useIsMobile } from "../hooks/useMediaQuery";
 import {
   enablePushNotifications,
   getBrowserPushSupport,
   getCurrentPushSubscription,
   getNotificationPermission,
+  preparePushNotifications,
+  type PreparedPushNotifications,
 } from "../push/notifications";
 import {
   isPwaPushPromptHandled,
@@ -25,9 +28,58 @@ import {
 import { stackedThreadToast, toastManager } from "./ui/toast";
 
 let pwaPushPromptEligibilityChecked = false;
+const DESKTOP_PUSH_PROMPT_DELAY_MS = 5_000;
 
-export function PwaPushNotificationPrompt() {
+interface PushNotificationPromptDialogProps {
+  readonly description: string;
+  readonly isEnabling: boolean;
+  readonly onDismiss: () => void;
+  readonly onEnable: () => void;
+  readonly open: boolean;
+}
+
+export function PushNotificationPromptDialog({
+  description,
+  isEnabling,
+  onDismiss,
+  onEnable,
+  open,
+}: PushNotificationPromptDialogProps) {
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (isEnabling) {
+          return;
+        }
+        if (!nextOpen) {
+          onDismiss();
+        }
+      }}
+    >
+      <DialogPopup className="max-w-lg" showCloseButton={!isEnabling}>
+        <DialogHeader>
+          <DialogTitle>Enable push notifications?</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        <DialogFooter variant="bare">
+          <Button variant="outline" disabled={isEnabling} onClick={onDismiss}>
+            Not now
+          </Button>
+          <Button disabled={isEnabling} onClick={onEnable}>
+            {isEnabling ? <LoaderIcon className="size-4 animate-spin" /> : "Enable notifications"}
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
+export function PwaPushNotificationPrompt({ hasRunningTurn }: { hasRunningTurn: boolean }) {
   const support = useMemo(() => getBrowserPushSupport(), []);
+  const isMobile = useIsMobile();
+  const surface = isStandalonePwa() ? "standalone-pwa" : isMobile ? "other" : "desktop-web";
+  const preparedPushRef = useRef<PreparedPushNotifications | null>(null);
   const [open, setOpen] = useState(false);
   const [isEnabling, setIsEnabling] = useState(false);
 
@@ -35,12 +87,12 @@ export function PwaPushNotificationPrompt() {
     if (pwaPushPromptEligibilityChecked) {
       return;
     }
-    pwaPushPromptEligibilityChecked = true;
 
     const permission = getNotificationPermission();
     const promptHandled = isPwaPushPromptHandled();
     const syncEligible = shouldOfferPwaPushPrompt({
-      isStandalonePwa: isStandalonePwa(),
+      surface,
+      hasRunningTurn,
       pushSupported: support.supported,
       permission,
       isSubscribed: false,
@@ -51,19 +103,33 @@ export function PwaPushNotificationPrompt() {
       return;
     }
 
-    void (async () => {
-      try {
-        const subscription = await getCurrentPushSubscription();
-        if (subscription !== null) {
-          markPwaPushPromptHandled();
+    const timeoutId = setTimeout(
+      () => {
+        if (pwaPushPromptEligibilityChecked) {
           return;
         }
-        setOpen(true);
-      } catch {
-        // If subscription status cannot be determined, skip the prompt.
-      }
-    })();
-  }, [support.supported]);
+        pwaPushPromptEligibilityChecked = true;
+
+        void (async () => {
+          try {
+            const prepared = await preparePushNotifications();
+            const subscription = await getCurrentPushSubscription(prepared);
+            if (subscription !== null) {
+              markPwaPushPromptHandled();
+              return;
+            }
+            preparedPushRef.current = prepared;
+            setOpen(true);
+          } catch {
+            // If setup or subscription status cannot be determined, skip the prompt.
+          }
+        })();
+      },
+      surface === "desktop-web" ? DESKTOP_PUSH_PROMPT_DELAY_MS : 0,
+    );
+
+    return () => clearTimeout(timeoutId);
+  }, [hasRunningTurn, support.supported, surface]);
 
   const handleDismiss = useCallback(() => {
     markPwaPushPromptHandled();
@@ -74,7 +140,7 @@ export function PwaPushNotificationPrompt() {
     setIsEnabling(true);
     void (async () => {
       try {
-        await enablePushNotifications();
+        await enablePushNotifications(preparedPushRef.current ?? undefined);
         markPwaPushPromptHandled();
         setOpen(false);
         toastManager.add({
@@ -83,7 +149,9 @@ export function PwaPushNotificationPrompt() {
           description: "This browser is subscribed to server notifications.",
         });
       } catch (error) {
-        markPwaPushPromptHandled();
+        if (getNotificationPermission() !== "granted") {
+          markPwaPushPromptHandled();
+        }
         setOpen(false);
         toastManager.add(
           stackedThreadToast({
@@ -98,35 +166,18 @@ export function PwaPushNotificationPrompt() {
     })();
   }, []);
 
+  const description =
+    surface === "desktop-web"
+      ? "Switch tabs or windows while this turn runs. Salchi will alert you when it finishes or needs your approval or input."
+      : "Get alerts when an agent needs approval or input, or when a turn completes. This is especially useful when the app is in the background on mobile.";
+
   return (
-    <Dialog
+    <PushNotificationPromptDialog
+      description={description}
+      isEnabling={isEnabling}
+      onDismiss={handleDismiss}
+      onEnable={handleEnable}
       open={open}
-      onOpenChange={(nextOpen) => {
-        if (isEnabling) {
-          return;
-        }
-        if (!nextOpen) {
-          handleDismiss();
-        }
-      }}
-    >
-      <DialogPopup className="max-w-lg" showCloseButton={!isEnabling}>
-        <DialogHeader>
-          <DialogTitle>Enable push notifications?</DialogTitle>
-          <DialogDescription>
-            Get alerts when an agent needs approval or input, or when a turn completes. This is
-            especially useful when the app is in the background on mobile.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter variant="bare">
-          <Button variant="outline" disabled={isEnabling} onClick={handleDismiss}>
-            Not now
-          </Button>
-          <Button disabled={isEnabling} onClick={handleEnable}>
-            {isEnabling ? <LoaderIcon className="size-4 animate-spin" /> : "Enable notifications"}
-          </Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
+    />
   );
 }

@@ -1,14 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { reconcileCurrentPushSubscription, sendTestPushNotification } from "./notifications";
+import {
+  preparePushNotifications,
+  reconcileCurrentPushSubscription,
+  sendTestPushNotification,
+} from "./notifications";
 
 const registerPushSubscription = vi.hoisted(() => vi.fn());
 const sendTestPushNotificationRpc = vi.hoisted(() => vi.fn());
 const registerServiceWorker = vi.hoisted(() => vi.fn());
+const getPushConfig = vi.hoisted(() => vi.fn());
 
 vi.mock("../localApi", () => ({
   ensureLocalApi: () => ({
     server: {
+      getPushConfig,
       registerPushSubscription,
       sendTestPushNotification: sendTestPushNotificationRpc,
     },
@@ -41,6 +47,7 @@ function installBrowserPushEnvironment(subscription: PushSubscription | null): v
   registerServiceWorker.mockResolvedValue(registration);
 
   vi.stubGlobal("window", {
+    atob: globalThis.atob,
     isSecureContext: true,
     PushManager: function PushManager() {},
     Notification: function Notification() {},
@@ -107,6 +114,43 @@ describe("push subscription reconciliation", () => {
     });
     expect(registerPushSubscription.mock.invocationCallOrder[0]).toBeLessThan(
       sendTestPushNotificationRpc.mock.invocationCallOrder[0]!,
+    );
+  });
+});
+
+describe("push notification preparation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("prepares the service worker and VAPID key before prompting", async () => {
+    installBrowserPushEnvironment(null);
+    getPushConfig.mockResolvedValue({
+      supported: true,
+      publicVapidKey: "AQID",
+    });
+
+    const prepared = await preparePushNotifications();
+
+    expect(registerServiceWorker).toHaveBeenCalledWith("/salchi-service-worker.js", {
+      updateViaCache: "none",
+    });
+    expect([...prepared.applicationServerKey]).toEqual([1, 2, 3]);
+  });
+
+  it("does not offer setup when the server has no push configuration", async () => {
+    installBrowserPushEnvironment(null);
+    getPushConfig.mockResolvedValue({
+      supported: false,
+      publicVapidKey: null,
+    });
+
+    await expect(preparePushNotifications()).rejects.toThrow(
+      "Push notifications are not available on this server.",
     );
   });
 });

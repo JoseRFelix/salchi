@@ -15,6 +15,11 @@ export interface BrowserPushSupport {
   readonly reason: "supported" | "electron" | "insecure-context" | "missing-browser-api";
 }
 
+export interface PreparedPushNotifications {
+  readonly applicationServerKey: Uint8Array<ArrayBuffer>;
+  readonly registration: ServiceWorkerRegistration;
+}
+
 export interface NotificationTagLike {
   readonly tag?: unknown;
 }
@@ -244,9 +249,30 @@ export async function clearTurnCompletionAlerts(
   ]);
 }
 
-export async function getCurrentPushSubscription(): Promise<PushSubscription | null> {
-  const registration = await ensureSalchiServiceWorkerRegistration();
+export async function getCurrentPushSubscription(
+  prepared?: PreparedPushNotifications,
+): Promise<PushSubscription | null> {
+  const registration = prepared?.registration ?? (await ensureSalchiServiceWorkerRegistration());
   return registration.pushManager.getSubscription();
+}
+
+/**
+ * Completes async setup before the user sees Salchi's permission pre-prompt.
+ * Keeping registration and server configuration out of the final click handler
+ * lets the native permission request preserve its direct user-gesture context.
+ */
+export async function preparePushNotifications(): Promise<PreparedPushNotifications> {
+  const [registration, config] = await Promise.all([
+    ensureSalchiServiceWorkerRegistration(),
+    ensureLocalApi().server.getPushConfig(),
+  ]);
+  if (!config.supported || !config.publicVapidKey) {
+    throw new Error("Push notifications are not available on this server.");
+  }
+  return {
+    registration,
+    applicationServerKey: urlBase64ToUint8Array(config.publicVapidKey),
+  };
 }
 
 async function registerPushSubscription(
@@ -272,26 +298,23 @@ export async function reconcileCurrentPushSubscription(): Promise<WebPushSubscri
   return subscription ? registerPushSubscription(subscription) : null;
 }
 
-export async function enablePushNotifications(): Promise<WebPushSubscriptionJson> {
-  const registration = await ensureSalchiServiceWorkerRegistration();
+export async function enablePushNotifications(
+  prepared?: PreparedPushNotifications,
+): Promise<WebPushSubscriptionJson> {
+  const setup = prepared ?? (await preparePushNotifications());
   const permission = await Notification.requestPermission();
   if (permission !== "granted") {
     throw new Error("Notification permission was not granted.");
   }
 
-  const config = await ensureLocalApi().server.getPushConfig();
-  if (!config.supported || !config.publicVapidKey) {
-    throw new Error("Push notifications are not available on this server.");
-  }
-
-  const existingSubscription = await registration.pushManager.getSubscription();
+  const existingSubscription = await setup.registration.pushManager.getSubscription();
   if (existingSubscription) {
     await existingSubscription.unsubscribe();
   }
 
-  const subscription = await registration.pushManager.subscribe({
+  const subscription = await setup.registration.pushManager.subscribe({
     userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(config.publicVapidKey),
+    applicationServerKey: setup.applicationServerKey,
   });
   return registerPushSubscription(subscription);
 }
