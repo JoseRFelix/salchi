@@ -11,7 +11,7 @@ subscriptions you already use; Salchi connects to your authenticated provider
 CLIs instead of reselling tokens.
 
 <p align="center">
-  <img src="./assets/screenshots/salchi-device-showcase.png" alt="Salchi running on a modern MacBook and iPhone" width="1200" />
+  <img src="https://raw.githubusercontent.com/JoseRFelix/salchi/main/assets/screenshots/salchi-device-showcase.png" alt="Salchi running on a modern MacBook and iPhone" width="1200" />
 </p>
 
 ## Demo
@@ -113,7 +113,7 @@ https://your-mac.your-tailnet.ts.net/pair#token=...
 Open that URL from another device signed into the same tailnet.
 
 7. **Optional:** To enable PWA push notifications, follow
-   [Tailscale Serve for PWA Push Notifications](./docs/tailscale-serve-pwa-push.md).
+   [Tailscale Serve for PWA Push Notifications](https://github.com/JoseRFelix/salchi/blob/main/docs/tailscale-serve-pwa-push.md).
 
 Use a non-default Tailscale HTTPS port with:
 
@@ -145,20 +145,20 @@ We are very very early in this project. Expect bugs.
 
 We are not accepting contributions yet.
 
-Observability guide: [docs/observability.md](./docs/observability.md)
+Observability guide: [docs/observability.md](https://github.com/JoseRFelix/salchi/blob/main/docs/observability.md)
 
-Local dictation guide: [docs/local-dictation.md](./docs/local-dictation.md)
+Local dictation guide: [docs/local-dictation.md](https://github.com/JoseRFelix/salchi/blob/main/docs/local-dictation.md)
 
 ## Screenshots
 
 <p align="center">
-  <img src="./assets/screenshots/salchi-jobs-sidebar.png" alt="Salchi sidebar with pending and completed jobs" width="480" />
-  <img src="./assets/screenshots/salchi-theme-selection.png" alt="Selecting a theme in Salchi" width="480" />
+  <img src="https://raw.githubusercontent.com/JoseRFelix/salchi/main/assets/screenshots/salchi-jobs-sidebar.png" alt="Salchi sidebar with pending and completed jobs" width="480" />
+  <img src="https://raw.githubusercontent.com/JoseRFelix/salchi/main/assets/screenshots/salchi-theme-selection.png" alt="Selecting a theme in Salchi" width="480" />
 </p>
 
 <p align="center">
-  <img src="./assets/screenshots/salchi-mobile-app.png" alt="Salchi mobile app" width="260" />
-  <img src="./assets/screenshots/salchi-mobile-push-notifications.png" alt="Salchi mobile push notification prompt" width="260" />
+  <img src="https://raw.githubusercontent.com/JoseRFelix/salchi/main/assets/screenshots/salchi-mobile-app.png" alt="Salchi mobile app" width="260" />
+  <img src="https://raw.githubusercontent.com/JoseRFelix/salchi/main/assets/screenshots/salchi-mobile-push-notifications.png" alt="Salchi mobile push notification prompt" width="260" />
 </p>
 
 ## If you REALLY want to contribute still.... read this first
@@ -171,4 +171,4 @@ mise install
 bun install .
 ```
 
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
+Read [CONTRIBUTING.md](https://github.com/JoseRFelix/salchi/blob/main/CONTRIBUTING.md) before opening an issue or PR.
