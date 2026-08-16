@@ -3206,6 +3206,14 @@ export function selectThreadsAcrossEnvironments(state: AppState): Thread[] {
   );
 }
 
+export function selectHasRunningTurnAcrossEnvironments(state: AppState): boolean {
+  return getEnvironmentEntries(state).some(([, environmentState]) =>
+    Object.values(environmentState.threadSessionById).some(
+      (session) => session?.status === "running" && session.activeTurnId != null,
+    ),
+  );
+}
+
 /** Like `selectThreadsAcrossEnvironments` but returns stable `ThreadShell` references from the store (no derived data). */
 export function selectThreadShellsAcrossEnvironments(state: AppState): ThreadShell[] {
   return getEnvironmentEntries(state).flatMap(([, environmentState]) =>
