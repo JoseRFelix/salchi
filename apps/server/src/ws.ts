@@ -156,12 +156,10 @@ function streamOrderedCatchupEvents<E, R1, R2>(input: {
 }): Stream.Stream<OrchestrationEvent, E, R1 | R2> {
   const replayItems = Stream.concat(
     input.replayStream.pipe(
-      Stream.map(
-        (event): OrderedCatchupInput => ({
-          kind: "event",
-          event,
-        }),
-      ),
+      Stream.map((event): OrderedCatchupInput => ({
+        kind: "event",
+        event,
+      })),
     ),
     Stream.succeed({
       kind: "caught-up",
@@ -169,12 +167,10 @@ function streamOrderedCatchupEvents<E, R1, R2>(input: {
   );
   const liveItems = input.liveStream.pipe(
     Stream.filter((event) => event.sequence > input.fromSequenceExclusive),
-    Stream.map(
-      (event): OrderedCatchupInput => ({
-        kind: "event",
-        event,
-      }),
-    ),
+    Stream.map((event): OrderedCatchupInput => ({
+      kind: "event",
+      event,
+    })),
   );
 
   return Stream.merge(replayItems, liveItems).pipe(

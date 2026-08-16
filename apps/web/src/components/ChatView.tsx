@@ -952,8 +952,9 @@ export default function ChatView(props: ChatViewProps) {
   );
   const openTerminalThreadKeys = useTerminalStateStore(
     useShallow((state) =>
-      Object.entries(state.terminalStateByThreadKey).flatMap(([nextThreadKey, nextTerminalState]) =>
-        nextTerminalState.terminalOpen ? [nextThreadKey] : [],
+      Object.entries(state.terminalStateByThreadKey).flatMap(
+        ([nextThreadKey, nextTerminalState]) =>
+          nextTerminalState.terminalOpen ? [nextThreadKey] : [],
       ),
     ),
   );
