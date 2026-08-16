@@ -38,6 +38,19 @@ describe("rightPanelGesture", () => {
     expect(openDiff).not.toHaveBeenCalled();
   });
 
+  it("falls back from an unavailable remembered panel to diff before file", () => {
+    const openFile = vi.fn();
+    const openDiff = vi.fn();
+
+    __registerRightPanelForTests("file", { open: openFile });
+    __registerRightPanelForTests("diff", { open: openDiff });
+    markRightPanelUsed("plan");
+
+    expect(openLastUsedRightPanel()).toBe(true);
+    expect(openDiff).toHaveBeenCalledOnce();
+    expect(openFile).not.toHaveBeenCalled();
+  });
+
   it("keeps workspace stack registrations open while closing non-stack panels", () => {
     const closeFile = vi.fn();
     const closeDiff = vi.fn();
