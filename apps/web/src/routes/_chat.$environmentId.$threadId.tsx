@@ -3,8 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
-import { DiffPanelLoadingState } from "../components/DiffPanelShell";
 import { ChatRightPanels } from "../components/chat/ChatRightPanels";
+import { ChatThreadLoadingState } from "../components/chat/ChatThreadLoadingState";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
 import {
   buildClosedDiffSearch,
@@ -260,7 +260,8 @@ function ChatThreadRouteView() {
     startSurface: "panel",
   });
 
-  const isRecoveringMissingThread = bootstrapComplete && threadRef !== null && !routeThreadExists;
+  const isMissingThread = threadRef !== null && !routeThreadExists;
+  const isRecoveringMissingThread = bootstrapComplete && isMissingThread;
 
   useEffect(() => {
     if (!threadRef || draftThreadExists) {
@@ -312,10 +313,10 @@ function ChatThreadRouteView() {
   if (isRecoveringMissingThread) {
     return (
       <SidebarInset
-        className="flex h-svh min-h-0 items-center justify-center overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh"
+        className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh"
         data-testid="thread-route-recovery"
       >
-        <DiffPanelLoadingState label="Loading conversation..." />
+        <ChatThreadLoadingState />
       </SidebarInset>
     );
   }
