@@ -67,7 +67,6 @@ import {
   type ComposerNativeInputTracker,
   createComposerNativeInputTracker,
   isComposerNativeComposingKeyEvent,
-  isComposerNativeInputSettling,
   markComposerNativeInputSettling,
   markComposerNativeInputSuppression,
   readComposerNativeInputChangeMetadata,
@@ -1608,13 +1607,10 @@ function ComposerPromptEditorInner({
     const shouldRewriteEditorState =
       editorIdentityChanged || previousSnapshot.value !== value || contextsChanged || skillsChanged;
     const isSelectionOnlyUpdate = !shouldRewriteEditorState && isFocused;
-    // A browser-owned edit can publish value before its controlled cursor catches up. Ignore only
-    // that unchanged cursor echo; a changed cursor prop is an authoritative external selection.
-    if (
-      isSelectionOnlyUpdate &&
-      !controlledCursorChanged &&
-      isComposerNativeInputSettling(nativeInputTrackerRef.current)
-    ) {
+    // A browser-owned edit publishes its value before an isolated parent necessarily catches its
+    // controlled cursor up. An unchanged cursor prop is only an echo, regardless of input source;
+    // a changed cursor prop remains an authoritative external selection.
+    if (isSelectionOnlyUpdate && !controlledCursorChanged) {
       return;
     }
 

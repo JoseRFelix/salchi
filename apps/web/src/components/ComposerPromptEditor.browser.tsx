@@ -1,4 +1,5 @@
 import { createRef, useImperativeHandle, useState, type RefObject } from "react";
+import { userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -160,6 +161,37 @@ describe("ComposerPromptEditor native iOS input", () => {
       Reflect.deleteProperty(navigator, "userAgent");
     }
     document.body.innerHTML = "";
+  });
+
+  it("keeps sequential desktop keyboard input ordered while the controlled cursor lags", async () => {
+    const editorRef = createRef<ComposerPromptEditorHandle>();
+    const controlsRef = createRef<EditorHarnessHandle>();
+    const screen = await render(
+      <EditorHarness
+        controlsRef={controlsRef}
+        editorRef={editorRef}
+        initialIdentity="desktop-keyboard-input"
+      />,
+    );
+
+    try {
+      const editor = document.querySelector<HTMLElement>('[data-testid="composer-editor"]');
+      expect(editor).not.toBeNull();
+      editor?.focus();
+
+      await userEvent.keyboard("the heck");
+
+      await vi.waitFor(() => {
+        expect(editor?.textContent).toBe("the heck");
+        expect(editorRef.current?.readSnapshot()).toMatchObject({
+          value: "the heck",
+          cursor: "the heck".length,
+        });
+        expect(readDomSelectionOffset(editor!)).toBe("the heck".length);
+      });
+    } finally {
+      await screen.unmount();
+    }
   });
 
   it("keeps streamed dictation chunks ordered while the controlled cursor lags", async () => {
