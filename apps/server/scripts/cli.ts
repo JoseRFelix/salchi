@@ -19,6 +19,7 @@ import { fromYaml } from "@salchi/shared/schemaYaml";
 import { resolveSpawnCommand } from "@salchi/shared/shell";
 import serverPackageJson from "../package.json" with { type: "json" };
 import { verifyCliEntrypoint } from "./verify-cli-entrypoint.ts";
+import { assertPortablePublishReadme } from "./verify-publish-readme.ts";
 
 interface PackageJson {
   name: string;
@@ -155,6 +156,18 @@ const copyPublishPackageFiles = Effect.fn("copyPublishPackageFiles")(function* (
     if (!(yield* fs.exists(sourcePath))) {
       return yield* new CliError({
         message: `Missing publish root file source: ${sourcePath}`,
+      });
+    }
+
+    if (relativePath === "README.md") {
+      const readme = yield* fs.readFileString(sourcePath);
+      yield* Effect.try({
+        try: () => assertPortablePublishReadme(readme, sourcePath),
+        catch: (cause) =>
+          new CliError({
+            message: cause instanceof Error ? cause.message : String(cause),
+            cause,
+          }),
       });
     }
 
