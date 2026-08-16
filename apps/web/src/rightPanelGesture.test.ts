@@ -13,7 +13,7 @@ describe("rightPanelGesture", () => {
     __resetRightPanelGestureStateForTests();
   });
 
-  it("opens the file panel on the initial right-panel open gesture", () => {
+  it("opens the diff panel on the initial right-panel open gesture", () => {
     const openFile = vi.fn();
     const openDiff = vi.fn();
 
@@ -21,17 +21,30 @@ describe("rightPanelGesture", () => {
     __registerRightPanelForTests("diff", { open: openDiff });
 
     expect(openLastUsedRightPanel()).toBe(true);
-    expect(openFile).toHaveBeenCalledOnce();
-    expect(openDiff).not.toHaveBeenCalled();
+    expect(openDiff).toHaveBeenCalledOnce();
+    expect(openFile).not.toHaveBeenCalled();
   });
 
-  it("reopens diff after explicit diff use", () => {
+  it("reopens the file panel after explicit file use", () => {
     const openFile = vi.fn();
     const openDiff = vi.fn();
 
     __registerRightPanelForTests("file", { open: openFile });
     __registerRightPanelForTests("diff", { open: openDiff });
-    markRightPanelUsed("diff");
+    markRightPanelUsed("file");
+
+    expect(openLastUsedRightPanel()).toBe(true);
+    expect(openFile).toHaveBeenCalledOnce();
+    expect(openDiff).not.toHaveBeenCalled();
+  });
+
+  it("falls back from an unavailable remembered panel to diff before file", () => {
+    const openFile = vi.fn();
+    const openDiff = vi.fn();
+
+    __registerRightPanelForTests("file", { open: openFile });
+    __registerRightPanelForTests("diff", { open: openDiff });
+    markRightPanelUsed("plan");
 
     expect(openLastUsedRightPanel()).toBe(true);
     expect(openDiff).toHaveBeenCalledOnce();
