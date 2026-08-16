@@ -6370,6 +6370,14 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     try {
       await expect.element(page.getByTestId("thread-route-recovery")).toBeInTheDocument();
+      await expect
+        .element(page.getByRole("status", { name: "Loading conversation..." }))
+        .toBeVisible();
+      await expect.element(page.getByTestId("chat-thread-loading-header")).toBeVisible();
+      await expect.element(page.getByTestId("chat-thread-loading-timeline")).toBeVisible();
+      await expect.element(page.getByTestId("chat-thread-loading-composer")).toBeVisible();
+      expect(page.getByTestId("chat-thread-loading-assistant-message").elements()).toHaveLength(7);
+      expect(page.getByTestId("chat-thread-loading-user-message").elements()).toHaveLength(7);
       await waitForURL(
         mounted.router,
         (path) => path === "/",
