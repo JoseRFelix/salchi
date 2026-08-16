@@ -67,9 +67,13 @@ That makes Salchi useful when you want:
 
 ### Run without installing
 
+Requires Node.js `^22.16`, `^23.11`, or `>=24.10`.
+
 ```bash
-npx salchi@latest
+npx --yes salchi@latest
 ```
+
+Salchi stays attached to the terminal and prints a pairing URL. Open that URL in your browser.
 
 ### Tailscale quick start on macOS
 
