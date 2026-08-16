@@ -75,7 +75,7 @@ reviews:
       instructions: |
         Review for predictable behavior under load and failure. Prefer existing local abstractions over new patterns, avoid broad `any` usage, keep async boundaries explicit, and require focused tests for user-facing behavior or shared contracts.
 
-        Never suggest `bun test`; this repo uses `bun run test` for Vitest.
+        Run repository tests with `vp run test`, which delegates to Vitest. Do not suggest a runtime's built-in test runner.
 
     - path: "apps/server/src/**/*.{ts,tsx}"
       instructions: |
@@ -97,8 +97,8 @@ reviews:
 
     - path: "**/*.{test,spec}.{ts,tsx}"
       instructions: |
-        Tests should exercise the exact failure mode, avoid brittle timing assumptions, and use Vitest through `bun run test` when run locally. For lifecycle work, include cancellation or interruption coverage where relevant.
+        Tests should exercise the exact failure mode, avoid brittle timing assumptions, and use Vitest through `vp run test` when run locally. For lifecycle work, include cancellation or interruption coverage where relevant.
 
     - path: ".github/workflows/**/*.{yml,yaml}"
       instructions: |
-        CI should keep format, lint, typecheck, and test coverage aligned with repository policy. Do not add `bun test`; use `bun run test` or the existing Vite+ commands that delegate to Vitest.
+        CI should keep format, lint, typecheck, and test coverage aligned with repository policy. Use the existing Vite+ commands that delegate to Vitest.

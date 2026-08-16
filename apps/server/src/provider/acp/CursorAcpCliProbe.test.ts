@@ -1,6 +1,6 @@
 /**
  * Optional integration check against a real `agent acp` install.
- * Enable with: SALCHI_CURSOR_ACP_PROBE=1 bun run test --filter CursorAcpCliProbe
+ * Enable with: SALCHI_CURSOR_ACP_PROBE=1 vp test run apps/server/src/provider/acp/CursorAcpCliProbe.test.ts
  */
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";

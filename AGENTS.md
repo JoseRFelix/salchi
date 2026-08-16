@@ -2,8 +2,8 @@
 
 ## Task Completion Requirements
 
-- All of `bun fmt`, `bun lint`, and `bun typecheck` must pass before considering tasks completed.
-- NEVER run `bun test`. Always use `bun run test` (runs Vitest).
+- All of `vp fmt`, `vp lint --report-unused-disable-directives`, and `vp run typecheck` must pass before considering tasks completed.
+- Always use `vp run test` for tests. Do not invoke a runtime's built-in test runner.
 
 ## Pull Requests
 
@@ -33,7 +33,7 @@ Effect lifecycle code is high risk in this repo. Treat changes to `ManagedRuntim
 
 Before changing Effect lifecycle code:
 
-- Inspect the installed Effect version in `node_modules/.bun/effect@.../node_modules/effect/dist/*.d.ts` or source. Do not rely on memory for `ManagedRuntime`, `Scope`, `Stream`, `Fiber`, or interruption semantics.
+- Inspect the installed Effect version in `node_modules/effect/dist/*.d.ts` or source. Do not rely on memory for `ManagedRuntime`, `Scope`, `Stream`, `Fiber`, or interruption semantics.
 - Identify the owner of every resource/fiber/scope being touched.
 - Confirm how cancellation happens: returned interruptor, scope close, runtime dispose, stream completion, or explicit unsubscribe.
 - Write or update a focused test that fails before the lifecycle change.
@@ -59,12 +59,12 @@ Required verification for Effect lifecycle changes:
 
 - A focused regression test for the exact failure mode.
 - A cancellation/interruption test if scopes, fibers, streams, or `runCallback` are changed.
-- `bun fmt`
-- `bun lint`
-- `bun typecheck`
-- `bun run test` for the relevant package/test file.
+- `vp fmt`
+- `vp lint --report-unused-disable-directives`
+- `vp run typecheck`
+- `vp run test` for the relevant package/test file.
 
-Never run `bun test`.
+Never invoke a runtime's built-in test runner.
 
 ## Package Roles
 

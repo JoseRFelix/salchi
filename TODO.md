@@ -7,7 +7,3 @@
 - [ ] Thread archiving
 - [ ] New projects should go on top
 - [ ] Projects should be sorted by latest thread update
-
-## Bigger things
-
-- [ ] Queueing messages

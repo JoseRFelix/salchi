@@ -13,7 +13,7 @@
   },
   "files": [
     "dist",
-    "assets/salchi/salchi-logo-transparent.png"
+    "assets/salchi/salchi-logo.png"
   ],
   "type": "module",
   "scripts": {

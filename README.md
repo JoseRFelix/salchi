@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/JoseRFelix/salchi/main/assets/salchi/salchi-logo-transparent.png" alt="Salchi logo" width="128" height="128" />
+  <img src="https://raw.githubusercontent.com/JoseRFelix/salchi/main/assets/salchi/salchi-logo.png" alt="Salchi logo" width="128" height="128" />
 </p>
 
 # Salchi
@@ -168,7 +168,25 @@ Before local development, prepare the environment and install dependencies:
 ```bash
 # Optional: only needed if you use mise for dev tool management.
 mise install
-bun install .
+pnpm install --frozen-lockfile
+```
+
+Common development commands:
+
+```bash
+pnpm dev
+pnpm dev:desktop
+pnpm build
+pnpm start
+```
+
+Repository quality checks use Vite+ directly:
+
+```bash
+vp fmt --check
+vp lint --report-unused-disable-directives
+vp run typecheck
+vp run test
 ```
 
 Read [CONTRIBUTING.md](https://github.com/JoseRFelix/salchi/blob/main/CONTRIBUTING.md) before opening an issue or PR.

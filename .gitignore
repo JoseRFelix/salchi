@@ -28,3 +28,5 @@ squashfs-root/
 .gstack/
 dist-electron/
 .electron-runtime/
+assets/salchi/app-icon-sprite/
+assets/salchi/salchi-demo.mp4
