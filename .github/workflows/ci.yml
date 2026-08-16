@@ -54,6 +54,18 @@ jobs:
       - name: Build desktop pipeline
         run: vp run build:desktop
 
+      - name: Smoke CLI on every supported older Node line
+        shell: bash
+        run: |
+          expected="salchi v$(node -p "require('./apps/server/package.json').version")"
+          for node_version in 22.16.0 22.17.1 23.11.1 24.10.0; do
+            actual="$(npm exec --yes --package="node@$node_version" -- node apps/server/dist/bin.mjs --version)"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "Node $node_version printed '$actual'; expected '$expected'." >&2
+              exit 1
+            fi
+          done
+
       - name: Verify preload bundle output
         run: |
           test -f apps/desktop/dist-electron/preload.cjs

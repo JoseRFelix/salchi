@@ -18,6 +18,7 @@ import { fromJsonStringPretty } from "@salchi/shared/schemaJson";
 import { fromYaml } from "@salchi/shared/schemaYaml";
 import { resolveSpawnCommand } from "@salchi/shared/shell";
 import serverPackageJson from "../package.json" with { type: "json" };
+import { verifyCliEntrypoint } from "./verify-cli-entrypoint.ts";
 
 interface PackageJson {
   name: string;
@@ -316,6 +317,16 @@ const publishCmd = Command.make(
           }),
       });
       yield* Effect.log(`[cli] Verified bundled client version ${version}`);
+
+      yield* Effect.tryPromise({
+        try: () => verifyCliEntrypoint(path.join(serverDir, "dist/bin.mjs"), version),
+        catch: (cause) =>
+          new CliError({
+            message: cause instanceof Error ? cause.message : String(cause),
+            cause,
+          }),
+      });
+      yield* Effect.log(`[cli] Verified CLI entrypoint for version ${version}`);
 
       yield* Effect.acquireUseRelease(
         // Acquire: backup package.json, resolve catalog dependencies, and strip devDependencies/scripts

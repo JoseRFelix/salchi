@@ -131,6 +131,9 @@ export const formatHeadlessServeOutput = (accessInfo: HeadlessServeAccessInfo): 
     "",
   ].join("\n");
 
+export const formatBrowserStartupOutput = (pairingUrl: string): string =>
+  ["Salchi server is ready.", `Pairing URL: ${pairingUrl}`, ""].join("\n");
+
 export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessInfo")(function* () {
   const serverConfig = yield* ServerConfig;
   const httpServer = yield* HttpServer.HttpServer;
