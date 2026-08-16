@@ -46,10 +46,14 @@ import { Input } from "./ui/input";
 import { Spinner } from "./ui/spinner";
 import { toastManager } from "./ui/toast";
 
-const EXPLORER_ROW_HEIGHT_CLASS_NAME = "py-1";
+const EXPLORER_ROW_HEIGHT_CLASS_NAME = "min-h-11 py-1 md:pointer-fine:min-h-0";
 const EXPLORER_DIRECTORY_ENTRY_LIMIT = 500;
 const EXPLORER_SEARCH_ENTRY_LIMIT = 120;
 const EMPTY_CHANGED_FILES: ReadonlyArray<WorkspaceChangedFile> = [];
+
+export type ExpandedDirectoryPathsUpdater = (
+  previousExpandedDirectoryPaths: ReadonlySet<string>,
+) => ReadonlySet<string>;
 
 type WorkspaceExplorerEntryContextMenuAction = "add-to-input" | "delete-entry";
 
@@ -470,7 +474,7 @@ export function WorkspaceFileExplorerPanel(props: {
   onAddFileToInput?: ((entry: ProjectEntry) => void) | undefined;
   onBack?: (() => void) | undefined;
   onClose: () => void;
-  onExpandedDirectoryPathsChange: (paths: Set<string>) => void;
+  onExpandedDirectoryPathsChange: (update: ExpandedDirectoryPathsUpdater) => void;
   onOpenFile: (entry: ProjectEntry) => void;
   onSearchQueryChange: (query: string) => void;
   onScrollTopChange: (scrollTop: number) => void;
@@ -512,28 +516,32 @@ export function WorkspaceFileExplorerPanel(props: {
 
   const onToggleDirectory = useCallback(
     (path: string) => {
-      const next = new Set(expandedDirectoryPaths);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
-      onExpandedDirectoryPathsChange(next);
+      onExpandedDirectoryPathsChange((previousExpandedDirectoryPaths) => {
+        const next = new Set(previousExpandedDirectoryPaths);
+        if (next.has(path)) {
+          next.delete(path);
+        } else {
+          next.add(path);
+        }
+        return next;
+      });
     },
-    [expandedDirectoryPaths, onExpandedDirectoryPathsChange],
+    [onExpandedDirectoryPathsChange],
   );
 
   const onRevealDirectory = useCallback(
     (path: string) => {
-      const next = new Set(expandedDirectoryPaths);
-      for (const parentPath of parentPathsOf(path)) {
-        next.add(parentPath);
-      }
-      next.add(path);
-      onExpandedDirectoryPathsChange(next);
+      onExpandedDirectoryPathsChange((previousExpandedDirectoryPaths) => {
+        const next = new Set(previousExpandedDirectoryPaths);
+        for (const parentPath of parentPathsOf(path)) {
+          next.add(parentPath);
+        }
+        next.add(path);
+        return next;
+      });
       onSearchQueryChange("");
     },
-    [expandedDirectoryPaths, onExpandedDirectoryPathsChange, onSearchQueryChange],
+    [onExpandedDirectoryPathsChange, onSearchQueryChange],
   );
 
   const refresh = useCallback(() => {

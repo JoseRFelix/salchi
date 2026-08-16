@@ -20,7 +20,10 @@ import {
   DiffPanelShell,
   type DiffPanelMode,
 } from "./DiffPanelShell";
-import { WorkspaceFileExplorerPanel } from "./WorkspaceFileExplorerPanel";
+import {
+  WorkspaceFileExplorerPanel,
+  type ExpandedDirectoryPathsUpdater,
+} from "./WorkspaceFileExplorerPanel";
 import { WorkspaceFilePreviewPanel } from "./WorkspaceFilePreviewPanel";
 import { Button } from "./ui/button";
 import { toastManager } from "./ui/toast";
@@ -153,13 +156,19 @@ export function WorkspaceFilesPanel(props: {
     [activeExplorerContextKey],
   );
 
-  const setExpandedDirectoryPaths = useCallback(
-    (nextExpandedDirectoryPaths: Set<string>) => {
-      setExplorerViewState((previous) => ({
-        contextKey: activeExplorerContextKey,
-        expandedDirectoryPaths: nextExpandedDirectoryPaths,
-        searchQuery: previous.contextKey === activeExplorerContextKey ? previous.searchQuery : "",
-      }));
+  const updateExpandedDirectoryPaths = useCallback(
+    (update: ExpandedDirectoryPathsUpdater) => {
+      setExplorerViewState((previous) => {
+        const previousExpandedDirectoryPaths =
+          previous.contextKey === activeExplorerContextKey
+            ? previous.expandedDirectoryPaths
+            : new Set<string>();
+        return {
+          contextKey: activeExplorerContextKey,
+          expandedDirectoryPaths: update(previousExpandedDirectoryPaths),
+          searchQuery: previous.contextKey === activeExplorerContextKey ? previous.searchQuery : "",
+        };
+      });
     },
     [activeExplorerContextKey],
   );
@@ -250,7 +259,7 @@ export function WorkspaceFilesPanel(props: {
         backButtonLabel={backTarget ? workspaceFilePanelBackButtonLabel(backTarget) : undefined}
         onBack={backTarget ? handleBack : undefined}
         onClose={onClose}
-        onExpandedDirectoryPathsChange={setExpandedDirectoryPaths}
+        onExpandedDirectoryPathsChange={updateExpandedDirectoryPaths}
         onOpenFile={openExplorerFile}
         onSearchQueryChange={setSearchQuery}
         onScrollTopChange={setExplorerScrollTop}
