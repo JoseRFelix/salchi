@@ -68,6 +68,11 @@ describe("brand-assets", () => {
   });
 
   it("ships Salchi icon sources at their declared pixel sizes", () => {
+    expect(BRAND_ASSET_PATHS.salchiReadmeLogoPng).toBe(BRAND_ASSET_PATHS.salchiWebLogoPng);
+    expect(readPngSize(BRAND_ASSET_PATHS.salchiReadmeLogoPng)).toEqual({
+      width: 1024,
+      height: 1024,
+    });
     expect(readPngSize(BRAND_ASSET_PATHS.salchiIconPng)).toEqual({
       width: 1024,
       height: 1024,

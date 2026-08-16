@@ -1,6 +1,6 @@
 /**
  * Optional integration check against a real `grok agent stdio` install.
- * Enable with: SALCHI_GROK_ACP_PROBE=1 bun run test GrokAcpCliProbe
+ * Enable with: SALCHI_GROK_ACP_PROBE=1 vp test run apps/server/src/provider/acp/GrokAcpCliProbe.test.ts
  *
  * The probe assumes either `XAI_API_KEY` is set in the environment or
  * the user has previously run `grok login`. Without credentials the

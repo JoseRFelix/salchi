@@ -1,1 +1,0 @@
-Single app icon sprite for Salchi, preserving the existing orange pixel-inspired mascot and dark laptop identity from the reference image; solid #FF00FF background for transparency cleanup; no text; centered compact square app-icon composition.
