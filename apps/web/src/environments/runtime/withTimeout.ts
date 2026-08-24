@@ -2,6 +2,7 @@ export function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
   createError: () => Error,
+  onTimeout?: () => void,
 ): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
@@ -16,6 +17,7 @@ export function withTimeout<T>(
     timeoutId = setTimeout(() => {
       timeoutId = null;
       reject(createError());
+      onTimeout?.();
     }, timeoutMs);
 
     promise.then(
@@ -28,5 +30,16 @@ export function withTimeout<T>(
         reject(error);
       },
     );
+  });
+}
+
+export function withAbortableTimeout<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  createError: () => Error,
+): Promise<T> {
+  const controller = new AbortController();
+  return withTimeout(run(controller.signal), timeoutMs, createError, () => {
+    controller.abort();
   });
 }

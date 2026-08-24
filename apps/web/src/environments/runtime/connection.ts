@@ -17,9 +17,13 @@ export interface EnvironmentConnection {
   readonly environmentId: EnvironmentId;
   readonly knownEnvironment: KnownEnvironment;
   readonly client: WsRpcClient;
-  readonly ensureBootstrapped: () => Promise<void>;
+  readonly ensureBootstrapped: (options?: EnvironmentBootstrapWaitOptions) => Promise<void>;
   readonly reconnect: (options?: EnvironmentReconnectOptions) => Promise<void>;
   readonly dispose: () => Promise<void>;
+}
+
+export interface EnvironmentBootstrapWaitOptions {
+  readonly signal?: AbortSignal;
 }
 
 export interface EnvironmentReconnectOptions {
@@ -79,22 +83,75 @@ interface EnvironmentConnectionInput extends OrchestrationHandlers {
   readonly onWelcome?: (payload: ServerLifecycleWelcomePayload) => void;
 }
 
-function createBootstrapGate() {
+interface CancellableBootstrapWaiter {
+  readonly promise: Promise<void>;
+  readonly cancel: (error?: unknown) => void;
+}
+
+export function createBootstrapGate() {
   let isOpen = false;
   const waiters = new Set<{
     readonly resolve: () => void;
     readonly reject: (error: unknown) => void;
   }>();
 
+  const waitCancellable = (): CancellableBootstrapWaiter => {
+    if (isOpen) {
+      return {
+        promise: Promise.resolve(),
+        cancel: () => undefined,
+      };
+    }
+
+    let waiter:
+      | {
+          readonly resolve: () => void;
+          readonly reject: (error: unknown) => void;
+        }
+      | undefined;
+    const promise = new Promise<void>((resolve, reject) => {
+      waiter = { resolve, reject };
+      waiters.add(waiter);
+    });
+
+    return {
+      promise,
+      cancel: (error = new Error("Bootstrap wait cancelled")) => {
+        if (waiter === undefined || !waiters.delete(waiter)) {
+          return;
+        }
+        waiter.reject(error);
+      },
+    };
+  };
+
+  const wait = (options?: EnvironmentBootstrapWaitOptions): Promise<void> => {
+    const waiter = waitCancellable();
+    const signal = options?.signal;
+    if (!signal) {
+      return waiter.promise;
+    }
+
+    const cancel = () => {
+      waiter.cancel(signal.reason ?? new Error("Bootstrap wait aborted"));
+    };
+    if (signal.aborted) {
+      cancel();
+      return waiter.promise;
+    }
+
+    signal.addEventListener("abort", cancel, { once: true });
+    const removeAbortListener = () => {
+      signal.removeEventListener("abort", cancel);
+    };
+    void waiter.promise.then(removeAbortListener, removeAbortListener);
+    return waiter.promise;
+  };
+
   return {
-    wait: () => {
-      if (isOpen) {
-        return Promise.resolve();
-      }
-      return new Promise<void>((resolve, reject) => {
-        waiters.add({ resolve, reject });
-      });
-    },
+    wait,
+    waitCancellable,
+    pendingWaiterCount: () => waiters.size,
     resolve: () => {
       isOpen = true;
       const currentWaiters = [...waiters];
@@ -137,6 +194,12 @@ export function createEnvironmentConnection(
 
   let disposed = false;
   const bootstrapGate = createBootstrapGate();
+  const createDisposedError = () => new Error("Environment connection disposed");
+  const throwIfDisposed = () => {
+    if (disposed) {
+      throw createDisposedError();
+    }
+  };
   const shouldObserveLifecycle = input.kind === "saved" || input.onWelcome !== undefined;
   const shouldObserveConfig = input.kind === "saved" || input.onConfigSnapshot !== undefined;
 
@@ -248,8 +311,10 @@ export function createEnvironmentConnection(
     environmentId,
     knownEnvironment: input.knownEnvironment,
     client: input.client,
-    ensureBootstrapped: () => bootstrapGate.wait(),
+    ensureBootstrapped: (options) =>
+      disposed ? Promise.reject(createDisposedError()) : bootstrapGate.wait(options),
     reconnect: async (options) => {
+      throwIfDisposed();
       const startedAt = Date.now();
       type ReconnectPhase =
         | "transport-reconnect"
@@ -323,11 +388,13 @@ export function createEnvironmentConnection(
       try {
         let phaseStartedAt = recordPhaseStart("transport-reconnect");
         await input.client.reconnect();
+        throwIfDisposed();
         recordPhaseComplete("transport-reconnect", phaseStartedAt);
 
         if (input.refreshMetadata) {
           phaseStartedAt = recordPhaseStart("metadata-refresh");
           await input.refreshMetadata();
+          throwIfDisposed();
           recordPhaseComplete("metadata-refresh", phaseStartedAt);
         } else {
           phase = "metadata-refresh:skipped";
@@ -371,11 +438,16 @@ export function createEnvironmentConnection(
         phaseStartedAt = recordPhaseStart("shell-bootstrap-wait");
         const shellBootstrapTimeoutMs =
           options?.shellBootstrapTimeoutMs ?? DEFAULT_SHELL_BOOTSTRAP_TIMEOUT_MS;
-        await withTimeout(
-          bootstrapGate.wait(),
-          shellBootstrapTimeoutMs,
-          () => new EnvironmentShellBootstrapTimeoutError(environmentId, shellBootstrapTimeoutMs),
-        );
+        const shellBootstrapWaiter = bootstrapGate.waitCancellable();
+        try {
+          await withTimeout(
+            shellBootstrapWaiter.promise,
+            shellBootstrapTimeoutMs,
+            () => new EnvironmentShellBootstrapTimeoutError(environmentId, shellBootstrapTimeoutMs),
+          );
+        } finally {
+          shellBootstrapWaiter.cancel();
+        }
         recordPhaseComplete("shell-bootstrap-wait", phaseStartedAt);
       } catch (error) {
         const isShellBootstrapTimeout = isEnvironmentShellBootstrapTimeoutError(error);
@@ -388,6 +460,7 @@ export function createEnvironmentConnection(
               totalElapsedMs: Date.now() - startedAt,
               timeoutMs: error.timeoutMs,
               reconnectReason: options?.reason ?? null,
+              pendingBootstrapWaiterCount: bootstrapGate.pendingWaiterCount(),
             },
           });
         }
@@ -408,6 +481,7 @@ export function createEnvironmentConnection(
     },
     dispose: async () => {
       cleanup();
+      bootstrapGate.reject(createDisposedError());
       await input.client.dispose();
     },
   };

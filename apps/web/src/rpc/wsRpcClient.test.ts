@@ -107,10 +107,14 @@ describe("wsRpcClient", () => {
     >;
 
     const client = createWsRpcClient(transport as unknown as WsTransport);
+    const controller = new AbortController();
 
-    await expect(client.orchestration.probeSync({ clientSequence: 4 })).resolves.toEqual(result);
+    await expect(
+      client.orchestration.probeSync({ clientSequence: 4 }, { signal: controller.signal }),
+    ).resolves.toEqual(result);
 
     expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(expect.any(Function), { signal: controller.signal });
     expect(protocolProbeSync).toHaveBeenCalledWith({ clientSequence: 4 });
   });
 

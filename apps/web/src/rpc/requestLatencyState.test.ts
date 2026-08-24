@@ -6,6 +6,7 @@ import {
   clearAllTrackedRpcRequests,
   getSlowRpcAckRequests,
   resetRequestLatencyStateForTests,
+  setRpcRequestLatencyTrackingEnabled,
   trackRpcRequestSent,
   SLOW_RPC_ACK_THRESHOLD_MS,
   MAX_TRACKED_RPC_ACK_REQUESTS,
@@ -67,6 +68,27 @@ describe("requestLatencyState", () => {
 
     setTimeoutSpy.mockRestore();
     clearTimeoutSpy.mockRestore();
+  });
+
+  it("clears pending requests and ignores new tracking while backgrounded", () => {
+    trackRpcRequestSent("visible-request", "server.getConfig");
+
+    setRpcRequestLatencyTrackingEnabled(false);
+    trackRpcRequestSent("hidden-request", "server.getSettings");
+    vi.advanceTimersByTime(SLOW_RPC_ACK_THRESHOLD_MS * 2);
+
+    expect(getSlowRpcAckRequests()).toEqual([]);
+
+    setRpcRequestLatencyTrackingEnabled(true);
+    trackRpcRequestSent("next-visible-request", "server.getSettings");
+    vi.advanceTimersByTime(SLOW_RPC_ACK_THRESHOLD_MS);
+
+    expect(getSlowRpcAckRequests()).toMatchObject([
+      {
+        requestId: "next-visible-request",
+        tag: "server.getSettings",
+      },
+    ]);
   });
 
   it("ignores long-lived subscriptions that do not produce an initial snapshot", () => {

@@ -1,7 +1,11 @@
 import { EnvironmentId } from "@salchi/contracts";
 import { describe, expect, it, vi } from "vitest";
 
-import { createEnvironmentConnection, EnvironmentShellBootstrapTimeoutError } from "./connection";
+import {
+  createBootstrapGate,
+  createEnvironmentConnection,
+  EnvironmentShellBootstrapTimeoutError,
+} from "./connection";
 import type { WsRpcClient } from "~/rpc/wsRpcClient";
 
 function createTestClient() {
@@ -144,6 +148,36 @@ function createTestClient() {
 }
 
 describe("createEnvironmentConnection", () => {
+  it("cancels one bootstrap waiter without disturbing retained waiters", async () => {
+    const gate = createBootstrapGate();
+    const retainedWaiter = gate.wait();
+    const cancellableWaiter = gate.waitCancellable();
+
+    expect(gate.pendingWaiterCount()).toBe(2);
+
+    cancellableWaiter.cancel();
+
+    await expect(cancellableWaiter.promise).rejects.toThrow("Bootstrap wait cancelled");
+    expect(gate.pendingWaiterCount()).toBe(1);
+
+    gate.resolve();
+    await expect(retainedWaiter).resolves.toBeUndefined();
+    expect(gate.pendingWaiterCount()).toBe(0);
+  });
+
+  it("removes an aborted bootstrap waiter", async () => {
+    const gate = createBootstrapGate();
+    const controller = new AbortController();
+    const waiter = gate.wait({ signal: controller.signal });
+
+    expect(gate.pendingWaiterCount()).toBe(1);
+
+    controller.abort(new Error("caller stopped waiting"));
+
+    await expect(waiter).rejects.toThrow("caller stopped waiting");
+    expect(gate.pendingWaiterCount()).toBe(0);
+  });
+
   it("bootstraps from the shell subscription snapshot", async () => {
     const environmentId = EnvironmentId.make("env-1");
     const { client } = createTestClient();
@@ -246,6 +280,38 @@ describe("createEnvironmentConnection", () => {
     );
 
     await connection.dispose();
+  });
+
+  it("rejects pending bootstrap waiters when the connection is disposed", async () => {
+    const environmentId = EnvironmentId.make("env-1");
+    const { client } = createTestClient();
+    const connection = createEnvironmentConnection({
+      kind: "saved",
+      knownEnvironment: {
+        id: "env-1",
+        label: "Remote env",
+        source: "manual",
+        target: {
+          httpBaseUrl: "http://example.test",
+          wsBaseUrl: "ws://example.test",
+        },
+        environmentId,
+      },
+      client,
+      applyShellEvent: vi.fn(),
+      syncShellSnapshot: vi.fn(),
+      applyTerminalEvent: vi.fn(),
+    });
+
+    await connection.ensureBootstrapped();
+
+    const reconnectPromise = connection.reconnect({ shellBootstrapTimeoutMs: 60_000 });
+    const ensurePromise = connection.ensureBootstrapped();
+    await Promise.resolve();
+    await connection.dispose();
+
+    await expect(reconnectPromise).rejects.toThrow("Environment connection disposed");
+    await expect(ensurePromise).rejects.toThrow("Environment connection disposed");
   });
 
   it("rejects reconnect when shell bootstrap wait times out", async () => {
