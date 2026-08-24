@@ -228,9 +228,24 @@ describe("buildSidebarThreadPresentation", () => {
     });
 
     expect(presentation.threads).toHaveLength(1);
+    expect(presentation.threads[0]?.title).toBe("Plan this change");
     expect(presentation.pendingThreadKeys.has(threadKey)).toBe(true);
     expect(presentation.draftThreadKeys.has(threadKey)).toBe(true);
     expect(presentation.draftIdByThreadKey.get(threadKey)).toBe(draftId);
+  });
+
+  it("truncates a draft title from the prompt like the first-send fallback", () => {
+    const prompt = "Investigate websocket reconnect regressions after repeated session resumes";
+
+    const presentation = buildSidebarThreadPresentation({
+      serverThreads: [],
+      draftThreads: [makeDraftInput(makeDraftThread(), makeComposerDraft({ prompt }))],
+      localDispatchByThreadKey: {},
+    });
+
+    expect(presentation.threads[0]?.title).toBe(
+      "Investigate websocket reconnect regressions after ...",
+    );
   });
 
   it("does not treat whitespace-only composer text as pending input", () => {
