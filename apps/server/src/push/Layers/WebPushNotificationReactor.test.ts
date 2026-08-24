@@ -6,6 +6,7 @@ import {
   MessageId,
   type OrchestrationMessage,
   type OrchestrationQueuedTurn,
+  type OrchestrationShellSnapshot,
   type OrchestrationThreadShell,
   ProviderDriverKind,
   RuntimeItemId,
@@ -35,6 +36,7 @@ import { WebPushService } from "../Services/WebPushService.ts";
 import {
   createQueuedTurnNotificationTracker,
   createRuntimeNotificationContentTrackerForTest,
+  deriveUnreadCompletionState,
   deriveWebPushPayloadForEvent,
   makeWebPushNotificationReactor,
   selectLatestThreadContentForTurnCompletion,
@@ -121,11 +123,32 @@ function makeThreadShell(input: {
     parentThreadId: input.parentThreadId ?? null,
     subagentKind: input.subagentKind ?? null,
     latestUserMessageAt: input.latestUserMessageAt ?? null,
+    archivedAt: null,
     session: {
       status: input.status ?? "ready",
       activeTurnId: input.activeTurnId ?? null,
     },
   } as OrchestrationThreadShell;
+}
+
+function projectedThreadForCount(
+  threadId: string,
+  turnId: string,
+  seenTurnId: string | null,
+): OrchestrationThreadShell {
+  return {
+    ...makeThreadShell({ id: ThreadId.make(threadId) }),
+    hiddenFromThreadList: false,
+    latestTurn: {
+      turnId: TurnId.make(turnId),
+      state: "completed",
+      requestedAt: now,
+      startedAt: now,
+      completedAt: now,
+      assistantMessageId: null,
+    },
+    seenCompletionTurnId: seenTurnId === null ? null : TurnId.make(seenTurnId),
+  };
 }
 
 function makeActivityAppendedEvent(
@@ -229,6 +252,20 @@ async function createNotificationReactorHarness(
   const runtimeEvents = await Effect.runPromise(PubSub.unbounded<ProviderRuntimeEvent>());
   const sentPayloads: ServerPushNotificationPayload[] = [];
   let queuedTurnLookupCount = 0;
+  let latestProjectedTurnId = TurnId.make("turn-1");
+  const projectedThreadShell = (threadId = ThreadId.make("thread-1")) => ({
+    ...makeThreadShell({ id: threadId, status: "ready" }),
+    hiddenFromThreadList: false,
+    latestTurn: {
+      turnId: latestProjectedTurnId,
+      state: "completed" as const,
+      requestedAt: now,
+      startedAt: now,
+      completedAt: now,
+      assistantMessageId: null,
+    },
+    seenCompletionTurnId: null,
+  });
 
   const layer = Layer.effect(WebPushNotificationReactor, makeWebPushNotificationReactor).pipe(
     Layer.provideMerge(
@@ -244,15 +281,15 @@ async function createNotificationReactorHarness(
     Layer.provideMerge(
       Layer.mock(ProjectionSnapshotQuery)({
         getThreadShellById: (threadId) =>
-          Effect.succeed(
-            Option.some(
-              makeThreadShell({
-                id: threadId,
-                status: "ready",
-              }),
-            ),
-          ),
+          Effect.succeed(Option.some(projectedThreadShell(threadId))),
         getThreadDetailSnapshotById: () => Effect.succeed(Option.none()),
+        getShellSnapshot: () =>
+          Effect.succeed({
+            snapshotSequence: 7,
+            projects: [],
+            threads: [projectedThreadShell()],
+            updatedAt: now,
+          }),
       }),
     ),
     Layer.provideMerge(
@@ -275,7 +312,7 @@ async function createNotificationReactorHarness(
           label: "Local",
           platform: { os: "linux", arch: "x64" },
           serverVersion: "test",
-          capabilities: { repositoryIdentity: false },
+          capabilities: { repositoryIdentity: false, completionAttention: true },
         }),
       }),
     ),
@@ -301,8 +338,12 @@ async function createNotificationReactorHarness(
     queuedTurnLookupCount: () => queuedTurnLookupCount,
     publishDomain: (event: OrchestrationEvent) =>
       Effect.runPromise(PubSub.publish(domainEvents, event)),
-    publishRuntime: (event: ProviderRuntimeEvent) =>
-      Effect.runPromise(PubSub.publish(runtimeEvents, event)),
+    publishRuntime: (event: ProviderRuntimeEvent) => {
+      if (event.type === "turn.completed" && event.turnId !== undefined) {
+        latestProjectedTurnId = event.turnId;
+      }
+      return Effect.runPromise(PubSub.publish(runtimeEvents, event));
+    },
     drain: () => runtime.runPromise(reactor.drain),
     close: async () => {
       await Effect.runPromise(Scope.close(scope, Exit.void));
@@ -550,6 +591,11 @@ describe("deriveWebPushPayloadForEvent", () => {
       body: "Latest assistant response",
       url: "/environment-local/thread-1",
       tag: "thread:thread-1:turn:turn-1",
+      completion: {
+        environmentId: "environment-local",
+        threadId: "thread-1",
+        completionId: "turn-1",
+      },
     });
   });
 
@@ -566,6 +612,11 @@ describe("deriveWebPushPayloadForEvent", () => {
       body: "Agent turn completed",
       url: "/environment-local/thread-1",
       tag: "thread:thread-1:turn:turn-1",
+      completion: {
+        environmentId: "environment-local",
+        threadId: "thread-1",
+        completionId: "turn-1",
+      },
     });
   });
 
@@ -584,6 +635,11 @@ describe("deriveWebPushPayloadForEvent", () => {
       body: "Provider quota exhausted",
       url: "/environment-local/thread-1",
       tag: "thread:thread-1:turn:turn-1",
+      completion: {
+        environmentId: "environment-local",
+        threadId: "thread-1",
+        completionId: "turn-1",
+      },
     });
   });
 
@@ -627,6 +683,32 @@ describe("deriveWebPushPayloadForEvent", () => {
       body: "Agent interrupted. Open Salchi to choose the next action.",
       url: "/environment-local/thread-1",
       tag: "thread:thread-1:turn:turn-1",
+      completion: {
+        environmentId: "environment-local",
+        threadId: "thread-1",
+        completionId: "turn-1",
+      },
+    });
+  });
+
+  it("does not track an interrupted notification as an unread completion in protocol v2", () => {
+    const payload = deriveWebPushPayloadForEvent({
+      event: makeTurnCompletedEvent("interrupted", {
+        errorMessage: "rate limit exceeded",
+        stopReason: "quota",
+      }),
+      environmentId: EnvironmentId.make("environment-local"),
+      threadTitle: "Interrupted thread",
+      latestThreadContent: null,
+      useCompletionAttentionProtocol: true,
+    });
+
+    expect(payload).toEqual({
+      title: "Interrupted thread",
+      body: "Agent interrupted. Open Salchi to choose the next action.",
+      url: "/environment-local/thread-1",
+      tag: "thread:thread-1:turn:turn-1",
+      completionAttentionVersion: 2,
     });
   });
 
@@ -810,6 +892,38 @@ describe("deriveWebPushPayloadForEvent", () => {
   });
 });
 
+describe("deriveUnreadCompletionState", () => {
+  it("counts only visible terminal completions whose exact turn is unseen", () => {
+    const unreadThread = projectedThreadForCount("thread-unread", "turn-unread", null);
+    const readThread = projectedThreadForCount("thread-read", "turn-read", "turn-read");
+    const hiddenThread = {
+      ...projectedThreadForCount("thread-hidden", "turn-hidden", null),
+      hiddenFromThreadList: true,
+    };
+    const archivedThread = {
+      ...projectedThreadForCount("thread-archived", "turn-archived", null),
+      archivedAt: now,
+    };
+
+    expect(
+      deriveUnreadCompletionState({
+        environmentId: EnvironmentId.make("environment-local"),
+        snapshot: {
+          snapshotSequence: 7,
+          completionAttentionSequence: 19,
+          projects: [],
+          threads: [unreadThread, readThread, hiddenThread, archivedThread],
+          updatedAt: now,
+        } as OrchestrationShellSnapshot,
+      }),
+    ).toEqual({
+      environmentId: "environment-local",
+      sequence: 19,
+      count: 1,
+    });
+  });
+});
+
 describe("WebPushNotificationReactor queue delivery", () => {
   it("reads durable queued state when the live queue event predates reactor startup", async () => {
     const durableQueuedTurns = new Map<string, OrchestrationQueuedTurn>([
@@ -845,6 +959,17 @@ describe("WebPushNotificationReactor queue delivery", () => {
           body: "Agent turn completed",
           url: "/environment-local/thread-1",
           tag: "thread:thread-1:turn:turn-final",
+          completion: {
+            environmentId: "environment-local",
+            threadId: "thread-1",
+            completionId: "turn-final",
+          },
+          unreadCompletionState: {
+            environmentId: "environment-local",
+            sequence: 7,
+            count: 1,
+          },
+          completionAttentionVersion: 2,
         },
       ]);
     } finally {

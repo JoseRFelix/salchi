@@ -2,10 +2,12 @@ import type {
   EnvironmentId,
   OrchestrationEvent,
   OrchestrationMessage,
+  OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadShell,
   ProviderRuntimeEvent,
   ServerPushNotificationPayload,
+  ServerPushUnreadCompletionState,
   ThreadId,
   TurnId,
 } from "@salchi/contracts";
@@ -20,6 +22,7 @@ import { ServerEnvironment } from "../../environment/Services/ServerEnvironment.
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionThreadQueuedTurnRepositoryLive } from "../../persistence/Layers/ProjectionThreadQueuedTurns.ts";
+import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import { ProjectionThreadQueuedTurnRepository } from "../../persistence/Services/ProjectionThreadQueuedTurns.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import {
@@ -76,6 +79,8 @@ const THREAD_NOTIFICATION_DETAIL_PAGE = {
     checkpoints: 1,
   },
 } as const;
+const CANONICAL_COMPLETION_RETRY_COUNT = 40;
+const CANONICAL_COMPLETION_RETRY_DELAY_MS = 50;
 
 export function createQueuedTurnNotificationTracker(): QueuedTurnNotificationTracker {
   const queuedMessageIdsByThreadId = new Map<ThreadId, Set<string>>();
@@ -485,6 +490,8 @@ export function deriveWebPushPayloadForEvent(input: {
   readonly environmentId: EnvironmentId;
   readonly threadTitle: string;
   readonly latestThreadContent: string | null;
+  readonly unreadCompletionState?: ServerPushUnreadCompletionState;
+  readonly useCompletionAttentionProtocol?: boolean;
 }): ServerPushNotificationPayload | null {
   const threadId = notificationThreadId(input.event);
   const url = threadUrl(input.environmentId, threadId);
@@ -527,8 +534,51 @@ export function deriveWebPushPayloadForEvent(input: {
         body,
         url,
         tag: `thread:${input.event.threadId}:turn:${input.event.turnId ?? input.event.eventId}`,
+        ...(!input.useCompletionAttentionProtocol || input.unreadCompletionState
+          ? {
+              completion: {
+                environmentId: input.environmentId,
+                threadId: input.event.threadId,
+                completionId: input.event.turnId ?? input.event.eventId,
+              },
+            }
+          : {}),
+        ...(input.unreadCompletionState
+          ? { unreadCompletionState: input.unreadCompletionState }
+          : {}),
+        ...(input.useCompletionAttentionProtocol ? { completionAttentionVersion: 2 as const } : {}),
       };
   }
+}
+
+function isEligibleCompletionThread(thread: OrchestrationThreadShell): boolean {
+  return (
+    !thread.hiddenFromThreadList &&
+    thread.archivedAt === null &&
+    thread.latestTurn !== null &&
+    thread.latestTurn.completedAt !== null &&
+    (thread.latestTurn.state === "completed" || thread.latestTurn.state === "error")
+  );
+}
+
+export function deriveUnreadCompletionState(input: {
+  readonly environmentId: EnvironmentId;
+  readonly snapshot: OrchestrationShellSnapshot;
+}): ServerPushUnreadCompletionState {
+  let count = 0;
+  for (const thread of input.snapshot.threads) {
+    if (
+      isEligibleCompletionThread(thread) &&
+      thread.seenCompletionTurnId !== thread.latestTurn?.turnId
+    ) {
+      count += 1;
+    }
+  }
+  return {
+    environmentId: input.environmentId,
+    sequence: input.snapshot.completionAttentionSequence ?? input.snapshot.snapshotSequence,
+    count,
+  };
 }
 
 export const makeWebPushNotificationReactor = Effect.gen(function* () {
@@ -546,6 +596,62 @@ export const makeWebPushNotificationReactor = Effect.gen(function* () {
     projectionSnapshotQuery
       .getThreadShellById(threadId)
       .pipe(Effect.catch(() => Effect.succeed(Option.none<OrchestrationThreadShell>())));
+
+  const resolveCanonicalUnreadCompletionState = (
+    event: Extract<ProviderRuntimeEvent, { type: "turn.completed" }>,
+    environmentId: EnvironmentId,
+    initialThread: Option.Option<OrchestrationThreadShell>,
+  ): Effect.Effect<ServerPushUnreadCompletionState | null> => {
+    const expectedTurnId =
+      event.turnId ??
+      Option.match(initialThread, {
+        onNone: () => null,
+        onSome: (thread) => thread.session?.activeTurnId ?? null,
+      });
+    if (expectedTurnId === null) {
+      return Effect.succeed(null);
+    }
+
+    const attempt = (
+      remainingAttempts: number,
+    ): Effect.Effect<ServerPushUnreadCompletionState | null, ProjectionRepositoryError> =>
+      Effect.gen(function* () {
+        const projectedThread = yield* resolveThread(event.threadId);
+        if (Option.isSome(projectedThread)) {
+          const latestTurn = projectedThread.value.latestTurn;
+          if (
+            latestTurn?.turnId === expectedTurnId &&
+            latestTurn.completedAt !== null &&
+            (latestTurn.state === "completed" || latestTurn.state === "error")
+          ) {
+            const snapshot = yield* projectionSnapshotQuery.getShellSnapshot();
+            const snapshotThread = snapshot.threads.find((thread) => thread.id === event.threadId);
+            if (
+              snapshotThread?.latestTurn?.turnId === expectedTurnId &&
+              isEligibleCompletionThread(snapshotThread)
+            ) {
+              return deriveUnreadCompletionState({ environmentId, snapshot });
+            }
+          }
+        }
+
+        if (remainingAttempts <= 1) {
+          return null;
+        }
+        yield* Effect.sleep(CANONICAL_COMPLETION_RETRY_DELAY_MS);
+        return yield* attempt(remainingAttempts - 1);
+      });
+
+    return attempt(CANONICAL_COMPLETION_RETRY_COUNT).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("failed to reconcile completion before web push", {
+          threadId: event.threadId,
+          turnId: expectedTurnId,
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as(null)),
+      ),
+    );
+  };
 
   const resolveLatestProjectedThreadContent = (
     event: Extract<ProviderRuntimeEvent, { type: "turn.completed" }>,
@@ -620,11 +726,25 @@ export const makeWebPushNotificationReactor = Effect.gen(function* () {
       onSome: (threadShell) => threadShell.title,
     });
     const latestThreadContent = yield* resolveLatestThreadContent(event);
+    const shouldTrackCompletion =
+      event.type === "turn.completed" &&
+      (event.payload.state === "completed" || event.payload.state === "failed");
+    const unreadCompletionState = shouldTrackCompletion
+      ? yield* resolveCanonicalUnreadCompletionState(event, environment.environmentId, thread)
+      : undefined;
+    if (shouldTrackCompletion && unreadCompletionState === null) {
+      yield* Effect.logWarning("sending completion web push without unread reconciliation", {
+        threadId: event.threadId,
+        turnId: event.turnId,
+      });
+    }
     const payload = deriveWebPushPayloadForEvent({
       event,
       environmentId: environment.environmentId,
       threadTitle,
       latestThreadContent,
+      ...(unreadCompletionState ? { unreadCompletionState } : {}),
+      ...(event.type === "turn.completed" ? { useCompletionAttentionProtocol: true } : {}),
     });
     if (payload === null) {
       return;

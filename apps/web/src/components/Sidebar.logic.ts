@@ -66,10 +66,10 @@ type ThreadStatusInput = Pick<
   | "hasPendingUserInput"
   | "interactionMode"
   | "latestTurn"
+  | "seenCompletionTurnId"
   | "session"
 > & {
   hasActiveLocalDispatch?: boolean;
-  lastVisitedAt?: string | undefined;
 };
 
 export interface ThreadJumpHintVisibilityController {

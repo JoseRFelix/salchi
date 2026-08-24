@@ -80,9 +80,17 @@ import {
   togglePendingUserInputOptionSelection,
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
-import { resyncAppBadge } from "../pwa/appBadge";
 import { closeThreadNotifications } from "../push/notifications";
-import { viewedThreadVisitedAt } from "../threadCompletion";
+import {
+  createThreadNotificationAttentionController,
+  isDocumentActivelyViewed,
+} from "../push/threadNotificationAttention";
+import {
+  setThreadCompletionAttention,
+  supportsThreadCompletionAttention,
+  threadCompletionAttentionTargetKey,
+} from "../threadAttention";
+import { getUnseenCompletionTurnId } from "../threadCompletion";
 import { resolveThreadDisplayTitle } from "../threadTitle";
 import {
   type AppState,
@@ -1550,58 +1558,129 @@ export default function ChatView(props: ChatViewProps) {
     [openOrReuseProjectDraftThread],
   );
 
+  const seenCompletionTurnIdRef = useRef(serverThread?.seenCompletionTurnId);
+  seenCompletionTurnIdRef.current = serverThread?.seenCompletionTurnId;
+  const acknowledgedCompletionTargetRef = useRef<string | null>(null);
+  if (
+    serverThread !== undefined &&
+    serverThread.seenCompletionTurnId !== undefined &&
+    serverThread.seenCompletionTurnId !== null &&
+    serverThread.latestTurn?.turnId === serverThread.seenCompletionTurnId &&
+    acknowledgedCompletionTargetRef.current ===
+      threadCompletionAttentionTargetKey({
+        environmentId: serverThread.environmentId,
+        threadId: serverThread.id,
+        turnId: serverThread.seenCompletionTurnId,
+      })
+  ) {
+    acknowledgedCompletionTargetRef.current = null;
+  }
+
   useEffect(() => {
     if (!serverThread?.id) return;
-    const threadId = serverThread.id;
-    const threadKey = scopedThreadKey(scopeThreadRef(serverThread.environmentId, threadId));
-    const closeVisibleThreadNotifications = () => {
-      // Use the raw thread id: notification tags are issued server-side as
-      // `thread:{rawThreadId}:...`, not the scoped key used for visited state.
-      void closeThreadNotifications(threadId).then(resyncAppBadge);
-    };
-    const markVisibleThreadVisited = () => {
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+    const activeServerThread = serverThread;
+    const threadId = activeServerThread.id;
+    const threadKey = scopedThreadKey(
+      scopeThreadRef(activeServerThread.environmentId, activeServerThread.id),
+    );
+    const attentionController = createThreadNotificationAttentionController({
+      isActivelyViewed: isDocumentActivelyViewed,
+      clearThreadNotifications: async () => {
+        // Notification payloads carry the environment plus the raw thread id,
+        // not the scoped key used by local UI state.
+        await closeThreadNotifications(activeServerThread.environmentId, threadId);
+      },
+    });
+    const retryDelaysMs = [1_000, 2_000, 5_000, 10_000] as const;
+    let retryAttempt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
+    let acknowledgeActiveThread: (afterActivation: boolean) => void;
+    const scheduleAcknowledgeRetry = () => {
+      if (disposed || retryTimer !== null || !isDocumentActivelyViewed()) {
         return;
       }
-      markThreadVisited(threadKey, viewedThreadVisitedAt(serverThread.latestTurn?.completedAt));
-      closeVisibleThreadNotifications();
+      const delay = retryDelaysMs[Math.min(retryAttempt, retryDelaysMs.length - 1)]!;
+      retryAttempt += 1;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        acknowledgeActiveThread(false);
+      }, delay);
     };
-
-    markVisibleThreadVisited();
-
-    if (typeof document === "undefined") {
-      return;
-    }
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        markThreadVisited(threadKey, viewedThreadVisitedAt(serverThread.latestTurn?.completedAt));
-        closeVisibleThreadNotifications();
+    acknowledgeActiveThread = (afterActivation: boolean) => {
+      if (!isDocumentActivelyViewed()) {
+        return;
+      }
+      markThreadVisited(threadKey);
+      const unseenCompletionTurnId = getUnseenCompletionTurnId({
+        latestTurn: activeServerThread.latestTurn,
+        seenCompletionTurnId: seenCompletionTurnIdRef.current,
+      });
+      const completionTarget =
+        unseenCompletionTurnId === null
+          ? null
+          : threadCompletionAttentionTargetKey({
+              environmentId: activeServerThread.environmentId,
+              threadId,
+              turnId: unseenCompletionTurnId,
+            });
+      if (
+        unseenCompletionTurnId !== null &&
+        completionTarget !== null &&
+        acknowledgedCompletionTargetRef.current !== completionTarget &&
+        supportsThreadCompletionAttention(activeServerThread.environmentId)
+      ) {
+        acknowledgedCompletionTargetRef.current = completionTarget;
+        void setThreadCompletionAttention({
+          operation: "acknowledge",
+          environmentId: activeServerThread.environmentId,
+          threadId,
+          turnId: unseenCompletionTurnId,
+        }).then((acknowledged) => {
+          if (acknowledged) {
+            retryAttempt = 0;
+          } else if (acknowledgedCompletionTargetRef.current === completionTarget) {
+            acknowledgedCompletionTargetRef.current = null;
+            scheduleAcknowledgeRetry();
+          }
+        });
+      }
+      if (afterActivation) {
+        attentionController.acknowledgeAfterActivation();
+      } else {
+        attentionController.acknowledgeCurrentState();
       }
     };
+    const acknowledgeThreadAfterActivation = () => {
+      acknowledgeActiveThread(true);
+    };
 
-    document.addEventListener("visibilitychange", handleVisibilityChange);
+    acknowledgeActiveThread(false);
+
+    if (typeof document === "undefined") {
+      return attentionController.dispose;
+    }
+
+    document.addEventListener("visibilitychange", acknowledgeThreadAfterActivation);
+    window.addEventListener("focus", acknowledgeThreadAfterActivation);
 
     return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      disposed = true;
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer);
+      }
+      document.removeEventListener("visibilitychange", acknowledgeThreadAfterActivation);
+      window.removeEventListener("focus", acknowledgeThreadAfterActivation);
+      attentionController.dispose();
     };
   }, [
     serverThread?.id,
     serverThread?.environmentId,
+    serverThread?.latestTurn?.turnId,
+    serverThread?.latestTurn?.state,
     serverThread?.latestTurn?.completedAt,
-    markThreadVisited,
-  ]);
-
-  useEffect(() => {
-    if (!serverThread?.id) return;
-    const threadKey = scopedThreadKey(scopeThreadRef(serverThread.environmentId, serverThread.id));
-    return () => {
-      markThreadVisited(threadKey, viewedThreadVisitedAt(serverThread.latestTurn?.completedAt));
-    };
-  }, [
-    serverThread?.id,
-    serverThread?.environmentId,
-    serverThread?.latestTurn?.completedAt,
+    serverThreadSummary?.hasPendingApprovals,
+    serverThreadSummary?.hasPendingUserInput,
     markThreadVisited,
   ]);
 

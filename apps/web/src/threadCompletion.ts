@@ -1,66 +1,63 @@
-import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
-import type { EnvironmentId, OrchestrationLatestTurn, ThreadId } from "@salchi/contracts";
+import type { EnvironmentId, OrchestrationLatestTurn, ThreadId, TurnId } from "@salchi/contracts";
 
 export interface ThreadCompletionStatusInput {
-  latestTurn: Pick<OrchestrationLatestTurn, "completedAt"> | null;
-  lastVisitedAt?: string | null | undefined;
+  latestTurn: Pick<OrchestrationLatestTurn, "turnId" | "state" | "completedAt"> | null;
+  seenCompletionTurnId?: TurnId | null | undefined;
 }
 
 export interface ScopedThreadCompletionInput extends ThreadCompletionStatusInput {
   environmentId: EnvironmentId;
   id: ThreadId;
   archivedAt?: string | null | undefined;
+  hiddenFromThreadList?: boolean | undefined;
 }
 
-/** Visit timestamp for a thread the user is actually looking at: never earlier
- * than the latest turn's completedAt, so server/client clock skew cannot leave
- * a viewed thread counting as unseen.
+function unreadEligibleCompletionTurnId(thread: ThreadCompletionStatusInput): TurnId | null {
+  if (!thread.latestTurn?.completedAt) return null;
+  if (thread.latestTurn.state !== "completed" && thread.latestTurn.state !== "error") return null;
+  return thread.latestTurn.turnId;
+}
+
+/**
+ * Missing means the snapshot came from a server predating completion
+ * attention. Treat that legacy completion as read; explicit null is the
+ * current protocol's unread value.
  */
-export function viewedThreadVisitedAt(
-  completedAt: string | null | undefined,
-  now = new Date(),
-): string {
-  const nowIso = now.toISOString();
-  if (!completedAt) {
-    return nowIso;
+export function normalizeSeenCompletionTurnId(thread: ThreadCompletionStatusInput): TurnId | null {
+  if (thread.seenCompletionTurnId !== undefined) {
+    return thread.seenCompletionTurnId;
   }
+  return unreadEligibleCompletionTurnId(thread);
+}
 
-  const completedAtMs = Date.parse(completedAt);
-  if (Number.isNaN(completedAtMs)) {
-    return nowIso;
-  }
+export function getUnseenCompletionTurnId(thread: ThreadCompletionStatusInput): TurnId | null {
+  const turnId = unreadEligibleCompletionTurnId(thread);
+  return turnId !== null && turnId !== normalizeSeenCompletionTurnId(thread) ? turnId : null;
+}
 
-  const nowMs = Date.parse(nowIso);
-  return completedAtMs > nowMs ? completedAt : nowIso;
+export function getAcknowledgedCompletionTurnId(
+  thread: ThreadCompletionStatusInput,
+): TurnId | null {
+  const turnId = unreadEligibleCompletionTurnId(thread);
+  return turnId !== null && turnId === normalizeSeenCompletionTurnId(thread) ? turnId : null;
 }
 
 export function hasUnseenCompletion(thread: ThreadCompletionStatusInput): boolean {
-  if (!thread.latestTurn?.completedAt) return false;
-  const completedAt = Date.parse(thread.latestTurn.completedAt);
-  if (Number.isNaN(completedAt)) return false;
-  if (!thread.lastVisitedAt) return true;
-
-  const lastVisitedAt = Date.parse(thread.lastVisitedAt);
-  if (Number.isNaN(lastVisitedAt)) return true;
-  return completedAt > lastVisitedAt;
+  return getUnseenCompletionTurnId(thread) !== null;
 }
 
 export function countUnseenCompletedThreads(
   threads: readonly ScopedThreadCompletionInput[],
-  threadLastVisitedAtById: Readonly<Record<string, string | undefined>>,
 ): number {
   let count = 0;
   for (const thread of threads) {
-    if (thread.archivedAt !== null && thread.archivedAt !== undefined) {
+    if (
+      (thread.archivedAt !== null && thread.archivedAt !== undefined) ||
+      thread.hiddenFromThreadList === true
+    ) {
       continue;
     }
-    const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-    if (
-      hasUnseenCompletion({
-        latestTurn: thread.latestTurn,
-        lastVisitedAt: threadLastVisitedAtById[threadKey],
-      })
-    ) {
+    if (hasUnseenCompletion(thread)) {
       count += 1;
     }
   }

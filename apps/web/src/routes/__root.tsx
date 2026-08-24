@@ -14,6 +14,7 @@ import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { APP_BASE_NAME, APP_DISPLAY_NAME } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { BackNavigationBlocker } from "../components/BackNavigationBlocker";
+import { BrowserTabUnreadBadge } from "../components/BrowserTabUnreadBadge";
 import { CommandPaletteBoundary } from "../components/CommandPaletteBoundary";
 import { OfflineBanner } from "../components/OfflineBanner";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
@@ -174,6 +175,7 @@ function RootRouteView() {
   return (
     <ToastProvider>
       <AnchoredToastProvider>
+        <BrowserTabUnreadBadge />
         <OfflineBanner />
         <BackNavigationBlocker />
         {authGateRevalidationRequired ? <BackgroundAuthRevalidator /> : null}

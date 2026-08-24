@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EnvironmentId, ThreadId } from "@salchi/contracts";
 
 import {
   clearTurnCompletionAlerts,
@@ -6,19 +7,34 @@ import {
   closeTurnCompletionNotifications,
   countTurnCompletionNotificationThreads,
   getDisplayedTurnCompletionThreadCount,
+  dropServiceWorkerUnreadCompletionEnvironments,
   requestServiceWorkerBadgeSync,
   requestServiceWorkerTurnCompletionNotificationClear,
+  syncServiceWorkerUnreadCompletions,
 } from "./notifications";
 
 interface FakeNotification {
   readonly tag: unknown;
+  readonly data: {
+    readonly url: string;
+    readonly completion?: {
+      readonly environmentId: string;
+      readonly threadId: string;
+      readonly completionId: string;
+    };
+  };
   closed: boolean;
   readonly close: () => void;
 }
 
-function makeNotification(tag: unknown): FakeNotification {
+function makeNotification(
+  tag: unknown,
+  url = "/env-1/thread-1",
+  completion?: FakeNotification["data"]["completion"],
+): FakeNotification {
   const notification: FakeNotification = {
     tag,
+    data: { url, ...(completion ? { completion } : {}) },
     closed: false,
     close: () => {
       notification.closed = true;
@@ -33,11 +49,22 @@ function installPushSupport(
 ): void {
   vi.stubGlobal("window", {
     isSecureContext: true,
+    location: { origin: "https://salchi.example" },
     PushManager: function PushManager() {},
     Notification: function Notification() {},
   });
   vi.stubGlobal("navigator", {
     serviceWorker: { getRegistration, ...(ready ? { ready } : {}) },
+  });
+}
+
+function makeAcknowledgingPostMessage() {
+  return vi.fn((message: { readonly requestId?: string }, ports?: MessagePort[]) => {
+    ports?.[0]?.postMessage({
+      requestId: message.requestId ?? null,
+      ok: true,
+      count: 0,
+    });
   });
 }
 
@@ -64,18 +91,18 @@ describe("closeThreadNotifications", () => {
     vi.unstubAllGlobals();
   });
 
-  it("closes only notifications whose tag matches the thread prefix", async () => {
+  it("closes only notifications whose environment and thread route match", async () => {
     const notifications = [
       makeNotification("thread:thread-1:turn:turn-1"),
       makeNotification("thread:thread-1:approval:activity-1"),
-      makeNotification("thread:thread-2:turn:turn-1"),
-      makeNotification("salchi-other"),
+      makeNotification("thread:thread-2:turn:turn-1", "/env-1/thread-2"),
+      makeNotification("salchi-other", "/"),
     ];
     installPushSupport(async () => ({
       getNotifications: async () => notifications,
     }));
 
-    await closeThreadNotifications("thread-1");
+    await closeThreadNotifications(EnvironmentId.make("env-1"), ThreadId.make("thread-1"));
 
     expect(notifications.map((notification) => notification.closed)).toEqual([
       true,
@@ -89,8 +116,25 @@ describe("closeThreadNotifications", () => {
     const getRegistration = vi.fn(async () => null);
     installPushSupport(getRegistration);
 
-    await expect(closeThreadNotifications("thread-1")).resolves.toBeUndefined();
+    await expect(
+      closeThreadNotifications(EnvironmentId.make("env-1"), ThreadId.make("thread-1")),
+    ).resolves.toBeUndefined();
     expect(getRegistration).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers structured environment scope over a conflicting legacy route", async () => {
+    const notification = makeNotification("thread:thread-1:turn:turn-1", "/env-1/thread-1", {
+      environmentId: "env-2",
+      threadId: "thread-1",
+      completionId: "turn-1",
+    });
+    installPushSupport(async () => ({
+      getNotifications: async () => [notification],
+    }));
+
+    await closeThreadNotifications(EnvironmentId.make("env-1"), ThreadId.make("thread-1"));
+
+    expect(notification.closed).toBe(false);
   });
 
   it("is a no-op when push is unsupported", async () => {
@@ -98,7 +142,9 @@ describe("closeThreadNotifications", () => {
     vi.stubGlobal("window", { isSecureContext: false });
     vi.stubGlobal("navigator", { serviceWorker: { getRegistration } });
 
-    await expect(closeThreadNotifications("thread-1")).resolves.toBeUndefined();
+    await expect(
+      closeThreadNotifications(EnvironmentId.make("env-1"), ThreadId.make("thread-1")),
+    ).resolves.toBeUndefined();
     expect(getRegistration).not.toHaveBeenCalled();
   });
 
@@ -107,7 +153,9 @@ describe("closeThreadNotifications", () => {
       throw new Error("registration lookup failed");
     });
 
-    await expect(closeThreadNotifications("thread-1")).resolves.toBeUndefined();
+    await expect(
+      closeThreadNotifications(EnvironmentId.make("env-1"), ThreadId.make("thread-1")),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -235,20 +283,24 @@ describe("requestServiceWorkerBadgeSync", () => {
   });
 
   it("posts a sync request to the active service worker", async () => {
-    const postMessage = vi.fn();
+    const postMessage = makeAcknowledgingPostMessage();
     installPushSupport(async () => ({
       active: { postMessage },
     }));
 
     await expect(requestServiceWorkerBadgeSync()).resolves.toBe(true);
 
-    expect(postMessage).toHaveBeenCalledWith({
-      type: "salchi.sync-displayed-notification-badge",
-    });
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "salchi.sync-displayed-notification-badge",
+        requestId: expect.any(String),
+      }),
+      [expect.anything()],
+    );
   });
 
   it("uses an explicit registration without looking it up", async () => {
-    const postMessage = vi.fn();
+    const postMessage = makeAcknowledgingPostMessage();
     const getRegistration = vi.fn(async () => null);
     installPushSupport(getRegistration);
 
@@ -266,6 +318,58 @@ describe("requestServiceWorkerBadgeSync", () => {
     installPushSupport(async () => ({}));
 
     await expect(requestServiceWorkerBadgeSync()).resolves.toBe(false);
+  });
+});
+
+describe("completion ledger service-worker requests", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("waits for acknowledgement of sequenced snapshots and removals", async () => {
+    const postMessage = makeAcknowledgingPostMessage();
+    installPushSupport(async () => ({ active: { postMessage } }));
+    const environmentId = EnvironmentId.make("env-1");
+
+    await expect(
+      syncServiceWorkerUnreadCompletions(
+        [
+          {
+            environmentId,
+            sequence: 12,
+            completions: [{ threadId: ThreadId.make("thread-1"), completionId: "turn-1" }],
+          },
+        ],
+        [EnvironmentId.make("env-removed")],
+      ),
+    ).resolves.toBe(true);
+    await expect(dropServiceWorkerUnreadCompletionEnvironments([environmentId])).resolves.toBe(
+      true,
+    );
+
+    expect(postMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        type: "salchi.sync-unread-completions",
+        snapshots: [
+          {
+            environmentId,
+            sequence: 12,
+            completions: [{ threadId: "thread-1", completionId: "turn-1" }],
+          },
+        ],
+        removedEnvironmentIds: ["env-removed"],
+      }),
+      [expect.anything()],
+    );
+    expect(postMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        type: "salchi.drop-unread-completion-environments",
+        environmentIds: [environmentId],
+      }),
+      [expect.anything()],
+    );
   });
 });
 
@@ -350,7 +454,7 @@ describe("closeThreadNotifications input guards", () => {
     const getRegistration = vi.fn(async () => null);
     installPushSupport(getRegistration);
 
-    await closeThreadNotifications("");
+    await closeThreadNotifications(EnvironmentId.make("env-1"), "" as ThreadId);
 
     expect(getRegistration).not.toHaveBeenCalled();
   });

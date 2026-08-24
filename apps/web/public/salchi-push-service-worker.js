@@ -14,16 +14,25 @@ const PENDING_NOTIFICATION_CLICK_REQUEST_PATH = "/__salchi-notification-click/pe
 // Matches turn-completion notification tags (thread:{threadId}:turn:{turnId}).
 // The app icon badge counts only completed turns, so approval/input request
 // notifications and the default "salchi" tag must be excluded.
-const TURN_NOTIFICATION_TAG_PATTERN = /^thread:(.+):turn:[^:]+$/;
+const TURN_NOTIFICATION_TAG_PATTERN = /^thread:(.+):turn:(.+)$/;
 const THREAD_NOTIFICATION_TAG_PREFIX = /^thread:(.+?):/;
 const SYNC_BADGE_MESSAGE_TYPE = "salchi.sync-displayed-notification-badge";
+const SYNC_UNREAD_COMPLETIONS_MESSAGE_TYPE = "salchi.sync-unread-completions";
+const DROP_UNREAD_COMPLETION_ENVIRONMENTS_MESSAGE_TYPE =
+  "salchi.drop-unread-completion-environments";
 const CLEAR_TURN_COMPLETION_NOTIFICATIONS_MESSAGE_TYPE =
   "salchi.clear-turn-completion-notifications";
+const LEGACY_UNREAD_COMPLETION_CACHE_NAME = "salchi-unread-completions-v1";
+const UNREAD_COMPLETION_CACHE_NAME = "salchi-unread-completions-v2";
+const UNREAD_COMPLETION_REQUEST_PATH = "/__salchi-unread-completions/state";
+let unreadCompletionMutation = Promise.resolve();
 
 self.addEventListener("push", (event) => {
   const payload = readPushPayload(event);
   const title = notificationTitle(payload.title);
   const tag = payload.tag || "salchi";
+  const completion = readThreadCompletion(payload, tag);
+  const unreadCompletionState = readUnreadCompletionState(payload.unreadCompletionState);
   const notification = {
     body: payload.body || undefined,
     icon: "/salchi-pwa-192.png",
@@ -31,6 +40,8 @@ self.addEventListener("push", (event) => {
     tag,
     data: {
       url: payload.url || DEFAULT_NOTIFICATION_URL,
+      completion,
+      completionAttentionVersion: payload.completionAttentionVersion,
     },
   };
 
@@ -55,7 +66,14 @@ self.addEventListener("push", (event) => {
       if (TURN_NOTIFICATION_TAG_PATTERN.test(tag)) {
         await ignoreNotificationMaintenanceFailure(() => closeSupersededThreadNotifications(tag));
       }
-      await ignoreNotificationMaintenanceFailure(syncDisplayedNotificationBadge);
+      // Only the versioned server state can converge after reads, reconnects,
+      // and multi-device updates. Legacy completion pushes remain visible but
+      // must not recreate an unread count that the old server cannot clear.
+      if (unreadCompletionState !== null) {
+        await ignoreNotificationMaintenanceFailure(() =>
+          applyPushUnreadCompletionState(unreadCompletionState, completion),
+        );
+      }
     })(),
   );
 });
@@ -63,32 +81,76 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const url = resolveNotificationUrl(event.notification.data?.url);
+  const completion = readThreadCompletion(event.notification.data, event.notification.tag);
 
   event.waitUntil(
     openNotificationUrl(url).then(async (client) => {
-      await ignoreNotificationMaintenanceFailure(clearTurnCompletionNotificationsAndBadge);
+      if (completion !== null) {
+        await ignoreNotificationMaintenanceFailure(() => acknowledgeUnreadCompletion(completion));
+      } else {
+        await ignoreNotificationMaintenanceFailure(syncUnreadCompletionBadge);
+      }
       return client;
     }),
   );
 });
 
 self.addEventListener("notificationclose", (event) => {
-  event.waitUntil(syncDisplayedNotificationBadge());
+  event.waitUntil(syncUnreadCompletionBadge());
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(syncDisplayedNotificationBadge());
+  event.waitUntil(initializeUnreadCompletionBadge());
 });
 
 self.addEventListener("message", (event) => {
   if (event.data?.type === SYNC_BADGE_MESSAGE_TYPE) {
-    event.waitUntil(syncDisplayedNotificationBadge());
+    waitForBadgeMessage(event, syncUnreadCompletionBadge());
+    return;
+  }
+  if (event.data?.type === SYNC_UNREAD_COMPLETIONS_MESSAGE_TYPE) {
+    waitForBadgeMessage(
+      event,
+      replaceUnreadCompletionSnapshots(event.data.snapshots, event.data.removedEnvironmentIds),
+    );
+    return;
+  }
+  if (event.data?.type === DROP_UNREAD_COMPLETION_ENVIRONMENTS_MESSAGE_TYPE) {
+    waitForBadgeMessage(event, dropUnreadCompletionEnvironments(event.data.environmentIds));
     return;
   }
   if (event.data?.type === CLEAR_TURN_COMPLETION_NOTIFICATIONS_MESSAGE_TYPE) {
-    event.waitUntil(clearTurnCompletionNotificationsAndBadge());
+    waitForBadgeMessage(event, clearTurnCompletionNotificationsAndBadge());
   }
 });
+
+function waitForBadgeMessage(event, operation) {
+  const requestId = typeof event.data?.requestId === "string" ? event.data.requestId : null;
+  const replyPort = event.ports?.[0];
+  const task = Promise.resolve(operation).then(
+    (count) => {
+      postBadgeMessageReply(replyPort, { requestId, ok: true, count });
+    },
+    (error) => {
+      postBadgeMessageReply(replyPort, {
+        requestId,
+        ok: false,
+        error: describeNotificationError(error),
+      });
+      throw error;
+    },
+  );
+  event.waitUntil(task);
+}
+
+function postBadgeMessageReply(replyPort, message) {
+  if (!replyPort || typeof replyPort.postMessage !== "function") {
+    return;
+  }
+  // MessagePort.postMessage does not accept a target origin.
+  // oxlint-disable-next-line require-post-message-target-origin
+  replyPort.postMessage(message);
+}
 
 function readPushPayload(event) {
   if (!event.data) {
@@ -100,6 +162,70 @@ function readPushPayload(event) {
   } catch {
     return {};
   }
+}
+
+function readThreadCompletion(source, rawTag) {
+  const completion = source?.completion;
+  if (
+    completion &&
+    typeof completion.environmentId === "string" &&
+    completion.environmentId.length > 0 &&
+    typeof completion.threadId === "string" &&
+    completion.threadId.length > 0 &&
+    typeof completion.completionId === "string" &&
+    completion.completionId.length > 0
+  ) {
+    return {
+      environmentId: completion.environmentId,
+      threadId: completion.threadId,
+      completionId: completion.completionId,
+    };
+  }
+
+  if (source?.completionAttentionVersion === 2) {
+    return null;
+  }
+
+  const tag = typeof rawTag === "string" ? rawTag : "";
+  const tagMatch = TURN_NOTIFICATION_TAG_PATTERN.exec(tag);
+  if (tagMatch === null) {
+    return null;
+  }
+  try {
+    const url = new URL(source?.url || DEFAULT_NOTIFICATION_URL, self.location.origin);
+    const pathSegments = url.pathname
+      .split("/")
+      .filter(Boolean)
+      .map((segment) => decodeURIComponent(segment));
+    if (pathSegments.length < 2 || pathSegments[1] !== tagMatch[1]) {
+      return null;
+    }
+    return {
+      environmentId: pathSegments[0],
+      threadId: tagMatch[1],
+      completionId: tagMatch[2],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readUnreadCompletionState(value) {
+  if (
+    typeof value?.environmentId !== "string" ||
+    value.environmentId.length === 0 ||
+    !Number.isSafeInteger(value.sequence) ||
+    value.sequence < 0 ||
+    !Number.isSafeInteger(value.count) ||
+    value.count < 0
+  ) {
+    return null;
+  }
+  return {
+    environmentId: value.environmentId,
+    sequence: value.sequence,
+    count: value.count,
+  };
 }
 
 function notificationTitle(rawTitle) {
@@ -227,44 +353,406 @@ async function openNotificationClickTarget(click) {
   return result;
 }
 
-function canSetAppBadge() {
-  return typeof self.navigator?.setAppBadge === "function";
+function unreadCompletionKey(completion) {
+  return `${completion.environmentId}\n${completion.threadId}`;
 }
 
-function countUnseenTurnCompletionThreads(notifications) {
-  const threadIds = new Set();
-  for (const notification of notifications) {
-    const tag = typeof notification.tag === "string" ? notification.tag : "";
-    const match = TURN_NOTIFICATION_TAG_PATTERN.exec(tag);
-    if (match) {
-      threadIds.add(match[1]);
+function unreadCompletionIdentity(completion) {
+  return `${unreadCompletionKey(completion)}\n${completion.completionId}`;
+}
+
+function normalizeUnreadCompletionEntries(value) {
+  if (!value || !Array.isArray(value.entries)) {
+    return [];
+  }
+  const entriesByThread = new Map();
+  for (const entry of value.entries) {
+    if (
+      typeof entry?.environmentId !== "string" ||
+      entry.environmentId.length === 0 ||
+      typeof entry?.threadId !== "string" ||
+      entry.threadId.length === 0 ||
+      typeof entry?.completionId !== "string" ||
+      entry.completionId.length === 0
+    ) {
+      continue;
+    }
+    const completion = {
+      environmentId: entry.environmentId,
+      threadId: entry.threadId,
+      completionId: entry.completionId,
+    };
+    entriesByThread.set(unreadCompletionKey(completion), completion);
+  }
+  return Array.from(entriesByThread.values());
+}
+
+function emptyUnreadCompletionLedger() {
+  return { version: 2, entries: [], environments: [] };
+}
+
+function normalizeUnreadCompletionLedger(value) {
+  if (!value || value.version !== 2) {
+    return emptyUnreadCompletionLedger();
+  }
+  const entries = normalizeUnreadCompletionEntries(value);
+  const environmentsById = new Map();
+  for (const environment of Array.isArray(value.environments) ? value.environments : []) {
+    if (
+      typeof environment?.environmentId !== "string" ||
+      environment.environmentId.length === 0 ||
+      !Number.isSafeInteger(environment.count) ||
+      environment.count < 0
+    ) {
+      continue;
+    }
+    const sequence =
+      Number.isSafeInteger(environment.sequence) && environment.sequence >= 0
+        ? environment.sequence
+        : null;
+    const previous = environmentsById.get(environment.environmentId);
+    if (
+      previous === undefined ||
+      previous.sequence === null ||
+      (sequence !== null && sequence >= previous.sequence)
+    ) {
+      environmentsById.set(environment.environmentId, {
+        environmentId: environment.environmentId,
+        sequence,
+        count: environment.count,
+      });
     }
   }
-  return threadIds.size;
-}
-
-async function syncDisplayedNotificationBadge() {
-  if (!canSetAppBadge() || typeof self.registration?.getNotifications !== "function") {
-    return false;
+  for (const entry of entries) {
+    if (!environmentsById.has(entry.environmentId)) {
+      environmentsById.set(entry.environmentId, {
+        environmentId: entry.environmentId,
+        sequence: null,
+        count: entries.filter((candidate) => candidate.environmentId === entry.environmentId)
+          .length,
+      });
+    }
   }
-
-  const notifications = await self.registration.getNotifications();
-  return writeServiceWorkerAppBadge(countUnseenTurnCompletionThreads(notifications));
+  return {
+    version: 2,
+    entries,
+    environments: Array.from(environmentsById.values()),
+  };
 }
 
-async function clearTurnCompletionNotificationsAndBadge() {
+function unreadCompletionCount(ledger) {
+  return ledger.environments.reduce((count, environment) => count + environment.count, 0);
+}
+
+async function readUnreadCompletionLedger() {
+  if (!("caches" in self)) {
+    return { exists: false, ledger: emptyUnreadCompletionLedger() };
+  }
+  try {
+    const cache = await self.caches.open(UNREAD_COMPLETION_CACHE_NAME);
+    const response = await cache.match(makeUnreadCompletionRequest());
+    if (!response) {
+      return { exists: false, ledger: emptyUnreadCompletionLedger() };
+    }
+    return {
+      exists: true,
+      ledger: normalizeUnreadCompletionLedger(await response.json()),
+    };
+  } catch {
+    return { exists: false, ledger: emptyUnreadCompletionLedger() };
+  }
+}
+
+async function writeUnreadCompletionLedger(ledger) {
+  if (!("caches" in self)) {
+    return;
+  }
+  const cache = await self.caches.open(UNREAD_COMPLETION_CACHE_NAME);
+  await cache.put(
+    makeUnreadCompletionRequest(),
+    new Response(JSON.stringify(normalizeUnreadCompletionLedger(ledger)), {
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
+}
+
+function makeUnreadCompletionRequest() {
+  return new Request(new URL(UNREAD_COMPLETION_REQUEST_PATH, self.location.origin), {
+    method: "GET",
+  });
+}
+
+function mutateUnreadCompletions(update) {
+  const mutation = unreadCompletionMutation.then(async () => {
+    const { ledger } = await readUnreadCompletionLedger();
+    const nextLedger = normalizeUnreadCompletionLedger(update(ledger));
+    const count = unreadCompletionCount(nextLedger);
+    let persistenceError = null;
+    try {
+      await writeUnreadCompletionLedger(nextLedger);
+    } catch (error) {
+      persistenceError = error;
+    }
+    const badgeApplied = await writeServiceWorkerAppBadge(count);
+    if (persistenceError !== null) {
+      throw persistenceError;
+    }
+    if (!badgeApplied) {
+      throw new Error("Service worker app badge write failed.");
+    }
+    return count;
+  });
+  unreadCompletionMutation = mutation.then(
+    () => undefined,
+    () => undefined,
+  );
+  return mutation;
+}
+
+function acknowledgeUnreadCompletion(completion) {
+  return mutateUnreadCompletions((ledger) => {
+    const matched = ledger.entries.some(
+      (entry) =>
+        unreadCompletionKey(entry) === unreadCompletionKey(completion) &&
+        entry.completionId === completion.completionId,
+    );
+    if (!matched) {
+      return ledger;
+    }
+    return {
+      ...ledger,
+      entries: ledger.entries.filter(
+        (entry) =>
+          unreadCompletionKey(entry) !== unreadCompletionKey(completion) ||
+          entry.completionId !== completion.completionId,
+      ),
+      environments: ledger.environments.map((environment) =>
+        environment.environmentId === completion.environmentId
+          ? { ...environment, count: Math.max(0, environment.count - 1) }
+          : environment,
+      ),
+    };
+  });
+}
+
+function applyPushUnreadCompletionState(rawState, completion) {
+  const incoming = readUnreadCompletionState(rawState);
+  if (incoming === null) {
+    return syncUnreadCompletionBadge();
+  }
+  return mutateUnreadCompletions((ledger) => {
+    const existing = ledger.environments.find(
+      (environment) => environment.environmentId === incoming.environmentId,
+    );
+    if (
+      existing?.sequence !== null &&
+      existing?.sequence !== undefined &&
+      incoming.sequence < existing.sequence
+    ) {
+      return ledger;
+    }
+    const replacementEntries =
+      completion !== null &&
+      completion.environmentId === incoming.environmentId &&
+      incoming.count > 0
+        ? [completion]
+        : [];
+    return {
+      ...ledger,
+      entries: [
+        ...ledger.entries.filter((entry) => entry.environmentId !== incoming.environmentId),
+        ...replacementEntries,
+      ],
+      environments: [
+        ...ledger.environments.filter(
+          (environment) => environment.environmentId !== incoming.environmentId,
+        ),
+        incoming,
+      ],
+    };
+  });
+}
+
+function applyUnreadCompletionSnapshotsToLedger(ledger, snapshots, removedEnvironmentIds) {
+  let entries = ledger.entries.filter((entry) => !removedEnvironmentIds.has(entry.environmentId));
+  let environments = ledger.environments.filter(
+    (environment) => !removedEnvironmentIds.has(environment.environmentId),
+  );
+  for (const snapshot of snapshots) {
+    if (
+      typeof snapshot?.environmentId !== "string" ||
+      snapshot.environmentId.length === 0 ||
+      !Number.isSafeInteger(snapshot.sequence) ||
+      snapshot.sequence < 0
+    ) {
+      continue;
+    }
+    const completions = Array.isArray(snapshot.completions) ? snapshot.completions : [];
+    const replacements = [];
+    for (const completion of completions) {
+      if (
+        typeof completion?.threadId === "string" &&
+        completion.threadId.length > 0 &&
+        typeof completion?.completionId === "string" &&
+        completion.completionId.length > 0
+      ) {
+        replacements.push({
+          environmentId: snapshot.environmentId,
+          threadId: completion.threadId,
+          completionId: completion.completionId,
+        });
+      }
+    }
+    const existing = environments.find(
+      (environment) => environment.environmentId === snapshot.environmentId,
+    );
+    if (
+      existing?.sequence !== null &&
+      existing?.sequence !== undefined &&
+      snapshot.sequence < existing.sequence
+    ) {
+      continue;
+    }
+    const normalizedReplacements = normalizeUnreadCompletionEntries({ entries: replacements });
+    entries = entries
+      .filter((entry) => entry.environmentId !== snapshot.environmentId)
+      .concat(normalizedReplacements);
+    environments = environments
+      .filter((environment) => environment.environmentId !== snapshot.environmentId)
+      .concat({
+        environmentId: snapshot.environmentId,
+        sequence: snapshot.sequence,
+        count: normalizedReplacements.length,
+      });
+  }
+  return { ...ledger, entries, environments };
+}
+
+async function replaceUnreadCompletionSnapshots(rawSnapshots, rawRemovedEnvironmentIds) {
+  const snapshots = Array.isArray(rawSnapshots) ? rawSnapshots : [];
+  const removedEnvironmentIds = new Set(
+    (Array.isArray(rawRemovedEnvironmentIds) ? rawRemovedEnvironmentIds : []).filter(
+      (environmentId) => typeof environmentId === "string" && environmentId.length > 0,
+    ),
+  );
+  let count = 0;
+  let mutationError = null;
+  try {
+    count = await mutateUnreadCompletions((ledger) =>
+      applyUnreadCompletionSnapshotsToLedger(ledger, snapshots, removedEnvironmentIds),
+    );
+  } catch (error) {
+    mutationError = error;
+  }
+  await ignoreNotificationMaintenanceFailure(() =>
+    closeReadCompletionNotifications(snapshots, removedEnvironmentIds),
+  );
+  if (mutationError !== null) {
+    throw mutationError;
+  }
+  return count;
+}
+
+function dropUnreadCompletionEnvironments(rawEnvironmentIds) {
+  return replaceUnreadCompletionSnapshots([], rawEnvironmentIds);
+}
+
+async function closeReadCompletionNotifications(snapshots, removedEnvironmentIds) {
   if (typeof self.registration?.getNotifications !== "function") {
-    return writeServiceWorkerAppBadge(0);
+    return;
+  }
+  const { ledger } = await readUnreadCompletionLedger();
+  const appliedEnvironmentIds = new Set();
+  for (const snapshot of snapshots) {
+    const environment = ledger.environments.find(
+      (candidate) => candidate.environmentId === snapshot?.environmentId,
+    );
+    if (
+      environment !== undefined &&
+      Number.isSafeInteger(snapshot?.sequence) &&
+      environment.sequence === snapshot.sequence
+    ) {
+      appliedEnvironmentIds.add(environment.environmentId);
+    }
+  }
+  if (appliedEnvironmentIds.size === 0 && removedEnvironmentIds.size === 0) {
+    return;
   }
 
+  const unreadCompletionIdentities = new Set(ledger.entries.map(unreadCompletionIdentity));
   const notifications = await self.registration.getNotifications();
   for (const notification of notifications) {
-    const tag = typeof notification.tag === "string" ? notification.tag : "";
-    if (TURN_NOTIFICATION_TAG_PATTERN.test(tag) && typeof notification.close === "function") {
+    const completion = readThreadCompletion(notification.data, notification.tag);
+    if (completion === null) {
+      continue;
+    }
+    if (
+      removedEnvironmentIds.has(completion.environmentId) ||
+      (appliedEnvironmentIds.has(completion.environmentId) &&
+        !unreadCompletionIdentities.has(unreadCompletionIdentity(completion)))
+    ) {
       notification.close();
     }
   }
-  return writeServiceWorkerAppBadge(0);
+}
+
+function syncUnreadCompletionBadge() {
+  const sync = unreadCompletionMutation.then(async () => {
+    const { ledger } = await readUnreadCompletionLedger();
+    const count = unreadCompletionCount(ledger);
+    if (!(await writeServiceWorkerAppBadge(count))) {
+      throw new Error("Service worker app badge write failed.");
+    }
+    return count;
+  });
+  unreadCompletionMutation = sync.then(
+    () => undefined,
+    () => undefined,
+  );
+  return sync;
+}
+
+function initializeUnreadCompletionBadge() {
+  const initialization = unreadCompletionMutation.then(async () => {
+    const ledger = await readUnreadCompletionLedger();
+    if (ledger.exists) {
+      const count = unreadCompletionCount(ledger.ledger);
+      if (!(await writeServiceWorkerAppBadge(count))) {
+        throw new Error("Service worker app badge write failed.");
+      }
+      return count;
+    }
+
+    const emptyLedger = emptyUnreadCompletionLedger();
+    await ignoreNotificationMaintenanceFailure(() => writeUnreadCompletionLedger(emptyLedger));
+    if (!(await writeServiceWorkerAppBadge(0))) {
+      throw new Error("Service worker app badge write failed.");
+    }
+    if (typeof self.caches?.delete === "function") {
+      await ignoreNotificationMaintenanceFailure(() =>
+        self.caches.delete(LEGACY_UNREAD_COMPLETION_CACHE_NAME),
+      );
+    }
+    return 0;
+  });
+  unreadCompletionMutation = initialization.then(
+    () => undefined,
+    () => undefined,
+  );
+  return initialization;
+}
+
+async function clearTurnCompletionNotificationsAndBadge() {
+  if (typeof self.registration?.getNotifications === "function") {
+    const notifications = await self.registration.getNotifications();
+    for (const notification of notifications) {
+      const tag = typeof notification.tag === "string" ? notification.tag : "";
+      if (TURN_NOTIFICATION_TAG_PATTERN.test(tag) && typeof notification.close === "function") {
+        notification.close();
+      }
+    }
+  }
+  return mutateUnreadCompletions(() => emptyUnreadCompletionLedger());
 }
 
 async function closeSupersededThreadNotifications(tag) {
@@ -291,6 +779,9 @@ async function closeSupersededThreadNotifications(tag) {
 
 async function writeServiceWorkerAppBadge(count) {
   const badgeCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+  if (typeof self.navigator?.setAppBadge !== "function") {
+    return true;
+  }
   try {
     if (badgeCount > 0) {
       await self.navigator.setAppBadge(badgeCount);

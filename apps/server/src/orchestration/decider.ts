@@ -415,6 +415,64 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.completion.acknowledge":
+    case "thread.completion.mark-unread": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const latestTurn = thread.latestTurn;
+      if (
+        latestTurn === null ||
+        latestTurn.turnId !== command.turnId ||
+        latestTurn.completedAt === null ||
+        latestTurn.state === "running" ||
+        latestTurn.state === "interrupted"
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Turn '${command.turnId}' is not the latest unread-eligible completion for thread '${command.threadId}'.`,
+        });
+      }
+      if (
+        command.type === "thread.completion.acknowledge" &&
+        thread.seenCompletionTurnId === command.turnId
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Turn '${command.turnId}' is already acknowledged for thread '${command.threadId}'.`,
+        });
+      }
+      if (
+        command.type === "thread.completion.mark-unread" &&
+        thread.seenCompletionTurnId !== command.turnId
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Turn '${command.turnId}' is not currently acknowledged for thread '${command.threadId}'.`,
+        });
+      }
+
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type:
+          command.type === "thread.completion.acknowledge"
+            ? "thread.completion-acknowledged"
+            : "thread.completion-marked-unread",
+        payload: {
+          threadId: command.threadId,
+          turnId: command.turnId,
+        },
+      };
+    }
+
     case "thread.meta.update": {
       yield* requireThread({
         readModel,

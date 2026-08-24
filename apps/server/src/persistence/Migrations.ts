@@ -55,6 +55,8 @@ import Migration0039 from "./Migrations/039_ProjectionQueuedTurnSteering.ts";
 import Migration0040 from "./Migrations/040_ProjectionThreadActivityOrderingExpressionIndex.ts";
 import Migration0041 from "./Migrations/041_InheritUntouchedLegacyProjectModelDefaults.ts";
 import Migration0042 from "./Migrations/042_ProjectionQueuedTurnRecoveryConfirmation.ts";
+import Migration0043 from "./Migrations/043_ProjectionThreadSeenCompletion.ts";
+import Migration0044 from "./Migrations/044_EnsureCompletionAttentionBaseline.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -109,6 +111,8 @@ export const migrationEntries = [
   [40, "ProjectionThreadActivityOrderingExpressionIndex", Migration0040],
   [41, "InheritUntouchedLegacyProjectModelDefaults", Migration0041],
   [42, "ProjectionQueuedTurnRecoveryConfirmation", Migration0042],
+  [43, "ProjectionThreadSeenCompletion", Migration0043],
+  [44, "EnsureCompletionAttentionBaseline", Migration0044],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
