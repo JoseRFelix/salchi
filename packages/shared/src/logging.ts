@@ -7,6 +7,8 @@ export interface RotatingFileSinkOptions {
   readonly maxBytes: number;
   readonly maxFiles: number;
   readonly throwOnError?: boolean;
+  readonly directoryMode?: number;
+  readonly fileMode?: number;
 }
 
 export class RotatingFileSink {
@@ -14,6 +16,7 @@ export class RotatingFileSink {
   private readonly maxBytes: number;
   private readonly maxFiles: number;
   private readonly throwOnError: boolean;
+  private readonly fileMode: number | undefined;
   private currentSize = 0;
 
   constructor(options: RotatingFileSinkOptions) {
@@ -28,8 +31,12 @@ export class RotatingFileSink {
     this.maxBytes = options.maxBytes;
     this.maxFiles = options.maxFiles;
     this.throwOnError = options.throwOnError ?? false;
+    this.fileMode = options.fileMode;
 
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+    const directory = path.dirname(this.filePath);
+    fs.mkdirSync(directory, { recursive: true, mode: options.directoryMode });
+    this.applyMode(directory, options.directoryMode);
+    this.applyMode(this.filePath, this.fileMode);
     this.pruneOverflowBackups();
     this.currentSize = this.readCurrentSize();
   }
@@ -43,7 +50,7 @@ export class RotatingFileSink {
         this.rotate();
       }
 
-      fs.appendFileSync(this.filePath, buffer);
+      fs.appendFileSync(this.filePath, buffer, { mode: this.fileMode });
       this.currentSize += buffer.length;
 
       if (this.currentSize > this.maxBytes) {
@@ -55,6 +62,11 @@ export class RotatingFileSink {
         throw new Error(`Failed to write log chunk to ${this.filePath}`);
       }
     }
+  }
+
+  /** Reconciles cached size after coordinated retention removes a log file. */
+  refreshCurrentSize(): void {
+    this.currentSize = this.readCurrentSize();
   }
 
   private rotate(): void {
@@ -107,6 +119,15 @@ export class RotatingFileSink {
       return fs.statSync(this.filePath).size;
     } catch {
       return 0;
+    }
+  }
+
+  private applyMode(targetPath: string, mode: number | undefined): void {
+    if (mode === undefined) return;
+    try {
+      fs.chmodSync(targetPath, mode);
+    } catch {
+      // POSIX modes are best-effort on platforms such as Windows.
     }
   }
 

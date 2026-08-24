@@ -1,3 +1,5 @@
+import NodeOS from "node:os";
+
 import * as NetService from "@salchi/shared/Net";
 import { parsePersistedServerObservabilitySettings } from "@salchi/shared/serverSettings";
 import { DesktopBackendBootstrap, PortSchema } from "@salchi/contracts";
@@ -26,6 +28,16 @@ import {
 import { migrateLegacyT3Home } from "../legacyHomeMigration.ts";
 import { createLegacyHomeMigrationProgressReporter } from "../legacyHomeMigrationProgress.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
+import {
+  DEFAULT_PROVIDER_LOG_MAX_AGE_MS,
+  DEFAULT_PROVIDER_LOG_MAX_FILES_PER_THREAD,
+  DEFAULT_PROVIDER_LOG_MAX_FILE_BYTES,
+  DEFAULT_PROVIDER_LOG_MAX_RECORD_BYTES,
+  DEFAULT_PROVIDER_LOG_MAX_STRING_BYTES,
+  DEFAULT_PROVIDER_LOG_MAX_TOTAL_BYTES,
+  findLegacyMigrationProviderLogDirectories,
+  pruneProviderLogDirectories,
+} from "../provider/ProviderLogRetention.ts";
 
 export const modeFlag = Flag.choice("mode", RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
@@ -71,6 +83,18 @@ export const logWebSocketEventsFlag = Flag.boolean("log-websocket-events").pipe(
   Flag.withAlias("log-ws-events"),
   Flag.optional,
 );
+export const providerEventLoggingFlag = Flag.boolean("provider-event-logging").pipe(
+  Flag.withDescription(
+    "Write redacted, size-bounded local provider diagnostics (equivalent to SALCHI_PROVIDER_EVENT_LOGGING; disabled by default outside development).",
+  ),
+  Flag.optional,
+);
+export const providerEventLogNativeFlag = Flag.boolean("provider-event-log-native").pipe(
+  Flag.withDescription(
+    "Also include redacted native provider events in local diagnostics (equivalent to SALCHI_PROVIDER_EVENT_LOG_NATIVE).",
+  ),
+  Flag.optional,
+);
 export const tailscaleServeFlag = Flag.boolean("tailscale-serve").pipe(
   Flag.withDescription(
     "Configure Tailscale Serve to expose this backend over HTTPS on the Tailnet.",
@@ -94,6 +118,31 @@ const EnvServerConfig = Config.all({
   traceMaxBytes: Config.int("SALCHI_TRACE_MAX_BYTES").pipe(Config.withDefault(10 * 1024 * 1024)),
   traceMaxFiles: Config.int("SALCHI_TRACE_MAX_FILES").pipe(Config.withDefault(10)),
   traceBatchWindowMs: Config.int("SALCHI_TRACE_BATCH_WINDOW_MS").pipe(Config.withDefault(200)),
+  providerEventLoggingEnabled: Config.boolean("SALCHI_PROVIDER_EVENT_LOGGING").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  providerEventLogIncludeNative: Config.boolean("SALCHI_PROVIDER_EVENT_LOG_NATIVE").pipe(
+    Config.withDefault(false),
+  ),
+  providerEventLogMaxFileBytes: Config.int("SALCHI_PROVIDER_EVENT_LOG_MAX_FILE_BYTES").pipe(
+    Config.withDefault(DEFAULT_PROVIDER_LOG_MAX_FILE_BYTES),
+  ),
+  providerEventLogMaxFilesPerThread: Config.int(
+    "SALCHI_PROVIDER_EVENT_LOG_MAX_FILES_PER_THREAD",
+  ).pipe(Config.withDefault(DEFAULT_PROVIDER_LOG_MAX_FILES_PER_THREAD)),
+  providerEventLogMaxTotalBytes: Config.int("SALCHI_PROVIDER_EVENT_LOG_MAX_TOTAL_BYTES").pipe(
+    Config.withDefault(DEFAULT_PROVIDER_LOG_MAX_TOTAL_BYTES),
+  ),
+  providerEventLogMaxAgeMs: Config.int("SALCHI_PROVIDER_EVENT_LOG_MAX_AGE_MS").pipe(
+    Config.withDefault(DEFAULT_PROVIDER_LOG_MAX_AGE_MS),
+  ),
+  providerEventLogMaxRecordBytes: Config.int("SALCHI_PROVIDER_EVENT_LOG_MAX_RECORD_BYTES").pipe(
+    Config.withDefault(DEFAULT_PROVIDER_LOG_MAX_RECORD_BYTES),
+  ),
+  providerEventLogMaxStringBytes: Config.int("SALCHI_PROVIDER_EVENT_LOG_MAX_STRING_BYTES").pipe(
+    Config.withDefault(DEFAULT_PROVIDER_LOG_MAX_STRING_BYTES),
+  ),
   otlpTracesUrl: Config.string("SALCHI_OTLP_TRACES_URL").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -161,6 +210,8 @@ export interface CliServerFlags {
   readonly bootstrapFd: Option.Option<number>;
   readonly autoBootstrapProjectFromCwd: Option.Option<boolean>;
   readonly logWebSocketEvents: Option.Option<boolean>;
+  readonly providerEventLoggingEnabled?: Option.Option<boolean>;
+  readonly providerEventLogIncludeNative?: Option.Option<boolean>;
   readonly tailscaleServeEnabled: Option.Option<boolean>;
   readonly tailscaleServePort: Option.Option<number>;
 }
@@ -195,6 +246,8 @@ export const sharedServerCommandFlags = {
   bootstrapFd: bootstrapFdFlag,
   autoBootstrapProjectFromCwd: autoBootstrapProjectFromCwdFlag,
   logWebSocketEvents: logWebSocketEventsFlag,
+  providerEventLoggingEnabled: providerEventLoggingFlag,
+  providerEventLogIncludeNative: providerEventLogNativeFlag,
   tailscaleServeEnabled: tailscaleServeFlag,
   tailscaleServePort: tailscaleServePortFlag,
 } as const;
@@ -243,6 +296,8 @@ export const resolveServerConfig = (
       bootstrapFd: flags.bootstrapFd ?? Option.none(),
       autoBootstrapProjectFromCwd: flags.autoBootstrapProjectFromCwd ?? Option.none(),
       logWebSocketEvents: flags.logWebSocketEvents ?? Option.none(),
+      providerEventLoggingEnabled: flags.providerEventLoggingEnabled ?? Option.none(),
+      providerEventLogIncludeNative: flags.providerEventLogIncludeNative ?? Option.none(),
       tailscaleServeEnabled: flags.tailscaleServeEnabled ?? Option.none(),
       tailscaleServePort: flags.tailscaleServePort ?? Option.none(),
     } satisfies CliServerFlags;
@@ -332,6 +387,55 @@ export const resolveServerConfig = (
       ),
       () => Boolean(devUrl),
     );
+    const providerEventLoggingEnabled = Option.getOrElse(
+      resolveOptionPrecedence(
+        normalizedFlags.providerEventLoggingEnabled,
+        Option.fromUndefinedOr(env.providerEventLoggingEnabled),
+      ),
+      () => Boolean(devUrl),
+    );
+    const providerEventLogIncludeNative = Option.getOrElse(
+      resolveOptionPrecedence(
+        normalizedFlags.providerEventLogIncludeNative,
+        Option.some(env.providerEventLogIncludeNative),
+      ),
+      () => false,
+    );
+    const providerEventLogMaxFileBytes = Math.max(1, env.providerEventLogMaxFileBytes);
+    const providerEventLogMaxFilesPerThread = Math.max(1, env.providerEventLogMaxFilesPerThread);
+    const providerEventLogMaxTotalBytes = Math.max(0, env.providerEventLogMaxTotalBytes);
+    const providerEventLogMaxAgeMs = Math.max(0, env.providerEventLogMaxAgeMs);
+    const providerEventLogMaxRecordBytes = Math.max(256, env.providerEventLogMaxRecordBytes);
+    const providerEventLogMaxStringBytes = Math.max(64, env.providerEventLogMaxStringBytes);
+
+    const providerLogDirectories = [
+      derivedPaths.providerLogsDir,
+      path.join(baseDir, "userdata", "logs", "provider"),
+      path.join(baseDir, "dev", "logs", "provider"),
+    ];
+    const defaultSalchiHome = path.resolve(path.join(NodeOS.homedir(), ".salchi"));
+    if (path.resolve(baseDir) === defaultSalchiHome) {
+      const legacyHome = path.resolve(path.join(NodeOS.homedir(), ".t3"));
+      providerLogDirectories.push(
+        path.join(legacyHome, "userdata", "logs", "provider"),
+        path.join(legacyHome, "dev", "logs", "provider"),
+        ...findLegacyMigrationProviderLogDirectories(NodeOS.homedir()),
+      );
+    }
+    const pruneResult = yield* Effect.sync(() =>
+      pruneProviderLogDirectories(providerLogDirectories, {
+        maxTotalBytes: providerEventLogMaxTotalBytes,
+        maxAgeMs: providerEventLogMaxAgeMs,
+      }),
+    );
+    if (pruneResult.deletedFiles > 0) {
+      yield* Effect.logInfo("Pruned retained provider diagnostics", pruneResult);
+    }
+    if (pruneResult.errors > 0) {
+      yield* Effect.logWarning("Provider diagnostics pruning completed with skipped files", {
+        errors: pruneResult.errors,
+      });
+    }
     const tailscaleServeEnabled = Option.getOrElse(
       resolveOptionPrecedence(
         normalizedFlags.tailscaleServeEnabled,
@@ -370,6 +474,14 @@ export const resolveServerConfig = (
       traceBatchWindowMs: env.traceBatchWindowMs,
       traceMaxBytes: env.traceMaxBytes,
       traceMaxFiles: env.traceMaxFiles,
+      providerEventLoggingEnabled,
+      providerEventLogIncludeNative,
+      providerEventLogMaxFileBytes,
+      providerEventLogMaxFilesPerThread,
+      providerEventLogMaxTotalBytes,
+      providerEventLogMaxAgeMs,
+      providerEventLogMaxRecordBytes,
+      providerEventLogMaxStringBytes,
       otlpTracesUrl:
         env.otlpTracesUrl ??
         bootstrap?.otlpTracesUrl ??

@@ -14,6 +14,15 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
 
+import {
+  DEFAULT_PROVIDER_LOG_MAX_AGE_MS,
+  DEFAULT_PROVIDER_LOG_MAX_FILES_PER_THREAD,
+  DEFAULT_PROVIDER_LOG_MAX_FILE_BYTES,
+  DEFAULT_PROVIDER_LOG_MAX_RECORD_BYTES,
+  DEFAULT_PROVIDER_LOG_MAX_STRING_BYTES,
+  DEFAULT_PROVIDER_LOG_MAX_TOTAL_BYTES,
+} from "./provider/ProviderLogRetention.ts";
+
 export const DEFAULT_PORT = 3773;
 
 export const RuntimeMode = Schema.Literals(["web", "desktop"]);
@@ -55,6 +64,14 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly traceBatchWindowMs: number;
   readonly traceMaxBytes: number;
   readonly traceMaxFiles: number;
+  readonly providerEventLoggingEnabled?: boolean;
+  readonly providerEventLogIncludeNative?: boolean;
+  readonly providerEventLogMaxFileBytes?: number;
+  readonly providerEventLogMaxFilesPerThread?: number;
+  readonly providerEventLogMaxTotalBytes?: number;
+  readonly providerEventLogMaxAgeMs?: number;
+  readonly providerEventLogMaxRecordBytes?: number;
+  readonly providerEventLogMaxStringBytes?: number;
   readonly otlpTracesUrl: string | undefined;
   readonly otlpMetricsUrl: string | undefined;
   readonly otlpExportIntervalMs: number;
@@ -115,11 +132,12 @@ export const ensureServerDirectories = Effect.fn(function* (derivedPaths: Server
 
   yield* Effect.all(
     [
-      fs.makeDirectory(derivedPaths.stateDir, { recursive: true }),
-      fs.makeDirectory(derivedPaths.logsDir, { recursive: true }),
-      fs.makeDirectory(derivedPaths.providerLogsDir, { recursive: true }),
-      fs.makeDirectory(derivedPaths.terminalLogsDir, { recursive: true }),
-      fs.makeDirectory(derivedPaths.attachmentsDir, { recursive: true }),
+      fs.makeDirectory(derivedPaths.stateDir, { recursive: true, mode: 0o700 }),
+      fs.makeDirectory(derivedPaths.logsDir, { recursive: true, mode: 0o700 }),
+      fs.makeDirectory(derivedPaths.providerLogsDir, { recursive: true, mode: 0o700 }),
+      fs.makeDirectory(derivedPaths.terminalLogsDir, { recursive: true, mode: 0o700 }),
+      fs.makeDirectory(derivedPaths.attachmentsDir, { recursive: true, mode: 0o700 }),
+      fs.makeDirectory(derivedPaths.secretsDir, { recursive: true, mode: 0o700 }),
       fs.makeDirectory(derivedPaths.worktreesDir, { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.keybindingsConfigPath), { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true }),
@@ -128,6 +146,29 @@ export const ensureServerDirectories = Effect.fn(function* (derivedPaths: Server
       fs.makeDirectory(path.dirname(derivedPaths.serverRuntimeStatePath), { recursive: true }),
     ],
     { concurrency: "unbounded" },
+  );
+
+  // Tighten directories created by older versions. chmod is best-effort so
+  // Windows and filesystems without POSIX modes continue to start normally.
+  yield* Effect.forEach(
+    [
+      derivedPaths.stateDir,
+      derivedPaths.logsDir,
+      derivedPaths.providerLogsDir,
+      derivedPaths.terminalLogsDir,
+      derivedPaths.attachmentsDir,
+      derivedPaths.secretsDir,
+    ],
+    (directory) =>
+      Effect.gen(function* () {
+        const symbolicLink = yield* fs
+          .readLink(directory)
+          .pipe(Effect.match({ onFailure: () => false, onSuccess: () => true }));
+        if (!symbolicLink) {
+          yield* fs.chmod(directory, 0o700).pipe(Effect.ignore);
+        }
+      }),
+    { concurrency: "unbounded", discard: true },
   );
 });
 
@@ -158,6 +199,14 @@ export class ServerConfig extends Context.Service<ServerConfig, ServerConfigShap
           traceBatchWindowMs: 200,
           traceMaxBytes: 10 * 1024 * 1024,
           traceMaxFiles: 10,
+          providerEventLoggingEnabled: false,
+          providerEventLogIncludeNative: false,
+          providerEventLogMaxFileBytes: DEFAULT_PROVIDER_LOG_MAX_FILE_BYTES,
+          providerEventLogMaxFilesPerThread: DEFAULT_PROVIDER_LOG_MAX_FILES_PER_THREAD,
+          providerEventLogMaxTotalBytes: DEFAULT_PROVIDER_LOG_MAX_TOTAL_BYTES,
+          providerEventLogMaxAgeMs: DEFAULT_PROVIDER_LOG_MAX_AGE_MS,
+          providerEventLogMaxRecordBytes: DEFAULT_PROVIDER_LOG_MAX_RECORD_BYTES,
+          providerEventLogMaxStringBytes: DEFAULT_PROVIDER_LOG_MAX_STRING_BYTES,
           otlpTracesUrl: undefined,
           otlpMetricsUrl: undefined,
           otlpExportIntervalMs: 10_000,

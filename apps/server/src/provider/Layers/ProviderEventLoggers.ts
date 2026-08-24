@@ -30,13 +30,25 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import type { ThreadId } from "@salchi/contracts";
 
 import { ServerConfig } from "../../config.ts";
-import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { type EventNdjsonLogger, makeCoordinatedEventNdjsonLoggers } from "./EventNdjsonLogger.ts";
+import {
+  DEFAULT_PROVIDER_LOG_MAX_AGE_MS,
+  DEFAULT_PROVIDER_LOG_MAX_FILES_PER_THREAD,
+  DEFAULT_PROVIDER_LOG_MAX_FILE_BYTES,
+  DEFAULT_PROVIDER_LOG_MAX_RECORD_BYTES,
+  DEFAULT_PROVIDER_LOG_MAX_STRING_BYTES,
+  DEFAULT_PROVIDER_LOG_MAX_TOTAL_BYTES,
+  deleteProviderLogsForThread,
+  pruneProviderLogs,
+} from "../ProviderLogRetention.ts";
 
 export interface ProviderEventLoggersShape {
   readonly native: EventNdjsonLogger | undefined;
   readonly canonical: EventNdjsonLogger | undefined;
+  readonly deleteThreadLogs: (threadId: ThreadId) => Effect.Effect<void>;
 }
 
 /**
@@ -60,26 +72,60 @@ export class ProviderEventLoggers extends Context.Service<
 export const NoOpProviderEventLoggers: ProviderEventLoggersShape = {
   native: undefined,
   canonical: undefined,
+  deleteThreadLogs: () => Effect.void,
 };
 
 /**
- * Live Layer that builds both loggers from `ServerConfig.providerEventLogPath`.
- * If the directory create fails for either stream, the corresponding field
- * is `undefined` and writes from that stream become no-ops downstream.
+ * Live Layer that always repairs retained logs, then builds one coordinated
+ * writer only when local provider diagnostics are enabled. Production config
+ * defaults to disabled; canonical events are the default opt-in stream and
+ * native events require a second explicit opt-in.
  */
 export const ProviderEventLoggersLive = Layer.effect(
   ProviderEventLoggers,
   Effect.gen(function* () {
-    const { providerEventLogPath } = yield* ServerConfig;
-    const native = yield* makeEventNdjsonLogger(providerEventLogPath, {
-      stream: "native",
-    });
-    const canonical = yield* makeEventNdjsonLogger(providerEventLogPath, {
-      stream: "canonical",
+    const config = yield* ServerConfig;
+    const maxTotalBytes =
+      config.providerEventLogMaxTotalBytes ?? DEFAULT_PROVIDER_LOG_MAX_TOTAL_BYTES;
+    const maxAgeMs = config.providerEventLogMaxAgeMs ?? DEFAULT_PROVIDER_LOG_MAX_AGE_MS;
+    yield* Effect.sync(() =>
+      pruneProviderLogs(config.providerLogsDir, {
+        maxTotalBytes,
+        maxAgeMs,
+      }),
+    );
+
+    if (!config.providerEventLoggingEnabled) {
+      return {
+        native: undefined,
+        canonical: undefined,
+        deleteThreadLogs: (threadId) =>
+          Effect.sync(() => {
+            deleteProviderLogsForThread(config.providerLogsDir, threadId);
+          }),
+      } satisfies ProviderEventLoggersShape;
+    }
+
+    const loggers = yield* makeCoordinatedEventNdjsonLoggers(config.providerEventLogPath, {
+      maxBytes: config.providerEventLogMaxFileBytes ?? DEFAULT_PROVIDER_LOG_MAX_FILE_BYTES,
+      maxFiles:
+        config.providerEventLogMaxFilesPerThread ?? DEFAULT_PROVIDER_LOG_MAX_FILES_PER_THREAD,
+      maxTotalBytes,
+      maxAgeMs,
+      maxRecordBytes:
+        config.providerEventLogMaxRecordBytes ?? DEFAULT_PROVIDER_LOG_MAX_RECORD_BYTES,
+      maxStringBytes:
+        config.providerEventLogMaxStringBytes ?? DEFAULT_PROVIDER_LOG_MAX_STRING_BYTES,
     });
     return {
-      native,
-      canonical,
+      native: config.providerEventLogIncludeNative ? loggers?.native : undefined,
+      canonical: loggers?.canonical,
+      deleteThreadLogs: (threadId) =>
+        loggers
+          ? loggers.deleteThread(threadId)
+          : Effect.sync(() => {
+              deleteProviderLogsForThread(config.providerLogsDir, threadId);
+            }),
     } satisfies ProviderEventLoggersShape;
   }),
 );

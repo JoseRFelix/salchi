@@ -6,6 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
 import { TurnFileSnapshotsLive } from "../../persistence/Layers/TurnFileSnapshots.ts";
 import { TurnFileSnapshots } from "../../persistence/Services/TurnFileSnapshots.ts";
 import { TerminalManager } from "../../terminal/Services/Manager.ts";
@@ -16,6 +17,20 @@ import {
 } from "../Services/ThreadDeletionReactor.ts";
 
 type ThreadDeletedEvent = Extract<OrchestrationEvent, { type: "thread.deleted" }>;
+
+export function runThreadDeletionCleanup<StopError, TerminalError, SnapshotError, LogError>(input: {
+  readonly stopProviderSession: Effect.Effect<void, StopError>;
+  readonly closeThreadTerminals: Effect.Effect<void, TerminalError>;
+  readonly deleteTurnFileSnapshots: Effect.Effect<void, SnapshotError>;
+  readonly deleteProviderEventLogs: Effect.Effect<void, LogError>;
+}): Effect.Effect<void, StopError | TerminalError | SnapshotError | LogError> {
+  return Effect.gen(function* () {
+    yield* input.stopProviderSession;
+    yield* input.closeThreadTerminals;
+    yield* input.deleteTurnFileSnapshots;
+    yield* input.deleteProviderEventLogs;
+  });
+}
 
 export const logCleanupCauseUnlessInterrupted = <R, E>({
   effect,
@@ -41,6 +56,7 @@ export const logCleanupCauseUnlessInterrupted = <R, E>({
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
+  const providerEventLoggers = yield* ProviderEventLoggers;
   const terminalManager = yield* TerminalManager;
   const turnFileSnapshots = yield* TurnFileSnapshots;
 
@@ -65,13 +81,23 @@ const make = Effect.gen(function* () {
       threadId,
     });
 
+  const deleteProviderEventLogs = (threadId: ThreadDeletedEvent["payload"]["threadId"]) =>
+    logCleanupCauseUnlessInterrupted({
+      effect: providerEventLoggers.deleteThreadLogs(threadId),
+      message: "thread deletion cleanup skipped provider diagnostics",
+      threadId,
+    });
+
   const processThreadDeleted = Effect.fn("processThreadDeleted")(function* (
     event: ThreadDeletedEvent,
   ) {
     const { threadId } = event.payload;
-    yield* stopProviderSession(threadId);
-    yield* closeThreadTerminals(threadId);
-    yield* deleteTurnFileSnapshots(threadId);
+    yield* runThreadDeletionCleanup({
+      stopProviderSession: stopProviderSession(threadId),
+      closeThreadTerminals: closeThreadTerminals(threadId),
+      deleteTurnFileSnapshots: deleteTurnFileSnapshots(threadId),
+      deleteProviderEventLogs: deleteProviderEventLogs(threadId),
+    });
   });
 
   const processThreadDeletedSafely = (event: ThreadDeletedEvent) =>
