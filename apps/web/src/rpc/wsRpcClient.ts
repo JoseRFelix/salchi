@@ -30,9 +30,18 @@ interface StreamSubscriptionOptions {
   readonly tag?: string;
 }
 
+interface RpcRequestOptions {
+  readonly signal?: AbortSignal;
+}
+
 type RpcUnaryMethod<TTag extends RpcTag> =
   RpcMethod<TTag> extends (input: any, options?: any) => Effect.Effect<infer TSuccess, any, any>
     ? (input: RpcInput<TTag>) => Promise<TSuccess>
+    : never;
+
+type AbortableRpcUnaryMethod<TTag extends RpcTag> =
+  RpcMethod<TTag> extends (input: any, options?: any) => Effect.Effect<infer TSuccess, any, any>
+    ? (input: RpcInput<TTag>, options?: RpcRequestOptions) => Promise<TSuccess>
     : never;
 
 type RpcUnaryNoArgMethod<TTag extends RpcTag> =
@@ -334,8 +343,8 @@ export interface WsRpcClient {
     readonly reconcileThreadDetail: RpcUnaryMethod<
       typeof ORCHESTRATION_WS_METHODS.reconcileThreadDetail
     >;
-    readonly probeSync: RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.probeSync>;
-    readonly replayEvents: RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.replayEvents>;
+    readonly probeSync: AbortableRpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.probeSync>;
+    readonly replayEvents: AbortableRpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.replayEvents>;
     readonly getArchivedShellSnapshot: RpcUnaryNoArgMethod<
       typeof ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot
     >;
@@ -532,10 +541,13 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) =>
           client[ORCHESTRATION_WS_METHODS.reconcileThreadDetail](input),
         ),
-      probeSync: (input) =>
-        transport.request((client) => client[ORCHESTRATION_WS_METHODS.probeSync](input)),
-      replayEvents: (input) =>
-        transport.request((client) => client[ORCHESTRATION_WS_METHODS.replayEvents](input)),
+      probeSync: (input, options) =>
+        transport.request((client) => client[ORCHESTRATION_WS_METHODS.probeSync](input), options),
+      replayEvents: (input, options) =>
+        transport.request(
+          (client) => client[ORCHESTRATION_WS_METHODS.replayEvents](input),
+          options,
+        ),
       getArchivedShellSnapshot: () =>
         transport.request((client) =>
           client[ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot]({}),

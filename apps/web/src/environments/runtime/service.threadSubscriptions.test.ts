@@ -21,6 +21,12 @@ const mockSubscribeThread = vi.fn();
 const mockThreadUnsubscribe = vi.fn();
 const mockProbeSync = vi.fn();
 const mockReplayEvents = vi.fn();
+const mockProbeSyncRequest = vi.fn((input: unknown, _options?: { readonly signal?: AbortSignal }) =>
+  mockProbeSync(input),
+);
+const mockReplayEventsRequest = vi.fn(
+  (input: unknown, _options?: { readonly signal?: AbortSignal }) => mockReplayEvents(input),
+);
 const mockReconcileThreadDetail = vi.fn();
 const mockCreateEnvironmentConnection = vi.fn();
 const mockCreateWsRpcClient = vi.fn();
@@ -418,6 +424,15 @@ function stubBrowserVisibility(
   };
 }
 
+function stubIosStandalonePwa(): void {
+  vi.stubGlobal("navigator", {
+    maxTouchPoints: 5,
+    platform: "iPhone",
+    standalone: true,
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X)",
+  });
+}
+
 function makeThreadDetailReconcileSnapshotResult(
   snapshot: OrchestrationThreadDetailSnapshot,
   reason:
@@ -593,6 +608,8 @@ async function exhaustNotificationReconnectTimeout(input: {
     expect(mockConnectionReconnects[0]).toHaveBeenCalledTimes(1);
   });
   await vi.advanceTimersByTimeAsync(0);
+  input.browser.setVisibilityState("visible");
+  input.browser.documentTarget.dispatchEvent(new Event("visibilitychange"));
   await vi.advanceTimersByTimeAsync(1_000);
   await vi.waitFor(() => {
     expect(mockConnectionReconnects[0]).toHaveBeenCalledTimes(2);
@@ -667,8 +684,8 @@ describe("retainThreadDetailSubscription", () => {
         isHeartbeatFresh: vi.fn(() => true),
         orchestration: {
           subscribeThread: mockSubscribeThread,
-          probeSync: mockProbeSync,
-          replayEvents: mockReplayEvents,
+          probeSync: mockProbeSyncRequest,
+          replayEvents: mockReplayEventsRequest,
           reconcileThreadDetail: mockReconcileThreadDetail,
         },
       };
@@ -2819,6 +2836,59 @@ describe("retainThreadDetailSubscription", () => {
     await resetEnvironmentServiceForTests();
   });
 
+  it("defers active stale-heartbeat recovery while the document is hidden", async () => {
+    const browser = stubBrowserVisibility();
+    const {
+      retainActiveThreadDetailSubscription,
+      resetEnvironmentServiceForTests,
+      startEnvironmentConnectionService,
+    } = await import("./service");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    readHeartbeatFreshMock().mockReturnValue(false);
+
+    const environmentId = EnvironmentId.make("env-1");
+    const threadId = ThreadId.make("thread-hidden-stale-heartbeat");
+    const connectionInput = mockCreateEnvironmentConnection.mock.calls[0]?.[0];
+    expect(connectionInput).toBeDefined();
+    connectionInput.syncShellSnapshot(
+      makeThreadShellSnapshot({ threadId, sessionStatus: "running" }),
+      environmentId,
+    );
+
+    const release = retainActiveThreadDetailSubscription(environmentId, threadId);
+    readThreadDetailSubscriptionListener(0)({
+      kind: "snapshot",
+      snapshot: makeThreadDetailSnapshot({
+        snapshotSequence: 1,
+        threadId,
+        sessionStatus: "running",
+      }),
+    });
+
+    browser.setVisibilityState("hidden");
+    browser.documentTarget.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(mockProbeSync).not.toHaveBeenCalled();
+    expect(mockConnectionReconnects[0]).not.toHaveBeenCalled();
+
+    browser.setVisibilityState("visible");
+    browser.documentTarget.dispatchEvent(new Event("visibilitychange"));
+
+    await vi.waitFor(() => {
+      expect(mockProbeSyncRequest).toHaveBeenCalledWith(
+        { clientSequence: 1 },
+        expect.objectContaining({ signal: expect.anything() }),
+      );
+    });
+    expect(mockConnectionReconnects[0]).not.toHaveBeenCalled();
+
+    release();
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
   it("does not enqueue active stale-heartbeat health recovery during full browser resume", async () => {
     let visibilityState: DocumentVisibilityState = "visible";
     const documentTarget = new EventTarget();
@@ -2889,6 +2959,7 @@ describe("retainThreadDetailSubscription", () => {
 
   it("does not enqueue active stale-heartbeat health recovery while browser-resume retry is pending", async () => {
     const browser = stubBrowserVisibility();
+    stubIosStandalonePwa();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     const {
@@ -4391,7 +4462,7 @@ describe("retainThreadDetailSubscription", () => {
     await resetEnvironmentServiceForTests();
   });
 
-  it("reconciles environment connections and forces thread detail refresh after notification click", async () => {
+  it("probes a stale connection and refreshes thread detail after notification click", async () => {
     const {
       reconcileAfterNotificationClick,
       retainActiveThreadDetailSubscription,
@@ -4427,8 +4498,9 @@ describe("retainThreadDetailSubscription", () => {
     });
 
     await vi.waitFor(() => {
-      expect(mockConnectionReconnects[0]).toHaveBeenCalledTimes(1);
+      expect(mockProbeSync).toHaveBeenCalledWith({ clientSequence: 1 });
     });
+    expect(mockConnectionReconnects[0]).not.toHaveBeenCalled();
     isHeartbeatFresh.mockReturnValue(true);
 
     const release = retainActiveThreadDetailSubscription(environmentId, threadId);
@@ -5024,8 +5096,8 @@ describe("retainThreadDetailSubscription", () => {
       isHeartbeatFresh: vi.fn(() => true),
       orchestration: {
         subscribeThread: mockSubscribeThread,
-        probeSync: mockProbeSync,
-        replayEvents: mockReplayEvents,
+        probeSync: mockProbeSyncRequest,
+        replayEvents: mockReplayEventsRequest,
         reconcileThreadDetail: mockReconcileThreadDetail,
       },
     });
@@ -5118,7 +5190,7 @@ describe("retainThreadDetailSubscription", () => {
     await resetEnvironmentServiceForTests();
   });
 
-  it("reconnects immediately on browser resume when the heartbeat is stale", async () => {
+  it("falls back to reconnect when the stale-heartbeat resume probe fails", async () => {
     let visibilityState: DocumentVisibilityState = "visible";
     const documentTarget = new EventTarget();
     const windowTarget = new EventTarget();
@@ -5148,8 +5220,8 @@ describe("retainThreadDetailSubscription", () => {
       isHeartbeatFresh: vi.fn(() => false),
       orchestration: {
         subscribeThread: mockSubscribeThread,
-        probeSync: mockProbeSync,
-        replayEvents: mockReplayEvents,
+        probeSync: mockProbeSyncRequest,
+        replayEvents: mockReplayEventsRequest,
         reconcileThreadDetail: mockReconcileThreadDetail,
       },
     });
@@ -5170,6 +5242,7 @@ describe("retainThreadDetailSubscription", () => {
       }),
       environmentId,
     );
+    mockProbeSync.mockRejectedValueOnce(new Error("stale socket"));
 
     visibilityState = "hidden";
     documentTarget.dispatchEvent(new Event("visibilitychange"));
@@ -5180,14 +5253,14 @@ describe("retainThreadDetailSubscription", () => {
     await vi.waitFor(() => {
       expect(mockConnectionReconnects[0]).toHaveBeenCalledTimes(1);
     });
-    expect(mockProbeSync).not.toHaveBeenCalled();
+    expect(mockProbeSync).toHaveBeenCalledWith({ clientSequence: 1 });
     expect(mockReplayEvents).not.toHaveBeenCalled();
 
     stop();
     await resetEnvironmentServiceForTests();
   });
 
-  it("forces reconnect after a long hidden gap even when the heartbeat reads fresh", async () => {
+  it("probes after a long desktop hidden gap instead of forcing a reconnect", async () => {
     let visibilityState: DocumentVisibilityState = "visible";
     const documentTarget = new EventTarget();
     vi.stubGlobal("document", {
@@ -5210,7 +5283,7 @@ describe("retainThreadDetailSubscription", () => {
 
     const stop = startEnvironmentConnectionService(new QueryClient());
     const environmentId = EnvironmentId.make("env-1");
-    const threadId = ThreadId.make("thread-long-background-force-reconnect");
+    const threadId = ThreadId.make("thread-long-background-desktop-probe");
     const connectionInput = mockCreateEnvironmentConnection.mock.calls[0]?.[0];
     expect(connectionInput).toBeDefined();
     connectionInput.syncShellSnapshot(
@@ -5234,9 +5307,12 @@ describe("retainThreadDetailSubscription", () => {
     documentTarget.dispatchEvent(new Event("visibilitychange"));
 
     await vi.waitFor(() => {
-      expect(mockConnectionReconnects[0]).toHaveBeenCalledTimes(1);
+      expect(mockProbeSyncRequest).toHaveBeenCalledWith(
+        { clientSequence: 1 },
+        expect.objectContaining({ signal: expect.anything() }),
+      );
     });
-    expect(mockProbeSync).not.toHaveBeenCalled();
+    expect(mockConnectionReconnects[0]).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(300);
     await vi.waitFor(() => {
@@ -5248,8 +5324,59 @@ describe("retainThreadDetailSubscription", () => {
     await resetEnvironmentServiceForTests();
   });
 
+  it("retains the long-background force reconnect for an iOS standalone PWA", async () => {
+    const browser = stubBrowserVisibility();
+    vi.stubGlobal("navigator", {
+      maxTouchPoints: 5,
+      platform: "iPhone",
+      standalone: true,
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X)",
+    });
+
+    const {
+      retainActiveThreadDetailSubscription,
+      resetEnvironmentServiceForTests,
+      startEnvironmentConnectionService,
+    } = await import("./service");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const environmentId = EnvironmentId.make("env-1");
+    const threadId = ThreadId.make("thread-long-background-ios-force-reconnect");
+    const connectionInput = mockCreateEnvironmentConnection.mock.calls[0]?.[0];
+    expect(connectionInput).toBeDefined();
+    connectionInput.syncShellSnapshot(
+      makeThreadShellSnapshot({ threadId, sessionStatus: "running" }),
+      environmentId,
+    );
+    const release = retainActiveThreadDetailSubscription(environmentId, threadId);
+    readThreadDetailSubscriptionListener(0)({
+      kind: "snapshot",
+      snapshot: makeThreadDetailSnapshot({
+        snapshotSequence: 1,
+        threadId,
+        sessionStatus: "running",
+      }),
+    });
+
+    browser.setVisibilityState("hidden");
+    browser.documentTarget.dispatchEvent(new Event("visibilitychange"));
+    vi.setSystemTime(Date.now() + 6_000);
+    browser.setVisibilityState("visible");
+    browser.documentTarget.dispatchEvent(new Event("visibilitychange"));
+
+    await vi.waitFor(() => {
+      expect(mockConnectionReconnects[0]).toHaveBeenCalledTimes(1);
+    });
+    expect(mockProbeSync).not.toHaveBeenCalled();
+
+    release();
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
   it("refreshes active thread detail after long-background shell bootstrap timeout when heartbeat is fresh", async () => {
     const browser = stubBrowserVisibility();
+    stubIosStandalonePwa();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     const {
@@ -5301,6 +5428,7 @@ describe("retainThreadDetailSubscription", () => {
 
   it("replays projection catch-up during a forced long-background reconnect before the shell snapshot resolves", async () => {
     const browser = stubBrowserVisibility();
+    stubIosStandalonePwa();
     let resolveReconnect: (() => void) | null = null;
     let reconnectSettled = false;
     mockCreateEnvironmentConnection.mockImplementation((input) => {
@@ -5400,6 +5528,7 @@ describe("retainThreadDetailSubscription", () => {
 
   it("reuses recent browser resume duration for notification clicks after focus", async () => {
     const browser = stubBrowserVisibility();
+    stubIosStandalonePwa();
 
     const {
       reconcileAfterNotificationClick,
@@ -5481,6 +5610,7 @@ describe("retainThreadDetailSubscription", () => {
 
   it("expires the recent browser resume context after 30 seconds", async () => {
     const browser = stubBrowserVisibility();
+    stubIosStandalonePwa();
 
     const {
       reconcileAfterNotificationClick,
@@ -5595,6 +5725,7 @@ describe("retainThreadDetailSubscription", () => {
 
   it("refreshes notification thread target after slow long-background reconnect completes", async () => {
     const browser = stubBrowserVisibility();
+    stubIosStandalonePwa();
 
     const {
       reconcileAfterNotificationClick,
@@ -5696,6 +5827,8 @@ describe("retainThreadDetailSubscription", () => {
     await vi.advanceTimersByTimeAsync(300);
     expect(mockReconcileThreadDetail).not.toHaveBeenCalled();
 
+    browser.setVisibilityState("visible");
+    browser.documentTarget.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.waitFor(() => {
       expect(mockConnectionReconnects[0]).toHaveBeenCalledTimes(2);
@@ -5737,6 +5870,8 @@ describe("retainThreadDetailSubscription", () => {
       expect(mockConnectionReconnects[0]).toHaveBeenCalledTimes(1);
     });
     await vi.advanceTimersByTimeAsync(0);
+    browser.setVisibilityState("visible");
+    browser.documentTarget.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.waitFor(() => {
       expect(mockConnectionReconnects[0]).toHaveBeenCalledTimes(2);
@@ -5761,6 +5896,48 @@ describe("retainThreadDetailSubscription", () => {
       )
       .map(([, payload]) => payload?.data?.retryDelayMs);
     expect(retryDelayMs).toEqual([1_000, 2_000, 4_000]);
+
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
+  it("defers a browser resume reconnect retry until the document is visible again", async () => {
+    const browser = stubBrowserVisibility();
+    stubIosStandalonePwa();
+    const { resetEnvironmentServiceForTests, startEnvironmentConnectionService } =
+      await import("./service");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const environmentId = EnvironmentId.make("env-1");
+    mockConnectionReconnects[0]
+      ?.mockRejectedValueOnce(new MockEnvironmentShellBootstrapTimeoutError(environmentId, 20_000))
+      .mockResolvedValueOnce(undefined);
+
+    browser.setVisibilityState("hidden");
+    browser.documentTarget.dispatchEvent(new Event("visibilitychange"));
+    vi.setSystemTime(Date.now() + 6_000);
+    browser.setVisibilityState("visible");
+    browser.documentTarget.dispatchEvent(new Event("visibilitychange"));
+
+    await vi.waitFor(() => {
+      expect(mockConnectionReconnects[0]).toHaveBeenCalledTimes(1);
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    browser.setVisibilityState("hidden");
+    browser.documentTarget.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(mockConnectionReconnects[0]).toHaveBeenCalledTimes(1);
+
+    browser.setVisibilityState("visible");
+    browser.documentTarget.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await vi.waitFor(() => {
+      expect(mockConnectionReconnects[0]).toHaveBeenCalledTimes(2);
+    });
+    expect(mockProbeSync).not.toHaveBeenCalled();
 
     stop();
     await resetEnvironmentServiceForTests();
@@ -5988,6 +6165,8 @@ describe("retainThreadDetailSubscription", () => {
     await vi.advanceTimersByTimeAsync(300);
     expect(mockReconcileThreadDetail).not.toHaveBeenCalled();
 
+    browser.setVisibilityState("visible");
+    browser.documentTarget.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.waitFor(() => {
       expect(mockConnectionReconnects[0]).toHaveBeenCalledTimes(2);
@@ -6795,8 +6974,8 @@ describe("retainThreadDetailSubscription", () => {
       isHeartbeatFresh: vi.fn(() => false),
       orchestration: {
         subscribeThread: mockSubscribeThread,
-        probeSync: mockProbeSync,
-        replayEvents: mockReplayEvents,
+        probeSync: mockProbeSyncRequest,
+        replayEvents: mockReplayEventsRequest,
         reconcileThreadDetail: mockReconcileThreadDetail,
       },
     });
@@ -7084,8 +7263,8 @@ describe("retainThreadDetailSubscription", () => {
       isHeartbeatFresh: vi.fn(() => false),
       orchestration: {
         subscribeThread: mockSubscribeThread,
-        probeSync: mockProbeSync,
-        replayEvents: mockReplayEvents,
+        probeSync: mockProbeSyncRequest,
+        replayEvents: mockReplayEventsRequest,
         reconcileThreadDetail: mockReconcileThreadDetail,
       },
     });

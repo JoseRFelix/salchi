@@ -7,6 +7,7 @@ import { appAtomRegistry } from "./atomRegistry";
 export const SLOW_RPC_ACK_THRESHOLD_MS = 15_000;
 export const MAX_TRACKED_RPC_ACK_REQUESTS = 256;
 let slowRpcAckThresholdMs = SLOW_RPC_ACK_THRESHOLD_MS;
+let rpcRequestLatencyTrackingEnabled = true;
 
 export interface SlowRpcAckRequest {
   readonly requestId: string;
@@ -57,7 +58,7 @@ export function getPendingRpcAckRequests(): ReadonlyArray<SlowRpcAckRequest> {
 }
 
 export function trackRpcRequestSent(requestId: string, tag: string): void {
-  if (!shouldTrackRpcAck(tag)) {
+  if (!rpcRequestLatencyTrackingEnabled || !shouldTrackRpcAck(tag)) {
     return;
   }
 
@@ -98,6 +99,16 @@ export function clearAllTrackedRpcRequests(): void {
   }
   pendingRpcAckRequests.clear();
   setSlowRpcAckRequests([]);
+}
+
+export function setRpcRequestLatencyTrackingEnabled(enabled: boolean): void {
+  if (rpcRequestLatencyTrackingEnabled === enabled) {
+    return;
+  }
+  rpcRequestLatencyTrackingEnabled = enabled;
+  if (!enabled) {
+    clearAllTrackedRpcRequests();
+  }
 }
 
 function clearTrackedRpcRequest(requestId: string): void {
@@ -143,6 +154,7 @@ function evictOldestPendingRpcRequestIfNeeded(): void {
 
 export function resetRequestLatencyStateForTests(): void {
   slowRpcAckThresholdMs = SLOW_RPC_ACK_THRESHOLD_MS;
+  rpcRequestLatencyTrackingEnabled = true;
   clearAllTrackedRpcRequests();
 }
 

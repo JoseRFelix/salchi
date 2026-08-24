@@ -434,19 +434,22 @@ async function waitForTerminalEnvironmentBootstrap(
     return "connection-unavailable";
   }
 
+  const controller = new AbortController();
   let timeoutId: number | null = null;
   try {
     return await new Promise<string>((resolve) => {
       timeoutId = window.setTimeout(() => {
         timeoutId = null;
+        controller.abort();
         resolve("timeout");
       }, TERMINAL_RETRY_BOOTSTRAP_WAIT_MS);
-      connection.ensureBootstrapped().then(
+      connection.ensureBootstrapped({ signal: controller.signal }).then(
         () => resolve("complete"),
         (error: unknown) => resolve(`error:${errorMessage(error, "bootstrap failed")}`),
       );
     });
   } finally {
+    controller.abort();
     if (timeoutId !== null) {
       window.clearTimeout(timeoutId);
     }
