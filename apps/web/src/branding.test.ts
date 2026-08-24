@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 describe("branding", () => {
-  it("uses injected desktop branding when available", async () => {
+  it("uses injected desktop branding without the stage in the display name", async () => {
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: {
@@ -32,7 +32,7 @@ describe("branding", () => {
 
     expect(branding.APP_BASE_NAME).toBe("Salchi");
     expect(branding.APP_STAGE_LABEL).toBe("Nightly");
-    expect(branding.APP_DISPLAY_NAME).toBe("Salchi (Nightly)");
+    expect(branding.APP_DISPLAY_NAME).toBe("Salchi");
   });
 
   it("normalizes hosted app channel metadata", async () => {
@@ -43,7 +43,7 @@ describe("branding", () => {
     expect(branding.HOSTED_APP_CHANNEL).toBe("nightly");
     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Nightly");
     expect(branding.APP_STAGE_LABEL).toBe("Nightly");
-    expect(branding.APP_DISPLAY_NAME).toBe("Salchi (Nightly)");
+    expect(branding.APP_DISPLAY_NAME).toBe("Salchi");
   });
 
   it("ignores unknown hosted app channels", async () => {
