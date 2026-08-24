@@ -7,7 +7,11 @@ import { ThreadId } from "@salchi/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
-import { makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import {
+  makeCoordinatedEventNdjsonLoggers,
+  makeEventNdjsonLogger,
+  serializeProviderEvent,
+} from "./EventNdjsonLogger.ts";
 
 function parseLogLine(line: string) {
   const match = /^\[([^\]]+)\] ([A-Z]+): (.+)$/.exec(line);
@@ -202,6 +206,138 @@ describe("EventNdjsonLogger", () => {
           matchingFiles.some((entry) => entry === `${fileStem}.3`),
           false,
         );
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }),
+  );
+
+  it("redacts secret keys and inline credentials and bounds large records", () => {
+    const serialized = serializeProviderEvent(
+      {
+        password: "password-value-must-not-appear",
+        nested: { apiKey: "api-key-must-not-appear" },
+        output: "Authorization: Bearer bearer-value-must-not-appear " + "x".repeat(2_000),
+      },
+      { maxRecordBytes: 512, maxStringBytes: 128 },
+    );
+
+    assert.notEqual(serialized, undefined);
+    assert.equal(serialized?.includes("password-value-must-not-appear"), false);
+    assert.equal(serialized?.includes("api-key-must-not-appear"), false);
+    assert.equal(serialized?.includes("bearer-value-must-not-appear"), false);
+    assert.equal(serialized?.includes("[REDACTED]"), true);
+    assert.equal(Buffer.byteLength(serialized ?? "") <= 512, true);
+  });
+
+  it.effect("coordinates native and canonical streams through one thread writer", () =>
+    Effect.gen(function* () {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "salchi-provider-log-"));
+      try {
+        const loggers = yield* makeCoordinatedEventNdjsonLoggers(path.join(tempDir, "events.log"), {
+          batchWindowMs: 0,
+          maxBytes: 256,
+          maxFiles: 2,
+        });
+        assert.notEqual(loggers, undefined);
+        if (!loggers) return;
+
+        yield* Effect.all(
+          Array.from({ length: 20 }, (_, index) =>
+            index % 2 === 0
+              ? loggers.native.write({ index, value: "n".repeat(20) }, ThreadId.make("shared"))
+              : loggers.canonical.write({ index, value: "c".repeat(20) }, ThreadId.make("shared")),
+          ),
+          { concurrency: "unbounded" },
+        );
+        yield* loggers.canonical.close();
+
+        const matchingFiles = fs
+          .readdirSync(tempDir)
+          .filter((entry) => entry === "shared.log" || entry.startsWith("shared.log."));
+        assert.equal(matchingFiles.length <= 3, true);
+        const combined = matchingFiles
+          .map((entry) => fs.readFileSync(path.join(tempDir, entry), "utf8"))
+          .join("\n");
+        assert.equal(combined.includes("NTIVE:"), true);
+        assert.equal(combined.includes("CANON:"), true);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }),
+  );
+
+  it.effect("creates provider directories and files with private POSIX modes", () =>
+    Effect.gen(function* () {
+      if (process.platform === "win32") return;
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "salchi-provider-log-mode-"));
+      const tempDir = path.join(root, "provider");
+      try {
+        const logger = yield* makeEventNdjsonLogger(path.join(tempDir, "events.log"), {
+          stream: "canonical",
+          batchWindowMs: 0,
+        });
+        assert.notEqual(logger, undefined);
+        if (!logger) return;
+        yield* logger.write({ id: "private" }, ThreadId.make("private-thread"));
+        yield* logger.close();
+
+        assert.equal(fs.statSync(tempDir).mode & 0o777, 0o700);
+        assert.equal(fs.statSync(path.join(tempDir, "private-thread.log")).mode & 0o777, 0o600);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }),
+  );
+
+  it.effect("drops queued writes and removes the log family when a thread is deleted", () =>
+    Effect.gen(function* () {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "salchi-provider-log-delete-"));
+      try {
+        const loggers = yield* makeCoordinatedEventNdjsonLoggers(path.join(tempDir, "events.log"), {
+          batchWindowMs: 60_000,
+        });
+        assert.notEqual(loggers, undefined);
+        if (!loggers) return;
+
+        const threadId = ThreadId.make("delete-me");
+        yield* loggers.canonical.write({ payload: "queued" }, threadId);
+        yield* loggers.deleteThread(threadId);
+        yield* loggers.canonical.close();
+
+        assert.equal(fs.existsSync(path.join(tempDir, "delete-me.log")), false);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }),
+  );
+
+  it.effect("enforces the global budget while diagnostics are being written", () =>
+    Effect.gen(function* () {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "salchi-provider-log-budget-"));
+      try {
+        const loggers = yield* makeCoordinatedEventNdjsonLoggers(path.join(tempDir, "events.log"), {
+          batchWindowMs: 0,
+          maxBytes: 10_000,
+          maxTotalBytes: 300,
+          maxAgeMs: 60_000,
+        });
+        assert.notEqual(loggers, undefined);
+        if (!loggers) return;
+
+        for (let index = 0; index < 5; index += 1) {
+          yield* loggers.canonical.write(
+            { index, payload: "x".repeat(120) },
+            ThreadId.make(`budget-${String(index)}`),
+          );
+        }
+        yield* loggers.canonical.close();
+
+        const totalBytes = fs
+          .readdirSync(tempDir)
+          .filter((entry) => entry.endsWith(".log") || /\.log\.\d+$/.test(entry))
+          .reduce((total, entry) => total + fs.statSync(path.join(tempDir, entry)).size, 0);
+        assert.equal(totalBytes <= 300, true);
       } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
       }

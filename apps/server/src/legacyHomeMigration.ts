@@ -4,6 +4,7 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 
@@ -12,10 +13,20 @@ import type {
   LegacyHomeMigrationProgressListener,
   LegacyHomeMigrationSource,
 } from "./legacyHomeMigrationProgress.ts";
+import {
+  DEFAULT_PROVIDER_LOG_MAX_AGE_MS,
+  DEFAULT_PROVIDER_LOG_MAX_TOTAL_BYTES,
+  pruneProviderLogDirectories,
+} from "./provider/ProviderLogRetention.ts";
 
 export const LEGACY_T3_HOME_DIRECTORY = ".t3";
 export const SALCHI_HOME_DIRECTORY = ".salchi";
 export const LEGACY_HOME_MIGRATION_MARKER = ".t3-home-migration-complete";
+export const LEGACY_HOME_STAGING_MARKER = ".salchi-owned-migration-staging";
+export const LEGACY_HOME_STAGING_MARKER_CONTENT = "salchi-owned-t3-migration-staging-v1\n";
+
+const ABANDONED_STAGING_MIN_AGE_MS = 24 * 60 * 60 * 1_000;
+const MIGRATION_STAGING_PREFIX = ".salchi-t3-migration-";
 
 export type LegacyHomeMigrationResult =
   | { readonly status: "skipped-custom-home" }
@@ -31,6 +42,7 @@ export type LegacyHomeMigrationResult =
 export interface LegacyHomeMigrationOptions {
   readonly homeDirectory?: string;
   readonly onProgress?: LegacyHomeMigrationProgressListener;
+  readonly abandonedStagingMinAgeMs?: number;
 }
 
 interface MigrationDirectory {
@@ -201,6 +213,55 @@ const writeMigrationMarker = Effect.fn("legacyHomeMigration.writeMarker")(functi
   yield* fs.writeFileString(markerPath, `${message}\n`);
 });
 
+const cleanupOwnedAbandonedStaging = Effect.fn("legacyHomeMigration.cleanupOwnedAbandonedStaging")(
+  function* (homeDirectory: string, minAgeMs: number) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const now = yield* Clock.currentTimeMillis;
+    const entries = yield* fs.readDirectory(homeDirectory).pipe(Effect.orElseSucceed(() => []));
+
+    for (const entry of entries.toSorted()) {
+      if (!entry.startsWith(MIGRATION_STAGING_PREFIX) || path.basename(entry) !== entry) continue;
+      const stagingPath = path.join(homeDirectory, entry);
+      const stagingLink = yield* fs
+        .readLink(stagingPath)
+        .pipe(Effect.match({ onFailure: () => false, onSuccess: () => true }));
+      if (stagingLink) continue;
+      const stagingInfo = yield* fs.stat(stagingPath).pipe(Effect.orElseSucceed(() => undefined));
+      if (stagingInfo?.type !== "Directory") continue;
+
+      const markerPath = path.join(stagingPath, LEGACY_HOME_STAGING_MARKER);
+      const markerLink = yield* fs
+        .readLink(markerPath)
+        .pipe(Effect.match({ onFailure: () => false, onSuccess: () => true }));
+      if (markerLink) continue;
+      const marker = yield* fs.readFileString(markerPath).pipe(Effect.orElseSucceed(() => ""));
+      if (marker !== LEGACY_HOME_STAGING_MARKER_CONTENT) continue;
+      const markerInfo = yield* fs.stat(markerPath).pipe(Effect.orElseSucceed(() => undefined));
+      const modifiedAt = markerInfo
+        ? Option.match(markerInfo.mtime, {
+            onNone: () => now,
+            onSome: (value) => value.getTime(),
+          })
+        : now;
+      const effectiveMinAgeMs = Math.max(0, minAgeMs);
+      if (effectiveMinAgeMs > 0 && now - modifiedAt < effectiveMinAgeMs) continue;
+
+      yield* fs.remove(stagingPath, { recursive: true, force: true }).pipe(Effect.ignore);
+    }
+  },
+);
+
+function migrationExcludedPaths(path: Path.Path): ReadonlySet<string> {
+  return new Set([
+    "caches",
+    "worktrees",
+    "logs",
+    path.join("userdata", "logs"),
+    path.join("dev", "logs"),
+  ]);
+}
+
 /**
  * Copies the legacy default `~/.t3` home into the default `~/.salchi` home.
  *
@@ -227,6 +288,11 @@ export const migrateLegacyT3Home = Effect.fn("legacyHomeMigration.migrate")(func
     return { status: "skipped-custom-home" };
   }
 
+  yield* cleanupOwnedAbandonedStaging(
+    homeDirectory,
+    options.abandonedStagingMinAgeMs ?? ABANDONED_STAGING_MIN_AGE_MS,
+  );
+
   const markerPath = path.join(salchiHome, LEGACY_HOME_MIGRATION_MARKER);
   if (yield* fs.exists(markerPath)) {
     return { status: "already-complete" };
@@ -248,6 +314,20 @@ export const migrateLegacyT3Home = Effect.fn("legacyHomeMigration.migrate")(func
   });
 
   const salchiHomeExists = yield* fs.exists(salchiHome);
+  yield* Effect.sync(() =>
+    pruneProviderLogDirectories(
+      [
+        path.join(legacyHome, "userdata", "logs", "provider"),
+        path.join(legacyHome, "dev", "logs", "provider"),
+        path.join(salchiHome, "userdata", "logs", "provider"),
+        path.join(salchiHome, "dev", "logs", "provider"),
+      ],
+      {
+        maxTotalBytes: DEFAULT_PROVIDER_LOG_MAX_TOTAL_BYTES,
+        maxAgeMs: DEFAULT_PROVIDER_LOG_MAX_AGE_MS,
+      },
+    ),
+  );
   const stagingPath = yield* nextAvailableSiblingPath(homeDirectory, ".salchi-t3-migration");
   const previousSalchiHomeBackup = salchiHomeExists
     ? yield* nextAvailableSiblingPath(homeDirectory, ".salchi-before-t3-migration")
@@ -280,15 +360,21 @@ export const migrateLegacyT3Home = Effect.fn("legacyHomeMigration.migrate")(func
       });
 
     const prepareStaging = Effect.gen(function* () {
+      const excludedPaths = migrationExcludedPaths(path);
+      yield* fs.makeDirectory(stagingPath, { recursive: true, mode: 0o700 });
+      yield* fs.writeFileString(
+        path.join(stagingPath, LEGACY_HOME_STAGING_MARKER),
+        LEGACY_HOME_STAGING_MARKER_CONTENT,
+      );
       yield* copyMigrationTree(legacyHome, stagingPath, legacyTree, {
         overwrite: true,
-        blockedPaths: new Set(),
+        blockedPaths: excludedPaths,
         onFileProcessed: recordFileProcessed("legacy"),
       });
       if (salchiTree !== undefined) {
         yield* copyMigrationTree(salchiHome, stagingPath, salchiTree, {
           overwrite: false,
-          blockedPaths: new Set(legacyTree.files),
+          blockedPaths: new Set([...legacyTree.files, ...excludedPaths]),
           onFileProcessed: recordFileProcessed("salchi"),
         });
       }
@@ -296,6 +382,7 @@ export const migrateLegacyT3Home = Effect.fn("legacyHomeMigration.migrate")(func
         path.join(stagingPath, LEGACY_HOME_MIGRATION_MARKER),
         `Copied from ${legacyHome}. The legacy home was retained.`,
       );
+      yield* fs.remove(path.join(stagingPath, LEGACY_HOME_STAGING_MARKER), { force: true });
     }).pipe(
       Effect.tapError(() =>
         fs.remove(stagingPath, { recursive: true, force: true }).pipe(Effect.ignore),

@@ -41,6 +41,14 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     traceBatchWindowMs: 200,
     traceMaxBytes: 10 * 1024 * 1024,
     traceMaxFiles: 10,
+    providerEventLoggingEnabled: false,
+    providerEventLogIncludeNative: false,
+    providerEventLogMaxFileBytes: 2 * 1024 * 1024,
+    providerEventLogMaxFilesPerThread: 2,
+    providerEventLogMaxTotalBytes: 200 * 1024 * 1024,
+    providerEventLogMaxAgeMs: 7 * 24 * 60 * 60 * 1_000,
+    providerEventLogMaxRecordBytes: 64 * 1024,
+    providerEventLogMaxStringBytes: 16 * 1024,
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpExportIntervalMs: 10_000,
@@ -110,6 +118,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       expect(resolved).toEqual({
         logLevel: "Warn",
         ...defaultResolvedConfig,
+        providerEventLoggingEnabled: true,
         mode: "desktop",
         port: 4001,
         cwd: process.cwd(),
@@ -148,6 +157,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           bootstrapFd: Option.none(),
           autoBootstrapProjectFromCwd: Option.some(true),
           logWebSocketEvents: Option.some(true),
+          providerEventLoggingEnabled: Option.some(false),
+          providerEventLogIncludeNative: Option.some(true),
           tailscaleServeEnabled: Option.some(true),
           tailscaleServePort: Option.some(8443),
         },
@@ -178,6 +189,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       expect(resolved).toEqual({
         logLevel: "Debug",
         ...defaultResolvedConfig,
+        providerEventLoggingEnabled: false,
+        providerEventLogIncludeNative: true,
         mode: "web",
         port: 8788,
         cwd: process.cwd(),
@@ -247,6 +260,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       expect(resolved).toEqual({
         logLevel: "Info",
         ...defaultResolvedConfig,
+        providerEventLoggingEnabled: true,
         mode: "web",
         port: 8788,
         cwd: process.cwd(),
@@ -480,6 +494,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       expect(resolved).toEqual({
         logLevel: "Debug",
         ...defaultResolvedConfig,
+        providerEventLoggingEnabled: true,
         mode: "web",
         port: 8788,
         cwd: process.cwd(),
@@ -737,6 +752,55 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         tailscaleServeEnabled: true,
         tailscaleServePort: 8443,
       });
+    }),
+  );
+
+  it.effect("keeps packaged production logging off while pruning retained provider logs", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "salchi-cli-provider-production-",
+      });
+      const providerDir = path.join(baseDir, "userdata", "logs", "provider");
+      const retainedLog = path.join(providerDir, "retained-thread.log");
+      yield* fs.makeDirectory(providerDir, { recursive: true });
+      yield* fs.writeFileString(retainedLog, "legacy provider payload");
+
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.some("web"),
+          port: Option.some(3773),
+          host: Option.none(),
+          baseDir: Option.some(baseDir),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  SALCHI_PROVIDER_EVENT_LOG_MAX_TOTAL_BYTES: "0",
+                },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      expect(resolved.providerEventLoggingEnabled).toBe(false);
+      expect(resolved.providerEventLogIncludeNative).toBe(false);
+      expect(yield* fs.exists(retainedLog)).toBe(false);
     }),
   );
 });

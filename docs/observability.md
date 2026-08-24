@@ -47,7 +47,30 @@ If OTLP is not configured, metrics still exist in-process, but you will not have
 
 ### Related Artifacts
 
-Provider event NDJSON files still exist for provider runtime streams. Those are separate from the main server trace file.
+Provider-event diagnostics are separate, local-only files. They are not OTLP data and enabling
+OTLP does not enable them.
+
+- packaged/npm and desktop production: disabled by default
+- monorepo development with `VITE_DEV_SERVER_URL`: enabled by default
+- production opt-in: `--provider-event-logging` or `SALCHI_PROVIDER_EVENT_LOGGING=true`
+- default stream: redacted canonical events only
+- optional native stream: `--provider-event-log-native` or
+  `SALCHI_PROVIDER_EVENT_LOG_NATIVE=true`
+
+When enabled, files live under `~/.salchi/userdata/logs/provider` in production and
+`~/.salchi/dev/logs/provider` in development. Records are recursively redacted for credential-like
+keys and common inline secret formats, large strings and records are truncated, directories use
+`0700`, and files use `0600` where POSIX modes are supported. Diagnostics can still contain
+sensitive application content after redaction, so enable them only for a bounded investigation.
+
+Provider-log retention is enforced even when new diagnostics are disabled. At startup Salchi prunes
+the active production and development provider directories and, for the default home, the legacy
+`~/.t3` provider directories plus exact provider-log directories inside old migration staging and
+pre-migration backup trees. Those possible backups are otherwise preserved. Retention never recurses
+or follows symlinks. The default is one global 200 MiB budget and a seven-day TTL across those
+provider-log directories. While diagnostics are running, the coordinated writer reapplies retention
+as data is written. Deleting a thread also removes its provider-log family after queued records for
+that thread have been suppressed.
 
 ## Run The Server In Instrumented Mode
 
@@ -488,6 +511,22 @@ Local trace file:
 - `SALCHI_TRACE_BATCH_WINDOW_MS`: flush window, default `200`
 - `SALCHI_TRACE_MIN_LEVEL`: minimum trace level, default `Info`
 - `SALCHI_TRACE_TIMING_ENABLED`: enable timing metadata, default `true`
+
+Local provider diagnostics (separate from traces and OTLP):
+
+- `SALCHI_PROVIDER_EVENT_LOGGING`: enable provider diagnostics; default `false` in packaged
+  production and `true` in monorepo development
+- `SALCHI_PROVIDER_EVENT_LOG_NATIVE`: also record redacted native events, default `false`
+- `SALCHI_PROVIDER_EVENT_LOG_MAX_FILE_BYTES`: per-thread current-file rotation threshold, default
+  `2097152`
+- `SALCHI_PROVIDER_EVENT_LOG_MAX_FILES_PER_THREAD`: rotated backups per thread, default `2`
+- `SALCHI_PROVIDER_EVENT_LOG_MAX_TOTAL_BYTES`: global provider-log byte budget, default `209715200`
+- `SALCHI_PROVIDER_EVENT_LOG_MAX_AGE_MS`: TTL, default `604800000` (seven days)
+- `SALCHI_PROVIDER_EVENT_LOG_MAX_RECORD_BYTES`: maximum serialized record size, default `65536`
+- `SALCHI_PROVIDER_EVENT_LOG_MAX_STRING_BYTES`: maximum serialized string size, default `16384`
+
+The two CLI boolean flags are also visible in `salchi --help`, `salchi start --help`, and
+`salchi serve --help`. Restart Salchi after changing any provider-diagnostics setting.
 
 OTLP export:
 
