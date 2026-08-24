@@ -9,6 +9,8 @@ export const ORCHESTRATION_THREAD_DETAIL_EVENT_TYPES = [
   "thread.queued-turn-steer-requested",
   "thread.queued-turn-steer-failed",
   "thread.queued-turn-steered",
+  "thread.completion-acknowledged",
+  "thread.completion-marked-unread",
   "thread.proposed-plan-upserted",
   "thread.activity-appended",
   "thread.turn-diff-completed",

@@ -156,6 +156,7 @@ export function getThreadFromEnvironmentState(
     ...shell,
     session,
     latestTurn: turnState?.latestTurn ?? null,
+    seenCompletionTurnId: turnState?.seenCompletionTurnId,
     pendingSourceProposedPlan: turnState?.pendingSourceProposedPlan,
     messages,
     queuedTurns,

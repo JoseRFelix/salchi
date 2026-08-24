@@ -49,6 +49,7 @@ import {
   resolveRemoteWebSocketConnectionUrl,
 } from "../remote/api";
 import type { NotificationNavigationTarget } from "../../push/notificationNavigation";
+import { dropServiceWorkerUnreadCompletionEnvironments } from "../../push/notifications";
 import { resolveRemotePairingTarget } from "../remote/target";
 import {
   getSavedEnvironmentRecord,
@@ -4581,6 +4582,7 @@ export async function removeSavedEnvironment(environmentId: EnvironmentId): Prom
   useSavedEnvironmentRegistryStore.getState().remove(environmentId);
   useSavedEnvironmentRuntimeStore.getState().clear(environmentId);
   useStore.getState().removeEnvironmentState(environmentId);
+  void dropServiceWorkerUnreadCompletionEnvironments([environmentId]);
   await removeSavedEnvironmentBearerToken(environmentId);
 }
 

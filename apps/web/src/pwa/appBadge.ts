@@ -1,29 +1,44 @@
-import { selectSidebarThreadsAcrossEnvironments, useStore, type AppState } from "../store";
+import type { EnvironmentId, ThreadId } from "@salchi/contracts";
+
+import { readEnvironmentConnection } from "../environments/runtime";
 import {
-  clearTurnCompletionAlerts,
-  getDisplayedTurnCompletionThreadCount,
+  requestServiceWorkerBadgeSync,
+  syncServiceWorkerUnreadCompletions,
+  type UnreadCompletionServiceWorkerSnapshot,
 } from "../push/notifications";
-import { countUnseenCompletedThreads } from "../threadCompletion";
-import { useUiStateStore, type UiState } from "../uiStateStore";
+import { type AppState, useStore } from "../store";
+import { completionAttentionStateChanged } from "../unreadCompletionStore";
 
 export interface AppBadgeNavigator {
   setAppBadge?: (contents?: number) => Promise<void>;
   clearAppBadge?: () => Promise<void>;
 }
 
-let badgeSyncInstalled = false;
-let syncScheduled = false;
-let lastRequestedBadgeCount: number | null = null;
-let badgeSyncGeneration = 0;
-let appStoreUnsubscribe: (() => void) | null = null;
-let uiStateStoreUnsubscribe: (() => void) | null = null;
-let clearRetryTimerIds: Array<ReturnType<typeof setTimeout>> = [];
+interface UnreadCompletionState {
+  readonly count: number;
+  readonly snapshots: ReadonlyArray<UnreadCompletionServiceWorkerSnapshot>;
+  readonly allEnvironmentStateAuthoritative: boolean;
+}
 
-// Chrome can focus/show a page before it dispatches the service worker's
-// notificationclick event. Closing displayed notifications in that window can
-// delete the notification Chrome is still trying to activate. Give the click
-// handler time to run; it clears the notifications itself once dispatched.
-const COMPLETED_TURN_ALERT_CLEAR_RETRY_DELAYS_MS = [5000, 1000, 3000] as const;
+export interface PwaAppBadgeSyncOptions {
+  readonly isEnvironmentAuthoritative?: (environmentId: EnvironmentId) => boolean;
+}
+
+let badgeSyncInstalled = false;
+let unsubscribeFromStore: (() => void) | null = null;
+let syncScheduled = false;
+let forceNextSync = false;
+let lastSnapshotFingerprint: string | null = null;
+let badgeWriteQueue: Promise<void> = Promise.resolve();
+let isEnvironmentAuthoritative = defaultIsEnvironmentAuthoritative;
+let observedEnvironmentIds = new Set<string>();
+let pendingRemovedEnvironmentIds = new Set<EnvironmentId>();
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let removeLifecycleListeners: (() => void) | null = null;
+
+function defaultIsEnvironmentAuthoritative(environmentId: EnvironmentId): boolean {
+  return readEnvironmentConnection(environmentId)?.client.isHeartbeatFresh() === true;
+}
 
 function readBadgeNavigator(): AppBadgeNavigator | null {
   return typeof navigator === "undefined" ? null : (navigator as AppBadgeNavigator);
@@ -31,16 +46,6 @@ function readBadgeNavigator(): AppBadgeNavigator | null {
 
 export function canUseAppBadge(navigatorLike: AppBadgeNavigator | null = readBadgeNavigator()) {
   return typeof navigatorLike?.setAppBadge === "function";
-}
-
-export function selectCompletedConversationBadgeCount(
-  appState: AppState,
-  uiState: Pick<UiState, "threadLastVisitedAtById">,
-): number {
-  return countUnseenCompletedThreads(
-    selectSidebarThreadsAcrossEnvironments(appState),
-    uiState.threadLastVisitedAtById,
-  );
 }
 
 export async function writeAppBadgeCount(
@@ -71,93 +76,102 @@ export async function writeAppBadgeCount(
   }
 }
 
+export function deriveUnreadCompletionState(
+  state: AppState,
+  environmentIsAuthoritative: (environmentId: EnvironmentId) => boolean = () => true,
+): UnreadCompletionState {
+  const snapshots: UnreadCompletionServiceWorkerSnapshot[] = [];
+  let count = 0;
+  let allEnvironmentStateAuthoritative = true;
+
+  for (const [rawEnvironmentId, environmentState] of Object.entries(state.environmentStateById)) {
+    if (!environmentState.bootstrapComplete) {
+      allEnvironmentStateAuthoritative = false;
+      continue;
+    }
+    const environmentId = rawEnvironmentId as EnvironmentId;
+    if (!environmentIsAuthoritative(environmentId)) {
+      allEnvironmentStateAuthoritative = false;
+    }
+    const completions: UnreadCompletionServiceWorkerSnapshot["completions"][number][] = [];
+    for (const [rawThreadId, completionId] of Object.entries(
+      environmentState.unreadCompletionTurnIdByThreadId ?? {},
+    )) {
+      completions.push({
+        threadId: rawThreadId as ThreadId,
+        completionId,
+      });
+      count += 1;
+    }
+    snapshots.push({
+      environmentId,
+      sequence: environmentState.completionAttentionSequence ?? 0,
+      completions,
+    });
+  }
+
+  return { count, snapshots, allEnvironmentStateAuthoritative };
+}
+
 function syncAppBadge(): void {
   syncScheduled = false;
-  if (isDocumentVisible()) {
-    clearCompletedTurnAlertsAndBadge();
+  const force = forceNextSync;
+  forceNextSync = false;
+  const state = useStore.getState();
+  const currentEnvironmentIds = new Set(Object.keys(state.environmentStateById));
+  for (const environmentId of observedEnvironmentIds) {
+    if (!currentEnvironmentIds.has(environmentId)) {
+      pendingRemovedEnvironmentIds.add(environmentId as EnvironmentId);
+    }
+  }
+  const removedEnvironmentIds = [...pendingRemovedEnvironmentIds];
+  observedEnvironmentIds = currentEnvironmentIds;
+  const unreadState = deriveUnreadCompletionState(state, isEnvironmentAuthoritative);
+  if (unreadState.snapshots.length === 0 && removedEnvironmentIds.length === 0) {
+    if (force) {
+      void requestServiceWorkerBadgeSync();
+    }
     return;
   }
 
-  const generation = ++badgeSyncGeneration;
-
-  void (async () => {
-    const displayedNotificationCount = await getDisplayedTurnCompletionThreadCount();
-    if (generation !== badgeSyncGeneration) {
-      return;
-    }
-
-    const badgeCount = displayedNotificationCount ?? 0;
-    if (badgeCount === lastRequestedBadgeCount) {
-      return;
-    }
-
-    lastRequestedBadgeCount = badgeCount;
-    const updated = await writeAppBadgeCount(badgeCount);
-    if (!updated && generation === badgeSyncGeneration && lastRequestedBadgeCount === badgeCount) {
-      lastRequestedBadgeCount = null;
-    }
-  })();
-}
-
-function isDocumentVisible(): boolean {
-  return typeof document === "undefined" || document.visibilityState === "visible";
-}
-
-function clearPendingClearRetryTimers(): void {
-  for (const timerId of clearRetryTimerIds) {
-    clearTimeout(timerId);
-  }
-  clearRetryTimerIds = [];
-}
-
-function removeClearRetryTimer(timerId: ReturnType<typeof setTimeout>): void {
-  clearRetryTimerIds = clearRetryTimerIds.filter((candidate) => candidate !== timerId);
-}
-
-function scheduleCompletedTurnAlertClearAttempt(generation: number, attemptIndex: number): void {
-  const delay = COMPLETED_TURN_ALERT_CLEAR_RETRY_DELAYS_MS[attemptIndex];
-  if (delay === undefined) {
+  const fingerprint = JSON.stringify([unreadState.snapshots, removedEnvironmentIds]);
+  if (!force && fingerprint === lastSnapshotFingerprint) {
     return;
   }
-
-  const runAttempt = () => {
-    void (async () => {
-      await clearTurnCompletionAlerts();
-      if (generation !== badgeSyncGeneration) {
-        return;
+  badgeWriteQueue = badgeWriteQueue.then(async () => {
+    const workerSynchronized = await syncServiceWorkerUnreadCompletions(
+      unreadState.snapshots,
+      removedEnvironmentIds,
+    );
+    if (workerSynchronized) {
+      for (const environmentId of removedEnvironmentIds) {
+        pendingRemovedEnvironmentIds.delete(environmentId);
       }
-      lastRequestedBadgeCount = 0;
-      const updated = await writeAppBadgeCount(0);
-      if (!updated && generation === badgeSyncGeneration && lastRequestedBadgeCount === 0) {
-        lastRequestedBadgeCount = null;
-      }
-      if (generation === badgeSyncGeneration) {
-        scheduleCompletedTurnAlertClearAttempt(generation, attemptIndex + 1);
-      }
-    })();
-  };
+      lastSnapshotFingerprint = fingerprint;
+      return;
+    }
 
-  const timerId = setTimeout(() => {
-    removeClearRetryTimer(timerId);
-    runAttempt();
-  }, delay);
-  clearRetryTimerIds.push(timerId);
-}
+    if (unreadState.allEnvironmentStateAuthoritative) {
+      const directlyWritten = await writeAppBadgeCount(unreadState.count);
+      if (directlyWritten) {
+        lastSnapshotFingerprint = fingerprint;
+        if (removedEnvironmentIds.length === 0) {
+          return;
+        }
+      }
+    }
 
-function clearCompletedTurnAlertsAndBadge(): void {
-  clearPendingClearRetryTimers();
-  syncScheduled = false;
-  const generation = ++badgeSyncGeneration;
-  lastRequestedBadgeCount = 0;
-  void writeAppBadgeCount(0).then((updated) => {
-    if (!updated && generation === badgeSyncGeneration && lastRequestedBadgeCount === 0) {
-      lastRequestedBadgeCount = null;
+    if (retryTimer === null) {
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        scheduleAppBadgeSync(true);
+      }, 1_000);
     }
   });
-  scheduleCompletedTurnAlertClearAttempt(generation, 0);
 }
 
-function scheduleAppBadgeSync(): void {
+function scheduleAppBadgeSync(force = false): void {
+  forceNextSync ||= force;
   if (syncScheduled) {
     return;
   }
@@ -166,51 +180,73 @@ function scheduleAppBadgeSync(): void {
 }
 
 export function resyncAppBadge(): void {
-  lastRequestedBadgeCount = null;
-  scheduleAppBadgeSync();
+  scheduleAppBadgeSync(true);
 }
 
-function handleWindowFocus(): void {
-  clearCompletedTurnAlertsAndBadge();
-}
-
-function handleDocumentVisibilityChange(): void {
-  if (typeof document !== "undefined" && document.visibilityState === "visible") {
-    clearCompletedTurnAlertsAndBadge();
-  }
-}
-
-export function installPwaAppBadgeSync(): void {
-  if (badgeSyncInstalled || !canUseAppBadge()) {
+export function installPwaAppBadgeSync(options: PwaAppBadgeSyncOptions = {}): void {
+  if (badgeSyncInstalled) {
     return;
   }
 
+  isEnvironmentAuthoritative =
+    options.isEnvironmentAuthoritative ?? defaultIsEnvironmentAuthoritative;
   badgeSyncInstalled = true;
-  appStoreUnsubscribe = useStore.subscribe(scheduleAppBadgeSync);
-  uiStateStoreUnsubscribe = useUiStateStore.subscribe(scheduleAppBadgeSync);
-  if (typeof window !== "undefined") {
-    window.addEventListener("focus", handleWindowFocus);
+  observedEnvironmentIds = new Set(Object.keys(useStore.getState().environmentStateById));
+  unsubscribeFromStore = useStore.subscribe((state, previousState) => {
+    if (
+      completionAttentionStateChanged(
+        state.environmentStateById,
+        previousState.environmentStateById,
+      )
+    ) {
+      scheduleAppBadgeSync();
+    }
+  });
+  if (
+    typeof window !== "undefined" &&
+    typeof document !== "undefined" &&
+    typeof window.addEventListener === "function" &&
+    typeof document.addEventListener === "function"
+  ) {
+    const handleResume = () => scheduleAppBadgeSync(true);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        handleResume();
+      }
+    };
+    window.addEventListener("focus", handleResume);
+    window.addEventListener("online", handleResume);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    const serviceWorker =
+      typeof navigator !== "undefined" && "serviceWorker" in navigator
+        ? navigator.serviceWorker
+        : null;
+    serviceWorker?.addEventListener?.("controllerchange", handleResume);
+    removeLifecycleListeners = () => {
+      window.removeEventListener("focus", handleResume);
+      window.removeEventListener("online", handleResume);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      serviceWorker?.removeEventListener?.("controllerchange", handleResume);
+    };
   }
-  if (typeof document !== "undefined") {
-    document.addEventListener("visibilitychange", handleDocumentVisibilityChange);
-  }
-  clearCompletedTurnAlertsAndBadge();
+  scheduleAppBadgeSync(true);
 }
 
 export function __resetPwaAppBadgeSyncForTests(): void {
-  appStoreUnsubscribe?.();
-  uiStateStoreUnsubscribe?.();
-  appStoreUnsubscribe = null;
-  uiStateStoreUnsubscribe = null;
-  if (typeof window !== "undefined") {
-    window.removeEventListener("focus", handleWindowFocus);
+  unsubscribeFromStore?.();
+  unsubscribeFromStore = null;
+  removeLifecycleListeners?.();
+  removeLifecycleListeners = null;
+  if (retryTimer !== null) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
   }
-  if (typeof document !== "undefined") {
-    document.removeEventListener("visibilitychange", handleDocumentVisibilityChange);
-  }
-  clearPendingClearRetryTimers();
   badgeSyncInstalled = false;
   syncScheduled = false;
-  lastRequestedBadgeCount = null;
-  badgeSyncGeneration += 1;
+  forceNextSync = false;
+  lastSnapshotFingerprint = null;
+  badgeWriteQueue = Promise.resolve();
+  observedEnvironmentIds = new Set();
+  pendingRemovedEnvironmentIds = new Set();
+  isEnvironmentAuthoritative = defaultIsEnvironmentAuthoritative;
 }

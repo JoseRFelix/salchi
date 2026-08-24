@@ -116,6 +116,7 @@ const mapThreadRelationshipFields = (row: typeof ProjectionThreadDbRowSchema.Typ
   subagentNickname: row.subagentNickname ?? null,
   subagentRole: row.subagentRole ?? null,
   hiddenFromThreadList: (row.hiddenFromThreadList ?? 0) > 0,
+  seenCompletionTurnId: row.seenCompletionTurnId,
 });
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
   Struct.assign({
@@ -248,6 +249,13 @@ function computeSnapshotSequence(
   }
 
   return Number.isFinite(minSequence) ? minSequence : 0;
+}
+
+function computeProjectorSequence(
+  stateRows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionStateDbRowSchema>>,
+  projector: string,
+): number {
+  return stateRows.find((row) => row.projector === projector)?.lastAppliedSequence ?? 0;
 }
 
 function mapLatestTurn(
@@ -628,6 +636,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
+          seen_completion_turn_id AS "seenCompletionTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
@@ -662,6 +671,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
+          seen_completion_turn_id AS "seenCompletionTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
@@ -698,6 +708,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
+          seen_completion_turn_id AS "seenCompletionTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
@@ -1099,6 +1110,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
+          seen_completion_turn_id AS "seenCompletionTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
@@ -2129,6 +2141,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
             const snapshot = {
               snapshotSequence: computeSnapshotSequence(stateRows),
+              completionAttentionSequence: computeProjectorSequence(
+                stateRows,
+                ORCHESTRATION_PROJECTOR_NAMES.threads,
+              ),
               projects: Arr.filterMap(projectRows, (row) =>
                 row.deletedAt === null
                   ? Result.succeed(
@@ -2332,6 +2348,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
             const snapshot = {
               snapshotSequence: computeSnapshotSequence(stateRows),
+              completionAttentionSequence: computeProjectorSequence(
+                stateRows,
+                ORCHESTRATION_PROJECTOR_NAMES.threads,
+              ),
               projects: Arr.filterMap(projectRows, (row) =>
                 row.deletedAt === null && activeProjectIds.has(row.projectId)
                   ? Result.succeed(

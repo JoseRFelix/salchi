@@ -227,6 +227,122 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
   );
 });
 
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("salchi-completion-attention-")))(
+  "OrchestrationProjectionPipeline",
+  (it) => {
+    it.effect("persists completion attention without changing thread activity time", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.make("thread-completion-attention");
+        const turnId = TurnId.make("turn-completion-attention");
+        const createdAt = "2026-08-18T00:00:00.000Z";
+        const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+          eventStore
+            .append(event)
+            .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+        yield* appendAndProject(
+          makeThreadCreatedProjectionEvent({
+            eventId: "event-completion-attention-thread",
+            commandId: "command-completion-attention-thread",
+            threadId,
+            projectId: ProjectId.make("project-completion-attention"),
+            occurredAt: createdAt,
+          }),
+        );
+        yield* appendAndProject({
+          type: "thread.completion-acknowledged",
+          eventId: EventId.make("event-completion-acknowledged"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-08-18T00:01:00.000Z",
+          commandId: CommandId.make("command-completion-acknowledged"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("command-completion-acknowledged"),
+          metadata: {},
+          payload: { threadId, turnId },
+        });
+
+        const acknowledgedRows = yield* sql<{
+          readonly seenCompletionTurnId: string | null;
+          readonly updatedAt: string;
+        }>`
+          SELECT
+            seen_completion_turn_id AS "seenCompletionTurnId",
+            updated_at AS "updatedAt"
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+        `;
+        assert.deepEqual(acknowledgedRows, [
+          { seenCompletionTurnId: turnId, updatedAt: createdAt },
+        ]);
+
+        yield* appendAndProject({
+          type: "thread.completion-marked-unread",
+          eventId: EventId.make("event-completion-marked-unread"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-08-18T00:02:00.000Z",
+          commandId: CommandId.make("command-completion-marked-unread"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("command-completion-marked-unread"),
+          metadata: {},
+          payload: { threadId, turnId },
+        });
+
+        const unreadRows = yield* sql<{
+          readonly seenCompletionTurnId: string | null;
+          readonly updatedAt: string;
+        }>`
+          SELECT
+            seen_completion_turn_id AS "seenCompletionTurnId",
+            updated_at AS "updatedAt"
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+        `;
+        assert.deepEqual(unreadRows, [{ seenCompletionTurnId: null, updatedAt: createdAt }]);
+      }),
+    );
+
+    it.effect("restores the legacy read baseline when thread projections are replayed", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.make("thread-legacy-baseline-replay");
+        const turnId = TurnId.make("turn-legacy-baseline-replay");
+
+        yield* sql`
+          INSERT INTO orchestration_completion_attention_baselines (
+            thread_id,
+            seen_completion_turn_id
+          ) VALUES (${threadId}, ${turnId})
+        `;
+        yield* eventStore.append(
+          makeThreadCreatedProjectionEvent({
+            eventId: "event-legacy-baseline-replay",
+            commandId: "command-legacy-baseline-replay",
+            threadId,
+            projectId: ProjectId.make("project-legacy-baseline-replay"),
+            occurredAt: "2026-08-18T00:00:00.000Z",
+          }),
+        );
+
+        yield* projectionPipeline.bootstrap;
+
+        const rows = yield* sql<{ readonly seenCompletionTurnId: string | null }>`
+          SELECT seen_completion_turn_id AS "seenCompletionTurnId"
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+        `;
+        assert.deepEqual(rows, [{ seenCompletionTurnId: turnId }]);
+      }),
+    );
+  },
+);
+
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("salchi-turn-diff-anchor-")))(
   "OrchestrationProjectionPipeline",
   (it) => {

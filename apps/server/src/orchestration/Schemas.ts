@@ -9,6 +9,8 @@ import {
   ThreadInteractionModeSetPayload as ContractsThreadInteractionModeSetPayloadSchema,
   ThreadDeletedPayload as ContractsThreadDeletedPayloadSchema,
   ThreadUnarchivedPayload as ContractsThreadUnarchivedPayloadSchema,
+  ThreadCompletionAcknowledgedPayload as ContractsThreadCompletionAcknowledgedPayloadSchema,
+  ThreadCompletionMarkedUnreadPayload as ContractsThreadCompletionMarkedUnreadPayloadSchema,
   ThreadMessageSentPayload as ContractsThreadMessageSentPayloadSchema,
   ThreadTurnQueuedPayload as ContractsThreadTurnQueuedPayloadSchema,
   ThreadQueuedTurnUpdatedPayload as ContractsThreadQueuedTurnUpdatedPayloadSchema,
@@ -41,6 +43,10 @@ export const ThreadRuntimeModeSetPayload = ContractsThreadRuntimeModeSetPayloadS
 export const ThreadInteractionModeSetPayload = ContractsThreadInteractionModeSetPayloadSchema;
 export const ThreadDeletedPayload = ContractsThreadDeletedPayloadSchema;
 export const ThreadUnarchivedPayload = ContractsThreadUnarchivedPayloadSchema;
+export const ThreadCompletionAcknowledgedPayload =
+  ContractsThreadCompletionAcknowledgedPayloadSchema;
+export const ThreadCompletionMarkedUnreadPayload =
+  ContractsThreadCompletionMarkedUnreadPayloadSchema;
 
 export const MessageSentPayloadSchema = ContractsThreadMessageSentPayloadSchema;
 export const ThreadTurnQueuedPayload = ContractsThreadTurnQueuedPayloadSchema;

@@ -12,6 +12,34 @@ const HOME_URL = `${ORIGIN}/`;
 const CROSS_ORIGIN_URL = "https://elsewhere.example/env-1/thread-1";
 const DEFAULT_NOTIFICATION_TITLE = "Salchi";
 
+function canonicalCompletionPush(input: {
+  readonly threadId: string;
+  readonly turnId: string;
+  readonly sequence: number;
+  readonly count: number;
+  readonly url?: string;
+  readonly title?: string;
+  readonly body?: string;
+}) {
+  return {
+    ...(input.title ? { title: input.title } : {}),
+    ...(input.body ? { body: input.body } : {}),
+    completionAttentionVersion: 2,
+    completion: {
+      environmentId: "env-1",
+      threadId: input.threadId,
+      completionId: input.turnId,
+    },
+    unreadCompletionState: {
+      environmentId: "env-1",
+      sequence: input.sequence,
+      count: input.count,
+    },
+    tag: `thread:${input.threadId}:turn:${input.turnId}`,
+    url: input.url ?? `${ORIGIN}/env-1/${input.threadId}`,
+  };
+}
+
 interface MockClientState {
   readonly id: string;
   readonly url: string;
@@ -57,9 +85,23 @@ interface ServiceWorkerTestHarness {
     readonly requestUrl: string;
     readonly value: unknown;
   }>;
+  readonly getUnreadCompletionEntries: () => Array<{
+    readonly environmentId: string;
+    readonly threadId: string;
+    readonly completionId: string;
+  }>;
+  readonly getUnreadCompletionEnvironments: () => Array<{
+    readonly environmentId: string;
+    readonly sequence: number | null;
+    readonly count: number;
+  }>;
   readonly getBadgeSetCalls: () => number[];
   readonly getBadgeClearCallCount: () => number;
   readonly getDisplayedNotificationCount: () => number;
+  readonly seedDisplayedNotification: (input: {
+    readonly tag: string;
+    readonly url: string;
+  }) => void;
   readonly closeAllDisplayedNotificationsWithoutEvent: () => void;
   readonly dispatchActivate: () => Promise<void>;
   readonly dispatchMessage: (payload: unknown) => Promise<void>;
@@ -67,6 +109,7 @@ interface ServiceWorkerTestHarness {
   readonly dispatchNotificationClick: (index?: number) => Promise<void>;
   readonly dispatchNotificationClose: (index?: number) => Promise<void>;
   readonly removeAppBadgeSupport: () => void;
+  readonly setAppBadgeResult: (result: "success" | "throw") => void;
   readonly setGetNotificationsResult: (result: "success" | "throw") => void;
   readonly addClient: (options: {
     readonly ackNotificationClick?: boolean;
@@ -107,6 +150,17 @@ function createServiceWorkerTestHarness(): ServiceWorkerTestHarness {
     requestUrl: string;
     value: unknown;
   }> = [];
+  const cachedResponses = new Map<string, Map<string, Response>>();
+  let unreadCompletionEntries: Array<{
+    environmentId: string;
+    threadId: string;
+    completionId: string;
+  }> = [];
+  let unreadCompletionEnvironments: Array<{
+    environmentId: string;
+    sequence: number | null;
+    count: number;
+  }> = [];
   const badgeSetCalls: number[] = [];
   let badgeClearCallCount = 0;
   const eventListeners: Record<string, Array<(event: unknown) => void>> = {};
@@ -130,6 +184,7 @@ function createServiceWorkerTestHarness(): ServiceWorkerTestHarness {
   > = [];
   let openWindowResult: "undefined" | "client-at-url" | "client-at-home" | "throw" = "undefined";
   let getNotificationsResult: "success" | "throw" = "success";
+  let appBadgeResult: "success" | "throw" = "success";
   let nextClientId = 1;
   const makeClient = (options: {
     readonly ackNotificationClick?: boolean;
@@ -261,10 +316,16 @@ function createServiceWorkerTestHarness(): ServiceWorkerTestHarness {
       navigator: {
         setAppBadge: async (count?: number) => {
           operationLog.push("setAppBadge");
+          if (appBadgeResult === "throw") {
+            throw new Error("setAppBadge failed");
+          }
           badgeSetCalls.push(Number(count));
         },
         clearAppBadge: async () => {
           operationLog.push("clearAppBadge");
+          if (appBadgeResult === "throw") {
+            throw new Error("clearAppBadge failed");
+          }
           badgeClearCallCount += 1;
         },
       },
@@ -322,16 +383,38 @@ function createServiceWorkerTestHarness(): ServiceWorkerTestHarness {
         },
       },
       caches: {
-        open: async (cacheName: string) => ({
-          put: async (request: Request, response: Response) => {
-            operationLog.push("persist");
-            pendingClickWrites.push({
-              cacheName,
-              requestUrl: request.url,
-              value: await response.json(),
-            });
-          },
-        }),
+        open: async (cacheName: string) => {
+          const responses = cachedResponses.get(cacheName) ?? new Map<string, Response>();
+          cachedResponses.set(cacheName, responses);
+          return {
+            match: async (request: Request) => responses.get(request.url)?.clone(),
+            put: async (request: Request, response: Response) => {
+              operationLog.push("persist");
+              const storedResponse = response.clone();
+              responses.set(request.url, storedResponse);
+              const value = await response.json();
+              if (cacheName === "salchi-notification-click-v1") {
+                pendingClickWrites.push({
+                  cacheName,
+                  requestUrl: request.url,
+                  value,
+                });
+              }
+              if (
+                cacheName === "salchi-unread-completions-v2" &&
+                typeof value === "object" &&
+                value !== null &&
+                Array.isArray((value as { entries?: unknown }).entries)
+              ) {
+                unreadCompletionEntries = (value as { entries: typeof unreadCompletionEntries })
+                  .entries;
+                unreadCompletionEnvironments =
+                  (value as { environments?: typeof unreadCompletionEnvironments }).environments ??
+                  [];
+              }
+            },
+          };
+        },
       },
       BroadcastChannel: MockBroadcastChannel,
     },
@@ -380,10 +463,20 @@ this.__salchiServiceWorkerTestExports = {
     getBroadcastCloseCalls: () => broadcastCloseCalls,
     getDirectDiagnostics: () => directDiagnostics,
     getPendingClickWrites: () => pendingClickWrites,
+    getUnreadCompletionEntries: () => unreadCompletionEntries,
+    getUnreadCompletionEnvironments: () => unreadCompletionEnvironments,
     getBadgeSetCalls: () => badgeSetCalls,
     getBadgeClearCallCount: () => badgeClearCallCount,
     getDisplayedNotificationCount: () =>
       displayedNotifications.filter((notification) => notification.__closed !== true).length,
+    seedDisplayedNotification: ({ tag, url }) => {
+      displayedNotifications.push(
+        makeNotification("Legacy completion", {
+          tag,
+          data: { url },
+        }),
+      );
+    },
     closeAllDisplayedNotificationsWithoutEvent: () => {
       for (const notification of displayedNotifications) {
         if (notification.__closed !== true) {
@@ -486,6 +579,9 @@ this.__salchiServiceWorkerTestExports = {
     removeAppBadgeSupport: () => {
       (context.self as Record<string, unknown>).navigator = {};
     },
+    setAppBadgeResult: (result) => {
+      appBadgeResult = result;
+    },
   };
 }
 
@@ -518,14 +614,12 @@ describe("salchi-service-worker app badge", () => {
   });
 
   it("counts distinct threads with completed turns after pushes", async () => {
-    await harness.dispatchPush({
-      tag: "thread:thread-1:turn:turn-1",
-      url: TARGET_URL,
-    });
-    await harness.dispatchPush({
-      tag: "thread:thread-2:turn:turn-1",
-      url: `${ORIGIN}/env-1/thread-2`,
-    });
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-1", turnId: "turn-1", sequence: 1, count: 1 }),
+    );
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-2", turnId: "turn-1", sequence: 2, count: 2 }),
+    );
 
     expect(harness.getDisplayedNotificationCount()).toBe(2);
     expect(harness.getBadgeSetCalls()).toEqual([1, 2]);
@@ -553,15 +647,25 @@ describe("salchi-service-worker app badge", () => {
     expect(harness.getBadgeSetCalls()).toEqual([]);
   });
 
+  it("does not let an unversioned legacy completion create un-clearable badge state", async () => {
+    await harness.dispatchPush({
+      tag: "thread:thread-1:turn:turn-legacy",
+      url: TARGET_URL,
+    });
+
+    expect(harness.getDisplayedNotificationCount()).toBe(1);
+    expect(harness.getUnreadCompletionEntries()).toEqual([]);
+    expect(harness.getUnreadCompletionEnvironments()).toEqual([]);
+    expect(harness.getBadgeSetCalls()).toEqual([]);
+  });
+
   it("counts a single thread once when multiple turns complete", async () => {
-    await harness.dispatchPush({
-      tag: "thread:thread-1:turn:turn-1",
-      url: TARGET_URL,
-    });
-    await harness.dispatchPush({
-      tag: "thread:thread-1:turn:turn-2",
-      url: TARGET_URL,
-    });
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-1", turnId: "turn-1", sequence: 1, count: 1 }),
+    );
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-1", turnId: "turn-2", sequence: 2, count: 1 }),
+    );
 
     expect(harness.getBadgeSetCalls()).toEqual([1, 1]);
     expect(harness.getBadgeClearCallCount()).toBe(0);
@@ -572,10 +676,9 @@ describe("salchi-service-worker app badge", () => {
       tag: "thread:thread-1:approval:activity-1",
       url: TARGET_URL,
     });
-    await harness.dispatchPush({
-      tag: "thread:thread-1:turn:turn-1",
-      url: TARGET_URL,
-    });
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-1", turnId: "turn-1", sequence: 1, count: 1 }),
+    );
 
     expect(harness.getDisplayedNotificationCount()).toBe(1);
     expect(harness.getBadgeSetCalls()).toEqual([1]);
@@ -588,10 +691,9 @@ describe("salchi-service-worker app badge", () => {
     });
     const operationStart = harness.operationLog.length;
 
-    await harness.dispatchPush({
-      tag: "thread:thread-1:turn:turn-1",
-      url: TARGET_URL,
-    });
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-1", turnId: "turn-1", sequence: 1, count: 1 }),
+    );
 
     const operations = harness.operationLog.slice(operationStart);
     expect(operations.indexOf("showNotification")).toBeLessThan(
@@ -606,12 +708,16 @@ describe("salchi-service-worker app badge", () => {
     harness.setGetNotificationsResult("throw");
 
     await expect(
-      harness.dispatchPush({
-        title: "Completed task",
-        body: "The task completed successfully.",
-        tag: "thread:thread-1:turn:turn-1",
-        url: TARGET_URL,
-      }),
+      harness.dispatchPush(
+        canonicalCompletionPush({
+          threadId: "thread-1",
+          turnId: "turn-1",
+          sequence: 1,
+          count: 1,
+          title: "Completed task",
+          body: "The task completed successfully.",
+        }),
+      ),
     ).resolves.toBeUndefined();
 
     expect(harness.getDisplayedNotificationCount()).toBe(1);
@@ -619,10 +725,9 @@ describe("salchi-service-worker app badge", () => {
   });
 
   it("records notification display directly after Chrome accepts it", async () => {
-    await harness.dispatchPush({
-      tag: "thread:thread-1:turn:turn-1",
-      url: TARGET_URL,
-    });
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-1", turnId: "turn-1", sequence: 1, count: 1 }),
+    );
 
     expect(harness.getDirectDiagnostics()).toEqual([
       {
@@ -648,55 +753,63 @@ describe("salchi-service-worker app badge", () => {
       visibilityState: "visible",
     });
 
-    await harness.dispatchPush({
-      tag: "thread:thread-1:turn:turn-1",
-      url: TARGET_URL,
-    });
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-1", turnId: "turn-1", sequence: 1, count: 1 }),
+    );
 
     expect(harness.getDisplayedNotificationCount()).toBe(1);
     expect(harness.getBadgeSetCalls()).toEqual([1]);
     expect(harness.getBadgeClearCallCount()).toBe(0);
   });
 
-  it("clears all completed-turn notifications when a notification is clicked", async () => {
+  it("shows protocol-v2 interrupted notifications without adding an unread badge", async () => {
     await harness.dispatchPush({
-      tag: "thread:thread-1:turn:turn-1",
+      completionAttentionVersion: 2,
+      tag: "thread:thread-1:turn:turn-interrupted",
       url: TARGET_URL,
     });
-    await harness.dispatchPush({
-      tag: "thread:thread-2:turn:turn-1",
-      url: `${ORIGIN}/env-1/thread-2`,
-    });
 
-    await harness.dispatchNotificationClick(0);
-
-    expect(harness.getDisplayedNotificationCount()).toBe(0);
-    expect(harness.getBadgeSetCalls()).toEqual([1, 2]);
-    expect(harness.getBadgeClearCallCount()).toBe(1);
+    expect(harness.getDisplayedNotificationCount()).toBe(1);
+    expect(harness.getUnreadCompletionEntries()).toEqual([]);
+    expect(harness.getBadgeSetCalls()).toEqual([]);
+    expect(harness.getBadgeClearCallCount()).toBe(0);
   });
 
-  it("resyncs the badge when a notification is dismissed", async () => {
-    await harness.dispatchPush({
-      tag: "thread:thread-1:turn:turn-1",
-      url: TARGET_URL,
-    });
-    await harness.dispatchPush({
-      tag: "thread:thread-2:turn:turn-1",
-      url: `${ORIGIN}/env-1/thread-2`,
-    });
+  it("keeps other completed-turn notifications when one is clicked", async () => {
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-1", turnId: "turn-1", sequence: 1, count: 1 }),
+    );
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-2", turnId: "turn-1", sequence: 2, count: 2 }),
+    );
 
-    await harness.dispatchNotificationClose(0);
+    await harness.dispatchNotificationClick(1);
 
     expect(harness.getDisplayedNotificationCount()).toBe(1);
     expect(harness.getBadgeSetCalls()).toEqual([1, 2, 1]);
     expect(harness.getBadgeClearCallCount()).toBe(0);
   });
 
-  it("resyncs dismissal while a visible same-origin page is open", async () => {
-    await harness.dispatchPush({
-      tag: "thread:thread-1:turn:turn-1",
-      url: TARGET_URL,
-    });
+  it("keeps unread state when a notification is dismissed", async () => {
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-1", turnId: "turn-1", sequence: 1, count: 1 }),
+    );
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-2", turnId: "turn-1", sequence: 2, count: 2 }),
+    );
+
+    await harness.dispatchNotificationClose(0);
+
+    expect(harness.getDisplayedNotificationCount()).toBe(1);
+    expect(harness.getBadgeSetCalls()).toEqual([1, 2, 2]);
+    expect(harness.getBadgeClearCallCount()).toBe(0);
+    expect(harness.getUnreadCompletionEntries()).toHaveLength(1);
+  });
+
+  it("keeps unread state on dismissal while a visible same-origin page is open", async () => {
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-1", turnId: "turn-1", sequence: 1, count: 1 }),
+    );
     harness.addClient({
       url: HOME_URL,
       focused: true,
@@ -705,32 +818,68 @@ describe("salchi-service-worker app badge", () => {
 
     await harness.dispatchNotificationClose(0);
 
-    expect(harness.getBadgeSetCalls()).toEqual([1]);
-    expect(harness.getBadgeClearCallCount()).toBe(1);
+    expect(harness.getBadgeSetCalls()).toEqual([1, 1]);
+    expect(harness.getBadgeClearCallCount()).toBe(0);
   });
 
   it("does nothing when app badge support is unavailable", async () => {
     harness.removeAppBadgeSupport();
 
-    await harness.dispatchPush({
-      tag: "thread:thread-1:turn:turn-1",
-      url: TARGET_URL,
-    });
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-1", turnId: "turn-1", sequence: 1, count: 1 }),
+    );
 
     expect(harness.getDisplayedNotificationCount()).toBe(1);
     expect(harness.getBadgeSetCalls()).toEqual([]);
     expect(harness.getBadgeClearCallCount()).toBe(0);
   });
 
-  it("clears completed-turn notifications when the page requests alert clearing", async () => {
-    await harness.dispatchPush({
-      tag: "thread:thread-1:turn:turn-1",
+  it("reports a native badge write rejection after preserving the authoritative ledger", async () => {
+    harness.setAppBadgeResult("throw");
+
+    await expect(
+      harness.dispatchMessage({
+        type: "salchi.sync-unread-completions",
+        snapshots: [
+          {
+            environmentId: "env-1",
+            sequence: 1,
+            completions: [{ threadId: "thread-1", completionId: "turn-1" }],
+          },
+        ],
+      }),
+    ).rejects.toThrow("Service worker app badge write failed");
+
+    expect(harness.getUnreadCompletionEntries()).toEqual([
+      { environmentId: "env-1", threadId: "thread-1", completionId: "turn-1" },
+    ]);
+  });
+
+  it("closes a stale completion notification even when the native clear call rejects", async () => {
+    harness.seedDisplayedNotification({
+      tag: "thread:thread-1:turn:turn-legacy",
       url: TARGET_URL,
     });
-    await harness.dispatchPush({
-      tag: "thread:thread-2:turn:turn-1",
-      url: `${ORIGIN}/env-1/thread-2`,
-    });
+    harness.setAppBadgeResult("throw");
+
+    await expect(
+      harness.dispatchMessage({
+        type: "salchi.sync-unread-completions",
+        snapshots: [{ environmentId: "env-1", sequence: 1, completions: [] }],
+      }),
+    ).rejects.toThrow("Service worker app badge write failed");
+
+    expect(harness.getDisplayedNotificationCount()).toBe(0);
+    expect(harness.getUnreadCompletionEntries()).toEqual([]);
+  });
+
+  it("clears completed-turn notifications when the page requests alert clearing", async () => {
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-1", turnId: "turn-1", sequence: 1, count: 1 }),
+    );
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-2", turnId: "turn-1", sequence: 2, count: 2 }),
+    );
 
     await harness.dispatchMessage({ type: "salchi.clear-turn-completion-notifications" });
 
@@ -739,23 +888,172 @@ describe("salchi-service-worker app badge", () => {
     expect(harness.getBadgeClearCallCount()).toBe(1);
   });
 
-  it("clears a stale badge when the page requests a badge sync after notifications disappeared", async () => {
-    await harness.dispatchPush({
-      tag: "thread:thread-1:turn:turn-1",
-      url: TARGET_URL,
-    });
+  it("restores the durable unread badge when displayed notifications disappeared", async () => {
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-1", turnId: "turn-1", sequence: 1, count: 1 }),
+    );
     harness.closeAllDisplayedNotificationsWithoutEvent();
 
     await harness.dispatchMessage({ type: "salchi.sync-displayed-notification-badge" });
 
     expect(harness.getDisplayedNotificationCount()).toBe(0);
-    expect(harness.getBadgeSetCalls()).toEqual([1]);
+    expect(harness.getBadgeSetCalls()).toEqual([1, 1]);
+    expect(harness.getBadgeClearCallCount()).toBe(0);
+  });
+
+  it("replaces durable unread state from an authoritative page snapshot", async () => {
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-1", turnId: "turn-1", sequence: 1, count: 1 }),
+    );
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-2", turnId: "turn-1", sequence: 2, count: 2 }),
+    );
+
+    await harness.dispatchMessage({
+      type: "salchi.sync-unread-completions",
+      snapshots: [
+        {
+          environmentId: "env-1",
+          sequence: 2,
+          completions: [{ threadId: "thread-2", completionId: "turn-1" }],
+        },
+      ],
+    });
+
+    expect(harness.getUnreadCompletionEntries()).toEqual([
+      { environmentId: "env-1", threadId: "thread-2", completionId: "turn-1" },
+    ]);
+    expect(harness.getDisplayedNotificationCount()).toBe(1);
+    expect(harness.getBadgeSetCalls()).toEqual([1, 2, 1]);
+  });
+
+  it("clears a pre-v2 stale notification and badge after an authoritative zero snapshot", async () => {
+    harness.seedDisplayedNotification({
+      tag: "thread:thread-1:turn:turn-legacy",
+      url: TARGET_URL,
+    });
+
+    await harness.dispatchMessage({
+      type: "salchi.sync-unread-completions",
+      snapshots: [{ environmentId: "env-1", sequence: 5, completions: [] }],
+    });
+
+    expect(harness.getDisplayedNotificationCount()).toBe(0);
+    expect(harness.getUnreadCompletionEntries()).toEqual([]);
+    expect(harness.getBadgeClearCallCount()).toBe(1);
+  });
+
+  it("rejects a stale page snapshot after a newer canonical push", async () => {
+    await harness.dispatchPush({
+      completion: {
+        environmentId: "env-1",
+        threadId: "thread-1",
+        completionId: "turn-10",
+      },
+      unreadCompletionState: {
+        environmentId: "env-1",
+        sequence: 10,
+        count: 1,
+      },
+      tag: "thread:thread-1:turn:turn-10",
+      url: TARGET_URL,
+    });
+
+    await harness.dispatchMessage({
+      type: "salchi.sync-unread-completions",
+      snapshots: [{ environmentId: "env-1", sequence: 9, completions: [] }],
+    });
+
+    expect(harness.getUnreadCompletionEntries()).toEqual([
+      { environmentId: "env-1", threadId: "thread-1", completionId: "turn-10" },
+    ]);
+    expect(harness.getUnreadCompletionEnvironments()).toEqual([
+      { environmentId: "env-1", sequence: 10, count: 1 },
+    ]);
+    expect(harness.getBadgeSetCalls()).toEqual([1, 1]);
+  });
+
+  it("uses the compact canonical push count for cross-device reconciliation", async () => {
+    await harness.dispatchPush({
+      completion: {
+        environmentId: "env-1",
+        threadId: "thread-3",
+        completionId: "turn-20",
+      },
+      unreadCompletionState: {
+        environmentId: "env-1",
+        sequence: 20,
+        count: 3,
+      },
+      tag: "thread:thread-3:turn:turn-20",
+      url: `${ORIGIN}/env-1/thread-3`,
+    });
+
+    expect(harness.getUnreadCompletionEntries()).toHaveLength(1);
+    expect(harness.getUnreadCompletionEnvironments()).toEqual([
+      { environmentId: "env-1", sequence: 20, count: 3 },
+    ]);
+    expect(harness.getBadgeSetCalls()).toEqual([3]);
+  });
+
+  it("accepts a newer authoritative zero and ignores an older delayed push", async () => {
+    await harness.dispatchMessage({
+      type: "salchi.sync-unread-completions",
+      snapshots: [{ environmentId: "env-1", sequence: 30, completions: [] }],
+    });
+    await harness.dispatchPush({
+      completion: {
+        environmentId: "env-1",
+        threadId: "thread-1",
+        completionId: "turn-29",
+      },
+      unreadCompletionState: {
+        environmentId: "env-1",
+        sequence: 29,
+        count: 1,
+      },
+      tag: "thread:thread-1:turn:turn-29",
+      url: TARGET_URL,
+    });
+
+    expect(harness.getUnreadCompletionEntries()).toEqual([]);
+    expect(harness.getUnreadCompletionEnvironments()).toEqual([
+      { environmentId: "env-1", sequence: 30, count: 0 },
+    ]);
+    expect(harness.getBadgeClearCallCount()).toBe(2);
+  });
+
+  it("removes durable state when an environment is deleted", async () => {
+    await harness.dispatchPush(
+      canonicalCompletionPush({ threadId: "thread-1", turnId: "turn-1", sequence: 1, count: 1 }),
+    );
+
+    await harness.dispatchMessage({
+      type: "salchi.drop-unread-completion-environments",
+      environmentIds: ["env-1"],
+    });
+
+    expect(harness.getUnreadCompletionEntries()).toEqual([]);
+    expect(harness.getUnreadCompletionEnvironments()).toEqual([]);
     expect(harness.getBadgeClearCallCount()).toBe(1);
   });
 
   it("syncs the displayed-notification badge on activation", async () => {
     await harness.dispatchActivate();
 
+    expect(harness.getBadgeSetCalls()).toEqual([]);
+    expect(harness.getBadgeClearCallCount()).toBe(1);
+  });
+
+  it("drops untrusted legacy displayed counts on the v2 activation", async () => {
+    harness.seedDisplayedNotification({
+      tag: "thread:thread-1:turn:turn-legacy",
+      url: TARGET_URL,
+    });
+
+    await harness.dispatchActivate();
+
+    expect(harness.getUnreadCompletionEntries()).toEqual([]);
     expect(harness.getBadgeSetCalls()).toEqual([]);
     expect(harness.getBadgeClearCallCount()).toBe(1);
   });

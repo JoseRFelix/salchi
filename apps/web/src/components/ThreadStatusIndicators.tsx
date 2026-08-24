@@ -11,7 +11,6 @@ import { useGitStatus } from "../lib/gitStatusState";
 import { useLocalDispatchStore } from "../localDispatchStore";
 import { type AppState, selectProjectByRef, useStore } from "../store";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
-import { useUiStateStore } from "../uiStateStore";
 import { resolveChangeRequestPresentation } from "../sourceControlPresentation";
 import { resolveThreadStatusPill, type ThreadStatusPill } from "./Sidebar.logic";
 import type { SidebarThreadSummary } from "../types";
@@ -153,7 +152,6 @@ export function ThreadStatusLabel({
 export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummary }) {
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const threadKey = scopedThreadKey(threadRef);
-  const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const hasActiveLocalDispatch = useLocalDispatchStore(
     (state) => state.localDispatchByThreadKey[threadKey] !== undefined,
   );
@@ -176,7 +174,6 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
     thread: {
       ...thread,
       hasActiveLocalDispatch,
-      lastVisitedAt,
     },
   });
 

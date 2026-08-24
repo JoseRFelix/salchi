@@ -1,10 +1,7 @@
-import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
-import { EnvironmentId, ProjectId, ThreadId } from "@salchi/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EnvironmentId, ProjectId, ThreadId, TurnId } from "@salchi/contracts";
 
-import { useStore, type AppState, type EnvironmentState } from "../store";
-import { DEFAULT_INTERACTION_MODE, type SidebarThreadSummary } from "../types";
-import { useUiStateStore } from "../uiStateStore";
+import { type EnvironmentState, useStore } from "../store";
 import {
   __resetPwaAppBadgeSyncForTests,
   canUseAppBadge,
@@ -13,18 +10,96 @@ import {
   writeAppBadgeCount,
 } from "./appBadge";
 
-const environmentId = EnvironmentId.make("environment-local");
-const projectId = ProjectId.make("project-local");
+const initialStoreState = useStore.getState();
 
-function makeEnvironmentState(threads: readonly SidebarThreadSummary[]): EnvironmentState {
+function installBadgeGlobals(responseOk = true) {
+  const postMessage = vi.fn(
+    (
+      message: { readonly requestId?: string; readonly snapshots?: readonly unknown[] },
+      ports?: MessagePort[],
+    ) => {
+      ports?.[0]?.postMessage({
+        requestId: message.requestId ?? null,
+        ok: responseOk,
+        count: message.snapshots?.length ?? 0,
+      });
+    },
+  );
+  const registration = {
+    active: { postMessage },
+    waiting: null,
+    installing: null,
+  };
+  const navigatorLike = {
+    setAppBadge: vi.fn(async () => {}),
+    clearAppBadge: vi.fn(async () => {}),
+    serviceWorker: {
+      getRegistration: vi.fn(async () => registration),
+      ready: Promise.resolve(registration),
+    },
+  };
+  vi.stubGlobal("navigator", navigatorLike);
+  vi.stubGlobal("window", {
+    isSecureContext: true,
+    location: { origin: "https://salchi.example" },
+    PushManager: function PushManager() {},
+    Notification: function Notification() {},
+  });
+  return { navigatorLike, postMessage };
+}
+
+function makeEnvironmentState(input: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId?: ThreadId;
+  readonly seenCompletionTurnId?: TurnId | null;
+  readonly archivedAt?: string | null;
+  readonly hiddenFromThreadList?: boolean;
+  readonly bootstrapComplete?: boolean;
+}): EnvironmentState {
+  const threadId = input.threadId ?? ThreadId.make("thread-1");
+  const turnId = TurnId.make("turn-1");
+  const summary = {
+    id: threadId,
+    environmentId: input.environmentId,
+    projectId: ProjectId.make("project-1"),
+    title: "Thread",
+    interactionMode: "default" as const,
+    session: null,
+    createdAt: "2026-08-18T00:00:00.000Z",
+    archivedAt: input.archivedAt ?? null,
+    latestTurn: {
+      turnId,
+      state: "completed" as const,
+      requestedAt: "2026-08-18T00:00:00.000Z",
+      startedAt: "2026-08-18T00:00:00.000Z",
+      completedAt: "2026-08-18T00:01:00.000Z",
+      assistantMessageId: null,
+    },
+    seenCompletionTurnId: input.seenCompletionTurnId ?? null,
+    branch: null,
+    worktreePath: null,
+    latestUserMessageAt: "2026-08-18T00:00:00.000Z",
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+    hiddenFromThreadList: input.hiddenFromThreadList ?? false,
+  };
   return {
     projectIds: [],
     projectById: {},
-    threadIds: threads.map((thread) => thread.id),
+    threadIds: [threadId],
     threadIdsByProjectId: {},
     threadShellById: {},
     threadSessionById: {},
     threadTurnStateById: {},
+    sidebarThreadSummaryById: { [threadId]: summary },
+    unreadCompletionTurnIdByThreadId:
+      summary.archivedAt === null &&
+      summary.hiddenFromThreadList !== true &&
+      summary.seenCompletionTurnId !== turnId
+        ? { [threadId]: turnId }
+        : {},
+    completionAttentionSequence: 7,
     messageIdsByThreadId: {},
     messageByThreadId: {},
     queuedTurnIdsByThreadId: {},
@@ -36,156 +111,39 @@ function makeEnvironmentState(threads: readonly SidebarThreadSummary[]): Environ
     turnDiffIdsByThreadId: {},
     turnDiffSummaryByThreadId: {},
     threadDetailPageInfoByThreadId: {},
-    sidebarThreadSummaryById: Object.fromEntries(threads.map((thread) => [thread.id, thread])),
-    bootstrapComplete: true,
+    bootstrapComplete: input.bootstrapComplete ?? true,
   };
 }
 
-function makeCompletedThread(id: string, completedAt: string): SidebarThreadSummary {
-  return {
-    id: ThreadId.make(id),
-    environmentId,
-    projectId,
-    title: id,
-    interactionMode: DEFAULT_INTERACTION_MODE,
-    session: null,
-    createdAt: completedAt,
-    archivedAt: null,
-    latestTurn: { completedAt } as SidebarThreadSummary["latestTurn"],
-    branch: null,
-    worktreePath: null,
-    latestUserMessageAt: completedAt,
-    hasPendingApprovals: false,
-    hasPendingUserInput: false,
-    hasActionableProposedPlan: false,
-  };
-}
-
-function setBadgeStoreState(
-  threads: readonly SidebarThreadSummary[],
-  threadLastVisitedAtById: Record<string, string> = {},
-): void {
-  useStore.setState({
-    activeEnvironmentId: environmentId,
-    environmentStateById: {
-      [environmentId]: makeEnvironmentState(threads),
-    },
-    accountRateLimitsByInstanceId: {},
-  } satisfies AppState);
-  useUiStateStore.setState({
-    threadLastVisitedAtById,
-  });
-}
-
-function resetBadgeStoreState(): void {
-  useStore.setState({
-    activeEnvironmentId: null,
-    environmentStateById: {},
-    accountRateLimitsByInstanceId: {},
-  } satisfies AppState);
-  useUiStateStore.setState({
-    threadLastVisitedAtById: {},
-  });
-}
-
-function createDocumentStub(visibilityState: DocumentVisibilityState) {
-  const target = new EventTarget() as EventTarget & { visibilityState: DocumentVisibilityState };
-  Object.defineProperty(target, "visibilityState", {
-    configurable: true,
-    value: visibilityState,
-  });
-  return target;
-}
-
-function setDocumentVisibility(
-  documentStub: EventTarget & { visibilityState: DocumentVisibilityState },
-  visibilityState: DocumentVisibilityState,
-): void {
-  Object.defineProperty(documentStub, "visibilityState", {
-    configurable: true,
-    value: visibilityState,
-  });
-}
-
-function createPushWindowStub(): EventTarget & {
-  isSecureContext: boolean;
-  PushManager: unknown;
-  Notification: unknown;
-} {
-  const target = new EventTarget() as EventTarget & {
-    isSecureContext: boolean;
-    PushManager: unknown;
-    Notification: unknown;
-  };
-  target.isSecureContext = true;
-  target.PushManager = function PushManager() {};
-  target.Notification = function Notification() {};
-  return target;
-}
-
-function makeDisplayedNotification(tag: string): Pick<Notification, "tag"> {
-  return { tag };
-}
-
-function installBadgeGlobals(
-  input: {
-    readonly displayedNotifications?: readonly Pick<Notification, "tag">[];
-    readonly getRegistration?: () => Promise<unknown>;
-    readonly visibilityState?: DocumentVisibilityState;
-  } = {},
-) {
-  let displayedNotifications = input.displayedNotifications ?? [];
-  const getRegistration = vi.fn(
-    input.getRegistration ??
-      (async () => ({
-        getNotifications: async () => displayedNotifications,
-      })),
-  );
-  const navigatorLike = {
-    setAppBadge: vi.fn(async () => {}),
-    clearAppBadge: vi.fn(async () => {}),
-    serviceWorker: { getRegistration },
-  };
-  const windowStub = createPushWindowStub();
-  const documentStub = createDocumentStub(input.visibilityState ?? "visible");
-  vi.stubGlobal("navigator", navigatorLike);
-  vi.stubGlobal("window", windowStub);
-  vi.stubGlobal("document", documentStub);
-  return {
-    navigatorLike,
-    windowStub,
-    documentStub,
-    getRegistration,
-    setDisplayedNotifications: (next: readonly Pick<Notification, "tag">[]) => {
-      displayedNotifications = next;
-    },
-  };
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
+function setEnvironmentStates(states: Record<string, EnvironmentState>) {
+  useStore.setState({ environmentStateById: states });
 }
 
 async function flushBadgeSync(): Promise<void> {
-  for (let index = 0; index < 8; index += 1) {
+  for (let index = 0; index < 12; index += 1) {
+    await Promise.resolve();
+  }
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  for (let index = 0; index < 4; index += 1) {
     await Promise.resolve();
   }
 }
 
+function installAuthoritativeBadgeSync(
+  environmentIsAuthoritative: (environmentId: EnvironmentId) => boolean = () => true,
+) {
+  installPwaAppBadgeSync({ isEnvironmentAuthoritative: environmentIsAuthoritative });
+}
+
 beforeEach(() => {
   __resetPwaAppBadgeSyncForTests();
-  resetBadgeStoreState();
+  useStore.setState(initialStoreState, true);
 });
 
 afterEach(() => {
   __resetPwaAppBadgeSyncForTests();
-  resetBadgeStoreState();
+  useStore.setState(initialStoreState, true);
   vi.unstubAllGlobals();
-  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -198,48 +156,14 @@ describe("canUseAppBadge", () => {
 });
 
 describe("writeAppBadgeCount", () => {
-  it("sets a positive badge count", async () => {
-    const navigatorLike = {
-      setAppBadge: vi.fn(async () => {}),
-      clearAppBadge: vi.fn(async () => {}),
-    };
-
-    await expect(writeAppBadgeCount(3, navigatorLike)).resolves.toBe(true);
-
-    expect(navigatorLike.setAppBadge).toHaveBeenCalledWith(3);
-    expect(navigatorLike.clearAppBadge).not.toHaveBeenCalled();
-  });
-
-  it("clears the badge when count is zero", async () => {
-    const navigatorLike = {
-      setAppBadge: vi.fn(async () => {}),
-      clearAppBadge: vi.fn(async () => {}),
-    };
-
-    await expect(writeAppBadgeCount(0, navigatorLike)).resolves.toBe(true);
-
-    expect(navigatorLike.clearAppBadge).toHaveBeenCalledTimes(1);
-    expect(navigatorLike.setAppBadge).not.toHaveBeenCalled();
-  });
-
-  it("falls back to setAppBadge(0) when clearAppBadge is unavailable", async () => {
-    const navigatorLike = {
-      setAppBadge: vi.fn(async () => {}),
-    };
-
-    await expect(writeAppBadgeCount(0, navigatorLike)).resolves.toBe(true);
-
-    expect(navigatorLike.setAppBadge).toHaveBeenCalledWith(0);
-  });
-
-  it("normalizes invalid and fractional counts", async () => {
+  it("sets positive counts and clears zero", async () => {
     const navigatorLike = {
       setAppBadge: vi.fn(async () => {}),
       clearAppBadge: vi.fn(async () => {}),
     };
 
     await expect(writeAppBadgeCount(2.8, navigatorLike)).resolves.toBe(true);
-    await expect(writeAppBadgeCount(Number.NaN, navigatorLike)).resolves.toBe(true);
+    await expect(writeAppBadgeCount(0, navigatorLike)).resolves.toBe(true);
 
     expect(navigatorLike.setAppBadge).toHaveBeenCalledWith(2);
     expect(navigatorLike.clearAppBadge).toHaveBeenCalledTimes(1);
@@ -247,215 +171,247 @@ describe("writeAppBadgeCount", () => {
 });
 
 describe("installPwaAppBadgeSync", () => {
-  it("clears completed-turn alerts on startup instead of restoring stale unseen thread state", async () => {
-    const thread1 = makeCompletedThread("thread-1", "2026-06-12T12:00:00.000Z");
-    const thread2 = makeCompletedThread("thread-2", "2026-06-12T12:01:00.000Z");
-    setBadgeStoreState([thread1, thread2]);
-    const { navigatorLike } = installBadgeGlobals({
-      displayedNotifications: [makeDisplayedNotification("thread:thread-1:turn:turn-1")],
+  it("does not clear durable worker state before the server snapshot is ready", async () => {
+    const { navigatorLike, postMessage } = installBadgeGlobals();
+    const environmentId = EnvironmentId.make("env-1");
+    setEnvironmentStates({
+      [environmentId]: makeEnvironmentState({
+        environmentId,
+        bootstrapComplete: false,
+      }),
     });
 
-    installPwaAppBadgeSync();
+    installAuthoritativeBadgeSync();
     await flushBadgeSync();
 
     expect(navigatorLike.setAppBadge).not.toHaveBeenCalled();
-    expect(navigatorLike.clearAppBadge).toHaveBeenCalled();
+    expect(navigatorLike.clearAppBadge).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "salchi.sync-displayed-notification-badge" }),
+      [expect.anything()],
+    );
   });
 
-  it("clears the badge when displayed notifications are unavailable", async () => {
-    const thread1 = makeCompletedThread("thread-1", "2026-06-12T12:00:00.000Z");
-    const thread2 = makeCompletedThread("thread-2", "2026-06-12T12:01:00.000Z");
-    setBadgeStoreState([thread1, thread2]);
-    const { navigatorLike } = installBadgeGlobals({
-      getRegistration: async () => null,
+  it("sends authoritative unread state to the worker without racing its badge write", async () => {
+    const { navigatorLike, postMessage } = installBadgeGlobals();
+    const environmentId = EnvironmentId.make("env-1");
+    setEnvironmentStates({
+      [environmentId]: makeEnvironmentState({ environmentId }),
     });
 
-    installPwaAppBadgeSync();
+    installAuthoritativeBadgeSync();
     await flushBadgeSync();
 
     expect(navigatorLike.setAppBadge).not.toHaveBeenCalled();
-    expect(navigatorLike.clearAppBadge).toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "salchi.sync-unread-completions",
+        snapshots: [
+          {
+            environmentId,
+            sequence: 7,
+            completions: [{ threadId: ThreadId.make("thread-1"), completionId: "turn-1" }],
+          },
+        ],
+        removedEnvironmentIds: [],
+      }),
+      [expect.anything()],
+    );
   });
 
-  it("re-syncs when displayed completed-turn notifications change", async () => {
-    const thread1 = makeCompletedThread("thread-1", "2026-06-12T12:00:00.000Z");
-    const thread2 = makeCompletedThread("thread-2", "2026-06-12T12:01:00.000Z");
-    setBadgeStoreState([thread1, thread2]);
-    const { navigatorLike, setDisplayedNotifications } = installBadgeGlobals({
-      displayedNotifications: [makeDisplayedNotification("thread:thread-1:turn:turn-1")],
-      visibilityState: "hidden",
+  it("clears the badge when the exact latest completion becomes seen", async () => {
+    const { navigatorLike, postMessage } = installBadgeGlobals();
+    const environmentId = EnvironmentId.make("env-1");
+    setEnvironmentStates({
+      [environmentId]: makeEnvironmentState({ environmentId }),
+    });
+    installAuthoritativeBadgeSync();
+    await flushBadgeSync();
+
+    setEnvironmentStates({
+      [environmentId]: makeEnvironmentState({
+        environmentId,
+        seenCompletionTurnId: TurnId.make("turn-1"),
+      }),
+    });
+    await flushBadgeSync();
+
+    expect(navigatorLike.clearAppBadge).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        snapshots: [{ environmentId, sequence: 7, completions: [] }],
+      }),
+      [expect.anything()],
+    );
+  });
+
+  it("aggregates environments and excludes archived or hidden threads", async () => {
+    const { navigatorLike, postMessage } = installBadgeGlobals();
+    const firstEnvironmentId = EnvironmentId.make("env-1");
+    const secondEnvironmentId = EnvironmentId.make("env-2");
+    const thirdEnvironmentId = EnvironmentId.make("env-3");
+    setEnvironmentStates({
+      [firstEnvironmentId]: makeEnvironmentState({ environmentId: firstEnvironmentId }),
+      [secondEnvironmentId]: makeEnvironmentState({
+        environmentId: secondEnvironmentId,
+        threadId: ThreadId.make("thread-2"),
+      }),
+      [thirdEnvironmentId]: makeEnvironmentState({
+        environmentId: thirdEnvironmentId,
+        threadId: ThreadId.make("thread-3"),
+        hiddenFromThreadList: true,
+      }),
     });
 
-    installPwaAppBadgeSync();
+    installAuthoritativeBadgeSync();
+    await flushBadgeSync();
+
+    expect(navigatorLike.setAppBadge).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshots: expect.arrayContaining([
+          expect.objectContaining({ environmentId: firstEnvironmentId }),
+          expect.objectContaining({ environmentId: secondEnvironmentId }),
+          expect.objectContaining({ environmentId: thirdEnvironmentId, completions: [] }),
+        ]),
+      }),
+      [expect.anything()],
+    );
+  });
+
+  it("does not rescan or rewrite badges for detail-only store updates", async () => {
+    const { navigatorLike, postMessage } = installBadgeGlobals();
+    const environmentId = EnvironmentId.make("env-1");
+    const environmentState = makeEnvironmentState({ environmentId });
+    setEnvironmentStates({ [environmentId]: environmentState });
+    installAuthoritativeBadgeSync();
     await flushBadgeSync();
     navigatorLike.setAppBadge.mockClear();
+    postMessage.mockClear();
 
-    setDisplayedNotifications([
-      makeDisplayedNotification("thread:thread-1:turn:turn-1"),
-      makeDisplayedNotification("thread:thread-2:turn:turn-1"),
-    ]);
-    resyncAppBadge();
+    setEnvironmentStates({
+      [environmentId]: {
+        ...environmentState,
+        messageByThreadId: { [ThreadId.make("thread-1")]: {} },
+      },
+    });
     await flushBadgeSync();
 
-    expect(navigatorLike.setAppBadge).toHaveBeenCalledWith(2);
+    expect(navigatorLike.setAppBadge).not.toHaveBeenCalled();
+    expect(postMessage).not.toHaveBeenCalled();
   });
 
-  it("clears instead of restoring displayed notifications while the app is visible", async () => {
-    const thread1 = makeCompletedThread("thread-1", "2026-06-12T12:00:00.000Z");
-    const thread2 = makeCompletedThread("thread-2", "2026-06-12T12:01:00.000Z");
-    setBadgeStoreState([thread1, thread2]);
-    const { navigatorLike } = installBadgeGlobals({
-      displayedNotifications: [
-        makeDisplayedNotification("thread:thread-1:turn:turn-1"),
-        makeDisplayedNotification("thread:thread-2:turn:turn-1"),
-      ],
+  it("sends disconnected snapshots safely because the worker compares sequences", async () => {
+    const { navigatorLike, postMessage } = installBadgeGlobals();
+    const connectedEnvironmentId = EnvironmentId.make("env-connected");
+    const disconnectedEnvironmentId = EnvironmentId.make("env-disconnected");
+    setEnvironmentStates({
+      [connectedEnvironmentId]: makeEnvironmentState({
+        environmentId: connectedEnvironmentId,
+      }),
+      [disconnectedEnvironmentId]: makeEnvironmentState({
+        environmentId: disconnectedEnvironmentId,
+        threadId: ThreadId.make("thread-disconnected"),
+      }),
     });
 
-    installPwaAppBadgeSync();
+    installAuthoritativeBadgeSync((environmentId) => environmentId === connectedEnvironmentId);
     await flushBadgeSync();
-    navigatorLike.clearAppBadge.mockClear();
+
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "salchi.sync-unread-completions",
+        snapshots: [
+          {
+            environmentId: connectedEnvironmentId,
+            sequence: 7,
+            completions: [{ threadId: ThreadId.make("thread-1"), completionId: "turn-1" }],
+          },
+          {
+            environmentId: disconnectedEnvironmentId,
+            sequence: 7,
+            completions: [
+              { threadId: ThreadId.make("thread-disconnected"), completionId: "turn-1" },
+            ],
+          },
+        ],
+      }),
+      [expect.anything()],
+    );
+    expect(navigatorLike.setAppBadge).not.toHaveBeenCalled();
+    expect(navigatorLike.clearAppBadge).not.toHaveBeenCalled();
+  });
+
+  it("allows callers to force a re-sync", async () => {
+    const { navigatorLike, postMessage } = installBadgeGlobals();
+    const environmentId = EnvironmentId.make("env-1");
+    setEnvironmentStates({
+      [environmentId]: makeEnvironmentState({ environmentId }),
+    });
+    installAuthoritativeBadgeSync();
+    await flushBadgeSync();
+    navigatorLike.setAppBadge.mockClear();
+    postMessage.mockClear();
 
     resyncAppBadge();
     await flushBadgeSync();
 
     expect(navigatorLike.setAppBadge).not.toHaveBeenCalled();
-    expect(navigatorLike.clearAppBadge).toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("does not let stale async notification reads overwrite newer badge syncs", async () => {
-    vi.useFakeTimers();
-    const thread1 = makeCompletedThread("thread-1", "2026-06-12T12:00:00.000Z");
-    const thread2 = makeCompletedThread("thread-2", "2026-06-12T12:01:00.000Z");
-    setBadgeStoreState([thread1, thread2]);
-    const firstRegistration = createDeferred<unknown>();
-    const secondRegistration = createDeferred<unknown>();
-    const { navigatorLike, getRegistration } = installBadgeGlobals({
-      visibilityState: "hidden",
-      getRegistration: vi
-        .fn()
-        .mockResolvedValueOnce({ getNotifications: async () => [] })
-        .mockResolvedValueOnce({})
-        .mockImplementationOnce(() => firstRegistration.promise)
-        .mockImplementationOnce(() => secondRegistration.promise),
+  it("falls back to a direct badge write when the worker rejects synchronization", async () => {
+    const { navigatorLike } = installBadgeGlobals(false);
+    const environmentId = EnvironmentId.make("env-1");
+    setEnvironmentStates({
+      [environmentId]: makeEnvironmentState({ environmentId }),
     });
 
-    installPwaAppBadgeSync();
-    await vi.advanceTimersByTimeAsync(5000);
-    await flushBadgeSync();
-    expect(getRegistration).toHaveBeenCalledTimes(2);
-    navigatorLike.clearAppBadge.mockClear();
-
-    resyncAppBadge();
-    await Promise.resolve();
-    expect(getRegistration).toHaveBeenCalledTimes(3);
-
-    resyncAppBadge();
-    await Promise.resolve();
-    expect(getRegistration).toHaveBeenCalledTimes(4);
-
-    secondRegistration.resolve({
-      getNotifications: async () => [makeDisplayedNotification("thread:thread-1:turn:turn-1")],
-    });
+    installAuthoritativeBadgeSync();
     await flushBadgeSync();
 
     expect(navigatorLike.setAppBadge).toHaveBeenCalledWith(1);
-    navigatorLike.setAppBadge.mockClear();
+  });
 
-    firstRegistration.resolve({
-      getNotifications: async () => [
-        makeDisplayedNotification("thread:thread-1:turn:turn-1"),
-        makeDisplayedNotification("thread:thread-2:turn:turn-1"),
-      ],
+  it("does not directly overwrite another environment while it is still bootstrapping", async () => {
+    const { navigatorLike } = installBadgeGlobals(false);
+    const readyEnvironmentId = EnvironmentId.make("env-ready");
+    const loadingEnvironmentId = EnvironmentId.make("env-loading");
+    setEnvironmentStates({
+      [readyEnvironmentId]: makeEnvironmentState({ environmentId: readyEnvironmentId }),
+      [loadingEnvironmentId]: makeEnvironmentState({
+        environmentId: loadingEnvironmentId,
+        bootstrapComplete: false,
+      }),
     });
+
+    installAuthoritativeBadgeSync();
     await flushBadgeSync();
 
     expect(navigatorLike.setAppBadge).not.toHaveBeenCalled();
     expect(navigatorLike.clearAppBadge).not.toHaveBeenCalled();
   });
 
-  it("clears completed-turn alerts on window focus", async () => {
-    const thread = makeCompletedThread("thread-1", "2026-06-12T12:00:00.000Z");
-    setBadgeStoreState([thread]);
-    const { navigatorLike, windowStub } = installBadgeGlobals({
-      displayedNotifications: [makeDisplayedNotification("thread:thread-1:turn:turn-1")],
+  it("drops durable worker state when an environment is removed", async () => {
+    const { postMessage } = installBadgeGlobals();
+    const environmentId = EnvironmentId.make("env-removed");
+    setEnvironmentStates({
+      [environmentId]: makeEnvironmentState({ environmentId }),
     });
+    installAuthoritativeBadgeSync();
+    await flushBadgeSync();
+    postMessage.mockClear();
 
-    installPwaAppBadgeSync();
+    setEnvironmentStates({});
     await flushBadgeSync();
 
-    expect(navigatorLike.clearAppBadge).toHaveBeenCalled();
-    navigatorLike.clearAppBadge.mockClear();
-
-    windowStub.dispatchEvent(new Event("focus"));
-    await flushBadgeSync();
-
-    expect(navigatorLike.setAppBadge).not.toHaveBeenCalled();
-    expect(navigatorLike.clearAppBadge).toHaveBeenCalled();
-  });
-
-  it("defers closing displayed notifications during notification-click activation", async () => {
-    vi.useFakeTimers();
-    const { getRegistration, windowStub } = installBadgeGlobals();
-
-    installPwaAppBadgeSync();
-    windowStub.dispatchEvent(new Event("focus"));
-    await flushBadgeSync();
-
-    expect(getRegistration).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(4999);
-    expect(getRegistration).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    await flushBadgeSync();
-
-    expect(getRegistration).toHaveBeenCalled();
-  });
-
-  it("clears completed-turn alerts when the document becomes visible", async () => {
-    const thread = makeCompletedThread("thread-1", "2026-06-12T12:00:00.000Z");
-    const threadKey = scopedThreadKey(scopeThreadRef(environmentId, thread.id));
-    setBadgeStoreState([thread], {
-      [threadKey]: "2026-06-12T11:59:00.000Z",
-    });
-    const { navigatorLike, documentStub } = installBadgeGlobals({
-      displayedNotifications: [makeDisplayedNotification("thread:thread-1:turn:turn-1")],
-      visibilityState: "hidden",
-    });
-
-    installPwaAppBadgeSync();
-    await flushBadgeSync();
-    navigatorLike.clearAppBadge.mockClear();
-
-    documentStub.dispatchEvent(new Event("visibilitychange"));
-    await flushBadgeSync();
-
-    expect(navigatorLike.setAppBadge).not.toHaveBeenCalled();
-    expect(navigatorLike.clearAppBadge).not.toHaveBeenCalled();
-
-    setDocumentVisibility(documentStub, "visible");
-    documentStub.dispatchEvent(new Event("visibilitychange"));
-    await flushBadgeSync();
-
-    expect(navigatorLike.setAppBadge).not.toHaveBeenCalled();
-    expect(navigatorLike.clearAppBadge).toHaveBeenCalled();
-  });
-
-  it("allows callers to force a cache-bypassing re-sync", async () => {
-    const thread = makeCompletedThread("thread-1", "2026-06-12T12:00:00.000Z");
-    setBadgeStoreState([thread]);
-    const { navigatorLike } = installBadgeGlobals({
-      displayedNotifications: [makeDisplayedNotification("thread:thread-1:turn:turn-1")],
-      visibilityState: "hidden",
-    });
-
-    installPwaAppBadgeSync();
-    await flushBadgeSync();
-    navigatorLike.setAppBadge.mockClear();
-
-    resyncAppBadge();
-    await flushBadgeSync();
-
-    expect(navigatorLike.setAppBadge).toHaveBeenCalledWith(1);
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "salchi.sync-unread-completions",
+        snapshots: [],
+        removedEnvironmentIds: [environmentId],
+      }),
+      [expect.anything()],
+    );
   });
 });

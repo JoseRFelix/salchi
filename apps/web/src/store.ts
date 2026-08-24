@@ -53,6 +53,7 @@ import {
 } from "./types";
 import { resolveEnvironmentHttpUrl } from "./environments/runtime";
 import { sanitizeThreadErrorMessage } from "./rpc/transportError";
+import { getUnseenCompletionTurnId } from "./threadCompletion";
 import { getThreadFromEnvironmentState } from "./threadDerivation";
 import { compareThreadActivitiesByOrder } from "./threadActivityOrdering";
 const isProviderDriverKindValue = Schema.is(ProviderDriverKind);
@@ -110,6 +111,11 @@ export interface EnvironmentState {
   // ---------------------------------------------------------------------------
   sidebarThreadSummaryById: Record<ThreadId, SidebarThreadSummary>;
 
+  // Incrementally maintained so streaming detail writes do not force badge
+  // consumers to rescan every thread.
+  unreadCompletionTurnIdByThreadId?: Record<ThreadId, TurnId>;
+  completionAttentionSequence?: number;
+
   bootstrapComplete: boolean;
 }
 
@@ -147,6 +153,8 @@ const initialEnvironmentState: EnvironmentState = {
   lastAppliedEventSequenceByThreadId: {},
   lastAppliedEventIdByThreadId: {},
   sidebarThreadSummaryById: {},
+  unreadCompletionTurnIdByThreadId: {},
+  completionAttentionSequence: 0,
   bootstrapComplete: false,
 };
 
@@ -350,6 +358,7 @@ function mapThread(
   environmentId: EnvironmentId,
   pageInfo: OrchestrationThreadDetailPageInfo = EMPTY_ORCHESTRATION_THREAD_DETAIL_PAGE_INFO,
 ): Thread {
+  const seenCompletionTurnId = thread.seenCompletionTurnId;
   return {
     id: thread.id,
     environmentId,
@@ -374,6 +383,7 @@ function mapThread(
     archivedAt: thread.archivedAt,
     updatedAt: thread.updatedAt,
     latestTurn: thread.latestTurn,
+    seenCompletionTurnId,
     pendingSourceProposedPlan: thread.latestTurn?.sourceProposedPlan,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
@@ -392,6 +402,7 @@ function mapThreadShell(
   turnState: ThreadTurnState;
   summary: SidebarThreadSummary;
 } {
+  const seenCompletionTurnId = thread.seenCompletionTurnId;
   const shell: ThreadShell = {
     id: thread.id,
     environmentId,
@@ -417,6 +428,7 @@ function mapThreadShell(
   const session = thread.session ? mapSession(thread.session) : null;
   const turnState: ThreadTurnState = {
     latestTurn: thread.latestTurn,
+    seenCompletionTurnId,
     pendingSourceProposedPlan: thread.latestTurn?.sourceProposedPlan,
   };
   const summary: SidebarThreadSummary = {
@@ -436,6 +448,7 @@ function mapThreadShell(
     archivedAt: thread.archivedAt,
     updatedAt: thread.updatedAt,
     latestTurn: thread.latestTurn,
+    seenCompletionTurnId,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
     latestUserMessageAt: thread.latestUserMessageAt,
@@ -479,6 +492,7 @@ function toThreadShell(thread: Thread): ThreadShell {
 function toThreadTurnState(thread: Thread): ThreadTurnState {
   return {
     latestTurn: thread.latestTurn,
+    seenCompletionTurnId: thread.seenCompletionTurnId,
     ...(thread.pendingSourceProposedPlan
       ? { pendingSourceProposedPlan: thread.pendingSourceProposedPlan }
       : {}),
@@ -572,6 +586,7 @@ function sidebarThreadSummariesEqual(
     left.archivedAt === right.archivedAt &&
     left.updatedAt === right.updatedAt &&
     latestTurnsEqual(left.latestTurn, right.latestTurn) &&
+    left.seenCompletionTurnId === right.seenCompletionTurnId &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath &&
     left.latestUserMessageAt === right.latestUserMessageAt &&
@@ -611,6 +626,7 @@ function threadTurnStatesEqual(left: ThreadTurnState | undefined, right: ThreadT
   return (
     left !== undefined &&
     latestTurnsEqual(left.latestTurn, right.latestTurn) &&
+    left.seenCompletionTurnId === right.seenCompletionTurnId &&
     sourceProposedPlansEqual(left.pendingSourceProposedPlan, right.pendingSourceProposedPlan)
   );
 }
@@ -1477,7 +1493,51 @@ function writeThreadShellState(
     };
   }
 
-  return nextState;
+  return reconcileUnreadCompletionIndex(nextState, nextThread.shell.id);
+}
+
+function reconcileUnreadCompletionIndex(
+  state: EnvironmentState,
+  threadId: ThreadId,
+): EnvironmentState {
+  const summary = state.sidebarThreadSummaryById[threadId];
+  const nextTurnId =
+    summary !== undefined && summary.archivedAt === null && summary.hiddenFromThreadList !== true
+      ? getUnseenCompletionTurnId(summary)
+      : null;
+  const currentIndex = state.unreadCompletionTurnIdByThreadId ?? {};
+  const currentTurnId = currentIndex[threadId] ?? null;
+  if (currentTurnId === nextTurnId) {
+    return state;
+  }
+
+  const nextIndex = { ...currentIndex };
+  if (nextTurnId === null) {
+    delete nextIndex[threadId];
+  } else {
+    nextIndex[threadId] = nextTurnId;
+  }
+  return {
+    ...state,
+    unreadCompletionTurnIdByThreadId: nextIndex,
+  };
+}
+
+function stampCompletionAttentionSequence(
+  previousState: EnvironmentState,
+  nextState: EnvironmentState,
+  sequence: number,
+): EnvironmentState {
+  if (
+    previousState.unreadCompletionTurnIdByThreadId === nextState.unreadCompletionTurnIdByThreadId ||
+    (nextState.completionAttentionSequence ?? 0) >= sequence
+  ) {
+    return nextState;
+  }
+  return {
+    ...nextState,
+    completionAttentionSequence: sequence,
+  };
 }
 
 function deriveLatestUserMessageAtForSidebarSummary(
@@ -1538,6 +1598,7 @@ function syncSidebarThreadSummaryFromThreadState(
     archivedAt: shell.archivedAt,
     updatedAt: shell.updatedAt,
     latestTurn: state.threadTurnStateById[threadId]?.latestTurn ?? null,
+    seenCompletionTurnId: state.threadTurnStateById[threadId]?.seenCompletionTurnId,
     branch: shell.branch,
     worktreePath: shell.worktreePath,
     latestUserMessageAt: deriveLatestUserMessageAtForSidebarSummary(
@@ -1551,16 +1612,19 @@ function syncSidebarThreadSummaryFromThreadState(
   };
 
   if (sidebarThreadSummariesEqual(existingSummary, nextSummary)) {
-    return state;
+    return reconcileUnreadCompletionIndex(state, threadId);
   }
 
-  return {
-    ...state,
-    sidebarThreadSummaryById: {
-      ...state.sidebarThreadSummaryById,
-      [threadId]: nextSummary,
+  return reconcileUnreadCompletionIndex(
+    {
+      ...state,
+      sidebarThreadSummaryById: {
+        ...state.sidebarThreadSummaryById,
+        [threadId]: nextSummary,
+      },
     },
-  };
+    threadId,
+  );
 }
 
 function syncSidebarThreadSummaryFromThreadStateIfMissing(
@@ -1704,6 +1768,8 @@ function removeThreadState(state: EnvironmentState, threadId: ThreadId): Environ
     state.threadDetailPageInfoByThreadId;
   const { [threadId]: _removedSidebarSummary, ...sidebarThreadSummaryById } =
     state.sidebarThreadSummaryById;
+  const { [threadId]: _removedUnreadCompletion, ...unreadCompletionTurnIdByThreadId } =
+    state.unreadCompletionTurnIdByThreadId ?? {};
 
   return {
     ...state,
@@ -1726,6 +1792,7 @@ function removeThreadState(state: EnvironmentState, threadId: ThreadId): Environ
     lastAppliedEventSequenceByThreadId: state.lastAppliedEventSequenceByThreadId ?? {},
     lastAppliedEventIdByThreadId: state.lastAppliedEventIdByThreadId ?? {},
     sidebarThreadSummaryById,
+    unreadCompletionTurnIdByThreadId,
   };
 }
 
@@ -1999,6 +2066,8 @@ function syncEnvironmentShellSnapshot(
     threadSessionById: retainThreadScopedRecord(state.threadSessionById, nextThreadIds),
     threadTurnStateById: retainThreadScopedRecord(state.threadTurnStateById, nextThreadIds),
     sidebarThreadSummaryById: {},
+    unreadCompletionTurnIdByThreadId: {},
+    completionAttentionSequence: snapshot.completionAttentionSequence ?? snapshot.snapshotSequence,
     messageIdsByThreadId: retainThreadScopedRecord(state.messageIdsByThreadId, nextThreadIds),
     messageByThreadId: retainThreadScopedRecord(state.messageByThreadId, nextThreadIds),
     queuedTurnIdsByThreadId: retainThreadScopedRecord(state.queuedTurnIdsByThreadId, nextThreadIds),
@@ -2324,6 +2393,7 @@ function applyEnvironmentOrchestrationEventUnchecked(
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
           latestTurn: null,
+          seenCompletionTurnId: null,
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
           archivedAt: null,
@@ -2363,6 +2433,28 @@ function applyEnvironmentOrchestrationEventUnchecked(
           ...thread,
           archivedAt: null,
           updatedAt: event.payload.updatedAt,
+        }),
+        options,
+      );
+
+    case "thread.completion-acknowledged":
+      return updateThreadState(
+        state,
+        event.payload.threadId,
+        (thread) => ({
+          ...thread,
+          seenCompletionTurnId: event.payload.turnId,
+        }),
+        options,
+      );
+
+    case "thread.completion-marked-unread":
+      return updateThreadState(
+        state,
+        event.payload.threadId,
+        (thread) => ({
+          ...thread,
+          seenCompletionTurnId: null,
         }),
         options,
       );
@@ -2988,6 +3080,7 @@ function applyEnvironmentOrchestrationEventUnchecked(
             proposedPlans,
             activities,
             pendingSourceProposedPlan: undefined,
+            seenCompletionTurnId: latestCheckpoint?.turnId ?? null,
             latestTurn:
               latestCheckpoint === null
                 ? null
@@ -3067,62 +3160,65 @@ function applyEnvironmentShellEvent(
   event: OrchestrationShellStreamEvent,
   environmentId: EnvironmentId,
 ): EnvironmentState {
-  switch (event.kind) {
-    case "project-upserted": {
-      const nextProject = mapProject(event.project, environmentId);
-      const existingProjectId =
-        state.projectIds.find(
-          (projectId) =>
-            projectId === event.project.id ||
-            state.projectById[projectId]?.cwd === event.project.workspaceRoot,
-        ) ?? null;
-      let projectById = state.projectById;
-      let projectIds = state.projectIds;
+  const nextState = (() => {
+    switch (event.kind) {
+      case "project-upserted": {
+        const nextProject = mapProject(event.project, environmentId);
+        const existingProjectId =
+          state.projectIds.find(
+            (projectId) =>
+              projectId === event.project.id ||
+              state.projectById[projectId]?.cwd === event.project.workspaceRoot,
+          ) ?? null;
+        let projectById = state.projectById;
+        let projectIds = state.projectIds;
 
-      if (existingProjectId !== null && existingProjectId !== nextProject.id) {
-        const { [existingProjectId]: _removedProject, ...restProjectById } = state.projectById;
-        projectById = {
-          ...restProjectById,
-          [nextProject.id]: nextProject,
-        };
-        projectIds = state.projectIds.map((projectId) =>
-          projectId === existingProjectId ? nextProject.id : projectId,
-        );
-      } else {
-        projectById = {
-          ...state.projectById,
-          [nextProject.id]: nextProject,
-        };
-        projectIds =
-          existingProjectId === null && !state.projectIds.includes(nextProject.id)
-            ? [...state.projectIds, nextProject.id]
-            : state.projectIds;
-      }
+        if (existingProjectId !== null && existingProjectId !== nextProject.id) {
+          const { [existingProjectId]: _removedProject, ...restProjectById } = state.projectById;
+          projectById = {
+            ...restProjectById,
+            [nextProject.id]: nextProject,
+          };
+          projectIds = state.projectIds.map((projectId) =>
+            projectId === existingProjectId ? nextProject.id : projectId,
+          );
+        } else {
+          projectById = {
+            ...state.projectById,
+            [nextProject.id]: nextProject,
+          };
+          projectIds =
+            existingProjectId === null && !state.projectIds.includes(nextProject.id)
+              ? [...state.projectIds, nextProject.id]
+              : state.projectIds;
+        }
 
-      return {
-        ...state,
-        projectById,
-        projectIds,
-      };
-    }
-    case "project-removed": {
-      if (!state.projectById[event.projectId]) {
-        return state;
+        return {
+          ...state,
+          projectById,
+          projectIds,
+        };
       }
-      const { [event.projectId]: _removedProject, ...projectById } = state.projectById;
-      return {
-        ...state,
-        projectById,
-        projectIds: removeId(state.projectIds, event.projectId),
-      };
+      case "project-removed": {
+        if (!state.projectById[event.projectId]) {
+          return state;
+        }
+        const { [event.projectId]: _removedProject, ...projectById } = state.projectById;
+        return {
+          ...state,
+          projectById,
+          projectIds: removeId(state.projectIds, event.projectId),
+        };
+      }
+      case "thread-upserted":
+        return writeThreadShellState(state, mapThreadShell(event.thread, environmentId), {
+          preserveNewerState: true,
+        });
+      case "thread-removed":
+        return removeThreadState(state, event.threadId);
     }
-    case "thread-upserted":
-      return writeThreadShellState(state, mapThreadShell(event.thread, environmentId), {
-        preserveNewerState: true,
-      });
-    case "thread-removed":
-      return removeThreadState(state, event.threadId);
-  }
+  })();
+  return stampCompletionAttentionSequence(state, nextState, event.sequence);
 }
 
 export function applyOrchestrationEvents(
@@ -3140,12 +3236,14 @@ export function applyOrchestrationEvents(
       applyEnvironmentOrchestrationEvent(nextState, event, environmentId, options),
     currentEnvironmentState,
   );
+  const synchronizedState = options?.syncSidebarSummaries
+    ? syncRecoveredSidebarThreadSummaries(nextEnvironmentState, events, environmentId)
+    : nextEnvironmentState;
+  const latestSequence = events.reduce((sequence, event) => Math.max(sequence, event.sequence), 0);
   return commitEnvironmentState(
     state,
     environmentId,
-    options?.syncSidebarSummaries
-      ? syncRecoveredSidebarThreadSummaries(nextEnvironmentState, events, environmentId)
-      : nextEnvironmentState,
+    stampCompletionAttentionSequence(currentEnvironmentState, synchronizedState, latestSequence),
   );
 }
 

@@ -1,6 +1,28 @@
 import * as Schema from "effect/Schema";
 
-import { AuthSessionId, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  AuthSessionId,
+  EnvironmentId,
+  NonNegativeInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
+
+export const ServerPushThreadCompletion = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  completionId: TrimmedNonEmptyString,
+});
+export type ServerPushThreadCompletion = typeof ServerPushThreadCompletion.Type;
+
+// A compact, authoritative count is used instead of embedding every unread
+// thread in a Web Push payload, whose size is constrained by push providers.
+export const ServerPushUnreadCompletionState = Schema.Struct({
+  environmentId: EnvironmentId,
+  sequence: NonNegativeInt,
+  count: NonNegativeInt,
+});
+export type ServerPushUnreadCompletionState = typeof ServerPushUnreadCompletionState.Type;
 
 export const WebPushSubscriptionKeys = Schema.Struct({
   p256dh: TrimmedNonEmptyString,
@@ -20,6 +42,9 @@ export const ServerPushNotificationPayload = Schema.Struct({
   body: Schema.optional(TrimmedNonEmptyString),
   url: Schema.optional(TrimmedNonEmptyString),
   tag: Schema.optional(TrimmedNonEmptyString),
+  completion: Schema.optional(ServerPushThreadCompletion),
+  unreadCompletionState: Schema.optional(ServerPushUnreadCompletionState),
+  completionAttentionVersion: Schema.optional(Schema.Literal(2)),
 });
 export type ServerPushNotificationPayload = typeof ServerPushNotificationPayload.Type;
 

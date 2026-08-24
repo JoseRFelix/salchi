@@ -17,6 +17,8 @@ import {
   ProjectMetaUpdatedPayload,
   ThreadActivityAppendedPayload,
   ThreadArchivedPayload,
+  ThreadCompletionAcknowledgedPayload,
+  ThreadCompletionMarkedUnreadPayload,
   ThreadCreatedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
@@ -297,6 +299,7 @@ export function projectEvent(
             branch: payload.branch,
             worktreePath: payload.worktreePath,
             latestTurn: null,
+            seenCompletionTurnId: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             archivedAt: null,
@@ -348,6 +351,36 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             archivedAt: null,
             updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "thread.completion-acknowledged":
+      return decodeForEvent(
+        ThreadCompletionAcknowledgedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            seenCompletionTurnId: payload.turnId,
+          }),
+        })),
+      );
+
+    case "thread.completion-marked-unread":
+      return decodeForEvent(
+        ThreadCompletionMarkedUnreadPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            seenCompletionTurnId: null,
           }),
         })),
       );
@@ -887,6 +920,7 @@ export function projectEvent(
               proposedPlans,
               activities,
               latestTurn,
+              seenCompletionTurnId: latestTurn?.turnId ?? null,
               updatedAt: event.occurredAt,
             }),
           };

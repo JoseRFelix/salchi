@@ -19,7 +19,6 @@ import {
   toggleThreadExpanded,
   type UiState,
 } from "./uiStateStore";
-import { hasUnseenCompletion } from "./threadCompletion";
 
 function makeUiState(overrides: Partial<UiState> = {}): UiState {
   return {
@@ -546,14 +545,6 @@ describe("uiStateStore pure functions", () => {
     expect(next).toBe(initialState);
     expect(next.threadLastVisitedAtById[thread1]).toBe("2026-02-25T12:35:30.000Z");
     expect(next.seededThreadVisitedKeys).toEqual(new Set());
-    expect(
-      hasUnseenCompletion({
-        latestTurn: {
-          completedAt: "2026-02-25T12:35:31.000Z",
-        },
-        lastVisitedAt: next.threadLastVisitedAtById[thread1],
-      }),
-    ).toBe(true);
   });
 
   it("markThreadUnread un-seeds a thread so newer seeds do not overwrite the unread marker", () => {

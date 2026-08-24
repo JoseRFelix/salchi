@@ -1,12 +1,17 @@
 import type { ServerPushSendResult, WebPushSubscriptionJson } from "@salchi/contracts";
+import type { EnvironmentId, ThreadId } from "@salchi/contracts";
 
 import { isElectron } from "../env";
 import { ensureLocalApi } from "../localApi";
 
 const SERVICE_WORKER_URL = "/salchi-service-worker.js";
 const TURN_NOTIFICATION_TAG_PATTERN = /^thread:(.+):turn:[^:]+$/;
-const SERVICE_WORKER_READY_TIMEOUT_MS = 3000;
+const SERVICE_WORKER_READY_TIMEOUT_MS = 750;
+const SERVICE_WORKER_RESPONSE_TIMEOUT_MS = 3000;
 export const SYNC_BADGE_MESSAGE_TYPE = "salchi.sync-displayed-notification-badge";
+export const SYNC_UNREAD_COMPLETIONS_MESSAGE_TYPE = "salchi.sync-unread-completions";
+export const DROP_UNREAD_COMPLETION_ENVIRONMENTS_MESSAGE_TYPE =
+  "salchi.drop-unread-completion-environments";
 export const CLEAR_TURN_COMPLETION_NOTIFICATIONS_MESSAGE_TYPE =
   "salchi.clear-turn-completion-notifications";
 
@@ -61,16 +66,18 @@ export async function ensureSalchiServiceWorkerRegistration(): Promise<ServiceWo
 }
 
 /**
- * Closes any displayed OS notifications for a thread when it is viewed in-app,
- * so stale notifications cannot re-inflate the app icon badge on the next push.
+ * Closes any displayed OS notifications for a thread when it is viewed in-app.
  *
  * Best-effort: never registers the service worker (uses getRegistration) and
- * swallows errors. Notification tags are server-issued as `thread:{threadId}:…`
- * using the raw thread id, so callers must pass the raw id (not the scoped key)
- * and we match by prefix because getNotifications({tag}) is exact-match only.
+ * swallows errors. New notifications carry an environment-scoped completion;
+ * route parsing preserves compatibility with notifications created by an older
+ * service worker. Callers must pass the raw thread id, not a scoped store key.
  */
-export async function closeThreadNotifications(threadId: string): Promise<void> {
-  if (!getBrowserPushSupport().supported || threadId.length === 0) {
+export async function closeThreadNotifications(
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+): Promise<void> {
+  if (!getBrowserPushSupport().supported || !environmentId || !threadId) {
     return;
   }
   try {
@@ -78,10 +85,26 @@ export async function closeThreadNotifications(threadId: string): Promise<void> 
     if (!registration || typeof registration.getNotifications !== "function") {
       return;
     }
-    const prefix = `thread:${threadId}:`;
     const notifications = await registration.getNotifications();
     for (const notification of notifications) {
-      if (notification.tag.startsWith(prefix)) {
+      const completion = notification.data?.completion as
+        | { readonly environmentId?: unknown; readonly threadId?: unknown }
+        | undefined;
+      const hasStructuredThreadScope =
+        typeof completion?.environmentId === "string" && typeof completion.threadId === "string";
+      let matchesThread = hasStructuredThreadScope
+        ? completion.environmentId === environmentId && completion.threadId === threadId
+        : false;
+      if (!hasStructuredThreadScope) {
+        try {
+          const url = new URL(notification.data?.url ?? "/", window.location.origin);
+          const segments = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+          matchesThread = segments[0] === environmentId && segments[1] === threadId;
+        } catch {
+          matchesThread = false;
+        }
+      }
+      if (matchesThread) {
         notification.close();
       }
     }
@@ -192,15 +215,68 @@ export async function closeTurnCompletionNotifications(
   }
 }
 
-function postServiceWorkerMessage(registration: ServiceWorkerRegistration, type: string): boolean {
+function postServiceWorkerMessage(
+  registration: ServiceWorkerRegistration,
+  message: Readonly<Record<string, unknown>>,
+): boolean {
   const worker = registration.active ?? registration.waiting ?? registration.installing;
   if (!worker || typeof worker.postMessage !== "function") {
     return false;
   }
   // ServiceWorker.postMessage does not accept a target origin.
   // oxlint-disable-next-line require-post-message-target-origin
-  worker.postMessage({ type });
+  worker.postMessage(message);
   return true;
+}
+
+interface ServiceWorkerBadgeResponse {
+  readonly requestId: string | null;
+  readonly ok: boolean;
+  readonly count?: number;
+}
+
+async function postServiceWorkerBadgeRequest(
+  registration: ServiceWorkerRegistration,
+  message: Readonly<Record<string, unknown>>,
+): Promise<ServiceWorkerBadgeResponse | null> {
+  const worker = registration.active ?? registration.waiting ?? registration.installing;
+  if (
+    !worker ||
+    typeof worker.postMessage !== "function" ||
+    typeof MessageChannel === "undefined"
+  ) {
+    return null;
+  }
+
+  const requestId = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  const channel = new MessageChannel();
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const response = new Promise<ServiceWorkerBadgeResponse | null>((resolve) => {
+      timeoutId = setTimeout(() => resolve(null), SERVICE_WORKER_RESPONSE_TIMEOUT_MS);
+      channel.port1.addEventListener("message", (event: MessageEvent<unknown>) => {
+        const value = event.data as Partial<ServiceWorkerBadgeResponse> | null;
+        if (!value || value.requestId !== requestId || typeof value.ok !== "boolean") {
+          return;
+        }
+        resolve({
+          requestId,
+          ok: value.ok,
+          ...(typeof value.count === "number" ? { count: value.count } : {}),
+        });
+      });
+      channel.port1.start();
+    });
+    worker.postMessage({ ...message, requestId }, [channel.port2]);
+    return await response;
+  } catch {
+    return null;
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+    channel.port1.close();
+  }
 }
 
 export async function requestServiceWorkerBadgeSync(
@@ -214,7 +290,10 @@ export async function requestServiceWorkerBadgeSync(
     if (!resolvedRegistration) {
       return false;
     }
-    return postServiceWorkerMessage(resolvedRegistration, SYNC_BADGE_MESSAGE_TYPE);
+    const response = await postServiceWorkerBadgeRequest(resolvedRegistration, {
+      type: SYNC_BADGE_MESSAGE_TYPE,
+    });
+    return response?.ok === true;
   } catch {
     return false;
   }
@@ -231,10 +310,69 @@ export async function requestServiceWorkerTurnCompletionNotificationClear(
     if (!resolvedRegistration) {
       return false;
     }
-    return postServiceWorkerMessage(
-      resolvedRegistration,
-      CLEAR_TURN_COMPLETION_NOTIFICATIONS_MESSAGE_TYPE,
-    );
+    return postServiceWorkerMessage(resolvedRegistration, {
+      type: CLEAR_TURN_COMPLETION_NOTIFICATIONS_MESSAGE_TYPE,
+    });
+  } catch {
+    return false;
+  }
+}
+
+export interface UnreadCompletionServiceWorkerSnapshot {
+  readonly environmentId: EnvironmentId;
+  readonly sequence: number;
+  readonly completions: ReadonlyArray<{
+    readonly threadId: ThreadId;
+    readonly completionId: string;
+  }>;
+}
+
+export async function syncServiceWorkerUnreadCompletions(
+  snapshots: ReadonlyArray<UnreadCompletionServiceWorkerSnapshot>,
+  removedEnvironmentIds: ReadonlyArray<EnvironmentId> = [],
+  registration?: ServiceWorkerRegistration | null,
+): Promise<boolean> {
+  if (isElectron || typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+    return false;
+  }
+  try {
+    const resolvedRegistration = registration ?? (await getInspectableServiceWorkerRegistration());
+    if (!resolvedRegistration) {
+      return false;
+    }
+    const response = await postServiceWorkerBadgeRequest(resolvedRegistration, {
+      type: SYNC_UNREAD_COMPLETIONS_MESSAGE_TYPE,
+      snapshots,
+      removedEnvironmentIds,
+    });
+    return response?.ok === true;
+  } catch {
+    return false;
+  }
+}
+
+export async function dropServiceWorkerUnreadCompletionEnvironments(
+  environmentIds: ReadonlyArray<EnvironmentId>,
+  registration?: ServiceWorkerRegistration | null,
+): Promise<boolean> {
+  if (
+    environmentIds.length === 0 ||
+    isElectron ||
+    typeof navigator === "undefined" ||
+    !("serviceWorker" in navigator)
+  ) {
+    return false;
+  }
+  try {
+    const resolvedRegistration = registration ?? (await getInspectableServiceWorkerRegistration());
+    if (!resolvedRegistration) {
+      return false;
+    }
+    const response = await postServiceWorkerBadgeRequest(resolvedRegistration, {
+      type: DROP_UNREAD_COMPLETION_ENVIRONMENTS_MESSAGE_TYPE,
+      environmentIds,
+    });
+    return response?.ok === true;
   } catch {
     return false;
   }

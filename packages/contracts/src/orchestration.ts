@@ -421,6 +421,10 @@ const DefaultedHiddenFromThreadList = Schema.Boolean.pipe(
   Schema.withDecodingDefaultKey(Effect.succeed(false)),
   Schema.withConstructorDefault(Effect.succeed(false)),
 );
+// This field intentionally has no decoding default. Its absence identifies a
+// pre-completion-attention server, while an explicit null means that a current
+// server considers the latest eligible completion unread.
+const OptionalSeenCompletionTurnId = Schema.NullOr(TurnId).pipe(Schema.optionalKey);
 
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
@@ -440,6 +444,7 @@ export const OrchestrationThread = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
+  seenCompletionTurnId: OptionalSeenCompletionTurnId,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -495,6 +500,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
+  seenCompletionTurnId: OptionalSeenCompletionTurnId,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -508,6 +514,7 @@ export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 
 export const OrchestrationShellSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
+  completionAttentionSequence: Schema.optionalKey(NonNegativeInt),
   projects: Schema.Array(OrchestrationProjectShell),
   threads: Schema.Array(OrchestrationThreadShell),
   updatedAt: IsoDateTime,
@@ -702,6 +709,20 @@ const ThreadUnarchiveCommand = Schema.Struct({
   type: Schema.Literal("thread.unarchive"),
   commandId: CommandId,
   threadId: ThreadId,
+});
+
+const ThreadCompletionAcknowledgeCommand = Schema.Struct({
+  type: Schema.Literal("thread.completion.acknowledge"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  turnId: TurnId,
+});
+
+const ThreadCompletionMarkUnreadCommand = Schema.Struct({
+  type: Schema.Literal("thread.completion.mark-unread"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  turnId: TurnId,
 });
 
 const ThreadMetaUpdateCommand = Schema.Struct({
@@ -917,6 +938,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
+  ThreadCompletionAcknowledgeCommand,
+  ThreadCompletionMarkUnreadCommand,
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
@@ -943,6 +966,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
+  ThreadCompletionAcknowledgeCommand,
+  ThreadCompletionMarkUnreadCommand,
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
@@ -1113,6 +1138,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.deleted",
   "thread.archived",
   "thread.unarchived",
+  "thread.completion-acknowledged",
+  "thread.completion-marked-unread",
   "thread.meta-updated",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
@@ -1203,6 +1230,16 @@ export const ThreadArchivedPayload = Schema.Struct({
 export const ThreadUnarchivedPayload = Schema.Struct({
   threadId: ThreadId,
   updatedAt: IsoDateTime,
+});
+
+export const ThreadCompletionAcknowledgedPayload = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+});
+
+export const ThreadCompletionMarkedUnreadPayload = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
 });
 
 export const ThreadMetaUpdatedPayload = Schema.Struct({
@@ -1425,6 +1462,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.unarchived"),
     payload: ThreadUnarchivedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.completion-acknowledged"),
+    payload: ThreadCompletionAcknowledgedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.completion-marked-unread"),
+    payload: ThreadCompletionMarkedUnreadPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

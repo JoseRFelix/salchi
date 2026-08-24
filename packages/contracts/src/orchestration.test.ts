@@ -721,6 +721,40 @@ it.effect("decodes thread archive and unarchive commands", () =>
   }),
 );
 
+it.effect("decodes exact completion attention commands and events", () =>
+  Effect.gen(function* () {
+    const acknowledgedCommand = yield* decodeClientOrchestrationCommand({
+      type: "thread.completion.acknowledge",
+      commandId: "cmd-completion-acknowledge",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    const markedUnreadCommand = yield* decodeClientOrchestrationCommand({
+      type: "thread.completion.mark-unread",
+      commandId: "cmd-completion-mark-unread",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    const acknowledgedEvent = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-completion-acknowledged",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.completion-acknowledged",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-completion-acknowledge",
+      causationEventId: null,
+      correlationId: "cmd-completion-acknowledge",
+      metadata: {},
+      payload: { threadId: "thread-1", turnId: "turn-1" },
+    });
+
+    assert.strictEqual(acknowledgedCommand.type, "thread.completion.acknowledge");
+    assert.strictEqual(markedUnreadCommand.type, "thread.completion.mark-unread");
+    assert.strictEqual(acknowledgedEvent.type, "thread.completion-acknowledged");
+  }),
+);
+
 it.effect("decodes thread archived and unarchived events", () =>
   Effect.gen(function* () {
     const archived = yield* decodeOrchestrationEvent({
@@ -1183,6 +1217,7 @@ it.effect("decodes queued turn events and thread snapshots", () =>
     assert.strictEqual(steered.type, "thread.queued-turn-steered");
     assert.strictEqual(snapshot.threads[0]?.queuedTurns[0]?.messageId, "msg-queued-1");
     assert.strictEqual(snapshot.threads[0]?.queuedTurns[0]?.recoveryConfirmationRequired, false);
+    assert.strictEqual(snapshot.threads[0]?.seenCompletionTurnId, undefined);
   }),
 );
 

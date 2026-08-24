@@ -4,6 +4,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationSessionStatus,
   ThreadId,
+  TurnId,
 } from "@salchi/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -639,7 +640,19 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       "applyThreadsProjection",
     )(function* (event, attachmentSideEffects) {
       switch (event.type) {
-        case "thread.created":
+        case "thread.created": {
+          const compatibilityBaselines = yield* sql<{
+            readonly seenCompletionTurnId: string;
+          }>`
+            SELECT seen_completion_turn_id AS "seenCompletionTurnId"
+            FROM orchestration_completion_attention_baselines
+            WHERE thread_id = ${event.payload.threadId}
+            LIMIT 1
+          `.pipe(
+            Effect.mapError(
+              toPersistenceSqlError("ProjectionPipeline.readCompletionAttentionBaseline"),
+            ),
+          );
           yield* projectionThreadRepository.upsert({
             threadId: event.payload.threadId,
             projectId: event.payload.projectId,
@@ -656,6 +669,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
             latestTurnId: null,
+            seenCompletionTurnId:
+              compatibilityBaselines[0] === undefined
+                ? null
+                : TurnId.make(compatibilityBaselines[0].seenCompletionTurnId),
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             archivedAt: null,
@@ -666,6 +683,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             deletedAt: null,
           });
           return;
+        }
 
         case "thread.archived": {
           const existingRow = yield* projectionThreadRepository.getById({
@@ -693,6 +711,22 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             archivedAt: null,
             updatedAt: maxIsoTimestamp(existingRow.value.updatedAt, event.payload.updatedAt),
+          });
+          return;
+        }
+
+        case "thread.completion-acknowledged":
+        case "thread.completion-marked-unread": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            seenCompletionTurnId:
+              event.type === "thread.completion-acknowledged" ? event.payload.turnId : null,
           });
           return;
         }
@@ -855,6 +889,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             latestTurnId,
+            seenCompletionTurnId: latestTurnId,
             updatedAt: maxIsoTimestamp(existingRow.value.updatedAt, event.occurredAt),
           });
           yield* refreshThreadShellSummary(event.payload.threadId);

@@ -85,7 +85,7 @@ describe("hasUnseenCompletion", () => {
         hasPendingUserInput: false,
         interactionMode: "default",
         latestTurn: makeLatestTurn(),
-        lastVisitedAt: "2026-03-09T10:04:00.000Z",
+        seenCompletionTurnId: null,
         session: null,
       }),
     ).toBe(true);
@@ -682,7 +682,7 @@ describe("resolveThreadStatusPill", () => {
     hasPendingUserInput: false,
     interactionMode: "plan" as const,
     latestTurn: null,
-    lastVisitedAt: undefined,
+    seenCompletionTurnId: null,
     session: {
       provider: ProviderDriverKind.make("codex"),
       status: "running" as const,
@@ -843,7 +843,7 @@ describe("resolveThreadStatusPill", () => {
           ...baseThread,
           hasActionableProposedPlan: true,
           latestTurn: makeLatestTurn({ completedAt: "2026-03-09T10:05:00.000Z" }),
-          lastVisitedAt: "2026-03-09T10:05:00.000Z",
+          seenCompletionTurnId: "turn-1" as never,
           session: {
             ...baseThread.session,
             status: "ready",
@@ -861,7 +861,7 @@ describe("resolveThreadStatusPill", () => {
           ...baseThread,
           hasActionableProposedPlan: true,
           latestTurn: makeLatestTurn({ completedAt: "2026-03-09T10:05:00.000Z" }),
-          lastVisitedAt: "2026-03-09T10:04:00.000Z",
+          seenCompletionTurnId: null,
           session: {
             ...baseThread.session,
             status: "ready",
@@ -895,7 +895,7 @@ describe("resolveThreadStatusPill", () => {
           ...baseThread,
           interactionMode: "default",
           latestTurn: makeLatestTurn(),
-          lastVisitedAt: "2026-03-09T10:04:00.000Z",
+          seenCompletionTurnId: null,
           session: {
             ...baseThread.session,
             status: "ready",
@@ -914,7 +914,7 @@ describe("resolveThreadStatusPill", () => {
           ...baseThread,
           interactionMode: "default",
           latestTurn: makeLatestTurn(),
-          lastVisitedAt: "2026-03-09T10:04:00.000Z",
+          seenCompletionTurnId: null,
           session: {
             ...baseThread.session,
             status: "ready",
@@ -933,7 +933,7 @@ describe("resolveThreadStatusPill", () => {
           ...baseThread,
           hasActionableProposedPlan: true,
           latestTurn: makeLatestTurn({ completedAt: "2026-03-09T10:05:00.000Z" }),
-          lastVisitedAt: "2026-03-09T10:04:00.000Z",
+          seenCompletionTurnId: null,
           session: {
             ...baseThread.session,
             status: "ready",

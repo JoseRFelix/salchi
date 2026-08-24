@@ -115,8 +115,15 @@ function normalizePayload(payload: ServerPushNotificationPayload): ServerPushNot
     ...(body ? { body } : {}),
     ...(payload.url ? { url: payload.url } : {}),
     ...(payload.tag ? { tag: payload.tag } : {}),
+    ...(payload.completion ? { completion: payload.completion } : {}),
+    ...(payload.unreadCompletionState
+      ? { unreadCompletionState: payload.unreadCompletionState }
+      : {}),
+    ...(payload.completionAttentionVersion === 2 ? { completionAttentionVersion: 2 as const } : {}),
   };
 }
+
+export const normalizeWebPushPayloadForTest = normalizePayload;
 
 function urlOriginOrNull(value: string): string | null {
   try {

@@ -225,6 +225,7 @@ function makeOrchestrationThread(
     branch: thread.branch,
     worktreePath: thread.worktreePath,
     latestTurn: thread.latestTurn,
+    seenCompletionTurnId: thread.seenCompletionTurnId ?? null,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt ?? thread.createdAt,
     archivedAt: thread.archivedAt,
@@ -324,6 +325,7 @@ function makeOrchestrationThreadShell(
     branch: thread.branch,
     worktreePath: thread.worktreePath,
     latestTurn: thread.latestTurn,
+    seenCompletionTurnId: thread.seenCompletionTurnId ?? null,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt ?? thread.createdAt,
     archivedAt: thread.archivedAt,
@@ -478,6 +480,7 @@ function makeState(thread: Thread): AppState {
     threadTurnStateById: {
       [thread.id]: {
         latestTurn: thread.latestTurn,
+        seenCompletionTurnId: thread.seenCompletionTurnId ?? null,
         ...(thread.pendingSourceProposedPlan
           ? { pendingSourceProposedPlan: thread.pendingSourceProposedPlan }
           : {}),
@@ -934,6 +937,158 @@ describe("thread selection memoization", () => {
 });
 
 describe("server shell snapshots", () => {
+  it("maintains an exact unread index and authoritative sequence", () => {
+    const turnId = TurnId.make("turn-indexed-completion");
+    const thread = makeThread({
+      latestTurn: {
+        turnId,
+        state: "completed",
+        requestedAt: "2026-02-13T00:00:00.000Z",
+        startedAt: "2026-02-13T00:00:00.000Z",
+        completedAt: "2026-02-13T00:01:00.000Z",
+        assistantMessageId: null,
+      },
+      seenCompletionTurnId: null,
+    });
+    const unread = syncServerShellSnapshot(
+      makeEmptyState(),
+      makeShellSnapshot(thread, {
+        snapshotSequence: 5,
+        completionAttentionSequence: 12,
+      }),
+      localEnvironmentId,
+    );
+
+    expect(localEnvironmentStateOf(unread).unreadCompletionTurnIdByThreadId).toEqual({
+      [thread.id]: turnId,
+    });
+    expect(localEnvironmentStateOf(unread).completionAttentionSequence).toBe(12);
+
+    const read = applyShellEvent(
+      unread,
+      {
+        kind: "thread-upserted",
+        sequence: 13,
+        thread: makeOrchestrationThreadShell(thread, { seenCompletionTurnId: turnId }),
+      },
+      localEnvironmentId,
+    );
+    expect(localEnvironmentStateOf(read).unreadCompletionTurnIdByThreadId).toEqual({});
+    expect(localEnvironmentStateOf(read).completionAttentionSequence).toBe(13);
+  });
+
+  it("preserves a missing legacy attention field as already read", () => {
+    const turnId = TurnId.make("turn-legacy-completion");
+    const thread = makeThread({
+      latestTurn: {
+        turnId,
+        state: "completed",
+        requestedAt: "2026-02-13T00:00:00.000Z",
+        startedAt: "2026-02-13T00:00:00.000Z",
+        completedAt: "2026-02-13T00:01:00.000Z",
+        assistantMessageId: null,
+      },
+      seenCompletionTurnId: null,
+    });
+    const { seenCompletionTurnId: _legacyMissing, ...legacyThread } =
+      makeOrchestrationThreadShell(thread);
+    const state = syncServerShellSnapshot(
+      makeEmptyState(),
+      makeShellSnapshot(thread, {
+        snapshotSequence: 4,
+        threads: [legacyThread],
+      }),
+      localEnvironmentId,
+    );
+
+    expect(localEnvironmentStateOf(state).unreadCompletionTurnIdByThreadId).toEqual({});
+    expect(threadsOf(state)[0]?.seenCompletionTurnId).toBeUndefined();
+
+    const upgraded = applyShellEvent(
+      state,
+      {
+        kind: "thread-upserted",
+        sequence: 5,
+        thread: makeOrchestrationThreadShell(thread, { seenCompletionTurnId: null }),
+      },
+      localEnvironmentId,
+    );
+    expect(localEnvironmentStateOf(upgraded).unreadCompletionTurnIdByThreadId).toEqual({
+      [thread.id]: turnId,
+    });
+    expect(threadsOf(upgraded)[0]?.seenCompletionTurnId).toBeNull();
+  });
+
+  it("keeps later live completions read when a legacy server omits attention state", () => {
+    const oldTurnId = TurnId.make("turn-legacy-old");
+    const nextTurnId = TurnId.make("turn-legacy-next");
+    const thread = makeThread({
+      latestTurn: {
+        turnId: oldTurnId,
+        state: "completed",
+        requestedAt: "2026-02-13T00:00:00.000Z",
+        startedAt: "2026-02-13T00:00:00.000Z",
+        completedAt: "2026-02-13T00:01:00.000Z",
+        assistantMessageId: null,
+      },
+      seenCompletionTurnId: null,
+    });
+    const { seenCompletionTurnId: _legacyMissing, ...legacyThread } =
+      makeOrchestrationThreadShell(thread);
+    const initial = syncServerShellSnapshot(
+      makeEmptyState(),
+      makeShellSnapshot(thread, {
+        snapshotSequence: 4,
+        threads: [legacyThread],
+      }),
+      localEnvironmentId,
+    );
+
+    const completed = applyOrchestrationEvents(
+      initial,
+      [
+        makeEvent(
+          "thread.session-set",
+          {
+            threadId: thread.id,
+            session: {
+              threadId: thread.id,
+              status: "running",
+              providerName: "codex",
+              runtimeMode: thread.runtimeMode,
+              activeTurnId: nextTurnId,
+              lastError: null,
+              updatedAt: "2026-02-13T00:02:00.000Z",
+            },
+          },
+          { sequence: 5 },
+        ),
+        makeEvent(
+          "thread.session-set",
+          {
+            threadId: thread.id,
+            session: {
+              threadId: thread.id,
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: thread.runtimeMode,
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-02-13T00:03:00.000Z",
+            },
+          },
+          { sequence: 6 },
+        ),
+      ],
+      localEnvironmentId,
+      { syncSidebarSummaries: true },
+    );
+
+    expect(threadsOf(completed)[0]?.latestTurn?.turnId).toBe(nextTurnId);
+    expect(threadsOf(completed)[0]?.seenCompletionTurnId).toBeUndefined();
+    expect(localEnvironmentStateOf(completed).unreadCompletionTurnIdByThreadId).toEqual({});
+  });
+
   it("rebuilds project thread lists when existing thread shells are retained", () => {
     const thread = makeThread({ id: ThreadId.make("thread-shell-snapshot-retained") });
     const state = makeState(thread);
@@ -1975,6 +2130,45 @@ describe("incremental orchestration updates", () => {
     );
 
     expect(localEnvironmentStateOf(next).bootstrapComplete).toBe(false);
+  });
+
+  it("applies exact completion acknowledgement and mark-unread events", () => {
+    const thread = makeThread({
+      latestTurn: {
+        turnId: TurnId.make("turn-completion-attention"),
+        state: "completed",
+        requestedAt: "2026-02-27T00:00:00.000Z",
+        startedAt: "2026-02-27T00:00:00.000Z",
+        completedAt: "2026-02-27T00:01:00.000Z",
+        assistantMessageId: null,
+      },
+      seenCompletionTurnId: null,
+    });
+    const acknowledged = applyOrchestrationEvent(
+      makeState(thread),
+      makeEvent(
+        "thread.completion-acknowledged",
+        { threadId: thread.id, turnId: thread.latestTurn!.turnId },
+        { sequence: 1 },
+      ),
+      localEnvironmentId,
+    );
+
+    expect(threadsOf(acknowledged)[0]?.seenCompletionTurnId).toBe(thread.latestTurn?.turnId);
+    expect(threadsOf(acknowledged)[0]?.updatedAt).toBe(thread.updatedAt);
+
+    const markedUnread = applyOrchestrationEvent(
+      acknowledged,
+      makeEvent(
+        "thread.completion-marked-unread",
+        { threadId: thread.id, turnId: thread.latestTurn!.turnId },
+        { sequence: 2 },
+      ),
+      localEnvironmentId,
+    );
+
+    expect(threadsOf(markedUnread)[0]?.seenCompletionTurnId).toBeNull();
+    expect(threadsOf(markedUnread)[0]?.updatedAt).toBe(thread.updatedAt);
   });
 
   it("preserves state identity for no-op project and thread deletes", () => {

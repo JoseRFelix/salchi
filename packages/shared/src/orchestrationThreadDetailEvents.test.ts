@@ -28,6 +28,15 @@ describe("isOrchestrationThreadDetailEvent", () => {
     }
   });
 
+  it("includes server-authoritative completion attention changes", () => {
+    expect(isOrchestrationThreadDetailEvent(eventWithType("thread.completion-acknowledged"))).toBe(
+      true,
+    );
+    expect(isOrchestrationThreadDetailEvent(eventWithType("thread.completion-marked-unread"))).toBe(
+      true,
+    );
+  });
+
   it("excludes thread events that do not directly change detail state", () => {
     expect(isOrchestrationThreadDetailEvent(eventWithType("thread.meta-updated"))).toBe(false);
     expect(isOrchestrationThreadDetailEvent(eventWithType("thread.turn-start-requested"))).toBe(

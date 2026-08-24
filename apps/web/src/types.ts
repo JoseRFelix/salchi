@@ -134,6 +134,7 @@ export interface Thread {
   archivedAt: string | null;
   updatedAt?: string | undefined;
   latestTurn: OrchestrationLatestTurn | null;
+  seenCompletionTurnId?: TurnId | null | undefined;
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
   branch: string | null;
   worktreePath: string | null;
@@ -167,6 +168,7 @@ export interface ThreadShell {
 
 export interface ThreadTurnState {
   latestTurn: OrchestrationLatestTurn | null;
+  seenCompletionTurnId?: TurnId | null | undefined;
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
 }
 
@@ -187,6 +189,7 @@ export interface SidebarThreadSummary {
   archivedAt: string | null;
   updatedAt?: string | undefined;
   latestTurn: OrchestrationLatestTurn | null;
+  seenCompletionTurnId?: TurnId | null | undefined;
   branch: string | null;
   worktreePath: string | null;
   latestUserMessageAt: string | null;

@@ -82,6 +82,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           branch,
           worktree_path,
           latest_turn_id,
+          seen_completion_turn_id,
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
@@ -99,6 +100,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'default',
           NULL,
           NULL,
+          'turn-1',
           'turn-1',
           '2026-02-24T00:00:04.000Z',
           1,
@@ -315,6 +317,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               planId: "plan-1",
             },
           },
+          seenCompletionTurnId: asTurnId("turn-1"),
           createdAt: "2026-02-24T00:00:02.000Z",
           updatedAt: "2026-02-24T00:00:03.000Z",
           archivedAt: null,
@@ -379,6 +382,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
 
       const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
       assert.equal(shellSnapshot.snapshotSequence, 5);
+      assert.equal(shellSnapshot.completionAttentionSequence, 6);
       assert.deepEqual(shellSnapshot.projects, [
         {
           id: asProjectId("project-1"),
@@ -433,6 +437,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               planId: "plan-1",
             },
           },
+          seenCompletionTurnId: asTurnId("turn-1"),
           createdAt: "2026-02-24T00:00:02.000Z",
           updatedAt: "2026-02-24T00:00:03.000Z",
           archivedAt: null,
