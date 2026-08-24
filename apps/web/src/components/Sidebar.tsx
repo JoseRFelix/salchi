@@ -48,7 +48,7 @@ import {
 } from "@salchi/contracts/settings";
 import { usePrimaryEnvironmentId } from "../environments/primary";
 import { isElectron } from "../env";
-import { APP_VERSION } from "../branding";
+import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { cn, isMacPlatform, newCommandId } from "../lib/utils";
 import {
@@ -2909,7 +2909,7 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
             >
               <SalchiLogo />
               <span className="truncate text-sm font-medium tracking-tight text-muted-foreground">
-                Salchi
+                {APP_DISPLAY_NAME}
               </span>
             </Link>
           }
