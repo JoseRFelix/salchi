@@ -36,6 +36,7 @@ function renderHeader(devServerLinks: ReadonlyArray<DevServerLink>) {
       activeThreadEnvironmentId={LOCAL_ENVIRONMENT_ID}
       activeThreadTitle="Implement chat header"
       activeProjectName="salchi"
+      activeProjectCwd="/repo/salchi"
       isGitRepo={true}
       openInCwd="/repo/salchi"
       activeProjectScripts={undefined}
@@ -79,6 +80,21 @@ describe("ChatHeader", () => {
     expect(markup).toContain('aria-haspopup="menu"');
   });
 
+  it("renders the project icon, project name, separator, and thread name in order", () => {
+    const markup = renderHeader([]);
+    const projectIconIndex = markup.indexOf('data-slot="chat-header-project-icon"');
+    const projectNameIndex = markup.indexOf('data-slot="chat-header-project-name"');
+    const separatorIndex = markup.indexOf('data-slot="chat-header-title-separator"');
+    const threadNameIndex = markup.indexOf('data-slot="chat-header-thread-name"');
+
+    expect(projectIconIndex).toBeGreaterThan(-1);
+    expect(projectNameIndex).toBeGreaterThan(projectIconIndex);
+    expect(separatorIndex).toBeGreaterThan(projectNameIndex);
+    expect(threadNameIndex).toBeGreaterThan(separatorIndex);
+    expect(markup).toContain('aria-label="salchi / Implement chat header"');
+    expect(markup).toContain('title="salchi / Implement chat header"');
+  });
+
   it("uses non-overlapping 44px subtle outline controls in the compact header", () => {
     useMediaQueryMock.mockReturnValue(true);
 
@@ -88,6 +104,7 @@ describe("ChatHeader", () => {
     expect(markup.match(/rounded-xl/g)).toHaveLength(4);
     expect(markup.match(/pointer-coarse:after:hidden/g)).toHaveLength(4);
     expect(markup).toContain('data-slot="compact-sidebar-trigger-slot"');
+    expect(markup).toContain("h-11 w-8");
     expect(markup).toContain("pointer-coarse:after:-translate-x-1/2");
     expect(markup).toContain("pointer-coarse:after:-translate-y-1/2");
     expect(markup).toContain("border-border/35 bg-background");

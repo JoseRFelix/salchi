@@ -1,7 +1,7 @@
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
 import { cva, type VariantProps } from "class-variance-authority";
-import { Loader2Icon, PanelLeftCloseIcon, PanelLeftIcon } from "lucide-react";
+import { ChevronLeftIcon, Loader2Icon, PanelLeftIcon } from "lucide-react";
 import * as React from "react";
 import { cn } from "~/lib/utils";
 import { usePwaServiceWorkerUpdateStore } from "~/pwa/serviceWorkerUpdateState";
@@ -353,7 +353,7 @@ function Sidebar({
 }
 
 function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
-  const { toggleSidebar, openMobile } = useSidebar();
+  const { isMobile, toggleSidebar } = useSidebar();
   const updateStatus = usePwaServiceWorkerUpdateStore((state) => state.status);
   const checkPhase = usePwaServiceWorkerUpdateStore((state) => state.checkPhase);
   const updateAvailable = updateStatus === "ready";
@@ -372,7 +372,11 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       variant="ghost"
       {...props}
     >
-      {openMobile ? <PanelLeftCloseIcon /> : <PanelLeftIcon />}
+      {isMobile ? (
+        <ChevronLeftIcon data-sidebar-trigger-icon="back" />
+      ) : (
+        <PanelLeftIcon data-sidebar-trigger-icon="sidebar" />
+      )}
       {updateAvailable && (
         <span
           aria-hidden

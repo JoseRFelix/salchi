@@ -61,6 +61,28 @@ describe("mobile Sidebar", () => {
     await page.viewport(1024, 768);
   });
 
+  it("uses a back chevron on mobile and preserves the sidebar icon on desktop", async () => {
+    await page.viewport(390, 700);
+    const mobileScreen = await render(<MobileSidebarHarness />);
+
+    try {
+      expect(document.querySelector('[data-sidebar-trigger-icon="back"]')).not.toBeNull();
+      expect(document.querySelector('[data-sidebar-trigger-icon="sidebar"]')).toBeNull();
+    } finally {
+      await mobileScreen.unmount();
+    }
+
+    await page.viewport(1024, 700);
+    const desktopScreen = await render(<MobileSidebarHarness />);
+
+    try {
+      expect(document.querySelector('[data-sidebar-trigger-icon="sidebar"]')).not.toBeNull();
+      expect(document.querySelector('[data-sidebar-trigger-icon="back"]')).toBeNull();
+    } finally {
+      await desktopScreen.unmount();
+    }
+  });
+
   it("keeps the historical loading-indicator position on the compact trigger", async () => {
     await page.viewport(390, 700);
     usePwaServiceWorkerUpdateStore.getState().setCheckPhase("checking");

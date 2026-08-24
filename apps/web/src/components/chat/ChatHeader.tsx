@@ -10,6 +10,7 @@ import {
   DiffIcon,
   EllipsisIcon,
   ExternalLinkIcon,
+  FolderIcon,
   FolderTreeIcon,
   GitBranchIcon,
   TerminalSquareIcon,
@@ -30,6 +31,7 @@ import { Button } from "../ui/button";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { readLocalApi } from "../../localApi";
 import { probeDevServerReachable, type DevServerLink } from "../../devServerLinks";
+import { ProjectFavicon } from "../ProjectFavicon";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -37,6 +39,7 @@ interface ChatHeaderProps {
   isSubagentThread?: boolean;
   parentThreadTitle?: string | null;
   activeProjectName: string | undefined;
+  activeProjectCwd: string | null;
   isGitRepo: boolean;
   openInCwd: string | null;
   activeProjectScripts: ProjectScript[] | undefined;
@@ -89,6 +92,7 @@ export const ChatHeader = memo(function ChatHeader({
   isSubagentThread = false,
   parentThreadTitle,
   activeProjectName,
+  activeProjectCwd,
   isGitRepo,
   openInCwd,
   activeProjectScripts,
@@ -156,24 +160,61 @@ export const ChatHeader = memo(function ChatHeader({
     ? COMPACT_HEADER_ICON_ACTION_CLASS_NAME
     : STANDARD_HEADER_ICON_ACTION_CLASS_NAME;
   const headerToggleIconClassName = isCompactHeader ? "size-4.5" : "size-3";
+  const headerTitle = activeProjectName
+    ? `${activeProjectName} / ${activeThreadTitle}`
+    : activeThreadTitle;
 
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
       <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden sm:gap-3">
         <div
-          className="flex size-11 shrink-0 items-center justify-center md:hidden"
+          className="flex h-11 w-8 shrink-0 items-center justify-center md:hidden"
           data-slot="compact-sidebar-trigger-slot"
         >
           <SidebarTrigger className="size-7 shrink-0 pointer-coarse:after:left-1/2 pointer-coarse:after:top-1/2 pointer-coarse:after:-translate-x-1/2 pointer-coarse:after:-translate-y-1/2" />
         </div>
-        <div className="flex min-w-0 flex-col justify-center">
+        <div className="flex min-w-0 flex-1 flex-col justify-center">
           <h2
-            className="min-w-0 truncate text-sm font-medium leading-tight text-foreground"
-            title={activeThreadTitle}
+            aria-label={headerTitle}
+            className="flex min-w-0 items-center gap-1.5 overflow-hidden text-sm font-medium leading-tight text-foreground"
+            data-slot="chat-header-primary-title"
+            title={headerTitle}
           >
-            {activeThreadTitle}
+            {activeProjectName ? (
+              <>
+                <span
+                  className="inline-flex size-3.5 shrink-0 items-center justify-center"
+                  data-slot="chat-header-project-icon"
+                >
+                  {activeProjectCwd ? (
+                    <ProjectFavicon
+                      environmentId={activeThreadEnvironmentId}
+                      cwd={activeProjectCwd}
+                    />
+                  ) : (
+                    <FolderIcon className="size-3.5 text-muted-foreground/50" />
+                  )}
+                </span>
+                <span
+                  className="min-w-0 max-w-[40%] shrink-0 truncate"
+                  data-slot="chat-header-project-name"
+                >
+                  {activeProjectName}
+                </span>
+                <span
+                  aria-hidden="true"
+                  className="shrink-0 text-muted-foreground/50"
+                  data-slot="chat-header-title-separator"
+                >
+                  /
+                </span>
+              </>
+            ) : null}
+            <span className="min-w-0 truncate" data-slot="chat-header-thread-name">
+              {activeThreadTitle}
+            </span>
           </h2>
-          {(activeProjectName || threadEnvironmentLabel || isSubagentThread) && (
+          {(threadEnvironmentLabel || isSubagentThread || (activeProjectName && !isGitRepo)) && (
             <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs leading-tight text-muted-foreground">
               {isSubagentThread && (
                 <Badge variant="secondary" className="shrink-0 px-1 py-0 text-[10px]">
@@ -189,16 +230,6 @@ export const ChatHeader = memo(function ChatHeader({
                 >
                   Parent: {parentThreadTitle}
                 </button>
-              )}
-              {activeProjectName && (
-                <span className="min-w-0 truncate" title={activeProjectName}>
-                  {activeProjectName}
-                </span>
-              )}
-              {activeProjectName && threadEnvironmentLabel && (
-                <span aria-hidden className="shrink-0 text-muted-foreground/50">
-                  •
-                </span>
               )}
               {threadEnvironmentLabel && (
                 <span className="min-w-0 shrink truncate" title={threadEnvironmentLabel}>
