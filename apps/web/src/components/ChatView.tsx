@@ -4990,6 +4990,7 @@ export default function ChatView(props: ChatViewProps) {
           isSubagentThread={activeParentThreadId !== null}
           parentThreadTitle={activeParentThreadId !== null ? activeParentThreadDisplayTitle : null}
           activeProjectName={activeProject?.name}
+          activeProjectCwd={activeProjectCwd}
           isGitRepo={isGitRepo}
           openInCwd={gitCwd}
           activeProjectScripts={activeProject?.scripts}

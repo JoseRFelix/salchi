@@ -46,7 +46,7 @@ function ChatLoadingHeader({ label }: { label: string }) {
     >
       <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden sm:gap-3">
-          <div className="flex size-11 shrink-0 items-center justify-center md:hidden">
+          <div className="flex h-11 w-8 shrink-0 items-center justify-center md:hidden">
             <SidebarTrigger className="size-7 shrink-0 pointer-coarse:after:left-1/2 pointer-coarse:after:top-1/2 pointer-coarse:after:-translate-x-1/2 pointer-coarse:after:-translate-y-1/2" />
           </div>
           <div className="flex min-w-0 flex-col justify-center">

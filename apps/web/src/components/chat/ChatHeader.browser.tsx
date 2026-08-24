@@ -18,6 +18,7 @@ vi.mock("@tanstack/react-router", () => ({
 
 const LOCAL_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
+const EMPTY_DEV_SERVER_LINKS: ReadonlyArray<DevServerLink> = [];
 const DEV_SERVER_LINK: DevServerLink = {
   url: "http://localhost:5173/",
   displayUrl: "http://localhost:5173",
@@ -27,7 +28,7 @@ const DEV_SERVER_LINK: DevServerLink = {
 };
 
 function ChatHeaderHarness({
-  devServerLinks = [],
+  devServerLinks = EMPTY_DEV_SERVER_LINKS,
 }: {
   readonly devServerLinks?: ReadonlyArray<DevServerLink>;
 }) {
@@ -38,40 +39,43 @@ function ChatHeaderHarness({
 
   return (
     <SidebarProvider>
-      <header className="flex w-full border-b px-3 py-2">
-        <ChatHeader
-          activeThreadEnvironmentId={LOCAL_ENVIRONMENT_ID}
-          activeThreadTitle="Responsive compact controls"
-          activeProjectName="salchi"
-          isGitRepo={true}
-          openInCwd="/repo/salchi"
-          activeProjectScripts={undefined}
-          preferredScriptId={null}
-          keybindings={EMPTY_KEYBINDINGS}
-          availableEditors={[]}
-          terminalAvailable={true}
-          terminalOpen={terminalOpen}
-          terminalToggleShortcutLabel={null}
-          diffToggleShortcutLabel={null}
-          sourceControlToggleShortcutLabel={null}
-          gitCwd="/repo/salchi"
-          diffOpen={diffOpen}
-          sourceControlOpen={sourceControlOpen}
-          devServerLinks={devServerLinks}
-          devServerProbeBrowserHostname={null}
-          probeDevServerUrl={async () => true}
-          fileExplorerAvailable={true}
-          fileExplorerOpen={fileExplorerOpen}
-          onRunProjectScript={() => undefined}
-          onAddProjectScript={async () => undefined}
-          onUpdateProjectScript={async () => undefined}
-          onDeleteProjectScript={async () => undefined}
-          onToggleFileExplorer={() => setFileExplorerOpen((open) => !open)}
-          onToggleTerminal={() => setTerminalOpen((open) => !open)}
-          onToggleDiff={() => setDiffOpen((open) => !open)}
-          onToggleSourceControl={() => setSourceControlOpen((open) => !open)}
-        />
-      </header>
+      <div className="flex min-h-svh min-w-0 flex-1 flex-col">
+        <header className="flex w-full border-b px-3 py-2 sm:px-5 sm:py-3">
+          <ChatHeader
+            activeThreadEnvironmentId={LOCAL_ENVIRONMENT_ID}
+            activeThreadTitle="Responsive compact controls"
+            activeProjectName="salchi"
+            activeProjectCwd="/repo/salchi"
+            isGitRepo={true}
+            openInCwd="/repo/salchi"
+            activeProjectScripts={undefined}
+            preferredScriptId={null}
+            keybindings={EMPTY_KEYBINDINGS}
+            availableEditors={[]}
+            terminalAvailable={true}
+            terminalOpen={terminalOpen}
+            terminalToggleShortcutLabel={null}
+            diffToggleShortcutLabel={null}
+            sourceControlToggleShortcutLabel={null}
+            gitCwd="/repo/salchi"
+            diffOpen={diffOpen}
+            sourceControlOpen={sourceControlOpen}
+            devServerLinks={devServerLinks}
+            devServerProbeBrowserHostname={null}
+            probeDevServerUrl={async () => true}
+            fileExplorerAvailable={true}
+            fileExplorerOpen={fileExplorerOpen}
+            onRunProjectScript={() => undefined}
+            onAddProjectScript={async () => undefined}
+            onUpdateProjectScript={async () => undefined}
+            onDeleteProjectScript={async () => undefined}
+            onToggleFileExplorer={() => setFileExplorerOpen((open) => !open)}
+            onToggleTerminal={() => setTerminalOpen((open) => !open)}
+            onToggleDiff={() => setDiffOpen((open) => !open)}
+            onToggleSourceControl={() => setSourceControlOpen((open) => !open)}
+          />
+        </header>
+      </div>
     </SidebarProvider>
   );
 }
@@ -151,6 +155,29 @@ describe("ChatHeader responsive controls", () => {
           expectControlsDoNotOverlap(controls);
         });
       }
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps the project identity visible before truncating the thread name on mobile", async () => {
+    await page.viewport(390, 700);
+    const screen = await render(<ChatHeaderHarness />);
+
+    try {
+      await vi.waitFor(() => {
+        const projectName = document.querySelector<HTMLElement>(
+          '[data-slot="chat-header-project-name"]',
+        );
+        const threadName = document.querySelector<HTMLElement>(
+          '[data-slot="chat-header-thread-name"]',
+        );
+
+        expect(projectName).not.toBeNull();
+        expect(threadName).not.toBeNull();
+        expect(projectName!.scrollWidth).toBeLessThanOrEqual(projectName!.clientWidth);
+        expect(threadName!.scrollWidth).toBeGreaterThan(threadName!.clientWidth);
+      });
     } finally {
       await screen.unmount();
     }
@@ -240,7 +267,9 @@ describe("ChatHeader responsive controls", () => {
       expect(trigger).not.toBeNull();
       expect(triggerSlot).not.toBeNull();
       expect(loadingIndicator).not.toBeNull();
-      expectSquareControls([triggerSlot!], 44);
+      const triggerSlotBox = triggerSlot!.getBoundingClientRect();
+      expect(triggerSlotBox.width).toBe(32);
+      expect(triggerSlotBox.height).toBe(44);
 
       const triggerBox = trigger!.getBoundingClientRect();
       const loadingBox = loadingIndicator!.getBoundingClientRect();
