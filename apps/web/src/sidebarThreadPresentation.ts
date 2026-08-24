@@ -1,5 +1,6 @@
 import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
 import type { ScopedProjectRef, ScopedThreadRef } from "@salchi/contracts";
+import { truncate } from "@salchi/shared/String";
 
 import type { ComposerThreadDraftState, DraftId, DraftThreadState } from "./composerDraftStore";
 import type { LocalDispatchSnapshot } from "./components/ChatView.logic";
@@ -100,12 +101,13 @@ function resolveServerThread(
 }
 
 function buildPendingThreadSummary(input: {
+  readonly composerDraft: ComposerThreadDraftState | null;
   readonly draftThread: DraftThreadState;
   readonly localDispatch: LocalDispatchSnapshot | null;
   readonly serverThread: Thread | undefined;
   readonly rowRef: ScopedThreadRef;
 }): SidebarThreadSummary {
-  const { draftThread, localDispatch, rowRef, serverThread } = input;
+  const { composerDraft, draftThread, localDispatch, rowRef, serverThread } = input;
   const activityAt =
     localDispatch?.startedAt ??
     serverThread?.updatedAt ??
@@ -113,7 +115,8 @@ function buildPendingThreadSummary(input: {
     draftThread.createdAt;
   const latestUserMessageAt =
     localDispatch?.startedAt ?? latestServerUserMessageAt(serverThread) ?? activityAt;
-  const title = serverThread?.title.trim() ? serverThread.title : "New thread";
+  const promptTitle = truncate(composerDraft?.prompt ?? "");
+  const title = serverThread?.title.trim() ? serverThread.title : promptTitle || "New thread";
 
   return {
     id: rowRef.threadId,
@@ -178,6 +181,7 @@ export function buildSidebarThreadPresentation(
     }
     pendingThreads.push(
       buildPendingThreadSummary({
+        composerDraft: draftInput.composerDraft,
         draftThread,
         localDispatch,
         rowRef,
