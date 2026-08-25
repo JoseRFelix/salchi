@@ -1,5 +1,5 @@
-import { useEffect, type ReactNode } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { lazy, Suspense, useEffect, type ReactNode } from "react";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 
 import ThreadSidebar from "./Sidebar";
 import { Sidebar, SidebarProvider, SidebarRail } from "./ui/sidebar";
@@ -7,12 +7,22 @@ import {
   clearShortcutModifierState,
   syncShortcutModifierStateFromKeyboardEvent,
 } from "../shortcutModifierState";
+import { useSidebarNavigationMode } from "../hooks/useSettings";
+import { resolveRenderedSidebarMode } from "../sidebarNavigationMode";
+
+const InboxSidebar = lazy(() => import("./InboxSidebar"));
 
 const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
 const THREAD_SIDEBAR_MIN_WIDTH = 13 * 16;
 const THREAD_MAIN_CONTENT_MIN_WIDTH = 40 * 16;
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
+  const sidebarNavigationMode = useSidebarNavigationMode();
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const renderedSidebarMode = resolveRenderedSidebarMode({
+    configuredMode: sidebarNavigationMode,
+    pathname,
+  });
 
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
@@ -66,7 +76,13 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
         }}
       >
-        <ThreadSidebar />
+        {renderedSidebarMode === "project" ? (
+          <ThreadSidebar />
+        ) : (
+          <Suspense fallback={null}>
+            <InboxSidebar />
+          </Suspense>
+        )}
         <SidebarRail />
       </Sidebar>
       {children}

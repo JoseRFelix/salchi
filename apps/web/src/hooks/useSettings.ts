@@ -15,7 +15,9 @@ import {
   type ClientSettingsPatch,
   type ClientSettings,
   DEFAULT_CLIENT_SETTINGS,
+  DEFAULT_SIDEBAR_NAVIGATION_MODE,
   DEFAULT_UNIFIED_SETTINGS,
+  type SidebarNavigationMode,
   UnifiedSettings,
 } from "@salchi/contracts/settings";
 import { ensureLocalApi } from "~/localApi";
@@ -177,6 +179,27 @@ export function useClientSettingsHydrated(): boolean {
     getClientSettingsHydratedSnapshot,
     () => false,
   );
+}
+
+export function resolveSidebarNavigationMode(input: {
+  readonly settingsHydrated: boolean;
+  readonly configuredMode: SidebarNavigationMode;
+}): SidebarNavigationMode {
+  return input.settingsHydrated ? input.configuredMode : DEFAULT_SIDEBAR_NAVIGATION_MODE;
+}
+
+/**
+ * Holds the backward-compatible project-first default until local settings
+ * hydrate, then applies any persisted inbox preference.
+ */
+export function useSidebarNavigationMode(): SidebarNavigationMode {
+  const settingsHydrated = useClientSettingsHydrated();
+  const configuredMode = useSyncExternalStore(
+    subscribeClientSettings,
+    getClientSettingsSnapshot,
+    () => DEFAULT_CLIENT_SETTINGS,
+  ).sidebarNavigationMode;
+  return resolveSidebarNavigationMode({ settingsHydrated, configuredMode });
 }
 
 export function useSettings<T = UnifiedSettings>(selector?: (s: UnifiedSettings) => T): T {

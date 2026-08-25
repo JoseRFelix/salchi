@@ -6,7 +6,6 @@ import {
   FolderPlusIcon,
   GitBranchIcon,
   SearchIcon,
-  SettingsIcon,
   SquarePenIcon,
   TerminalIcon,
   TriangleAlertIcon,
@@ -25,7 +24,6 @@ import {
   type ContextMenuItem,
   type DesktopUpdateState,
   ProjectId,
-  type ScopedProjectRef,
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
   type ThreadEnvMode,
@@ -38,7 +36,7 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@salchi/client-runtime";
-import { Link, useLocation, useNavigate, useParams, useRouter } from "@tanstack/react-router";
+import { useLocation, useNavigate, useParams, useRouter } from "@tanstack/react-router";
 import {
   MAX_SIDEBAR_THREAD_PREVIEW_COUNT,
   MIN_SIDEBAR_THREAD_PREVIEW_COUNT,
@@ -48,7 +46,6 @@ import {
 } from "@salchi/contracts/settings";
 import { usePrimaryEnvironmentId } from "../environments/primary";
 import { isElectron } from "../env";
-import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { cn, isMacPlatform, newCommandId } from "../lib/utils";
 import {
@@ -59,7 +56,6 @@ import {
   selectThreadByRef,
   useStore,
 } from "../store";
-import { getThreadFromEnvironmentState } from "../threadDerivation";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useUiStateStore } from "../uiStateStore";
 import { useLocalDispatchStore } from "../localDispatchStore";
@@ -75,8 +71,7 @@ import { useModelPickerOpen } from "../modelPickerOpenState";
 import { useShortcutModifierState } from "../shortcutModifierState";
 import { useGitStatus } from "../lib/gitStatusState";
 import { readLocalApi } from "../localApi";
-import { DraftId, useComposerDraftStore } from "../composerDraftStore";
-import { derivePhase } from "../session-logic";
+import { useComposerDraftStore } from "../composerDraftStore";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useLongPressContextMenu } from "../hooks/useLongPressContextMenu";
 import { retainThreadDetailSubscription } from "../environments/runtime/service";
@@ -90,7 +85,6 @@ import { useThreadActions } from "../hooks/useThreadActions";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { formatRelativeTimeLabel } from "../timestampFormat";
-import { hasServerAcknowledgedLocalDispatch } from "./ChatView.logic";
 import { Kbd } from "./ui/kbd";
 import {
   getArm64IntelBuildWarningDescription,
@@ -133,9 +127,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./u
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -143,7 +135,6 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
   SidebarSeparator,
-  SidebarTrigger,
   useSidebar,
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
@@ -185,11 +176,8 @@ import {
   useSavedEnvironmentRegistryStore,
   useSavedEnvironmentRuntimeStore,
 } from "../environments/runtime";
-import type { SidebarThreadSummary, Thread } from "../types";
-import {
-  buildSidebarThreadPresentation,
-  placeDraftThreadsFirst,
-} from "../sidebarThreadPresentation";
+import type { SidebarThreadSummary } from "../types";
+import { placeDraftThreadsFirst } from "../sidebarThreadPresentation";
 import {
   buildPhysicalToLogicalProjectKeyMap,
   buildSidebarProjectSnapshots,
@@ -203,7 +191,9 @@ import {
   type SidebarProjectDragStartEvent,
   type SidebarSortableProjectHandleProps,
 } from "./sidebar/SidebarProjectDndList";
-import { SidebarFooterItems } from "./sidebar/SidebarFooterItems";
+import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import { useSidebarThreadPresentation } from "../hooks/useSidebarThreadPresentation";
+import { useSidebarLocalDispatchReconciliation } from "../hooks/useSidebarLocalDispatchReconciliation";
 import { SidebarUsageBackgroundRefresh } from "./sidebar/SidebarUsageIndicator";
 import {
   getFixedVirtualItemStyle,
@@ -256,66 +246,6 @@ function attachDeferredAutoAnimate(
       autoAnimate(node, SIDEBAR_LIST_ANIMATION_OPTIONS);
     }
   });
-}
-
-function useSidebarThreadPresentation(
-  serverThreads: readonly SidebarThreadSummary[],
-  projectRefs?: readonly ScopedProjectRef[],
-) {
-  const draftThreadsByDraftId = useComposerDraftStore((store) => store.draftThreadsByThreadKey);
-  const draftThreadEntries = useMemo(
-    () =>
-      Object.entries(draftThreadsByDraftId).filter(([, thread]) =>
-        projectRefs
-          ? projectRefs.some(
-              (projectRef) =>
-                projectRef.environmentId === thread.environmentId &&
-                projectRef.projectId === thread.projectId,
-            )
-          : true,
-      ),
-    [draftThreadsByDraftId, projectRefs],
-  );
-  const composerDrafts = useComposerDraftStore(
-    useShallow((store) =>
-      draftThreadEntries.map(([draftId]) => store.draftsByThreadKey[draftId] ?? null),
-    ),
-  );
-  const draftThreads = useMemo(
-    () =>
-      draftThreadEntries.map(([draftId, thread], index) => ({
-        draftId: DraftId.make(draftId),
-        thread,
-        composerDraft: composerDrafts[index] ?? null,
-      })),
-    [composerDrafts, draftThreadEntries],
-  );
-  const localDispatchByThreadKey = useLocalDispatchStore((store) => store.localDispatchByThreadKey);
-  const environmentStateById = useStore((state) => state.environmentStateById);
-  const serverThreadByKey = useMemo(() => {
-    const threadByKey = new Map<string, Thread>();
-    for (const environmentState of Object.values(environmentStateById)) {
-      for (const threadId of environmentState.threadIds) {
-        const thread = getThreadFromEnvironmentState(environmentState, threadId);
-        if (thread) {
-          threadByKey.set(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread);
-        }
-      }
-    }
-    return threadByKey;
-  }, [environmentStateById]);
-
-  return useMemo(
-    () =>
-      buildSidebarThreadPresentation({
-        serverThreads,
-        draftThreads,
-        localDispatchByThreadKey,
-        serverThreadByKey,
-        ...(projectRefs !== undefined ? { projectRefs } : {}),
-      }),
-    [draftThreads, localDispatchByThreadKey, projectRefs, serverThreadByKey, serverThreads],
-  );
 }
 
 function clampSidebarThreadPreviewCount(value: number): SidebarThreadPreviewCount {
@@ -2750,18 +2680,6 @@ const SidebarProjectListRow = memo(function SidebarProjectListRow(props: Sidebar
   );
 });
 
-function SalchiLogo() {
-  return (
-    <span aria-hidden="true" className="relative size-[25px] shrink-0 overflow-hidden">
-      <img
-        alt=""
-        className="absolute -top-[5.25px] -left-[7px] size-[39px] max-w-none"
-        src="/salchi-logo.png"
-      />
-    </span>
-  );
-}
-
 function ProjectSortMenu({
   projectSortOrder,
   threadSortOrder,
@@ -2910,74 +2828,6 @@ function ProjectSortMenu({
     </Menu>
   );
 }
-
-const SidebarChromeHeader = memo(function SidebarChromeHeader({
-  isElectron,
-}: {
-  isElectron: boolean;
-}) {
-  const wordmark = (
-    <div className="flex items-center gap-2">
-      <SidebarTrigger className="shrink-0 md:hidden" />
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Link
-              aria-label="Go to threads"
-              className="ml-1 flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md outline-hidden ring-ring transition-colors hover:text-foreground focus-visible:ring-2"
-              to="/"
-            >
-              <SalchiLogo />
-              <span className="truncate text-sm font-medium tracking-tight text-muted-foreground">
-                {APP_DISPLAY_NAME}
-              </span>
-            </Link>
-          }
-        />
-        <TooltipPopup side="bottom" sideOffset={2}>
-          Version {APP_VERSION}
-        </TooltipPopup>
-      </Tooltip>
-    </div>
-  );
-
-  return isElectron ? (
-    <SidebarHeader className="drag-region h-[52px] flex-row items-center gap-2 px-4 py-0 pl-[90px] wco:h-[env(titlebar-area-height)] wco:pl-[calc(env(titlebar-area-x)+1em)]">
-      {wordmark}
-    </SidebarHeader>
-  ) : (
-    <SidebarHeader className="gap-3 px-3 py-2 sm:gap-2.5 sm:px-4 sm:py-3">{wordmark}</SidebarHeader>
-  );
-});
-
-const SidebarChromeFooter = memo(function SidebarChromeFooter() {
-  const navigate = useNavigate();
-  const { isMobile, setOpenMobile } = useSidebar();
-  const handleSettingsClick = useCallback(() => {
-    if (isMobile) {
-      setOpenMobile(false);
-    }
-    void navigate({ to: "/settings" });
-  }, [isMobile, navigate, setOpenMobile]);
-
-  return (
-    <SidebarFooter className="p-2">
-      <SidebarFooterItems />
-      <SidebarMenu>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            size="sm"
-            className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-            onClick={handleSettingsClick}
-          >
-            <SettingsIcon className="size-3.5" />
-            <span>Settings</span>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-      </SidebarMenu>
-    </SidebarFooter>
-  );
-});
 
 interface SidebarProjectsContentProps {
   showArm64IntelBuildWarning: boolean;
@@ -3236,6 +3086,7 @@ export default function Sidebar() {
     draftThreadKeys,
     draftIdByThreadKey,
   } = useSidebarThreadPresentation(serverSidebarThreads);
+  useSidebarLocalDispatchReconciliation(sidebarThreads);
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const threadExpandedById = useUiStateStore((store) => store.threadExpandedById);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
@@ -3271,10 +3122,6 @@ export default function Sidebar() {
     [routeDraftSession, routeTarget],
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
-  const localDispatchByThreadKey = useLocalDispatchStore((state) => state.localDispatchByThreadKey);
-  const clearLocalDispatchByThreadKey = useLocalDispatchStore(
-    (state) => state.clearLocalDispatchByThreadKey,
-  );
   const keybindings = useServerKeybindings();
   const setCommandPaletteOpen = useCommandPaletteStore((store) => store.setOpen);
   const openAddProjectCommandPalette = useCommandPaletteStore((store) => store.openAddProject);
@@ -3294,37 +3141,6 @@ export default function Sidebar() {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const savedEnvironmentRegistry = useSavedEnvironmentRegistryStore((s) => s.byId);
   const savedEnvironmentRuntimeById = useSavedEnvironmentRuntimeStore((s) => s.byId);
-  useEffect(() => {
-    const entries = Object.entries(localDispatchByThreadKey);
-    if (entries.length === 0) {
-      return;
-    }
-    const sidebarThreadByKey = new Map(
-      sidebarThreads.map(
-        (thread) =>
-          [scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread] as const,
-      ),
-    );
-    for (const [threadKey, localDispatch] of entries) {
-      const thread = sidebarThreadByKey.get(threadKey);
-      if (!thread) {
-        continue;
-      }
-      if (
-        hasServerAcknowledgedLocalDispatch({
-          localDispatch,
-          phase: derivePhase(thread.session, thread.latestTurn),
-          latestTurn: thread.latestTurn,
-          session: thread.session,
-          pendingApprovalCreatedAt: null,
-          pendingUserInputCreatedAt: null,
-          threadError: null,
-        })
-      ) {
-        clearLocalDispatchByThreadKey(threadKey);
-      }
-    }
-  }, [clearLocalDispatchByThreadKey, localDispatchByThreadKey, sidebarThreads]);
   const orderedProjects = useMemo(() => {
     return orderItemsByPreferredIds({
       items: projects,

@@ -25,6 +25,7 @@ const clientSettings: ClientSettings = {
   diffWordWrap: true,
   favorites: [],
   providerModelPreferences: {},
+  sidebarNavigationMode: "project",
   sidebarProjectGroupingMode: "repository_path",
   sidebarProjectGroupingOverrides: {
     "environment-1:/tmp/project-a": "separate",

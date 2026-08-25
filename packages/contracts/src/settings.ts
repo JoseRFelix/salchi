@@ -18,6 +18,10 @@ export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"])
 export type TimestampFormat = typeof TimestampFormat.Type;
 export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
 
+export const SidebarNavigationMode = Schema.Literals(["project", "inbox"]);
+export type SidebarNavigationMode = typeof SidebarNavigationMode.Type;
+export const DEFAULT_SIDEBAR_NAVIGATION_MODE: SidebarNavigationMode = "project";
+
 export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_at", "manual"]);
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
 export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "updated_at";
@@ -91,6 +95,9 @@ export const ClientSettingsSchema = Schema.Struct({
       modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  sidebarNavigationMode: SidebarNavigationMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_NAVIGATION_MODE)),
+  ),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
   ),
@@ -597,6 +604,7 @@ export const ClientSettingsPatch = Schema.Struct({
       }),
     ),
   ),
+  sidebarNavigationMode: Schema.optionalKey(SidebarNavigationMode),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),

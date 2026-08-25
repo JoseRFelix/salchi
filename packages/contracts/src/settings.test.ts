@@ -24,6 +24,14 @@ describe("ClientSettings defaults", () => {
     expect(legacySettings.clientSettingsVersion).toBe(0);
     expect(legacySettings.autoOpenPlanSidebar).toBe(false);
   });
+
+  it("keeps the existing project-first sidebar as the default", () => {
+    expect(DEFAULT_CLIENT_SETTINGS.sidebarNavigationMode).toBe("project");
+    expect(decodeClientSettings({}).sidebarNavigationMode).toBe("project");
+    expect(decodeClientSettings({ sidebarNavigationMode: "inbox" }).sidebarNavigationMode).toBe(
+      "inbox",
+    );
+  });
 });
 
 describe("ServerSettings.transcriptionModel", () => {
