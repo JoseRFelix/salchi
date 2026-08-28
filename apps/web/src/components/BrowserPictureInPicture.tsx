@@ -3,12 +3,8 @@ import { BotIcon, GripIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { BrowserPipPhase } from "../browser/browserPipState";
-import type { BrowserStreamViewportFrame } from "../browser/browserStreamConnection";
 import type { BrowserSurfaceStreamLease } from "../browser/browserSurfaceStreamLease";
-import {
-  createBrowserBinaryFrameRenderer,
-  type LatestFrameRenderer,
-} from "../browser/latestFrameRenderer";
+import { useBrowserCanvasRenderer } from "../browser/useBrowserCanvasRenderer";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { cn } from "../lib/utils";
@@ -83,19 +79,20 @@ export function BrowserPictureInPicture(props: {
   readonly onClose: () => void;
   readonly onOpenPanel: () => void;
   readonly phase: Exclude<BrowserPipPhase, "hidden">;
+  readonly resetKey: string;
   readonly streamLease: BrowserSurfaceStreamLease;
 }) {
   const isMobile = useIsMobile();
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const rendererRef = useRef<LatestFrameRenderer<BrowserStreamViewportFrame> | null>(null);
-  const pendingFrameRef = useRef<BrowserStreamViewportFrame | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const transientDesktopLayoutRef = useRef<DesktopLayout | null>(null);
   const transientMobilePositionRef = useRef<{ readonly x: number; readonly y: number } | null>(
     null,
   );
-  const [hasFrame, setHasFrame] = useState(false);
+  const { canvasRef, hasFrame, pushFrame } = useBrowserCanvasRenderer({
+    enabled: true,
+    resetKey: props.resetKey,
+  });
   const [desktopLayout, setDesktopLayout] = useLocalStorage(
     DESKTOP_LAYOUT_KEY,
     DEFAULT_DESKTOP_LAYOUT,
@@ -114,35 +111,9 @@ export function BrowserPictureInPicture(props: {
 
   useEffect(() => {
     return props.streamLease.attach("pip", {
-      onFrame: (frame) => {
-        setHasFrame(true);
-        const renderer = rendererRef.current;
-        if (renderer) renderer.push(frame);
-        else pendingFrameRef.current = frame;
-      },
+      onFrame: pushFrame,
     });
-  }, [props.streamLease]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (canvas === null) return;
-    const renderer = createBrowserBinaryFrameRenderer(canvas);
-    rendererRef.current = renderer;
-    if (pendingFrameRef.current !== null) {
-      renderer.push(pendingFrameRef.current);
-      pendingFrameRef.current = null;
-    }
-    const redraw = () => renderer.redraw();
-    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(redraw) : null;
-    observer?.observe(canvas);
-    if (observer === null) window.addEventListener("resize", redraw);
-    return () => {
-      if (rendererRef.current === renderer) rendererRef.current = null;
-      observer?.disconnect();
-      if (observer === null) window.removeEventListener("resize", redraw);
-      renderer.dispose();
-    };
-  }, []);
+  }, [props.streamLease, pushFrame]);
 
   const beginDrag = useCallback(
     (event: React.PointerEvent, kind: DragState["kind"]) => {

@@ -42,6 +42,7 @@ describe("BrowserPictureInPicture", () => {
         onClose={vi.fn()}
         onOpenPanel={onOpenPanel}
         phase="visible"
+        resetKey="thread-test"
         streamLease={streamLease}
       />,
     );

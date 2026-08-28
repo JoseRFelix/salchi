@@ -96,6 +96,7 @@ function Panel(props: {
   readonly threadId: ThreadId;
   readonly visible: boolean;
 }) {
+  const state = props.state ?? viewportState(props.threadId);
   const streamLease = useMemo(
     () =>
       createBrowserSurfaceStreamLease({ environmentId: ENVIRONMENT_ID, threadId: props.threadId }),
@@ -103,15 +104,15 @@ function Panel(props: {
   );
   useLayoutEffect(() => () => streamLease.dispose(), [streamLease]);
   useLayoutEffect(() => {
-    streamLease.setSurface(props.visible ? "panel" : null);
-  }, [props.visible, streamLease]);
+    streamLease.setSurface(props.visible && state.authorization !== "denied" ? "panel" : null);
+  }, [props.visible, state.authorization, streamLease]);
   return (
     <BrowserPanel
       environmentId={ENVIRONMENT_ID}
       mode="sidebar"
       onClose={props.onClose ?? vi.fn()}
       onStateAction={vi.fn()}
-      state={props.state ?? viewportState(props.threadId)}
+      state={state}
       streamLease={streamLease}
       threadId={props.threadId}
       visible={props.visible}

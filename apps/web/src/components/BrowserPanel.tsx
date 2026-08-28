@@ -35,12 +35,9 @@ import {
   mapCanvasPointToBrowserFrame,
   type BrowserFramePoint,
 } from "../browser/browserInput";
-import {
-  createBrowserBinaryFrameRenderer,
-  type LatestFrameRenderer,
-} from "../browser/latestFrameRenderer";
 import type { BrowserStreamViewportFrame } from "../browser/browserStreamConnection";
 import type { BrowserSurfaceStreamLease } from "../browser/browserSurfaceStreamLease";
+import { useBrowserCanvasRenderer } from "../browser/useBrowserCanvasRenderer";
 import { readEnvironmentConnection } from "../environments/runtime";
 import type { WsRpcClient } from "../rpc/wsRpcClient";
 import { cn } from "../lib/utils";
@@ -194,12 +191,8 @@ export function BrowserPanel(props: {
     actuallyVisible &&
     props.state.threadId === props.threadId &&
     props.state.authorization !== "denied";
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const addressInputRef = useRef<HTMLInputElement | null>(null);
   const mobileKeyboardInputRef = useRef<HTMLInputElement | null>(null);
-  const frameRendererRef = useRef<LatestFrameRenderer<BrowserStreamViewportFrame> | null>(null);
-  const pendingFrameRef = useRef<BrowserStreamViewportFrame | null>(null);
-  const currentFrameRef = useRef<BrowserStreamViewportFrame | null>(null);
   const lastFrameReceivedAtRef = useRef(0);
   const inputMeasurementRef = useRef<{
     readonly afterSeq: number;
@@ -224,7 +217,6 @@ export function BrowserPanel(props: {
     props.state.tabs.find((tab) => tab.targetId === displayedActiveTargetId) ?? null;
   const displayedActiveUrl = browserAddressValue(displayedActiveTab?.url ?? "");
   const hasWebsiteUrl = displayedActiveUrl.length > 0;
-  const [hasFrame, setHasFrame] = useState(false);
   const [interactEnabled, setInteractEnabled] = useState(false);
   const [live, setLive] = useState(false);
   const [addressValue, setAddressValue] = useState(() => displayedActiveUrl);
@@ -238,20 +230,6 @@ export function BrowserPanel(props: {
   const pauseFrame = useCallback(() => {
     setLive(false);
   }, []);
-  const acceptFrame = useCallback((frame: BrowserStreamViewportFrame) => {
-    currentFrameRef.current = frame;
-    lastFrameReceivedAtRef.current = Date.now();
-    setHasFrame(true);
-    setLive(true);
-
-    const renderer = frameRendererRef.current;
-    if (renderer) {
-      renderer.push(frame);
-    } else {
-      pendingFrameRef.current = frame;
-    }
-  }, []);
-
   const frameRendered = useCallback((frame: BrowserStreamViewportFrame) => {
     if (import.meta.env.DEV) {
       console.debug("[browser-stream] frame receive-to-render", {
@@ -271,12 +249,25 @@ export function BrowserPanel(props: {
     }
   }, []);
 
+  const { canvasRef, currentFrameRef, hasFrame, pushFrame } =
+    useBrowserCanvasRenderer<BrowserStreamViewportFrame>({
+      enabled: props.state.status === "running" && hasWebsiteUrl,
+      onRendered: frameRendered,
+      resetKey: props.threadId,
+    });
+
+  const acceptFrame = useCallback(
+    (frame: BrowserStreamViewportFrame) => {
+      lastFrameReceivedAtRef.current = Date.now();
+      setLive(true);
+      pushFrame(frame);
+    },
+    [pushFrame],
+  );
+
   useEffect(() => {
-    pendingFrameRef.current = null;
-    currentFrameRef.current = null;
     lastFrameReceivedAtRef.current = 0;
     inputMeasurementRef.current = null;
-    setHasFrame(false);
     updateInteractEnabled(false);
     pauseFrame();
   }, [pauseFrame, props.threadId, updateInteractEnabled]);
@@ -284,33 +275,6 @@ export function BrowserPanel(props: {
   useEffect(() => {
     setAddressValue(browserAddressValue(displayedActiveTab?.url ?? ""));
   }, [displayedActiveTab?.targetId, displayedActiveTab?.url, props.threadId]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || props.state.status !== "running") return;
-
-    const renderer = createBrowserBinaryFrameRenderer(canvas, { onRendered: frameRendered });
-    frameRendererRef.current = renderer;
-    if (pendingFrameRef.current) {
-      renderer.push(pendingFrameRef.current);
-      pendingFrameRef.current = null;
-    }
-
-    const redraw = () => renderer.redraw();
-    const resizeObserver = typeof ResizeObserver === "function" ? new ResizeObserver(redraw) : null;
-    if (resizeObserver) {
-      resizeObserver.observe(canvas);
-    } else {
-      window.addEventListener("resize", redraw);
-    }
-
-    return () => {
-      if (frameRendererRef.current === renderer) frameRendererRef.current = null;
-      resizeObserver?.disconnect();
-      if (!resizeObserver) window.removeEventListener("resize", redraw);
-      renderer.dispose();
-    };
-  }, [frameRendered, hasWebsiteUrl, props.state.status, props.threadId]);
 
   useEffect(() => {
     if (!actuallyVisible || props.state.status !== "running" || !hasFrame) return;

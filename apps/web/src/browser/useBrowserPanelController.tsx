@@ -352,6 +352,7 @@ export function useBrowserPanelController(input: {
           openRightPanel("browser");
         }}
         phase={pipState.phase}
+        resetKey={input.threadId}
         streamLease={streamLease}
       />
     );
