@@ -2,7 +2,10 @@ import { Suspense, lazy, useCallback, type CSSProperties, type ReactNode } from 
 
 import { cn } from "~/lib/utils";
 
-import { usePlanRightPanelContent } from "../../rightPanelContentRegistry";
+import {
+  useBrowserRightPanelContent,
+  usePlanRightPanelContent,
+} from "../../rightPanelContentRegistry";
 import type { WorkspaceFilePreviewDiffReturnTarget } from "../../workspaceFilePreview";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 import {
@@ -43,7 +46,7 @@ const LazyDiffPanel = (props: { mode: DiffPanelMode }) => {
   );
 };
 
-export type ChatRightPanelView = "diff" | "files" | "plan";
+export type ChatRightPanelView = "browser" | "diff" | "files" | "plan";
 
 const RightPanelInlineSidebar = (props: {
   activeView: ChatRightPanelView | null;
@@ -52,6 +55,7 @@ const RightPanelInlineSidebar = (props: {
   onReturnToDiff: (target: WorkspaceFilePreviewDiffReturnTarget) => void;
   renderDiffContent: boolean;
   renderFileContent: boolean;
+  renderBrowserContent: ReactNode;
   renderPlanContent: ReactNode;
 }) => {
   const {
@@ -61,6 +65,7 @@ const RightPanelInlineSidebar = (props: {
     onReturnToDiff,
     renderDiffContent,
     renderFileContent,
+    renderBrowserContent,
     renderPlanContent,
   } = props;
   const open = activeView !== null;
@@ -164,6 +169,11 @@ const RightPanelInlineSidebar = (props: {
             {renderPlanContent}
           </div>
         ) : null}
+        {renderBrowserContent ? (
+          <div className={cn("h-full min-h-0", activeView !== "browser" && "hidden")}>
+            {renderBrowserContent}
+          </div>
+        ) : null}
         <SidebarRail />
       </Sidebar>
     </SidebarProvider>
@@ -189,8 +199,14 @@ export function ChatRightPanels(props: {
     useSheet,
   } = props;
   const plan = usePlanRightPanelContent();
-  const effectiveActiveView: ChatRightPanelView | null = plan.open ? "plan" : activeView;
-  const effectiveOnClose = plan.open ? plan.onClose : onClose;
+  const browser = useBrowserRightPanelContent();
+  const registeredPanel = browser.open ? browser : plan.open ? plan : null;
+  const effectiveActiveView: ChatRightPanelView | null = browser.open
+    ? "browser"
+    : plan.open
+      ? "plan"
+      : activeView;
+  const effectiveOnClose = registeredPanel?.onClose ?? onClose;
 
   // The worker-pool provider eagerly allocates WASM workers on mount, so it must
   // stay gated behind whether any panel content actually renders. It is wrapped
@@ -220,7 +236,8 @@ export function ChatRightPanels(props: {
             ) : null}
           </DiffWorkerPoolProvider>
         ) : null}
-        {plan.open ? plan.render("sheet") : null}
+        {effectiveActiveView === "plan" ? plan.render("sheet") : null}
+        {effectiveActiveView === "browser" ? browser.render("sheet") : null}
       </RightPanelSheet>
     );
   }
@@ -233,7 +250,8 @@ export function ChatRightPanels(props: {
       onReturnToDiff={onReturnFromFileToDiff}
       renderDiffContent={renderDiffContent}
       renderFileContent={renderFileContent}
-      renderPlanContent={plan.open ? plan.render("sidebar") : null}
+      renderBrowserContent={effectiveActiveView === "browser" ? browser.render("sidebar") : null}
+      renderPlanContent={effectiveActiveView === "plan" ? plan.render("sidebar") : null}
     />
   );
 }

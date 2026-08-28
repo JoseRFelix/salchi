@@ -83,4 +83,24 @@ describe("rightPanelGesture", () => {
     expect(openRightPanel("plan")).toBe(true);
     expect(closeWorkspaceStack).toHaveBeenCalledOnce();
   });
+
+  it("treats the browser as an exclusive right-panel view", () => {
+    const closeWorkspaceStack = vi.fn();
+    const closePlan = vi.fn();
+    const openBrowser = vi.fn();
+
+    __registerRightPanelForTests("diff", { close: closeWorkspaceStack, open: vi.fn() });
+    __registerRightPanelForTests("file", { close: closeWorkspaceStack, open: vi.fn() });
+    __registerRightPanelForTests("source-control", {
+      close: closeWorkspaceStack,
+      open: vi.fn(),
+    });
+    __registerRightPanelForTests("plan", { close: closePlan, open: vi.fn() });
+    __registerRightPanelForTests("browser", { open: openBrowser });
+
+    expect(openRightPanel("browser")).toBe(true);
+    expect(openBrowser).toHaveBeenCalledOnce();
+    expect(closeWorkspaceStack).toHaveBeenCalledOnce();
+    expect(closePlan).toHaveBeenCalledOnce();
+  });
 });

@@ -120,6 +120,7 @@ import { useCommandPaletteStore } from "../commandPaletteStore";
 import { buildTemporaryWorktreeBranchName } from "@salchi/shared/git";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useMobileEdgeSwipe } from "../hooks/useMobileEdgeSwipe";
+import { useBrowserPanelController } from "../browser/useBrowserPanelController";
 import { providerSupportsActiveTurnSteering } from "../providerTurnCapabilities";
 import { markRightPanelUsed, openRightPanel, useRegisterRightPanel } from "../rightPanelGesture";
 import { useRegisterPlanRightPanelContent } from "../rightPanelContentRegistry";
@@ -1029,6 +1030,12 @@ export default function ChatView(props: ChatViewProps) {
     [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
   );
   const isServerThread = routeKind === "server" && serverThread !== undefined;
+  const browserPanel = useBrowserPanelController({
+    enabled: isServerThread,
+    environmentId,
+    threadId,
+    useSheet: shouldUsePlanSidebarSheet,
+  });
   const activeThread = isServerThread ? serverThread : localDraftThread;
   const isInitialThreadDetailLoading =
     routeKind === "server" &&
@@ -2421,10 +2428,12 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeFileExplorerContext) {
       return;
     }
+    browserPanel.close();
     dismissPlanSidebarForCurrentTurn();
     openWorkspaceFileExplorer(activeFileExplorerContext, { navigation: "replace" });
   }, [
     activeFileExplorerContext,
+    browserPanel.close,
     dismissPlanSidebarForCurrentTurn,
     diffOpen,
     draftId,
@@ -2485,9 +2494,10 @@ export default function ChatView(props: ChatViewProps) {
   );
   const openDiffPanelExclusive = useCallback(() => {
     closeWorkspaceFilePreview();
+    browserPanel.close();
     dismissPlanSidebarForCurrentTurn();
     onDiffPanelOpen?.();
-  }, [dismissPlanSidebarForCurrentTurn, onDiffPanelOpen]);
+  }, [browserPanel.close, dismissPlanSidebarForCurrentTurn, onDiffPanelOpen]);
   const onToggleDiff = useCallback(() => {
     if (routeKind === "server" && !isServerThread) {
       return;
@@ -5080,6 +5090,9 @@ export default function ChatView(props: ChatViewProps) {
           availableEditors={availableEditors}
           terminalAvailable={activeProject !== undefined}
           terminalOpen={terminalState.terminalOpen}
+          browserAvailable={isServerThread}
+          browserOpen={browserPanel.open}
+          browserRunning={browserPanel.running}
           terminalToggleShortcutLabel={terminalToggleShortcutLabel}
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           sourceControlToggleShortcutLabel={sourceControlShortcutLabel}
@@ -5096,6 +5109,7 @@ export default function ChatView(props: ChatViewProps) {
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
           onToggleFileExplorer={toggleFileExplorerSidebar}
+          onToggleBrowser={browserPanel.toggle}
           onToggleTerminal={toggleTerminalVisibility}
           onToggleDiff={onToggleDiff}
           onToggleSourceControl={onToggleSourceControl}

@@ -13,6 +13,7 @@ import {
   FolderIcon,
   FolderTreeIcon,
   GitBranchIcon,
+  MonitorPlayIcon,
   TerminalSquareIcon,
 } from "lucide-react";
 import { Badge } from "../ui/badge";
@@ -48,6 +49,9 @@ interface ChatHeaderProps {
   availableEditors: ReadonlyArray<EditorId>;
   terminalAvailable: boolean;
   terminalOpen: boolean;
+  browserAvailable: boolean;
+  browserOpen: boolean;
+  browserRunning: boolean;
   terminalToggleShortcutLabel: string | null;
   diffToggleShortcutLabel: string | null;
   sourceControlToggleShortcutLabel: string | null;
@@ -64,6 +68,7 @@ interface ChatHeaderProps {
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleFileExplorer: () => void;
+  onToggleBrowser: () => void;
   onToggleTerminal: () => void;
   onToggleDiff: () => void;
   onToggleSourceControl: () => void;
@@ -101,6 +106,9 @@ export const ChatHeader = memo(function ChatHeader({
   availableEditors,
   terminalAvailable,
   terminalOpen,
+  browserAvailable,
+  browserOpen,
+  browserRunning,
   terminalToggleShortcutLabel,
   diffToggleShortcutLabel,
   sourceControlToggleShortcutLabel,
@@ -117,6 +125,7 @@ export const ChatHeader = memo(function ChatHeader({
   onUpdateProjectScript,
   onDeleteProjectScript,
   onToggleFileExplorer,
+  onToggleBrowser,
   onToggleTerminal,
   onToggleDiff,
   onToggleSourceControl,
@@ -321,6 +330,37 @@ export const ChatHeader = memo(function ChatHeader({
               <TooltipTrigger
                 render={
                   <Toggle
+                    className={`${headerIconActionClassName} relative`}
+                    pressed={browserOpen}
+                    onPressedChange={onToggleBrowser}
+                    aria-label="Toggle browser panel"
+                    variant="subtle-outline"
+                    size="xs"
+                    disabled={!browserAvailable}
+                  >
+                    <MonitorPlayIcon className="size-3" />
+                    {browserRunning ? (
+                      <span
+                        aria-hidden="true"
+                        className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-emerald-500 ring-1 ring-background"
+                        data-browser-running-indicator="true"
+                      />
+                    ) : null}
+                  </Toggle>
+                }
+              />
+              <TooltipPopup side="bottom">
+                {browserAvailable
+                  ? "Toggle browser panel"
+                  : "Browser is unavailable until this thread exists on the server."}
+              </TooltipPopup>
+            </Tooltip>
+          )}
+          {!isCompactHeader && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Toggle
                     className={headerIconActionClassName}
                     pressed={fileExplorerOpen}
                     onPressedChange={onToggleFileExplorer}
@@ -386,6 +426,19 @@ export const ChatHeader = memo(function ChatHeader({
                 <MenuItem onClick={() => onToggleFileExplorer()} disabled={!fileExplorerAvailable}>
                   <FolderTreeIcon aria-hidden="true" className="size-4" />
                   File explorer
+                </MenuItem>
+                <MenuItem onClick={() => onToggleBrowser()} disabled={!browserAvailable}>
+                  <span className="relative">
+                    <MonitorPlayIcon aria-hidden="true" className="size-4" />
+                    {browserRunning ? (
+                      <span
+                        aria-hidden="true"
+                        className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-emerald-500 ring-1 ring-popover"
+                        data-browser-running-indicator="true"
+                      />
+                    ) : null}
+                  </span>
+                  Browser
                 </MenuItem>
                 {showCompactOverflowActions ? <MenuSeparator /> : null}
                 {showCompactOverflowActions && hasProjectScriptsControl

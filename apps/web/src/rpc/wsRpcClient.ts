@@ -224,6 +224,16 @@ export interface WsRpcClient {
     readonly close: RpcUnaryMethod<typeof WS_METHODS.terminalClose>;
     readonly onEvent: RpcStreamMethod<typeof WS_METHODS.subscribeTerminalEvents>;
   };
+  readonly browser: {
+    readonly start: RpcUnaryMethod<typeof WS_METHODS.browserStart>;
+    readonly stop: RpcUnaryMethod<typeof WS_METHODS.browserStop>;
+    readonly getState: RpcUnaryMethod<typeof WS_METHODS.browserGetState>;
+    readonly setActiveTab: RpcUnaryMethod<typeof WS_METHODS.browserSetActiveTab>;
+    readonly openTab: RpcUnaryMethod<typeof WS_METHODS.browserOpenTab>;
+    readonly navigate: RpcUnaryMethod<typeof WS_METHODS.browserNavigate>;
+    readonly closeTab: RpcUnaryMethod<typeof WS_METHODS.browserCloseTab>;
+    readonly subscribeViewport: RpcInputStreamMethod<typeof WS_METHODS.browserSubscribeViewport>;
+  };
   readonly projects: {
     readonly searchEntries: RpcUnaryMethod<typeof WS_METHODS.projectsSearchEntries>;
     readonly listDirectoryEntries: RpcUnaryMethod<typeof WS_METHODS.projectsListDirectoryEntries>;
@@ -375,6 +385,22 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
           ...options,
           tag: options?.tag ?? WS_METHODS.subscribeTerminalEvents,
         }),
+    },
+    browser: {
+      start: (input) => transport.request((client) => client[WS_METHODS.browserStart](input)),
+      stop: (input) => transport.request((client) => client[WS_METHODS.browserStop](input)),
+      getState: (input) => transport.request((client) => client[WS_METHODS.browserGetState](input)),
+      setActiveTab: (input) =>
+        transport.request((client) => client[WS_METHODS.browserSetActiveTab](input)),
+      openTab: (input) => transport.request((client) => client[WS_METHODS.browserOpenTab](input)),
+      navigate: (input) => transport.request((client) => client[WS_METHODS.browserNavigate](input)),
+      closeTab: (input) => transport.request((client) => client[WS_METHODS.browserCloseTab](input)),
+      subscribeViewport: (input, listener, options) =>
+        transport.subscribe(
+          (client) => client[WS_METHODS.browserSubscribeViewport](input),
+          listener,
+          { ...options, tag: options?.tag ?? WS_METHODS.browserSubscribeViewport },
+        ),
     },
     projects: {
       searchEntries: (input) =>

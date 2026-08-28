@@ -11,6 +11,7 @@ import {
   type VcsStatusStreamEvent,
 } from "@salchi/contracts";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WsRpcProtocolClient } from "./protocol";
 import { isTransportConnectionErrorMessage } from "./transportError";
@@ -116,6 +117,62 @@ describe("wsRpcClient", () => {
     expect(request).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledWith(expect.any(Function), { signal: controller.signal });
     expect(protocolProbeSync).toHaveBeenCalledWith({ clientSequence: 4 });
+  });
+
+  it("forwards browser unary and viewport subscription RPCs", async () => {
+    const threadId = ThreadId.make("thread-browser-client");
+    const state = {
+      threadId,
+      status: "stopped" as const,
+      tabs: [],
+      executable: null,
+    };
+    const protocolStart = vi.fn(() => Effect.succeed(state));
+    const protocolNavigate = vi.fn(() => Effect.succeed(state));
+    const protocolSubscribe = vi.fn(() => Stream.empty);
+    const protocolClient = {
+      [WS_METHODS.browserStart]: protocolStart,
+      [WS_METHODS.browserNavigate]: protocolNavigate,
+      [WS_METHODS.browserSubscribeViewport]: protocolSubscribe,
+    } as unknown as WsRpcProtocolClient;
+    const request = vi.fn(
+      async <TSuccess>(
+        execute: (client: WsRpcProtocolClient) => Effect.Effect<TSuccess, Error, never>,
+      ) => Effect.runPromise(execute(protocolClient)),
+    );
+    const subscribe = vi.fn(
+      (_connect: unknown, _listener: unknown, _options?: unknown) => () => undefined,
+    );
+    const transport = {
+      dispose: vi.fn(async () => undefined),
+      reconnect: vi.fn(async () => undefined),
+      isHeartbeatFresh: vi.fn(() => true),
+      request: request as WsTransport["request"],
+      requestStream: vi.fn(),
+      subscribe: subscribe as unknown as WsTransport["subscribe"],
+    } satisfies Pick<
+      WsTransport,
+      "dispose" | "reconnect" | "isHeartbeatFresh" | "request" | "requestStream" | "subscribe"
+    >;
+    const client = createWsRpcClient(transport as unknown as WsTransport);
+
+    await expect(client.browser.start({ threadId })).resolves.toEqual(state);
+    await expect(
+      client.browser.navigate({ threadId, targetId: "target-1", url: "https://example.com/" }),
+    ).resolves.toEqual(state);
+    client.browser.subscribeViewport({ threadId }, vi.fn());
+
+    expect(protocolStart).toHaveBeenCalledWith({ threadId });
+    expect(protocolNavigate).toHaveBeenCalledWith({
+      threadId,
+      targetId: "target-1",
+      url: "https://example.com/",
+    });
+    const connect = subscribe.mock.calls[0]?.[0] as unknown as (
+      client: WsRpcProtocolClient,
+    ) => unknown;
+    connect(protocolClient);
+    expect(protocolSubscribe).toHaveBeenCalledWith({ threadId });
   });
 
   it("forwards thread detail page requests through the websocket transport", async () => {

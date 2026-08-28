@@ -28,10 +28,13 @@ const DEV_SERVER_LINK: DevServerLink = {
 };
 
 function ChatHeaderHarness({
+  browserRunning = false,
   devServerLinks = EMPTY_DEV_SERVER_LINKS,
 }: {
+  readonly browserRunning?: boolean;
   readonly devServerLinks?: ReadonlyArray<DevServerLink>;
 }) {
+  const [browserOpen, setBrowserOpen] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
   const [fileExplorerOpen, setFileExplorerOpen] = useState(false);
   const [sourceControlOpen, setSourceControlOpen] = useState(false);
@@ -54,6 +57,9 @@ function ChatHeaderHarness({
             availableEditors={[]}
             terminalAvailable={true}
             terminalOpen={terminalOpen}
+            browserAvailable={true}
+            browserOpen={browserOpen}
+            browserRunning={browserRunning}
             terminalToggleShortcutLabel={null}
             diffToggleShortcutLabel={null}
             sourceControlToggleShortcutLabel={null}
@@ -70,6 +76,7 @@ function ChatHeaderHarness({
             onUpdateProjectScript={async () => undefined}
             onDeleteProjectScript={async () => undefined}
             onToggleFileExplorer={() => setFileExplorerOpen((open) => !open)}
+            onToggleBrowser={() => setBrowserOpen((open) => !open)}
             onToggleTerminal={() => setTerminalOpen((open) => !open)}
             onToggleDiff={() => setDiffOpen((open) => !open)}
             onToggleSourceControl={() => setSourceControlOpen((open) => !open)}
@@ -197,7 +204,7 @@ describe("ChatHeader responsive controls", () => {
 
         await vi.waitFor(() => {
           const controls = getHeaderActionButtons();
-          expect(controls).toHaveLength(5);
+          expect(controls).toHaveLength(6);
           expectSquareControls(controls, 24);
           expectControlsDoNotOverlap(controls);
         });
@@ -243,8 +250,25 @@ describe("ChatHeader responsive controls", () => {
       await expect
         .element(page.getByRole("button", { name: "Toggle file explorer" }))
         .toBeVisible();
+      await expect
+        .element(page.getByRole("button", { name: "Toggle browser panel" }))
+        .toBeVisible();
       await expect.element(page.getByRole("button", { name: "Toggle diff panel" })).toBeVisible();
       await vi.waitFor(() => expectSquareControls(getHeaderActionButtons(), 24));
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("shows a running indicator on the browser view switcher", async () => {
+    await page.viewport(1024, 700);
+    const screen = await render(<ChatHeaderHarness browserRunning />);
+
+    try {
+      await expect
+        .element(page.getByRole("button", { name: "Toggle browser panel" }))
+        .toBeVisible();
+      expect(document.querySelector('[data-browser-running-indicator="true"]')).not.toBeNull();
     } finally {
       await screen.unmount();
     }
