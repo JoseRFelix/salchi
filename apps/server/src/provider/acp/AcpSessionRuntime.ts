@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import type { ThreadId } from "@salchi/contracts";
+
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -17,6 +19,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@salchi/shared/shell";
 import { mergeBrowserAgentEnvironment } from "../../browser/BrowserAgentAccess.ts";
+import { registerBrowserProviderProcess } from "../../browser/BrowserProviderProcessRegistry.ts";
 import {
   BROWSER_MCP_USAGE_INSTRUCTION,
   prepareBrowserMcpServer,
@@ -49,6 +52,7 @@ export interface AcpSpawnInput {
 
 export interface AcpSessionRuntimeOptions {
   readonly spawn: AcpSpawnInput;
+  readonly threadId?: ThreadId;
   readonly browserEnvironment?: NodeJS.ProcessEnv;
   readonly cwd: string;
   readonly resumeSessionId?: string;
@@ -270,6 +274,13 @@ const makeAcpSessionRuntime = (
             }),
         ),
       );
+    if (options.threadId !== undefined) {
+      const unregisterProviderProcess = registerBrowserProviderProcess({
+        pid: Number(child.pid),
+        threadId: options.threadId,
+      });
+      yield* Scope.addFinalizer(runtimeScope, Effect.sync(unregisterProviderProcess));
+    }
     yield* Scope.addFinalizer(
       runtimeScope,
       terminateAcpProcessTree({ child, label: options.clientInfo.name }).pipe(

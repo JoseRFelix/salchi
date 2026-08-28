@@ -6,6 +6,9 @@
  *
  * @module ClaudeAdapterLive
  */
+// @effect-diagnostics nodeBuiltinImport:off
+import { spawn } from "node:child_process";
+
 import {
   type CanUseTool,
   createSdkMcpServer,
@@ -22,6 +25,8 @@ import {
   type SettingSource,
   type SDKUserMessage,
   type ModelUsage,
+  type SpawnOptions,
+  type SpawnedProcess,
 } from "@anthropic-ai/claude-agent-sdk";
 import { parseCliArgs } from "@salchi/shared/cliArgs";
 import {
@@ -88,6 +93,7 @@ import {
   BROWSER_MCP_USAGE_INSTRUCTION,
   prepareBrowserMcpServer,
 } from "../../browser/BrowserMcp.ts";
+import { registerBrowserProviderProcess } from "../../browser/BrowserProviderProcessRegistry.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   formatPdfAttachmentReferenceText,
@@ -138,6 +144,22 @@ const CLAUDE_AUTH_FAILURE_MESSAGE =
 // is more aggressively rate-limited for non-Claude-Code user agents.
 const CLAUDE_OAUTH_USAGE_USER_AGENT = "claude-code/2.1.80";
 const CLAUDE_OAUTH_REFRESH_SKEW_MS = 60 * 1000;
+
+function spawnTrackedClaudeCodeProcess(threadId: ThreadId, options: SpawnOptions): SpawnedProcess {
+  const child = spawn(options.command, options.args, {
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+    env: options.env,
+    signal: options.signal,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const unregisterProviderProcess = registerBrowserProviderProcess({
+    pid: child.pid ?? -1,
+    threadId,
+  });
+  child.once("error", unregisterProviderProcess);
+  child.once("exit", unregisterProviderProcess);
+  return child;
+}
 const CLAUDE_STATUSLINE_CAPTURE_ENV = "SALCHI_CLAUDE_STATUSLINE_CAPTURE_PATH";
 const CLAUDE_OAUTH_DEFAULT_SCOPES = [
   "user:profile",
@@ -4617,6 +4639,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
         pathToClaudeCodeExecutable: claudeBinaryPath,
+        ...(options?.createQuery === undefined
+          ? {
+              spawnClaudeCodeProcess: (spawnOptions) =>
+                spawnTrackedClaudeCodeProcess(threadId, spawnOptions),
+            }
+          : {}),
         systemPrompt: {
           type: "preset",
           preset: "claude_code",

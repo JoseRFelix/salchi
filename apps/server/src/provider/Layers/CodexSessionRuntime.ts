@@ -45,6 +45,7 @@ import {
   prepareBrowserMcpServer,
   type PreparedBrowserMcpServer,
 } from "../../browser/BrowserMcp.ts";
+import { registerBrowserProviderProcess } from "../../browser/BrowserProviderProcessRegistry.ts";
 import { terminateChildProcess } from "@salchi/shared/childProcess";
 import { registerManagedChildProcess } from "../../process/ManagedChildProcessRegistry.ts";
 
@@ -1038,6 +1039,11 @@ export const makeCodexSessionRuntime = (
         : {}),
       ...(appServerEnvironment ? { environment: appServerEnvironment } : {}),
     });
+    const unregisterProviderProcess = registerBrowserProviderProcess({
+      pid: Number(child.pid),
+      threadId: options.threadId,
+    });
+    yield* Scope.addFinalizer(runtimeScope, Effect.sync(unregisterProviderProcess));
     const serverNotifications = yield* Queue.unbounded<CodexServerNotification>();
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const randomUUIDv4 = crypto.randomUUIDv4.pipe(

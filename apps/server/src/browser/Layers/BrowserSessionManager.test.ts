@@ -14,6 +14,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import type { BrowserRuntime, BrowserRuntimeCallbacks } from "../PlaywrightBrowserRuntime.ts";
+import { ROGUE_BROWSER_VIEWPORT_NOTICE } from "../RogueBrowserWatchdog.ts";
 import type { BrowserSessionManagerShape } from "../Services/BrowserSessionManager.ts";
 import {
   makeBrowserSessionManagerWithOptions,
@@ -94,6 +95,59 @@ it.effect("closes the owned browser runtime when the manager scope shuts down", 
     yield* Deferred.await(closed);
     assert.isTrue(yield* Deferred.isDone(closed));
   }),
+);
+
+it.effect("publishes rogue-browser notices and cancels the watchdog with the manager scope", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const managerScope = yield* Scope.make("sequential");
+      let scanCount = 0;
+      const terminated: number[] = [];
+      const manager = yield* makeBrowserSessionManagerWithOptions({
+        ...managerOptions(() => Effect.succeed(fakeRuntime())),
+        rogueBrowserWatchdog: {
+          intervalMillis: 1_000,
+          scan: Effect.sync(() => {
+            scanCount += 1;
+            return {
+              killEnabled: true,
+              processes: [
+                {
+                  command: "/tmp/chrome --user-data-dir=/tmp/rogue",
+                  pid: 4242,
+                  providerPid: 4000,
+                  threadId,
+                },
+              ],
+            };
+          }),
+          terminate: (process) =>
+            Effect.sync(() => {
+              terminated.push(process.pid);
+            }),
+        },
+      }).pipe(Effect.provideService(Scope.Scope, managerScope));
+      const notice = yield* manager.subscribeViewport(threadId).pipe(
+        Stream.filter(
+          (event) => event._tag === "Status" && event.error === ROGUE_BROWSER_VIEWPORT_NOTICE,
+        ),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+
+      yield* TestClock.adjust("1 second");
+      const events = yield* Fiber.join(notice);
+      assert.equal(events.length, 1);
+      assert.deepEqual(terminated, [4242]);
+      assert.equal(scanCount, 1);
+
+      yield* Scope.close(managerScope, Exit.void);
+      yield* TestClock.adjust("5 seconds");
+      yield* Effect.yieldNow;
+      assert.equal(scanCount, 1);
+    }),
+  ),
 );
 
 it.effect("starts screencasting for a subscriber and stops it when the stream is interrupted", () =>

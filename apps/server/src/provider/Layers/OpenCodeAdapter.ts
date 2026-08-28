@@ -1073,6 +1073,7 @@ export function makeOpenCodeAdapter(
               // process automatically. No manual `server.close()` needed.
               const server = yield* openCodeRuntime.connectToOpenCodeServer({
                 binaryPath,
+                threadId: input.threadId,
                 serverUrl,
                 ...(options?.environment ? { environment: options.environment } : {}),
                 ...(browserAgentAccess !== undefined

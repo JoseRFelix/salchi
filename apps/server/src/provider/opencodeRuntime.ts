@@ -1,6 +1,11 @@
 import { pathToFileURL } from "node:url";
 
-import type { ChatAttachment, ProviderApprovalDecision, RuntimeMode } from "@salchi/contracts";
+import type {
+  ChatAttachment,
+  ProviderApprovalDecision,
+  RuntimeMode,
+  ThreadId,
+} from "@salchi/contracts";
 import {
   createOpencodeClient,
   type Agent,
@@ -34,6 +39,7 @@ import * as NetService from "@salchi/shared/Net";
 import { resolveSpawnCommand } from "@salchi/shared/shell";
 import { mergeBrowserAgentEnvironment } from "../browser/BrowserAgentAccess.ts";
 import type { PreparedBrowserMcpServer } from "../browser/BrowserMcp.ts";
+import { registerBrowserProviderProcess } from "../browser/BrowserProviderProcessRegistry.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
 
 const OPENCODE_SERVER_READY_PREFIX = "opencode server listening";
@@ -116,6 +122,7 @@ export interface OpenCodeRuntimeShape {
    */
   readonly startOpenCodeServerProcess: (input: {
     readonly binaryPath: string;
+    readonly threadId?: ThreadId;
     readonly environment?: NodeJS.ProcessEnv;
     readonly browserEnvironment?: NodeJS.ProcessEnv;
     readonly browserMcpServer?: PreparedBrowserMcpServer;
@@ -130,6 +137,7 @@ export interface OpenCodeRuntimeShape {
    */
   readonly connectToOpenCodeServer: (input: {
     readonly binaryPath: string;
+    readonly threadId?: ThreadId;
     readonly serverUrl?: string | null;
     readonly environment?: NodeJS.ProcessEnv;
     readonly browserEnvironment?: NodeJS.ProcessEnv;
@@ -390,6 +398,13 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
               }),
           ),
         );
+      if (input.threadId !== undefined) {
+        const unregisterProviderProcess = registerBrowserProviderProcess({
+          pid: Number(child.pid),
+          threadId: input.threadId,
+        });
+        yield* Scope.addFinalizer(runtimeScope, Effect.sync(unregisterProviderProcess));
+      }
 
       const killOpenCodeProcessGroup = (signal: NodeJS.Signals) =>
         process.platform === "win32"
@@ -514,6 +529,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
 
     return startOpenCodeServerProcess({
       binaryPath: input.binaryPath,
+      ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
       ...(input.environment !== undefined ? { environment: input.environment } : {}),
       ...(input.browserEnvironment !== undefined
         ? { browserEnvironment: input.browserEnvironment }

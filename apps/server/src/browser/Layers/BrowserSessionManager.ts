@@ -31,17 +31,21 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import * as NetService from "@salchi/shared/Net";
 
 import { ServerConfig } from "../../config.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { readProcessRows } from "../../diagnostics/ProcessDiagnostics.ts";
 import { reapManagedChildProcesses } from "../../process/ManagedChildProcessRegistry.ts";
+import { terminateProcessTree } from "../../process/ProcessTree.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   makeBrowserAgentActivityController,
   type BrowserAgentActivityController,
 } from "../BrowserAgentActivity.ts";
 import { makeBrowserIdleController, type BrowserIdleController } from "../BrowserIdle.ts";
+import { listBrowserProviderProcesses } from "../BrowserProviderProcessRegistry.ts";
 import {
   browserMonotonicMillis,
   browserStreamDebugEnabled,
@@ -51,6 +55,12 @@ import {
   recordBrowserFrameTiming,
 } from "../BrowserStreamDiagnostics.ts";
 import { isBrowserRootThread, resolveBrowserRootThreadId } from "../BrowserThreadRoot.ts";
+import {
+  findRogueBrowserProcesses,
+  ROGUE_BROWSER_VIEWPORT_NOTICE,
+  ROGUE_BROWSER_WATCHDOG_INTERVAL_MILLIS,
+  type RogueBrowserProcess,
+} from "../RogueBrowserWatchdog.ts";
 import {
   launchPlaywrightBrowser,
   type BrowserRuntime,
@@ -93,6 +103,14 @@ export interface BrowserSessionManagerOptions {
   readonly launchRuntime: (
     input: PlaywrightBrowserLaunchInput,
   ) => Effect.Effect<BrowserRuntime, BrowserUnavailable | BrowserOperationErrorType, Scope.Scope>;
+  readonly rogueBrowserWatchdog?: {
+    readonly intervalMillis?: number;
+    readonly scan: Effect.Effect<{
+      readonly killEnabled: boolean;
+      readonly processes: ReadonlyArray<RogueBrowserProcess>;
+    }>;
+    readonly terminate: (process: RogueBrowserProcess) => Effect.Effect<void>;
+  };
 }
 
 interface SessionLifecycle {
@@ -1012,6 +1030,61 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
     );
   }
 
+  if (options.rogueBrowserWatchdog !== undefined) {
+    const watchdog = options.rogueBrowserWatchdog;
+    const checkRogueBrowsers = Effect.flatMap(watchdog.scan, ({ killEnabled, processes }) =>
+      Effect.forEach(
+        processes,
+        (rogueProcess) =>
+          resolveThreadId(rogueProcess.threadId).pipe(
+            Effect.flatMap((rootThreadId) =>
+              options.threadExists(rootThreadId).pipe(
+                Effect.flatMap((exists) =>
+                  exists
+                    ? withThreadLock(
+                        rootThreadId,
+                        Effect.gen(function* () {
+                          const entry = yield* getOrCreateEntry(rootThreadId);
+                          entry.mailbox.publishStatus(
+                            entry.status,
+                            entry.error ?? ROGUE_BROWSER_VIEWPORT_NOTICE,
+                          );
+                          yield* Effect.logWarning("Agent launched an external browser", {
+                            threadId: rootThreadId,
+                            pid: rogueProcess.pid,
+                            providerPid: rogueProcess.providerPid,
+                            command: rogueProcess.command,
+                            killEnabled,
+                          });
+                        }),
+                      ).pipe(
+                        Effect.andThen(
+                          killEnabled ? watchdog.terminate(rogueProcess) : Effect.void,
+                        ),
+                      )
+                    : Effect.void,
+                ),
+              ),
+            ),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Rogue browser watchdog could not inspect a process", {
+                pid: rogueProcess.pid,
+                cause,
+              }),
+            ),
+          ),
+        { discard: true },
+      ),
+    );
+    scheduleInManager(
+      Effect.forever(
+        Effect.sleep(watchdog.intervalMillis ?? ROGUE_BROWSER_WATCHDOG_INTERVAL_MILLIS).pipe(
+          Effect.andThen(checkRogueBrowsers),
+        ),
+      ),
+    );
+  }
+
   const subscribeAgentActivity: BrowserSessionManagerShape["subscribeAgentActivity"] = (threadId) =>
     Stream.unwrap(
       resolveThreadId(threadId).pipe(
@@ -1053,6 +1126,7 @@ const makeLive = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const serverSettings = yield* ServerSettingsService;
   const netService = yield* NetService.NetService;
+  const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const profileRoot = path.join(config.baseDir, "userdata", "browser-profiles");
   const processRegistryDirectory = path.join(config.providerStatusCacheDir, "browser-processes");
 
@@ -1139,6 +1213,33 @@ const makeLive = Effect.gen(function* () {
       }),
     launchRuntime: (input) =>
       launchPlaywrightBrowser(input).pipe(Effect.provideService(NetService.NetService, netService)),
+    rogueBrowserWatchdog: {
+      scan: Effect.gen(function* () {
+        const settings = yield* serverSettings.getSettings;
+        const processRows = yield* readProcessRows().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+        );
+        return {
+          killEnabled: settings.browserKillRogueBrowsers,
+          processes: findRogueBrowserProcesses({
+            processRows,
+            profileRoot,
+            providerProcesses: listBrowserProviderProcesses(),
+          }),
+        };
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Rogue browser watchdog scan failed", { cause }).pipe(
+            Effect.as({ killEnabled: false, processes: [] }),
+          ),
+        ),
+      ),
+      terminate: (rogueProcess) =>
+        terminateProcessTree({
+          rootPid: rogueProcess.pid,
+          label: `rogue browser for ${rogueProcess.threadId}`,
+        }),
+    },
   });
 });
 

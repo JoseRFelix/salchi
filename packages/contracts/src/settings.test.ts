@@ -37,6 +37,7 @@ describe("ServerSettings browser defaults", () => {
       Duration.toMillis(DEFAULT_BROWSER_IDLE_TIMEOUT),
     );
     expect(settings.browserAgentAccessEnabled).toBe(true);
+    expect(settings.browserKillRogueBrowsers).toBe(false);
     expect(settings.browserExecutablePath).toBe("");
   });
 
@@ -45,10 +46,12 @@ describe("ServerSettings browser defaults", () => {
       browserExecutablePath: "  /opt/chrome  ",
       browserIdleTimeout: 42_000,
       browserAgentAccessEnabled: false,
+      browserKillRogueBrowsers: true,
     });
     expect(patch.browserExecutablePath).toBe("/opt/chrome");
     expect(Duration.toMillis(patch.browserIdleTimeout!)).toBe(42_000);
     expect(patch.browserAgentAccessEnabled).toBe(false);
+    expect(patch.browserKillRogueBrowsers).toBe(true);
   });
 });
 
