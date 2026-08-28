@@ -40,8 +40,10 @@ requested id so a child-thread UI can still reject stale events without creating
 The public stream route passes its requested id through the same manager boundary. Agent access is
 normalized before the credential and stable proxy URL are created, so every provider seam receives
 the root id in `SALCHI_BROWSER_CDP_URL`. The live `threadExists` predicate accepts only a real root
-orchestration thread. On startup Salchi warns—but never deletes or migrates—profile directories that
-do not correspond to a current root thread.
+orchestration thread. On startup Salchi warns—but never automatically prunes—profile directories
+that do not correspond to a current root thread. `salchi browser prune-profiles` lists those
+directories and deletes them only when passed `--confirm`. Deleting a root thread stops its browser
+and removes that thread's profile; deleting a child thread cannot remove its root owner's profile.
 
 ## Browser runtime
 
@@ -272,7 +274,7 @@ activity for the configured timeout (15 minutes by default).
 | Trigger         | Browser session                                                                                           | Agent proxy                                                                                | Public/RPC viewport consumer                                                              |
 | --------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
 | `browser.stop`  | publishes `stopped`, closes session scope, gracefully closes Playwright, then enforces process-tree death | Chromium side closes each pipe; stable credential remains reconnectable                    | subscription remains and observes stopped metadata; screencast is gone                    |
-| thread deletion | invokes browser stop beside terminal cleanup; later starts fail root existence                            | attached pipes close; a retained token cannot restart a deleted thread                     | UI/thread teardown closes the client; server subscription releases on socket/stream close |
+| thread deletion | stops the browser, then removes that thread's persistent profile; later starts fail root existence        | attached pipes close; a retained token cannot restart a deleted thread                     | UI/thread teardown closes the client; server subscription releases on socket/stream close |
 | idle timeout    | same finalizers as stop; impossible while a subscriber or agent connection is present                     | therefore no attached proxy at the instant idle wins                                       | therefore no open viewport subscriber at the instant idle wins                            |
 | Chromium crash  | publishes `crashed`, resets agent activity, closes the failed session scope; no automatic restart         | Chromium side drops; reconnect through a valid credential explicitly/lazily restarts       | connection stays subscribed to manager metadata and can observe crash/restart             |
 | server shutdown | manager scope closes all session scopes/fibers; runtime/process-registry finalizers reap Chromium         | broker scope terminates pending/active pipes, revokes credentials, closes WS/HTTP listener | public HTTP/WS scope interrupts routes; RPC/raw subscription scopes release               |

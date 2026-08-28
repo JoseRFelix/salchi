@@ -2,15 +2,22 @@ import type { OrchestrationEvent } from "@salchi/contracts";
 import { makeDrainableWorker } from "@salchi/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 
+import {
+  browserProfileRoot,
+  deleteBrowserProfileForThread,
+} from "../../browser/BrowserProfiles.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
 import { TurnFileSnapshotsLive } from "../../persistence/Layers/TurnFileSnapshots.ts";
 import { TurnFileSnapshots } from "../../persistence/Services/TurnFileSnapshots.ts";
 import { TerminalManager } from "../../terminal/Services/Manager.ts";
 import { BrowserSessionManager } from "../../browser/Services/BrowserSessionManager.ts";
+import { ServerConfig } from "../../config.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ThreadDeletionReactor,
@@ -23,19 +30,25 @@ export function runThreadDeletionCleanup<
   StopError,
   TerminalError,
   BrowserError,
+  BrowserProfileError,
   SnapshotError,
   LogError,
 >(input: {
   readonly stopProviderSession: Effect.Effect<void, StopError>;
   readonly closeThreadTerminals: Effect.Effect<void, TerminalError>;
   readonly stopThreadBrowser: Effect.Effect<void, BrowserError>;
+  readonly deleteThreadBrowserProfile: Effect.Effect<void, BrowserProfileError>;
   readonly deleteTurnFileSnapshots: Effect.Effect<void, SnapshotError>;
   readonly deleteProviderEventLogs: Effect.Effect<void, LogError>;
-}): Effect.Effect<void, StopError | TerminalError | BrowserError | SnapshotError | LogError> {
+}): Effect.Effect<
+  void,
+  StopError | TerminalError | BrowserError | BrowserProfileError | SnapshotError | LogError
+> {
   return Effect.gen(function* () {
     yield* input.stopProviderSession;
     yield* input.closeThreadTerminals;
     yield* input.stopThreadBrowser;
+    yield* input.deleteThreadBrowserProfile;
     yield* input.deleteTurnFileSnapshots;
     yield* input.deleteProviderEventLogs;
   });
@@ -68,6 +81,9 @@ const make = Effect.gen(function* () {
   const providerEventLoggers = yield* ProviderEventLoggers;
   const terminalManager = yield* TerminalManager;
   const browserSessionManager = yield* BrowserSessionManager;
+  const config = yield* ServerConfig;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const turnFileSnapshots = yield* TurnFileSnapshots;
 
   const stopProviderSession = (threadId: ThreadDeletedEvent["payload"]["threadId"]) =>
@@ -88,6 +104,19 @@ const make = Effect.gen(function* () {
     logCleanupCauseUnlessInterrupted({
       effect: browserSessionManager.stop(threadId).pipe(Effect.asVoid),
       message: "thread deletion cleanup skipped browser stop",
+      threadId,
+    });
+
+  const deleteThreadBrowserProfile = (threadId: ThreadDeletedEvent["payload"]["threadId"]) =>
+    logCleanupCauseUnlessInterrupted({
+      effect: deleteBrowserProfileForThread({
+        profileRoot: browserProfileRoot(config.baseDir, path),
+        threadId,
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      ),
+      message: "thread deletion cleanup skipped browser profile deletion",
       threadId,
     });
 
@@ -113,6 +142,7 @@ const make = Effect.gen(function* () {
       stopProviderSession: stopProviderSession(threadId),
       closeThreadTerminals: closeThreadTerminals(threadId),
       stopThreadBrowser: stopThreadBrowser(threadId),
+      deleteThreadBrowserProfile: deleteThreadBrowserProfile(threadId),
       deleteTurnFileSnapshots: deleteTurnFileSnapshots(threadId),
       deleteProviderEventLogs: deleteProviderEventLogs(threadId),
     });

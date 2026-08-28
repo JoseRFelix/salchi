@@ -14,7 +14,9 @@ export interface BrowserThreadLookup<E> {
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, E>;
 }
 
-export function isBrowserRootThread(thread: OrchestrationThreadShell): boolean {
+export function isBrowserRootThread(
+  thread: Pick<OrchestrationThreadShell, "createdByThreadId" | "parentThreadId">,
+): boolean {
   return thread.parentThreadId === null && thread.createdByThreadId === null;
 }
 

@@ -50,6 +50,7 @@ describe("logCleanupCauseUnlessInterrupted", () => {
           stopProviderSession: record("provider"),
           closeThreadTerminals: record("terminals"),
           stopThreadBrowser: record("browser"),
+          deleteThreadBrowserProfile: record("browser-profile"),
           deleteTurnFileSnapshots: record("snapshots"),
           deleteProviderEventLogs: record("provider-logs"),
         });
@@ -57,6 +58,13 @@ describe("logCleanupCauseUnlessInterrupted", () => {
       }),
     );
 
-    expect(operations).toEqual(["provider", "terminals", "browser", "snapshots", "provider-logs"]);
+    expect(operations).toEqual([
+      "provider",
+      "terminals",
+      "browser",
+      "browser-profile",
+      "snapshots",
+      "provider-logs",
+    ]);
   });
 });

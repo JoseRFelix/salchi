@@ -45,6 +45,11 @@ import {
   type BrowserAgentActivityController,
 } from "../BrowserAgentActivity.ts";
 import { makeBrowserIdleController, type BrowserIdleController } from "../BrowserIdle.ts";
+import {
+  browserProfileDirectoryName,
+  browserProfileRoot,
+  browserProfileThreadIdFromDirectory,
+} from "../BrowserProfiles.ts";
 import { listBrowserProviderProcesses } from "../BrowserProviderProcessRegistry.ts";
 import {
   browserMonotonicMillis,
@@ -230,15 +235,6 @@ function makeOperationError(threadId: ThreadId, message: string, cause?: unknown
     message,
     ...(cause === undefined ? {} : { cause }),
   });
-}
-
-function profileThreadIdFromDirectory(profileDirectory: string): ThreadId | undefined {
-  try {
-    const decoded = decodeURIComponent(profileDirectory);
-    return decoded.trim().length > 0 ? ThreadId.make(decoded) : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function launchFailureFromCause(
@@ -1133,7 +1129,7 @@ const makeLive = Effect.gen(function* () {
   const serverSettings = yield* ServerSettingsService;
   const netService = yield* NetService.NetService;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const profileRoot = path.join(config.baseDir, "userdata", "browser-profiles");
+  const profileRoot = browserProfileRoot(config.baseDir, path);
   const processRegistryDirectory = path.join(config.providerStatusCacheDir, "browser-processes");
 
   yield* Effect.all([
@@ -1149,7 +1145,7 @@ const makeLive = Effect.gen(function* () {
     profileDirectories,
     (profileDirectory) =>
       Effect.gen(function* () {
-        const profileThreadId = profileThreadIdFromDirectory(profileDirectory);
+        const profileThreadId = browserProfileThreadIdFromDirectory(profileDirectory);
         const thread =
           profileThreadId === undefined
             ? Option.none()
@@ -1194,7 +1190,7 @@ const makeLive = Effect.gen(function* () {
             makeOperationError(threadId, "Failed to load browser settings.", cause),
           ),
         );
-        const userDataDirectory = path.join(profileRoot, encodeURIComponent(threadId));
+        const userDataDirectory = path.join(profileRoot, browserProfileDirectoryName(threadId));
         yield* fileSystem
           .makeDirectory(userDataDirectory, { recursive: true })
           .pipe(
