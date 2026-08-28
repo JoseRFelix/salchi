@@ -1,5 +1,6 @@
 import {
   BrowserCrashed,
+  type BrowserHistoryAction,
   BrowserOperationError,
   BrowserUnavailable,
   ThreadNotFound,
@@ -796,6 +797,15 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
       withRunningSession(rootThreadId, (runtime) => runtime.navigate(targetId, url)),
     );
 
+  const navigateHistory: BrowserSessionManagerShape["navigateHistory"] = (
+    threadId,
+    targetId,
+    action: BrowserHistoryAction,
+  ) =>
+    runStateOperation(threadId, (rootThreadId) =>
+      withRunningSession(rootThreadId, (runtime) => runtime.navigateHistory(targetId, action)),
+    );
+
   const closeTab: BrowserSessionManagerShape["closeTab"] = (threadId, targetId) =>
     runStateOperation(threadId, (rootThreadId) =>
       withRunningSession(rootThreadId, (runtime) => runtime.closeTab(targetId)),
@@ -907,6 +917,7 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
     setActiveTab,
     openTab,
     navigate,
+    navigateHistory,
     closeTab,
     dispatchInput,
     subscribeViewport,

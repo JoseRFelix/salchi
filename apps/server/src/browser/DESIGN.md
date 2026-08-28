@@ -37,7 +37,8 @@ as `crashed` and is restarted only by an explicit start.
 
 The web client provides the browser as a normal right-panel view. Frames stay in the component's
 canvas renderer and are not stored in Zustand or persisted. The viewport subscription exists only
-while that panel view is visible.
+while that panel view is visible. Its browser-style address bar exposes back, forward, reload, and
+direct navigation through owner-scoped unary browser RPCs.
 
 ## Phase 2b: agent CDP access
 

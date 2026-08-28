@@ -83,6 +83,7 @@ function createBrowserClient() {
     setActiveTab: vi.fn(),
     openTab: vi.fn(),
     navigate: vi.fn(async ({ threadId }: { threadId: ThreadId }) => sessionState(threadId)),
+    navigateHistory: vi.fn(async ({ threadId }: { threadId: ThreadId }) => sessionState(threadId)),
     closeTab: vi.fn(),
   };
   return { browser };
@@ -211,6 +212,53 @@ describe("BrowserPanel subscription visibility", () => {
       await expect.element(page.getByText("Open a new tab to start browsing.")).toBeVisible();
       await expect.element(page.getByRole("button", { name: "Open tab" })).toBeVisible();
       expect(document.querySelector('canvas[aria-label="Live browser viewport"]')).toBeNull();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("places browser history controls before the address bar and dispatches their actions", async () => {
+    const client = createBrowserClient();
+    readEnvironmentConnectionMock.mockReturnValue({ client });
+    const state = reduceBrowserViewportState(initialBrowserViewportState(THREAD_A), {
+      type: "snapshot",
+      snapshot: {
+        threadId: THREAD_A,
+        status: "running",
+        tabs: [
+          {
+            targetId: "target-1",
+            title: "Example",
+            url: "https://example.com/",
+            active: true,
+          },
+        ],
+        executable: null,
+      },
+    });
+    const screen = await render(<Panel state={state} threadId={THREAD_A} visible />);
+
+    try {
+      const address = document.querySelector<HTMLInputElement>('[aria-label="Browser address"]');
+      expect(address).not.toBeNull();
+      for (const label of ["Go back", "Go forward", "Reload"] as const) {
+        const button = document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+        expect(button).not.toBeNull();
+        expect(
+          button && address
+            ? button.compareDocumentPosition(address) & Node.DOCUMENT_POSITION_FOLLOWING
+            : 0,
+        ).not.toBe(0);
+        await page.getByRole("button", { name: label }).click();
+      }
+
+      await vi.waitFor(() =>
+        expect(client.browser.navigateHistory.mock.calls.map(([input]) => input)).toEqual([
+          { threadId: THREAD_A, targetId: "target-1", action: "back" },
+          { threadId: THREAD_A, targetId: "target-1", action: "forward" },
+          { threadId: THREAD_A, targetId: "target-1", action: "reload" },
+        ]),
+      );
     } finally {
       await screen.unmount();
     }

@@ -62,6 +62,16 @@ export const BrowserNavigateInput = Schema.Struct({
 });
 export type BrowserNavigateInput = typeof BrowserNavigateInput.Type;
 
+export const BrowserHistoryAction = Schema.Literals(["back", "forward", "reload"]);
+export type BrowserHistoryAction = typeof BrowserHistoryAction.Type;
+
+export const BrowserNavigateHistoryInput = Schema.Struct({
+  threadId: ThreadId,
+  targetId: TrimmedNonEmptyString,
+  action: BrowserHistoryAction,
+});
+export type BrowserNavigateHistoryInput = typeof BrowserNavigateHistoryInput.Type;
+
 export const BrowserCloseTabInput = BrowserSetActiveTabInput;
 export type BrowserCloseTabInput = typeof BrowserCloseTabInput.Type;
 

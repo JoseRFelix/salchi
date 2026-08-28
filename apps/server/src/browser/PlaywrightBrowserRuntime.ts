@@ -2,6 +2,7 @@
 import { readlinkSync } from "node:fs";
 
 import {
+  type BrowserHistoryAction,
   BrowserOperationError,
   BrowserTabNotFound,
   type BrowserExecutableInfo,
@@ -98,6 +99,10 @@ export interface BrowserRuntime {
   readonly navigate: (
     targetId: string,
     url: string,
+  ) => Effect.Effect<void, BrowserOperationErrorType | BrowserTabNotFoundType>;
+  readonly navigateHistory: (
+    targetId: string,
+    action: BrowserHistoryAction,
   ) => Effect.Effect<void, BrowserOperationErrorType | BrowserTabNotFoundType>;
   readonly closeTab: (
     targetId: string,
@@ -799,6 +804,28 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
           const runtime = yield* lookupTab(targetId);
           yield* tryBrowserOperation(input.threadId, "Failed to navigate the browser tab.", () =>
             runtime.page.goto(url),
+          );
+          input.callbacks.onCdpActivity();
+          yield* refreshTabsUnlocked;
+        }),
+      ),
+    navigateHistory: (targetId, action) =>
+      serialized(
+        Effect.gen(function* () {
+          const runtime = yield* lookupTab(targetId);
+          yield* tryBrowserOperation(
+            input.threadId,
+            `Failed to navigate browser history ${action}.`,
+            () => {
+              switch (action) {
+                case "back":
+                  return runtime.page.goBack();
+                case "forward":
+                  return runtime.page.goForward();
+                case "reload":
+                  return runtime.page.reload();
+              }
+            },
           );
           input.callbacks.onCdpActivity();
           yield* refreshTabsUnlocked;

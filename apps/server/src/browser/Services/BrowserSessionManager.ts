@@ -1,4 +1,5 @@
 import type {
+  BrowserHistoryAction,
   BrowserInputEvent,
   BrowserRpcError,
   BrowserSessionState,
@@ -36,6 +37,11 @@ export interface BrowserSessionManagerShape {
     threadId: ThreadId,
     targetId: string,
     url: string,
+  ) => Effect.Effect<BrowserSessionState, BrowserRpcError>;
+  readonly navigateHistory: (
+    threadId: ThreadId,
+    targetId: string,
+    action: BrowserHistoryAction,
   ) => Effect.Effect<BrowserSessionState, BrowserRpcError>;
   readonly closeTab: (
     threadId: ThreadId,

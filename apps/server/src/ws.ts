@@ -1643,6 +1643,16 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
             ),
             { "rpc.aggregate": "browser" },
           ),
+        [WS_METHODS.browserNavigateHistory]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserNavigateHistory,
+            requireBrowserOperationScope.pipe(
+              Effect.andThen(
+                browserSessionManager.navigateHistory(input.threadId, input.targetId, input.action),
+              ),
+            ),
+            { "rpc.aggregate": "browser" },
+          ),
         [WS_METHODS.browserCloseTab]: (input) =>
           observeRpcEffect(
             WS_METHODS.browserCloseTab,

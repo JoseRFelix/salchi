@@ -7,6 +7,7 @@ import { AuthAccessStreamEvent, EnvironmentAuthorizationError } from "./auth.ts"
 import {
   BrowserCloseTabInput,
   BrowserDispatchInput,
+  BrowserNavigateHistoryInput,
   BrowserNavigateInput,
   BrowserOpenTabInput,
   BrowserRpcError,
@@ -200,6 +201,7 @@ export const WS_METHODS = {
   browserSetActiveTab: "browser.setActiveTab",
   browserOpenTab: "browser.openTab",
   browserNavigate: "browser.navigate",
+  browserNavigateHistory: "browser.navigateHistory",
   browserCloseTab: "browser.closeTab",
   browserDispatchInput: "browser.dispatchInput",
   browserSubscribeViewport: "browser.subscribeViewport",
@@ -636,6 +638,12 @@ export const WsBrowserNavigateRpc = Rpc.make(WS_METHODS.browserNavigate, {
   error: BrowserAuthorizedRpcError,
 });
 
+export const WsBrowserNavigateHistoryRpc = Rpc.make(WS_METHODS.browserNavigateHistory, {
+  payload: BrowserNavigateHistoryInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
 export const WsBrowserCloseTabRpc = Rpc.make(WS_METHODS.browserCloseTab, {
   payload: BrowserCloseTabInput,
   success: BrowserSessionState,
@@ -821,6 +829,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsBrowserSetActiveTabRpc,
   WsBrowserOpenTabRpc,
   WsBrowserNavigateRpc,
+  WsBrowserNavigateHistoryRpc,
   WsBrowserCloseTabRpc,
   WsBrowserDispatchInputRpc,
   WsBrowserSubscribeViewportRpc,

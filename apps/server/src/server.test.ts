@@ -583,6 +583,7 @@ const buildAppUnderTest = (options?: {
       setActiveTab: (threadId) => Effect.succeed(browserState(threadId, "running")),
       openTab: (threadId) => Effect.succeed(browserState(threadId, "running")),
       navigate: (threadId) => Effect.succeed(browserState(threadId, "running")),
+      navigateHistory: (threadId) => Effect.succeed(browserState(threadId, "running")),
       closeTab: (threadId) => Effect.succeed(browserState(threadId, "running")),
       dispatchInput: () => Effect.void,
       subscribeViewport: () => Stream.empty,

@@ -129,11 +129,13 @@ describe("wsRpcClient", () => {
     };
     const protocolStart = vi.fn(() => Effect.succeed(state));
     const protocolNavigate = vi.fn(() => Effect.succeed(state));
+    const protocolNavigateHistory = vi.fn(() => Effect.succeed(state));
     const protocolDispatchInput = vi.fn(() => Effect.void);
     const protocolSubscribe = vi.fn(() => Stream.empty);
     const protocolClient = {
       [WS_METHODS.browserStart]: protocolStart,
       [WS_METHODS.browserNavigate]: protocolNavigate,
+      [WS_METHODS.browserNavigateHistory]: protocolNavigateHistory,
       [WS_METHODS.browserDispatchInput]: protocolDispatchInput,
       [WS_METHODS.browserSubscribeViewport]: protocolSubscribe,
     } as unknown as WsRpcProtocolClient;
@@ -163,6 +165,9 @@ describe("wsRpcClient", () => {
       client.browser.navigate({ threadId, targetId: "target-1", url: "https://example.com/" }),
     ).resolves.toEqual(state);
     await expect(
+      client.browser.navigateHistory({ threadId, targetId: "target-1", action: "back" }),
+    ).resolves.toEqual(state);
+    await expect(
       client.browser.dispatchInput({
         threadId,
         targetId: "target-1",
@@ -176,6 +181,11 @@ describe("wsRpcClient", () => {
       threadId,
       targetId: "target-1",
       url: "https://example.com/",
+    });
+    expect(protocolNavigateHistory).toHaveBeenCalledWith({
+      threadId,
+      targetId: "target-1",
+      action: "back",
     });
     expect(protocolDispatchInput).toHaveBeenCalledWith({
       threadId,

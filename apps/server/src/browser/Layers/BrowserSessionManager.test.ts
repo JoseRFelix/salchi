@@ -35,6 +35,7 @@ function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
     setActiveTab: () => Effect.void,
     openTab: () => Effect.void,
     navigate: () => Effect.void,
+    navigateHistory: () => Effect.void,
     closeTab: () => Effect.void,
     dispatchInput: () => Effect.void,
     setScreencastEnabled: () => Effect.void,
@@ -270,6 +271,37 @@ it.effect("shares a root browser session while preserving the requested API thre
       );
       assert.isTrue(existenceChecks.every((checkedThreadId) => checkedThreadId === rootThreadId));
       assert.deepEqual(launchThreadIds, [rootThreadId]);
+    }),
+  ),
+);
+
+it.effect("dispatches browser history controls to the requested tab", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const calls: Array<{ readonly action: string; readonly targetId: string }> = [];
+      const manager = yield* makeBrowserSessionManagerWithOptions(
+        managerOptions(() =>
+          Effect.succeed(
+            fakeRuntime({
+              navigateHistory: (targetId, action) =>
+                Effect.sync(() => {
+                  calls.push({ targetId, action });
+                }),
+            }),
+          ),
+        ),
+      );
+
+      yield* manager.start(threadId);
+      yield* manager.navigateHistory(threadId, "target-1", "back");
+      yield* manager.navigateHistory(threadId, "target-1", "forward");
+      yield* manager.navigateHistory(threadId, "target-1", "reload");
+
+      assert.deepEqual(calls, [
+        { targetId: "target-1", action: "back" },
+        { targetId: "target-1", action: "forward" },
+        { targetId: "target-1", action: "reload" },
+      ]);
     }),
   ),
 );

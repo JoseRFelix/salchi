@@ -1,4 +1,5 @@
 import type {
+  BrowserHistoryAction,
   BrowserInputEvent,
   BrowserSessionState,
   EnvironmentId,
@@ -6,6 +7,7 @@ import type {
 } from "@salchi/contracts";
 import {
   AppWindowIcon,
+  ArrowLeftIcon,
   ArrowRightIcon,
   CircleStopIcon,
   KeyboardIcon,
@@ -13,6 +15,7 @@ import {
   MousePointer2Icon,
   PanelRightCloseIcon,
   PlusIcon,
+  RefreshCwIcon,
   RotateCcwIcon,
   SearchIcon,
   XIcon,
@@ -69,7 +72,14 @@ const TOUCH_CLICK_DRAG_HOLD_MS = 450;
 const TOUCH_SCROLL_THRESHOLD_PX = 8;
 
 type BrowserClient = WsRpcClient["browser"];
-type PendingOperation = "close-tab" | "navigate" | "open-tab" | "set-active-tab" | "start" | "stop";
+type PendingOperation =
+  | "close-tab"
+  | "navigate"
+  | "navigate-history"
+  | "open-tab"
+  | "set-active-tab"
+  | "start"
+  | "stop";
 type BrowserPointerButton = Extract<BrowserInputEvent, { readonly _tag: "PointerDown" }>["button"];
 
 interface ActivePointerGesture {
@@ -145,6 +155,33 @@ function BrowserEmptyState(props: {
         </EmptyContent>
       ) : null}
     </Empty>
+  );
+}
+
+function BrowserNavigationButton(props: {
+  readonly disabled: boolean;
+  readonly icon: React.ReactNode;
+  readonly label: string;
+  readonly onClick: () => void;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            aria-label={props.label}
+            disabled={props.disabled}
+            onClick={props.onClick}
+            size="icon-xs"
+            type="button"
+            variant="ghost"
+          />
+        }
+      >
+        {props.icon}
+      </TooltipTrigger>
+      <TooltipPopup side="bottom">{props.label}</TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -923,6 +960,19 @@ export function BrowserPanel(props: {
     },
     [addressValue, displayedActiveTargetId, props.threadId, runOperation],
   );
+  const navigateHistory = useCallback(
+    (action: BrowserHistoryAction) => {
+      if (displayedActiveTargetId === null) return;
+      void runOperation("navigate-history", (client) =>
+        client.navigateHistory({
+          threadId: props.threadId,
+          targetId: displayedActiveTargetId,
+          action,
+        }),
+      );
+    },
+    [displayedActiveTargetId, props.threadId, runOperation],
+  );
   const closeTab = useCallback(
     (targetId: string) => {
       void runOperation("close-tab", (client) =>
@@ -986,7 +1036,26 @@ export function BrowserPanel(props: {
           className="flex shrink-0 items-center gap-1.5 border-b border-border/60 bg-muted/10 px-2 py-1.5"
           onSubmit={navigate}
         >
-          <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          <div className="flex shrink-0 items-center gap-0.5">
+            <BrowserNavigationButton
+              disabled={pendingOperation !== null || !hasWebsiteUrl}
+              icon={<ArrowLeftIcon className="size-3.5" />}
+              label="Go back"
+              onClick={() => navigateHistory("back")}
+            />
+            <BrowserNavigationButton
+              disabled={pendingOperation !== null || !hasWebsiteUrl}
+              icon={<ArrowRightIcon className="size-3.5" />}
+              label="Go forward"
+              onClick={() => navigateHistory("forward")}
+            />
+            <BrowserNavigationButton
+              disabled={pendingOperation !== null || !hasWebsiteUrl}
+              icon={<RefreshCwIcon className="size-3.5" />}
+              label="Reload"
+              onClick={() => navigateHistory("reload")}
+            />
+          </div>
           <input
             aria-label="Browser address"
             autoCapitalize="none"
