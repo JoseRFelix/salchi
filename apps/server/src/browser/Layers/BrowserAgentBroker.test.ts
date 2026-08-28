@@ -197,6 +197,7 @@ it.effect("does not issue a CDP URL when browser agent access is disabled", () =
           getCdpWebSocketUrl: () => Effect.die("disabled broker must not expose CDP"),
           agentConnectionOpened: () => Effect.die("disabled broker must not open a proxy"),
           recordAgentCdpActivity: () => Effect.void,
+          recordAgentCdpCommand: () => Effect.void,
           agentConnectionClosed: () => Effect.void,
         },
       });
@@ -227,6 +228,7 @@ it.effect("injects the root thread into provider browser environments", () =>
           getCdpWebSocketUrl: () => Effect.die("browser must remain lazy"),
           agentConnectionOpened: () => Effect.die("browser must remain lazy"),
           recordAgentCdpActivity: () => Effect.void,
+          recordAgentCdpCommand: () => Effect.void,
           agentConnectionClosed: () => Effect.void,
         },
       });
@@ -252,6 +254,7 @@ it.effect("validates stable URLs and relays concurrent CDP connections with hear
       const closed: string[] = [];
       let starts = 0;
       let activityCount = 0;
+      let commandCount = 0;
       const runningState: BrowserSessionState = {
         threadId,
         status: "running",
@@ -276,6 +279,10 @@ it.effect("validates stable URLs and relays concurrent CDP connections with hear
           recordAgentCdpActivity: () =>
             Effect.sync(() => {
               activityCount += 1;
+            }),
+          recordAgentCdpCommand: () =>
+            Effect.sync(() => {
+              commandCount += 1;
             }),
           agentConnectionClosed: (_threadId, connectionId) =>
             Effect.sync(() => {
@@ -322,6 +329,8 @@ it.effect("validates stable URLs and relays concurrent CDP connections with hear
       const secondMessage = nextMessage(second);
       second.send('{"id":2,"method":"Target.getTargets"}');
       expect(yield* secondMessage).toBe('{"id":2,"method":"Target.getTargets"}');
+      yield* Effect.yieldNow;
+      expect(commandCount).toBe(2);
 
       const beforeHeartbeat = activityCount;
       yield* TestClock.adjust("1 second");
@@ -360,6 +369,7 @@ it.effect("closes stable proxy connections when its scope is interrupted", () =>
           getCdpWebSocketUrl: () => Effect.succeed(upstream.url),
           agentConnectionOpened: () => Effect.void,
           recordAgentCdpActivity: () => Effect.void,
+          recordAgentCdpCommand: () => Effect.void,
           agentConnectionClosed: () => Deferred.succeed(closed, undefined).pipe(Effect.asVoid),
         },
       }).pipe(Effect.provideService(Scope.Scope, brokerScope));
@@ -400,6 +410,7 @@ it.effect("releases the idle hold when credentials are revoked during proxy acqu
               Effect.asVoid,
             ),
           recordAgentCdpActivity: () => Effect.void,
+          recordAgentCdpCommand: () => Effect.void,
           agentConnectionClosed: () => Deferred.succeed(closed, undefined).pipe(Effect.asVoid),
         },
       });

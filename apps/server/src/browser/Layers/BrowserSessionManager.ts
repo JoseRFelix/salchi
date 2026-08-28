@@ -37,6 +37,10 @@ import { ServerConfig } from "../../config.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { reapManagedChildProcesses } from "../../process/ManagedChildProcessRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  makeBrowserAgentActivityController,
+  type BrowserAgentActivityController,
+} from "../BrowserAgentActivity.ts";
 import { makeBrowserIdleController, type BrowserIdleController } from "../BrowserIdle.ts";
 import {
   browserMonotonicMillis,
@@ -109,6 +113,7 @@ interface BrowserEntry {
   readonly executable: BrowserExecutableInfo | null;
   readonly error: string | undefined;
   readonly mailbox: LatestViewportMailbox;
+  readonly agentActivity: BrowserAgentActivityController;
   readonly subscriberCount: number;
   readonly agentConnectionIds: ReadonlySet<string>;
   readonly starting: StartingBrowserSession | undefined;
@@ -278,6 +283,9 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
     const mailbox = yield* makeLatestViewportMailbox(threadId).pipe(
       Effect.provideService(Scope.Scope, managerScope),
     );
+    const agentActivity = yield* makeBrowserAgentActivityController().pipe(
+      Effect.provideService(Scope.Scope, managerScope),
+    );
     const entry: BrowserEntry = {
       threadId,
       status: "stopped",
@@ -285,6 +293,7 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
       executable: null,
       error: undefined,
       mailbox,
+      agentActivity,
       subscriberCount: 0,
       agentConnectionIds: new Set(),
       starting: undefined,
@@ -336,6 +345,7 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
           session: undefined,
         };
         yield* setEntry(next);
+        yield* next.agentActivity.reset;
         next.mailbox.publishTabs([]);
         next.mailbox.publishStatus("stopped");
         const launchFiber = entry.starting?.launchFiber;
@@ -371,6 +381,7 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
           session: undefined,
         };
         yield* setEntry(next);
+        yield* next.agentActivity.reset;
         next.mailbox.publishStatus("crashed", message);
         yield* closeScope(entry.session.scope);
       }),
@@ -731,6 +742,27 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
       recordAgentCdpActivityResolved(rootThreadId, connectionId),
     ).pipe(Effect.ignore);
 
+  const recordAgentCdpCommandResolved: BrowserSessionManagerShape["recordAgentCdpCommand"] = (
+    threadId,
+    connectionId,
+  ) =>
+    Effect.flatMap(getEntry(threadId), (entry) =>
+      entry?.session !== undefined && entry.agentConnectionIds.has(connectionId)
+        ? Effect.all([
+            entry.session.idle.recordCdpActivity,
+            entry.agentActivity.recordCommand,
+          ]).pipe(Effect.asVoid)
+        : Effect.void,
+    );
+
+  const recordAgentCdpCommand: BrowserSessionManagerShape["recordAgentCdpCommand"] = (
+    threadId,
+    connectionId,
+  ) =>
+    Effect.flatMap(resolveThreadId(threadId), (rootThreadId) =>
+      recordAgentCdpCommandResolved(rootThreadId, connectionId),
+    ).pipe(Effect.ignore);
+
   const agentConnectionClosedResolved: BrowserSessionManagerShape["agentConnectionClosed"] = (
     threadId,
     connectionId,
@@ -905,6 +937,18 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
       ).pipe(Stream.flatMap(({ mailbox }) => mailbox.stream)),
     ).pipe(Stream.map((event) => viewportEventForRequestedThread(event, threadId)));
 
+  const subscribeAgentActivity: BrowserSessionManagerShape["subscribeAgentActivity"] = (threadId) =>
+    Stream.unwrap(
+      resolveThreadId(threadId).pipe(
+        Effect.flatMap((rootThreadId) =>
+          requireThread(rootThreadId).pipe(
+            Effect.andThen(getOrCreateEntry(rootThreadId)),
+            Effect.map((entry) => entry.agentActivity.changes),
+          ),
+        ),
+      ),
+    );
+
   return {
     resolveRootThreadId: resolveThreadId,
     start,
@@ -913,6 +957,7 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
     getCdpWebSocketUrl,
     agentConnectionOpened,
     recordAgentCdpActivity,
+    recordAgentCdpCommand,
     agentConnectionClosed,
     setActiveTab,
     openTab,
@@ -921,6 +966,7 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
     closeTab,
     dispatchInput,
     subscribeViewport,
+    subscribeAgentActivity,
   } satisfies BrowserSessionManagerShape;
 });
 

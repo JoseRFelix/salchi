@@ -429,7 +429,10 @@ export const ChatHeader = memo(function ChatHeader({
                 </MenuItem>
                 <MenuItem onClick={() => onToggleBrowser()} disabled={!browserAvailable}>
                   <span className="relative">
-                    <MonitorPlayIcon aria-hidden="true" className="size-4" />
+                    <MonitorPlayIcon
+                      aria-hidden="true"
+                      className="size-4 text-muted-foreground opacity-80"
+                    />
                     {browserRunning ? (
                       <span
                         aria-hidden="true"

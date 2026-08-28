@@ -341,7 +341,7 @@ describe("BrowserPanel subscription visibility", () => {
     }
   });
 
-  it("marks a running viewport paused when its newest frame is stale or reconnecting", async () => {
+  it("dims a stale running viewport without covering it with a paused label", async () => {
     const client = createBrowserClient();
     readEnvironmentConnectionMock.mockReturnValue({ client });
     const state = reduceBrowserViewportState(initialBrowserViewportState(THREAD_A), {
@@ -363,6 +363,10 @@ describe("BrowserPanel subscription visibility", () => {
     const screen = await render(<Panel state={state} threadId={THREAD_A} visible />);
 
     try {
+      const canvas = document.querySelector<HTMLCanvasElement>(
+        'canvas[aria-label="Live browser viewport"]',
+      );
+      expect(canvas).not.toBeNull();
       await vi.waitFor(() => expect(browserStreamConnections).toHaveLength(1));
       browserStreamConnections[0]?.options.onFrame({
         targetId: "target-1",
@@ -373,11 +377,13 @@ describe("BrowserPanel subscription visibility", () => {
         receivedAt: performance.now(),
       });
       await vi.waitFor(() => expect(document.body.textContent).not.toContain("Paused"));
+      expect(canvas?.classList.contains("opacity-55")).toBe(false);
       await new Promise<void>((resolve) => window.setTimeout(resolve, 1_700));
       expect(document.body.textContent).not.toContain("Paused");
 
       await new Promise<void>((resolve) => window.setTimeout(resolve, 600));
-      await expect.element(page.getByText("Paused")).toBeVisible();
+      await vi.waitFor(() => expect(canvas?.classList.contains("opacity-55")).toBe(true));
+      expect(document.body.textContent).not.toContain("Paused");
 
       browserStreamConnections[0]?.options.onFrame({
         targetId: "target-1",
@@ -387,17 +393,18 @@ describe("BrowserPanel subscription visibility", () => {
         seq: 2,
         receivedAt: performance.now(),
       });
-      await vi.waitFor(() => expect(document.body.textContent).not.toContain("Paused"));
+      await vi.waitFor(() => expect(canvas?.classList.contains("opacity-55")).toBe(false));
 
       browserStreamConnections[0]?.options.onConnectionState?.("closed");
-      await expect.element(page.getByText("Paused")).toBeVisible();
+      await vi.waitFor(() => expect(canvas?.classList.contains("opacity-55")).toBe(true));
+      expect(document.body.textContent).not.toContain("Paused");
       expect(document.querySelector("[data-browser-live-state]")).toBeNull();
     } finally {
       await screen.unmount();
     }
   });
 
-  it("dispatches pointer input only in explicit interact mode and disables it when hidden", async () => {
+  it("enables interaction on the first viewport press and disables it when hidden", async () => {
     const client = createBrowserClient();
     readEnvironmentConnectionMock.mockReturnValue({ client });
     const state = reduceBrowserViewportState(initialBrowserViewportState(THREAD_A), {
@@ -429,11 +436,9 @@ describe("BrowserPanel subscription visibility", () => {
         receivedAt: performance.now(),
       });
 
-      const interact = page.getByRole("button", { name: "Interact" });
-      await expect.element(interact).toBeEnabled();
-      await interact.click();
+      expect(document.querySelector('button[aria-label="Interact"]')).toBeNull();
       const canvas = document.querySelector<HTMLCanvasElement>(
-        'canvas[aria-label="Interactive browser viewport"]',
+        'canvas[aria-label="Live browser viewport"]',
       );
       expect(canvas).not.toBeNull();
       const bounds = canvas?.getBoundingClientRect();
@@ -454,18 +459,39 @@ describe("BrowserPanel subscription visibility", () => {
       }
       const sendInput = browserStreamConnections[0]!.sendInput;
       await vi.waitFor(() => expect(sendInput).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() =>
+        expect(document.querySelector('[data-browser-interact="true"]')).not.toBeNull(),
+      );
+      expect(document.activeElement).toBe(canvas);
+      canvas?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "a",
+          code: "KeyA",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      canvas?.dispatchEvent(
+        new KeyboardEvent("keyup", {
+          key: "a",
+          code: "KeyA",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await vi.waitFor(() => expect(sendInput).toHaveBeenCalledTimes(4));
       expect(sendInput.mock.calls.map(([_targetId, event]) => event._tag)).toEqual([
         "PointerDown",
         "PointerUp",
+        "KeyDown",
+        "KeyUp",
       ]);
 
       await screen.rerender(<Panel state={state} threadId={THREAD_A} visible={false} />);
       await vi.waitFor(() =>
         expect(document.querySelector('[data-browser-interact="true"]')).toBeNull(),
       );
-      await expect
-        .element(page.getByRole("button", { name: "Interact" }))
-        .toHaveAttribute("aria-pressed", "false");
+      expect(document.querySelector('button[aria-label="Interact"]')).toBeNull();
     } finally {
       await screen.unmount();
     }

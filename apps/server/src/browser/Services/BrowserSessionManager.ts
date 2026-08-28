@@ -24,6 +24,7 @@ export interface BrowserSessionManagerShape {
     threadId: ThreadId,
     connectionId: string,
   ) => Effect.Effect<void>;
+  readonly recordAgentCdpCommand: (threadId: ThreadId, connectionId: string) => Effect.Effect<void>;
   readonly agentConnectionClosed: (threadId: ThreadId, connectionId: string) => Effect.Effect<void>;
   readonly setActiveTab: (
     threadId: ThreadId,
@@ -55,6 +56,7 @@ export interface BrowserSessionManagerShape {
   readonly subscribeViewport: (
     threadId: ThreadId,
   ) => Stream.Stream<BrowserViewportEvent, BrowserRpcError>;
+  readonly subscribeAgentActivity: (threadId: ThreadId) => Stream.Stream<boolean, BrowserRpcError>;
 }
 
 export class BrowserSessionManager extends Context.Service<

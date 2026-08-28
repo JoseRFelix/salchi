@@ -68,6 +68,7 @@ export interface BrowserAgentBrokerOptions {
     | "getCdpWebSocketUrl"
     | "agentConnectionOpened"
     | "recordAgentCdpActivity"
+    | "recordAgentCdpCommand"
     | "agentConnectionClosed"
   >;
   readonly accessEnabled: Effect.Effect<boolean>;
@@ -363,6 +364,10 @@ export const makeBrowserAgentBrokerWithOptions = Effect.fn("browserAgentBroker.m
           schedule(
             options.browserManager.recordAgentCdpActivity(credential.threadId, connection.id),
           );
+        const recordCommand = () =>
+          schedule(
+            options.browserManager.recordAgentCdpCommand(credential.threadId, connection.id),
+          );
         const heartbeat = Effect.sleep(Duration.millis(heartbeatIntervalMillis)).pipe(
           Effect.andThen(
             options.browserManager.recordAgentCdpActivity(credential.threadId, connection.id),
@@ -378,7 +383,7 @@ export const makeBrowserAgentBrokerWithOptions = Effect.fn("browserAgentBroker.m
           }
         };
         downstream.on("message", (data, isBinary) => {
-          recordActivity();
+          recordCommand();
           relay(upstream!, data, isBinary);
         });
         upstream.on("message", (data, isBinary) => {

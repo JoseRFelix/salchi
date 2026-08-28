@@ -333,6 +333,32 @@ it.effect("exposes the raw CDP endpoint only from getState and tracks proxy conn
   ),
 );
 
+it.effect("publishes agent activity only for proxied CDP commands and resets it on stop", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const manager = yield* makeBrowserSessionManagerWithOptions(
+        managerOptions(() => Effect.succeed(fakeRuntime())),
+      );
+      yield* manager.start(threadId);
+      yield* manager.agentConnectionOpened(threadId, "agent-activity-connection");
+      const transitions = yield* manager
+        .subscribeAgentActivity(threadId)
+        .pipe(Stream.take(3), Stream.runCollect, Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      yield* manager.recordAgentCdpActivity(threadId, "agent-activity-connection");
+      yield* Effect.yieldNow;
+      assert.isUndefined(transitions.pollUnsafe());
+
+      yield* manager.recordAgentCdpCommand(threadId, "agent-activity-connection");
+      yield* Effect.yieldNow;
+      yield* manager.stop(threadId);
+
+      assert.deepEqual(Array.from(yield* Fiber.join(transitions)), [false, true, false]);
+    }),
+  ),
+);
+
 it.effect("does not idle out while an agent CDP proxy remains connected", () =>
   Effect.scoped(
     Effect.gen(function* () {

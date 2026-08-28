@@ -2,7 +2,6 @@ import type {
   AuthWebSocketTicketResult,
   BrowserInputEvent,
   BrowserTab,
-  BrowserViewportEvent,
   EnvironmentId,
   ThreadId,
 } from "@salchi/contracts";
@@ -10,6 +9,7 @@ import {
   BROWSER_STREAM_UNKNOWN_TAB_INDEX,
   decodeBrowserStreamServerMessage,
   encodeBrowserStreamInput,
+  type BrowserStreamMetaMessage,
 } from "@salchi/shared/browserStreamProtocol";
 
 import { fetchEnvironmentHttp, resolveEnvironmentHttpUrl } from "../environments/runtime";
@@ -57,7 +57,7 @@ export interface BrowserStreamConnectionOptions {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly onConnectionState?: (state: BrowserStreamConnectionState) => void;
-  readonly onEvent: (event: Exclude<BrowserViewportEvent, { readonly _tag: "Frame" }>) => void;
+  readonly onEvent: (event: BrowserStreamMetaMessage) => void;
   readonly onFrame: (frame: BrowserStreamViewportFrame) => void;
   readonly onAuthorizationDenied?: () => void;
   readonly onError?: (error: unknown) => void;
@@ -219,7 +219,7 @@ export function createBrowserStreamConnection(
               emitFrame(message);
               return;
             }
-            if (message.event._tag === "Tabs") {
+            if (!("agentActive" in message.event) && message.event._tag === "Tabs") {
               tabs = message.event.tabs;
               options.onEvent(message.event);
               if (pendingFrame !== null) emitFrame(pendingFrame);

@@ -22,9 +22,11 @@ describe("ClientSettings defaults", () => {
   it("keeps the task and plan sidebar closed until the user opens it", () => {
     expect(DEFAULT_CLIENT_SETTINGS.clientSettingsVersion).toBe(CURRENT_CLIENT_SETTINGS_VERSION);
     expect(DEFAULT_CLIENT_SETTINGS.autoOpenPlanSidebar).toBe(false);
+    expect(DEFAULT_CLIENT_SETTINGS.showBrowserAgentPreview).toBe(true);
     const legacySettings = decodeClientSettings({});
     expect(legacySettings.clientSettingsVersion).toBe(0);
     expect(legacySettings.autoOpenPlanSidebar).toBe(false);
+    expect(legacySettings.showBrowserAgentPreview).toBe(true);
   });
 });
 

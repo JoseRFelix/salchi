@@ -1,7 +1,16 @@
 import type { EnvironmentId, ThreadId } from "@salchi/contracts";
-import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { BrowserPanel } from "../components/BrowserPanel";
+import { BrowserPictureInPicture } from "../components/BrowserPictureInPicture";
 import {
   readEnvironmentConnection,
   subscribeEnvironmentConnections,
@@ -16,12 +25,20 @@ import {
   reduceBrowserViewportState,
   type BrowserViewportStateAction,
 } from "./browserViewportState";
+import {
+  BROWSER_PIP_FADE_MILLIS,
+  BROWSER_PIP_LINGER_MILLIS,
+  initialBrowserPipState,
+  reduceBrowserPipState,
+} from "./browserPipState";
+import { acquireBrowserStream } from "./browserStreamPool";
 
 const HIDDEN_BROWSER_STATE_REFRESH_INTERVAL_MS = 15_000;
 
 export interface BrowserPanelController {
   readonly close: () => void;
   readonly open: boolean;
+  readonly pictureInPicture: ReactNode;
   readonly running: boolean;
   readonly toggle: () => void;
 }
@@ -29,6 +46,7 @@ export interface BrowserPanelController {
 export function useBrowserPanelController(input: {
   readonly enabled: boolean;
   readonly environmentId: EnvironmentId;
+  readonly showAgentPreview: boolean;
   readonly threadId: ThreadId;
   readonly useSheet: boolean;
 }): BrowserPanelController {
@@ -37,6 +55,14 @@ export function useBrowserPanelController(input: {
     reduceBrowserViewportState,
     input.threadId,
     initialBrowserViewportState,
+  );
+  const [pipState, dispatchPip] = useReducer(
+    reduceBrowserPipState,
+    { enabled: input.enabled && input.showAgentPreview, threadId: input.threadId },
+    initialBrowserPipState,
+  );
+  const pipThreadMemoryRef = useRef(
+    new Map<string, { readonly agentActive: boolean; readonly dismissed: boolean }>(),
   );
 
   const close = useCallback(() => setOpen(false), []);
@@ -58,12 +84,91 @@ export function useBrowserPanelController(input: {
 
   useEffect(() => {
     dispatch({ type: "reset", threadId: input.threadId });
-  }, [input.threadId]);
+    const memory = pipThreadMemoryRef.current.get(input.threadId);
+    dispatchPip({
+      type: "reset",
+      ...(memory === undefined
+        ? {}
+        : {
+            agentActive: memory.agentActive,
+            dismissedForCurrentBurst: memory.dismissed,
+          }),
+      enabled: input.enabled && input.showAgentPreview,
+      threadId: input.threadId,
+    });
+  }, [input.enabled, input.showAgentPreview, input.threadId]);
+
+  useEffect(() => {
+    pipThreadMemoryRef.current.set(pipState.threadId, {
+      agentActive: pipState.agentActive,
+      dismissed: pipState.dismissedForCurrentBurst,
+    });
+  }, [pipState.agentActive, pipState.dismissedForCurrentBurst, pipState.threadId]);
 
   useEffect(() => {
     if (input.enabled) return;
     setOpen(false);
   }, [input.enabled]);
+
+  useEffect(() => {
+    dispatchPip({ type: "panelVisibility", open: input.enabled && open });
+  }, [input.enabled, open]);
+
+  useEffect(() => {
+    dispatchPip({ type: "status", status: state.status ?? "stopped" });
+  }, [state.status]);
+
+  useEffect(() => {
+    if (!input.enabled || !input.showAgentPreview || state.authorization === "denied") return;
+    const subscription = acquireBrowserStream({
+      environmentId: input.environmentId,
+      threadId: input.threadId,
+      onEvent: (event) => {
+        if ("agentActive" in event) {
+          dispatchPip({ type: "activity", active: event.agentActive });
+        } else {
+          dispatch({ type: "event", event });
+          if (event._tag === "Status") {
+            dispatchPip({ type: "status", status: event.status });
+          }
+        }
+      },
+      onConnectionState: (connectionState) => {
+        if (connectionState === "closed") {
+          dispatchPip({ type: "activity", active: false });
+        }
+      },
+      onAuthorizationDenied: () => {
+        dispatch({ type: "authorizationDenied" });
+        dispatchPip({ type: "status", status: "stopped" });
+      },
+    });
+    return subscription.dispose;
+  }, [
+    input.enabled,
+    input.environmentId,
+    input.showAgentPreview,
+    input.threadId,
+    state.authorization,
+  ]);
+
+  useEffect(() => {
+    if (pipState.phase !== "lingering") return;
+    const timer = window.setTimeout(
+      () => dispatchPip({ type: "lingerElapsed" }),
+      BROWSER_PIP_LINGER_MILLIS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [pipState.phase]);
+
+  useEffect(() => {
+    if (pipState.phase !== "fading") return;
+    const timer = window.setTimeout(
+      () => dispatchPip({ type: "fadeElapsed" }),
+      BROWSER_PIP_FADE_MILLIS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [pipState.phase]);
 
   useEffect(() => {
     if (!input.enabled) return;
@@ -166,9 +271,24 @@ export function useBrowserPanelController(input: {
     if (open) markRightPanelUsed("browser");
   }, [open]);
 
+  const pictureInPicture =
+    pipState.threadId !== input.threadId || pipState.phase === "hidden" || open ? null : (
+      <BrowserPictureInPicture
+        environmentId={input.environmentId}
+        onClose={() => dispatchPip({ type: "close" })}
+        onOpenPanel={() => {
+          dispatchPip({ type: "panelVisibility", open: true });
+          openRightPanel("browser");
+        }}
+        phase={pipState.phase}
+        threadId={input.threadId}
+      />
+    );
+
   return {
     close,
     open: input.enabled && open,
+    pictureInPicture,
     running: input.enabled && state.status === "running",
     toggle,
   };

@@ -151,12 +151,12 @@ Phase 2b deliberately does not add a `salchi/*` browser tool or alter dynamic-to
 
 ## Phase 3 manual interaction
 
-The viewport remains view-only until the user explicitly enables **Interact**. Hiding the panel,
-switching views or threads, closing the responsive sheet, stopping/crashing the browser, or losing
-authorization disables interaction. Pointer, wheel, keyboard, and composed text events use the
-existing dispatch-input event union and are accepted only for the active tab. Phase 4 sends panel
-input over the binary browser socket; the owner-scoped `browser.dispatchInput` RPC remains available
-for programmatic callers.
+The viewport enters interaction mode on the first valid click or tap and forwards that same gesture;
+there is no separate interaction control. Hiding the panel, switching views or threads, closing the
+responsive sheet, stopping/crashing the browser, or losing authorization disables interaction.
+Pointer, wheel, keyboard, and composed text events use the existing dispatch-input event union and
+are accepted only for the active tab. Phase 4 sends panel input over the binary browser socket; the
+owner-scoped `browser.dispatchInput` RPC remains available for programmatic callers.
 
 The browser viewport is fixed at 800×600 with device scale factor 1. The client inverts the canvas
 aspect-fit transform, including letterbox offsets and device-pixel-ratio backing scale, into streamed
@@ -174,7 +174,8 @@ gestures remain out of scope.
 Manual verification:
 
 1. Have an attached agent navigate to a page while the Browser panel is open.
-2. Enable **Interact**, click a link or cookie banner, and verify the agent remains attached.
+2. Click a link or cookie banner in the viewport and verify the first click is forwarded while the
+   agent remains attached.
 3. Scroll with a mouse wheel or a one-finger touch drag.
 4. Focus a text field and type with the desktop keyboard or the panel keyboard button on mobile.
 
@@ -224,8 +225,8 @@ VPS connection.
 Manual verification:
 
 1. Start Salchi on the VPS, open a thread and its Browser panel, then start the browser.
-2. From a phone on cellular, enable **Interact**, click a visible link, and confirm the next frame
-   feels immediate while the connection-quality overlay stays clear.
+2. From a phone on cellular, tap a visible link and confirm the first tap enables interaction and
+   the next frame feels immediate while the connection-quality overlay stays clear.
 3. Disable networking or kill the browser-stream websocket mid-stream, restore connectivity, and
    confirm the ticket/reconnect loop resumes frames.
 4. Hide the panel, switch right-panel views and switch threads; in every case confirm the raw socket
@@ -248,3 +249,44 @@ Playwright page per tool call; Chromium renderer client ids are monotonic and th
 live-page count. Salchi still detaches each per-page CDP session and removes all CDP/Page listeners
 when that page closes, including configuration-failure cleanup. A page pool would conflict with
 explicit MCP new-tab semantics and is therefore not added.
+
+## Agent browsing picture-in-picture
+
+The browser stream's version-1 `META` union also carries `{ "agentActive": boolean }`. A session
+becomes agent-active on the first CDP command received from an authenticated agent proxy. Proxy
+open/close, heartbeats, Chromium responses, viewport subscribers, and user input do not activate
+the signal. The active window is four seconds after the latest command; its inactive transition is
+held for another two seconds to avoid flapping during short command gaps. Stop and crash reset the
+signal immediately. The manager owns the transition monitor and replay-one activity feed, so server
+scope shutdown interrupts both the monitor and its subscriptions.
+
+The web app uses a ref-counted connection pool keyed by environment and root thread. The hidden
+activity listener, full Browser panel, and picture-in-picture canvas are logical consumers of that
+pool, but they share exactly one ticketed raw websocket and therefore one server viewport
+subscriber. Raw frames remain outside Zustand and persistence; both canvases use the existing
+latest-only JPEG renderer. Because activity is delivered only on the browser stream, enabling the
+automatic preview keeps that one stream connected for the current thread even while the card is
+hidden. Consequently it also holds the current route's viewport-subscriber/idle lease. This is the
+unavoidable lifecycle consequence of the phase's fixed protocol; disabling **Show browser preview
+while agent browses** restores subscribe-only-while-panel-visible behavior.
+
+On desktop, the view-only card is draggable and corner-resizable, and its pixel position/size are
+stored in device-local storage. On mobile it is a fixed 16:10 card at roughly 40% viewport width;
+dragging its header snaps it to the nearest corner. Clicking the image opens the full Browser panel,
+while close suppresses the card until the next inactive-to-active transition for that thread. The
+last frame lingers for three seconds after activity stops and then fades. Opening the panel,
+switching threads, stopping, or crashing hides it immediately. Native video PiP remains out of
+scope, but the preview is isolated behind the same canvas renderer so a future capture-stream
+consumer does not require another browser socket.
+
+Manual verification:
+
+1. Leave the Browser panel closed and ask an agent to navigate; confirm the preview appears over
+   the lower-right chat area and follows the live page.
+2. Click the preview body; confirm the full Browser panel opens and the preview disappears without
+   creating a second browser-stream connection.
+3. Close the preview during an activity burst; confirm it stays hidden until activity ends and a
+   later command burst begins.
+4. Let the agent finish; confirm the final frame remains for three seconds and fades.
+5. On desktop, drag and resize the card, then reload and confirm its layout persists. On mobile,
+   drag it across the chat and confirm it snaps to the nearest corner.

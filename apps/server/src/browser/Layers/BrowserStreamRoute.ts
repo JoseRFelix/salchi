@@ -133,8 +133,20 @@ export function runBrowserStreamConnection(input: {
       });
       let tabs: ReadonlyArray<BrowserTab> = [];
 
-      const outbound = input.browserManager.subscribeViewport(input.threadId).pipe(
-        Stream.runForEach((event) => {
+      const viewportEvents = input.browserManager
+        .subscribeViewport(input.threadId)
+        .pipe(Stream.map((event) => ({ _tag: "Viewport" as const, event })));
+      const agentActivityEvents = input.browserManager
+        .subscribeAgentActivity(input.threadId)
+        .pipe(Stream.map((agentActive) => ({ _tag: "AgentActivity" as const, agentActive })));
+      const outbound = Stream.merge(viewportEvents, agentActivityEvents).pipe(
+        Stream.runForEach((outboundEvent) => {
+          if (outboundEvent._tag === "AgentActivity") {
+            return outbox.offerMeta(
+              encodeBrowserStreamMeta({ agentActive: outboundEvent.agentActive }),
+            );
+          }
+          const event = outboundEvent.event;
           if (event._tag === "Tabs") {
             tabs = event.tabs;
             return outbox.offerMeta(encodeBrowserStreamMeta(event));

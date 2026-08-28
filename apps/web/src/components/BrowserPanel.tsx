@@ -12,7 +12,6 @@ import {
   CircleStopIcon,
   KeyboardIcon,
   LockKeyholeIcon,
-  MousePointer2Icon,
   PanelRightCloseIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -40,11 +39,8 @@ import {
   createBrowserBinaryFrameRenderer,
   type LatestFrameRenderer,
 } from "../browser/latestFrameRenderer";
-import {
-  createBrowserStreamConnection,
-  type BrowserStreamConnection,
-  type BrowserStreamViewportFrame,
-} from "../browser/browserStreamConnection";
+import type { BrowserStreamViewportFrame } from "../browser/browserStreamConnection";
+import { acquireBrowserStream, type BrowserStreamSubscription } from "../browser/browserStreamPool";
 import {
   readEnvironmentConnection,
   subscribeEnvironmentConnections,
@@ -207,12 +203,13 @@ export function BrowserPanel(props: {
   const frameRendererRef = useRef<LatestFrameRenderer<BrowserStreamViewportFrame> | null>(null);
   const pendingFrameRef = useRef<BrowserStreamViewportFrame | null>(null);
   const currentFrameRef = useRef<BrowserStreamViewportFrame | null>(null);
-  const browserStreamConnectionRef = useRef<BrowserStreamConnection | null>(null);
+  const browserStreamConnectionRef = useRef<BrowserStreamSubscription | null>(null);
   const lastFrameReceivedAtRef = useRef(0);
   const inputMeasurementRef = useRef<{
     readonly afterSeq: number;
     readonly sentAt: number;
   } | null>(null);
+  const interactEnabledRef = useRef(false);
   const activePointerGestureRef = useRef<ActivePointerGesture | null>(null);
   const pendingPointerMoveRef = useRef<PendingPointerMove | null>(null);
   const pointerMoveFrameRef = useRef<number | null>(null);
@@ -236,6 +233,11 @@ export function BrowserPanel(props: {
   const [live, setLive] = useState(false);
   const [addressValue, setAddressValue] = useState(() => displayedActiveUrl);
   const [pendingOperation, setPendingOperation] = useState<PendingOperation | null>(null);
+
+  const updateInteractEnabled = useCallback((enabled: boolean) => {
+    interactEnabledRef.current = enabled;
+    setInteractEnabled(enabled);
+  }, []);
 
   const pauseFrame = useCallback(() => {
     setLive(false);
@@ -279,9 +281,9 @@ export function BrowserPanel(props: {
     lastFrameReceivedAtRef.current = 0;
     inputMeasurementRef.current = null;
     setHasFrame(false);
-    setInteractEnabled(false);
+    updateInteractEnabled(false);
     pauseFrame();
-  }, [pauseFrame, props.threadId]);
+  }, [pauseFrame, props.threadId, updateInteractEnabled]);
 
   useEffect(() => {
     setAddressValue(browserAddressValue(displayedActiveTab?.url ?? ""));
@@ -331,7 +333,7 @@ export function BrowserPanel(props: {
 
     let disposed = false;
     let currentClient: BrowserClient | null = null;
-    let currentConnection: BrowserStreamConnection | null = null;
+    let currentConnection: BrowserStreamSubscription | null = null;
     let connectionGeneration = 0;
 
     const disposeCurrentConnection = () => {
@@ -348,14 +350,14 @@ export function BrowserPanel(props: {
       const generation = connectionGeneration;
       const startStream = () => {
         if (disposed || generation !== connectionGeneration) return;
-        const connection = createBrowserStreamConnection({
+        const connection = acquireBrowserStream({
           environmentId: props.environmentId,
           threadId: props.threadId,
           onFrame: (frame) => {
             if (!disposed && generation === connectionGeneration) acceptFrame(frame);
           },
           onEvent: (event) => {
-            if (!disposed && generation === connectionGeneration) {
+            if (!disposed && generation === connectionGeneration && !("agentActive" in event)) {
               props.onStateAction({ type: "event", event });
             }
           },
@@ -582,9 +584,9 @@ export function BrowserPanel(props: {
       props.state.authorization === "denied" ||
       props.state.status !== "running"
     ) {
-      setInteractEnabled(false);
+      updateInteractEnabled(false);
     }
-  }, [actuallyVisible, props.state.authorization, props.state.status]);
+  }, [actuallyVisible, props.state.authorization, props.state.status, updateInteractEnabled]);
 
   useEffect(() => {
     if (interactEnabled) return;
@@ -594,21 +596,12 @@ export function BrowserPanel(props: {
 
   useEffect(() => () => releaseActiveGesture(true), [releaseActiveGesture]);
 
-  const toggleInteract = useCallback(() => {
-    setInteractEnabled((enabled) => {
-      const next = !enabled;
-      if (next) {
-        window.requestAnimationFrame(() => canvasRef.current?.focus({ preventScroll: true }));
-      }
-      return next;
-    });
-  }, []);
-
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
-      if (!interactEnabled || !event.isPrimary) return;
+      if (!event.isPrimary) return;
       const mapped = mapPointerCoordinates(event.clientX, event.clientY);
       if (mapped === null) return;
+      if (!interactEnabledRef.current) updateInteractEnabled(true);
       event.preventDefault();
       event.stopPropagation();
       event.currentTarget.focus({ preventScroll: true });
@@ -660,12 +653,12 @@ export function BrowserPanel(props: {
         });
       }, TOUCH_CLICK_DRAG_HOLD_MS);
     },
-    [dispatchBrowserInput, interactEnabled, mapPointerCoordinates],
+    [dispatchBrowserInput, mapPointerCoordinates, updateInteractEnabled],
   );
 
   const handlePointerMove = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
-      if (!interactEnabled || !event.isPrimary) return;
+      if (!interactEnabledRef.current || !event.isPrimary) return;
       const gesture = activePointerGestureRef.current;
       const mapped = mapPointerCoordinates(
         event.clientX,
@@ -728,13 +721,14 @@ export function BrowserPanel(props: {
         },
       });
     },
-    [dispatchBrowserInput, interactEnabled, mapPointerCoordinates, queuePointerMove],
+    [dispatchBrowserInput, mapPointerCoordinates, queuePointerMove],
   );
 
   const handlePointerUp = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
       const gesture = activePointerGestureRef.current;
-      if (!interactEnabled || gesture === null || gesture.pointerId !== event.pointerId) return;
+      if (!interactEnabledRef.current || gesture === null || gesture.pointerId !== event.pointerId)
+        return;
       event.preventDefault();
       event.stopPropagation();
       const mapped = mapPointerCoordinates(event.clientX, event.clientY, true);
@@ -792,7 +786,6 @@ export function BrowserPanel(props: {
       discardPendingPointerMove,
       dispatchBrowserInput,
       flushPendingPointerMove,
-      interactEnabled,
       mapPointerCoordinates,
     ],
   );
@@ -808,7 +801,7 @@ export function BrowserPanel(props: {
 
   const handleWheel = useCallback(
     (event: React.WheelEvent<HTMLCanvasElement>) => {
-      if (!interactEnabled) return;
+      if (!interactEnabledRef.current) return;
       const mapped = mapPointerCoordinates(event.clientX, event.clientY);
       if (mapped === null) return;
       event.preventDefault();
@@ -821,12 +814,12 @@ export function BrowserPanel(props: {
         deltaY: event.deltaY,
       });
     },
-    [dispatchBrowserInput, interactEnabled, mapPointerCoordinates],
+    [dispatchBrowserInput, mapPointerCoordinates],
   );
 
   const handleCanvasKey = useCallback(
     (event: React.KeyboardEvent<HTMLCanvasElement>, tag: "KeyDown" | "KeyUp") => {
-      if (!interactEnabled || event.nativeEvent.isComposing) return;
+      if (!interactEnabledRef.current || event.nativeEvent.isComposing) return;
       const frame = currentFrameRef.current;
       if (frame === null || frame.targetId !== displayedActiveTargetId) return;
       event.preventDefault();
@@ -838,12 +831,13 @@ export function BrowserPanel(props: {
         modifiers: browserKeyboardModifiers(event),
       });
     },
-    [dispatchBrowserInput, displayedActiveTargetId, interactEnabled],
+    [dispatchBrowserInput, displayedActiveTargetId],
   );
 
   const handleMobileKeyboardKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
-      if (!interactEnabled || (event.key !== "Enter" && event.key !== "Backspace")) return;
+      if (!interactEnabledRef.current || (event.key !== "Enter" && event.key !== "Backspace"))
+        return;
       const frame = currentFrameRef.current;
       if (frame === null || frame.targetId !== displayedActiveTargetId) return;
       event.preventDefault();
@@ -862,19 +856,19 @@ export function BrowserPanel(props: {
         modifiers,
       });
     },
-    [dispatchBrowserInput, displayedActiveTargetId, interactEnabled],
+    [dispatchBrowserInput, displayedActiveTargetId],
   );
 
   const handleMobileTextInput = useCallback(
     (event: React.FormEvent<HTMLInputElement>) => {
-      if (!interactEnabled) return;
+      if (!interactEnabledRef.current) return;
       const frame = currentFrameRef.current;
       const text = event.currentTarget.value;
       event.currentTarget.value = "";
       if (frame === null || frame.targetId !== displayedActiveTargetId || text.length === 0) return;
       dispatchBrowserInput(frame.targetId, { _tag: "InsertText", text });
     },
-    [dispatchBrowserInput, displayedActiveTargetId, interactEnabled],
+    [dispatchBrowserInput, displayedActiveTargetId],
   );
 
   const focusMobileKeyboard = useCallback(() => {
@@ -1119,6 +1113,7 @@ export function BrowserPanel(props: {
               interactEnabled && "ring-1 ring-inset ring-primary",
             )}
             data-browser-interact={interactEnabled ? "true" : "false"}
+            data-chat-keyboard-capture={interactEnabled ? "true" : undefined}
           >
             <canvas
               aria-label={
@@ -1130,7 +1125,7 @@ export function BrowserPanel(props: {
                 interactEnabled && "touch-none cursor-crosshair select-none outline-none",
               )}
               onContextMenu={(event) => {
-                if (interactEnabled) event.preventDefault();
+                if (interactEnabledRef.current) event.preventDefault();
               }}
               onKeyDown={(event) => handleCanvasKey(event, "KeyDown")}
               onKeyUp={(event) => handleCanvasKey(event, "KeyUp")}
@@ -1158,12 +1153,6 @@ export function BrowserPanel(props: {
             {!hasFrame ? (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-zinc-400">
                 Waiting for a viewport frame…
-              </div>
-            ) : !live ? (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <span className="rounded-full border border-white/10 bg-black/55 px-2.5 py-1 text-xs text-zinc-300 backdrop-blur-sm">
-                  Paused
-                </span>
               </div>
             ) : null}
           </div>
@@ -1251,17 +1240,6 @@ export function BrowserPanel(props: {
         <div className="ml-1 flex shrink-0 items-center gap-0.5 border-l border-border/60 pl-1">
           {running ? (
             <>
-              <Button
-                aria-label={interactEnabled ? "Disable browser interaction" : "Interact"}
-                aria-pressed={interactEnabled}
-                disabled={!hasFrame || !hasWebsiteUrl}
-                onClick={toggleInteract}
-                size="xs"
-                variant={interactEnabled ? "secondary" : "ghost"}
-              >
-                <MousePointer2Icon className="size-3.5" />
-                Interact
-              </Button>
               {interactEnabled ? (
                 <Tooltip>
                   <TooltipTrigger

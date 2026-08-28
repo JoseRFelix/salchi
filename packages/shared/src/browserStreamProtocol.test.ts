@@ -58,6 +58,12 @@ describe("browser stream binary protocol", () => {
       _tag: "Meta",
       event: tabs,
     });
+    expect(
+      decodeBrowserStreamServerMessage(encodeBrowserStreamMeta({ agentActive: true })),
+    ).toEqual({
+      _tag: "Meta",
+      event: { agentActive: true },
+    });
   });
 
   it("round-trips the existing browser input event union inside its target envelope", () => {

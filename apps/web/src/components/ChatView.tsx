@@ -311,6 +311,7 @@ const TYPE_TO_FOCUS_FLOATING_LAYER_SELECTOR = [
   '[data-slot="combobox-popup"]',
   '[data-slot="autocomplete-popup"]',
 ].join(",");
+const CHAT_KEYBOARD_CAPTURE_SELECTOR = '[data-chat-keyboard-capture="true"]';
 
 type EnvironmentUnavailableState = {
   readonly environmentId: EnvironmentId;
@@ -1033,6 +1034,7 @@ export default function ChatView(props: ChatViewProps) {
   const browserPanel = useBrowserPanelController({
     enabled: isServerThread,
     environmentId,
+    showAgentPreview: settings.showBrowserAgentPreview,
     threadId,
     useSheet: shouldUsePlanSidebarSheet,
   });
@@ -3719,6 +3721,7 @@ export default function ChatView(props: ChatViewProps) {
       if (!activeThreadId || useCommandPaletteStore.getState().open || event.defaultPrevented) {
         return;
       }
+      if (eventPathContainsSelector(event, CHAT_KEYBOARD_CAPTURE_SELECTOR)) return;
       const shortcutContext = {
         terminalFocus: isTerminalFocused(),
         terminalOpen: Boolean(terminalState.terminalOpen),
@@ -5167,6 +5170,8 @@ export default function ChatView(props: ChatViewProps) {
               onIsAtEndChange={onIsAtEndChange}
               onUserScrollIntent={onTimelineUserScrollIntent}
             />
+
+            {browserPanel.pictureInPicture}
 
             {/* scroll to bottom pill — shown when user has scrolled away from the bottom */}
             {showScrollToBottom && (

@@ -29,7 +29,14 @@ export interface BrowserStreamFrameMessage {
   readonly jpegBytes: Uint8Array;
 }
 
-export type BrowserStreamMetaMessage = BrowserViewportStatusType | BrowserViewportTabsType;
+export interface BrowserStreamActivityMeta {
+  readonly agentActive: boolean;
+}
+
+export type BrowserStreamMetaMessage =
+  | BrowserViewportStatusType
+  | BrowserViewportTabsType
+  | BrowserStreamActivityMeta;
 
 export interface BrowserStreamInputMessage {
   readonly targetId: string;
@@ -40,7 +47,12 @@ export type BrowserStreamServerMessage =
   | { readonly _tag: "Frame"; readonly frame: BrowserStreamFrameMessage }
   | { readonly _tag: "Meta"; readonly event: BrowserStreamMetaMessage };
 
-const BrowserStreamMetaSchema = Schema.Union([BrowserViewportTabs, BrowserViewportStatus]);
+const BrowserStreamActivityMetaSchema = Schema.Struct({ agentActive: Schema.Boolean });
+const BrowserStreamMetaSchema = Schema.Union([
+  BrowserViewportTabs,
+  BrowserViewportStatus,
+  BrowserStreamActivityMetaSchema,
+]);
 const BrowserStreamInputSchema = Schema.Struct({
   targetId: Schema.String.check(Schema.isTrimmed(), Schema.isMinLength(1)),
   event: BrowserInputEvent,

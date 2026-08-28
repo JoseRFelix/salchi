@@ -586,7 +586,13 @@ const buildAppUnderTest = (options?: {
       navigateHistory: (threadId) => Effect.succeed(browserState(threadId, "running")),
       closeTab: (threadId) => Effect.succeed(browserState(threadId, "running")),
       dispatchInput: () => Effect.void,
+      recordAgentCdpActivity: () => Effect.void,
+      recordAgentCdpCommand: () => Effect.void,
+      agentConnectionOpened: () => Effect.void,
+      agentConnectionClosed: () => Effect.void,
+      getCdpWebSocketUrl: () => Effect.die("No browser CDP endpoint configured for this test"),
       subscribeViewport: () => Stream.empty,
+      subscribeAgentActivity: () => Stream.make(false).pipe(Stream.concat(Stream.never)),
       ...options?.layers?.browserSessionManager,
     });
 
