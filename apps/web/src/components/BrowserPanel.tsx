@@ -1,7 +1,6 @@
 import type {
   BrowserInputEvent,
   BrowserSessionState,
-  BrowserViewportFrame,
   EnvironmentId,
   ThreadId,
 } from "@salchi/contracts";
@@ -35,9 +34,14 @@ import {
   type BrowserFramePoint,
 } from "../browser/browserInput";
 import {
-  createBrowserFrameRenderer,
+  createBrowserBinaryFrameRenderer,
   type LatestFrameRenderer,
 } from "../browser/latestFrameRenderer";
+import {
+  createBrowserStreamConnection,
+  type BrowserStreamConnection,
+  type BrowserStreamViewportFrame,
+} from "../browser/browserStreamConnection";
 import {
   readEnvironmentConnection,
   subscribeEnvironmentConnections,
@@ -59,7 +63,6 @@ import {
 import { Spinner } from "./ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
-const NOOP = () => undefined;
 const DOUBLE_TAP_DISTANCE_PX = 24;
 const DOUBLE_TAP_WINDOW_MS = 350;
 const TOUCH_CLICK_DRAG_HOLD_MS = 450;
@@ -164,10 +167,15 @@ export function BrowserPanel(props: {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const addressInputRef = useRef<HTMLInputElement | null>(null);
   const mobileKeyboardInputRef = useRef<HTMLInputElement | null>(null);
-  const frameRendererRef = useRef<LatestFrameRenderer<BrowserViewportFrame> | null>(null);
-  const pendingFrameRef = useRef<BrowserViewportFrame | null>(null);
-  const currentFrameRef = useRef<BrowserViewportFrame | null>(null);
-  const inputDispatchTailRef = useRef<Promise<void>>(Promise.resolve());
+  const frameRendererRef = useRef<LatestFrameRenderer<BrowserStreamViewportFrame> | null>(null);
+  const pendingFrameRef = useRef<BrowserStreamViewportFrame | null>(null);
+  const currentFrameRef = useRef<BrowserStreamViewportFrame | null>(null);
+  const browserStreamConnectionRef = useRef<BrowserStreamConnection | null>(null);
+  const lastFrameReceivedAtRef = useRef(0);
+  const inputMeasurementRef = useRef<{
+    readonly afterSeq: number;
+    readonly sentAt: number;
+  } | null>(null);
   const activePointerGestureRef = useRef<ActivePointerGesture | null>(null);
   const pendingPointerMoveRef = useRef<PendingPointerMove | null>(null);
   const pointerMoveFrameRef = useRef<number | null>(null);
@@ -195,8 +203,9 @@ export function BrowserPanel(props: {
   const pauseFrame = useCallback(() => {
     setLive(false);
   }, []);
-  const acceptFrame = useCallback((frame: BrowserViewportFrame) => {
+  const acceptFrame = useCallback((frame: BrowserStreamViewportFrame) => {
     currentFrameRef.current = frame;
+    lastFrameReceivedAtRef.current = Date.now();
     setHasFrame(true);
     setLive(true);
 
@@ -208,9 +217,30 @@ export function BrowserPanel(props: {
     }
   }, []);
 
+  const frameRendered = useCallback((frame: BrowserStreamViewportFrame) => {
+    if (import.meta.env.DEV) {
+      console.debug("[browser-stream] frame receive-to-render", {
+        seq: frame.seq,
+        milliseconds: Math.max(0, performance.now() - frame.receivedAt),
+      });
+    }
+    const inputMeasurement = inputMeasurementRef.current;
+    if (inputMeasurement !== null && frame.seq > inputMeasurement.afterSeq) {
+      if (import.meta.env.DEV) {
+        console.debug("[browser-stream] input-to-next-frame-render", {
+          seq: frame.seq,
+          milliseconds: Math.max(0, performance.now() - inputMeasurement.sentAt),
+        });
+      }
+      inputMeasurementRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     pendingFrameRef.current = null;
     currentFrameRef.current = null;
+    lastFrameReceivedAtRef.current = 0;
+    inputMeasurementRef.current = null;
     setHasFrame(false);
     setInteractEnabled(false);
     pauseFrame();
@@ -224,7 +254,7 @@ export function BrowserPanel(props: {
     const canvas = canvasRef.current;
     if (!canvas || props.state.status !== "running") return;
 
-    const renderer = createBrowserFrameRenderer(canvas);
+    const renderer = createBrowserBinaryFrameRenderer(canvas, { onRendered: frameRendered });
     frameRendererRef.current = renderer;
     if (pendingFrameRef.current) {
       renderer.push(pendingFrameRef.current);
@@ -245,7 +275,16 @@ export function BrowserPanel(props: {
       if (!resizeObserver) window.removeEventListener("resize", redraw);
       renderer.dispose();
     };
-  }, [hasWebsiteUrl, props.state.status, props.threadId]);
+  }, [frameRendered, hasWebsiteUrl, props.state.status, props.threadId]);
+
+  useEffect(() => {
+    if (!actuallyVisible || props.state.status !== "running" || !hasFrame) return;
+    const checkFrameAge = () => {
+      if (Date.now() - lastFrameReceivedAtRef.current > 2_000) setLive(false);
+    };
+    const timer = window.setInterval(checkFrameAge, 250);
+    return () => window.clearInterval(timer);
+  }, [actuallyVisible, hasFrame, props.state.status, props.threadId]);
 
   useEffect(() => {
     if (!shouldSubscribe) {
@@ -255,47 +294,57 @@ export function BrowserPanel(props: {
 
     let disposed = false;
     let currentClient: BrowserClient | null = null;
-    let currentUnsubscribe: () => void = NOOP;
+    let currentConnection: BrowserStreamConnection | null = null;
     let connectionGeneration = 0;
+
+    const disposeCurrentConnection = () => {
+      const connection = currentConnection;
+      currentConnection = null;
+      if (browserStreamConnectionRef.current === connection) {
+        browserStreamConnectionRef.current = null;
+      }
+      connection?.dispose();
+    };
 
     const connect = (client: BrowserClient) => {
       connectionGeneration += 1;
       const generation = connectionGeneration;
-      let streamUnsubscribe: () => void = NOOP;
-
       const startStream = () => {
         if (disposed || generation !== connectionGeneration) return;
-        streamUnsubscribe = client.subscribeViewport(
-          { threadId: props.threadId },
-          (event) => {
-            if (disposed || generation !== connectionGeneration) return;
-            if (event._tag === "Frame") {
-              acceptFrame(event);
-              return;
+        const connection = createBrowserStreamConnection({
+          environmentId: props.environmentId,
+          threadId: props.threadId,
+          onFrame: (frame) => {
+            if (!disposed && generation === connectionGeneration) acceptFrame(frame);
+          },
+          onEvent: (event) => {
+            if (!disposed && generation === connectionGeneration) {
+              props.onStateAction({ type: "event", event });
             }
-            props.onStateAction({ type: "event", event });
           },
-          {
-            onResubscribe: pauseFrame,
-            onSubscriptionError: (info) => {
-              if (
-                disposed ||
-                generation !== connectionGeneration ||
-                !isBrowserAuthorizationErrorMessage(info.error)
-              ) {
-                return;
-              }
+          onConnectionState: (state) => {
+            if (!disposed && generation === connectionGeneration && state !== "open") pauseFrame();
+          },
+          onAuthorizationDenied: () => {
+            if (!disposed && generation === connectionGeneration) {
               props.onStateAction({ type: "authorizationDenied" });
-              streamUnsubscribe();
-              if (currentUnsubscribe === streamUnsubscribe) currentUnsubscribe = NOOP;
-            },
+              disposeCurrentConnection();
+            }
           },
-        );
+          onError: (error) => {
+            if (disposed || generation !== connectionGeneration) return;
+            const message = browserErrorMessage(error, "The browser viewport disconnected.");
+            if (isBrowserAuthorizationErrorMessage(message)) {
+              props.onStateAction({ type: "authorizationDenied" });
+            }
+          },
+        });
         if (disposed || generation !== connectionGeneration) {
-          streamUnsubscribe();
+          connection.dispose();
           return;
         }
-        currentUnsubscribe = streamUnsubscribe;
+        currentConnection = connection;
+        browserStreamConnectionRef.current = connection;
       };
 
       void client.getState({ threadId: props.threadId }).then(
@@ -321,8 +370,7 @@ export function BrowserPanel(props: {
       const nextClient = readEnvironmentConnection(props.environmentId)?.client.browser ?? null;
       if (nextClient === currentClient) return;
       connectionGeneration += 1;
-      currentUnsubscribe();
-      currentUnsubscribe = NOOP;
+      disposeCurrentConnection();
       currentClient = nextClient;
       pauseFrame();
       if (nextClient) {
@@ -341,7 +389,7 @@ export function BrowserPanel(props: {
       disposed = true;
       connectionGeneration += 1;
       unsubscribeConnections();
-      currentUnsubscribe();
+      disposeCurrentConnection();
       pauseFrame();
     };
   }, [
@@ -395,28 +443,14 @@ export function BrowserPanel(props: {
     [props.environmentId, props.onStateAction],
   );
 
-  const dispatchBrowserInput = useCallback(
-    (targetId: string, event: BrowserInputEvent) => {
-      const client = readEnvironmentConnection(props.environmentId)?.client.browser;
-      if (!client) return;
-      const execute = async () => {
-        try {
-          await client.dispatchInput({ threadId: props.threadId, targetId, event });
-        } catch (error: unknown) {
-          if (isBrowserAuthorizationError(error)) {
-            props.onStateAction({ type: "authorizationDenied" });
-            return;
-          }
-          props.onStateAction({
-            type: "operationFailed",
-            error: browserErrorMessage(error, "Unable to send browser input."),
-          });
-        }
-      };
-      inputDispatchTailRef.current = inputDispatchTailRef.current.then(execute, execute);
-    },
-    [props.environmentId, props.onStateAction, props.threadId],
-  );
+  const dispatchBrowserInput = useCallback((targetId: string, event: BrowserInputEvent) => {
+    const connection = browserStreamConnectionRef.current;
+    if (!connection?.sendInput(targetId, event)) return;
+    inputMeasurementRef.current = {
+      afterSeq: currentFrameRef.current?.seq ?? -1,
+      sentAt: performance.now(),
+    };
+  }, []);
 
   const mapPointerCoordinates = useCallback(
     (clientX: number, clientY: number, clampToFrame = false) => {

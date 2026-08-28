@@ -37,6 +37,7 @@ import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
 import { TerminalManagerLive } from "./terminal/Layers/Manager.ts";
 import { BrowserSessionManagerLive } from "./browser/Layers/BrowserSessionManager.ts";
+import { browserStreamRouteLayer } from "./browser/Layers/BrowserStreamRoute.ts";
 import {
   BrowserAgentBrokerLive,
   browserAgentBrokerPublicDenyRouteLayer,
@@ -361,6 +362,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   authWebSocketTicketRouteLayer,
   authWebSocketTokenRouteLayer,
   browserAgentBrokerPublicDenyRouteLayer,
+  browserStreamRouteLayer,
   attachmentsRouteLayer,
   transcriptionHttpRouteLayer,
   orchestrationDispatchRouteLayer,

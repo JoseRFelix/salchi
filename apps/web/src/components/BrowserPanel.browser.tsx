@@ -1,11 +1,6 @@
 import "../index.css";
 
-import {
-  EnvironmentId,
-  ThreadId,
-  type BrowserDispatchInput,
-  type BrowserViewportEvent,
-} from "@salchi/contracts";
+import { EnvironmentId, ThreadId } from "@salchi/contracts";
 import { page } from "vitest/browser";
 import { useReducer } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,14 +13,46 @@ import {
 import { BrowserPanel } from "./BrowserPanel";
 import { RightPanelSheet } from "./RightPanelSheet";
 
-const { readEnvironmentConnectionMock, subscribeEnvironmentConnectionsMock } = vi.hoisted(() => ({
-  readEnvironmentConnectionMock: vi.fn(),
-  subscribeEnvironmentConnectionsMock: vi.fn(() => () => undefined),
-}));
+const {
+  browserStreamConnections,
+  createBrowserStreamConnectionMock,
+  readEnvironmentConnectionMock,
+  subscribeEnvironmentConnectionsMock,
+} = vi.hoisted(() => {
+  const browserStreamConnections: Array<{
+    readonly dispose: ReturnType<typeof vi.fn>;
+    readonly options: {
+      readonly onConnectionState?: (state: "closed" | "connecting" | "open") => void;
+      readonly onEvent: (event: unknown) => void;
+      readonly onFrame: (frame: unknown) => void;
+      readonly threadId: ThreadId;
+    };
+    readonly sendInput: ReturnType<typeof vi.fn>;
+  }> = [];
+  const createBrowserStreamConnectionMock = vi.fn((options) => {
+    const connection = {
+      dispose: vi.fn(),
+      options,
+      sendInput: vi.fn(() => true),
+    };
+    browserStreamConnections.push(connection);
+    return connection;
+  });
+  return {
+    browserStreamConnections,
+    createBrowserStreamConnectionMock,
+    readEnvironmentConnectionMock: vi.fn(),
+    subscribeEnvironmentConnectionsMock: vi.fn(() => () => undefined),
+  };
+});
 
 vi.mock("../environments/runtime", () => ({
   readEnvironmentConnection: readEnvironmentConnectionMock,
   subscribeEnvironmentConnections: subscribeEnvironmentConnectionsMock,
+}));
+
+vi.mock("../browser/browserStreamConnection", () => ({
+  createBrowserStreamConnection: createBrowserStreamConnectionMock,
 }));
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-browser-panel");
@@ -49,28 +76,6 @@ function viewportState(threadId: ThreadId) {
 }
 
 function createBrowserClient() {
-  const unsubscriptions: Array<ReturnType<typeof vi.fn>> = [];
-  const listeners: Array<(event: BrowserViewportEvent) => void> = [];
-  const subscriptionOptions: Array<{
-    readonly onResubscribe?: () => void;
-    readonly onSubscriptionError?: (info: { readonly error: string }) => void;
-  }> = [];
-  const subscribeViewport = vi.fn(
-    (
-      _input: { readonly threadId: ThreadId },
-      listener: (event: BrowserViewportEvent) => void,
-      options?: {
-        readonly onResubscribe?: () => void;
-        readonly onSubscriptionError?: (info: { readonly error: string }) => void;
-      },
-    ) => {
-      const unsubscribe = vi.fn();
-      unsubscriptions.push(unsubscribe);
-      listeners.push(listener);
-      subscriptionOptions.push(options ?? {});
-      return unsubscribe;
-    },
-  );
   const browser = {
     start: vi.fn(async ({ threadId }: { threadId: ThreadId }) => sessionState(threadId)),
     stop: vi.fn(async ({ threadId }: { threadId: ThreadId }) => sessionState(threadId)),
@@ -79,10 +84,8 @@ function createBrowserClient() {
     openTab: vi.fn(),
     navigate: vi.fn(async ({ threadId }: { threadId: ThreadId }) => sessionState(threadId)),
     closeTab: vi.fn(),
-    dispatchInput: vi.fn(async (_input: BrowserDispatchInput) => undefined),
-    subscribeViewport,
   };
-  return { browser, listeners, subscribeViewport, subscriptionOptions, unsubscriptions };
+  return { browser };
 }
 
 function Panel(props: {
@@ -127,6 +130,8 @@ describe("BrowserPanel subscription visibility", () => {
   beforeEach(() => {
     readEnvironmentConnectionMock.mockReset();
     subscribeEnvironmentConnectionsMock.mockClear();
+    createBrowserStreamConnectionMock.mockClear();
+    browserStreamConnections.length = 0;
   });
 
   it("uses an address bar to navigate the active tab and opens a blank new tab", async () => {
@@ -288,7 +293,7 @@ describe("BrowserPanel subscription visibility", () => {
     }
   });
 
-  it("keeps a static streamed frame live and shows paused only over the image on reconnect", async () => {
+  it("marks a running viewport paused when its newest frame is stale or reconnecting", async () => {
     const client = createBrowserClient();
     readEnvironmentConnectionMock.mockReturnValue({ client });
     const state = reduceBrowserViewportState(initialBrowserViewportState(THREAD_A), {
@@ -310,22 +315,33 @@ describe("BrowserPanel subscription visibility", () => {
     const screen = await render(<Panel state={state} threadId={THREAD_A} visible />);
 
     try {
-      await vi.waitFor(() => expect(client.listeners).toHaveLength(1));
-      client.listeners[0]?.({
-        _tag: "Frame",
-        threadId: THREAD_A,
+      await vi.waitFor(() => expect(browserStreamConnections).toHaveLength(1));
+      browserStreamConnections[0]?.options.onFrame({
         targetId: "target-1",
-        dataBase64: "Zg==",
+        jpegBytes: Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]),
         width: 800,
         height: 600,
         seq: 1,
-        capturedAt: "2026-08-25T00:00:00.000Z" as never,
+        receivedAt: performance.now(),
       });
       await vi.waitFor(() => expect(document.body.textContent).not.toContain("Paused"));
       await new Promise<void>((resolve) => window.setTimeout(resolve, 1_700));
       expect(document.body.textContent).not.toContain("Paused");
 
-      client.subscriptionOptions[0]?.onResubscribe?.();
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 600));
+      await expect.element(page.getByText("Paused")).toBeVisible();
+
+      browserStreamConnections[0]?.options.onFrame({
+        targetId: "target-1",
+        jpegBytes: Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]),
+        width: 800,
+        height: 600,
+        seq: 2,
+        receivedAt: performance.now(),
+      });
+      await vi.waitFor(() => expect(document.body.textContent).not.toContain("Paused"));
+
+      browserStreamConnections[0]?.options.onConnectionState?.("closed");
       await expect.element(page.getByText("Paused")).toBeVisible();
       expect(document.querySelector("[data-browser-live-state]")).toBeNull();
     } finally {
@@ -355,16 +371,14 @@ describe("BrowserPanel subscription visibility", () => {
     const screen = await render(<Panel state={state} threadId={THREAD_A} visible />);
 
     try {
-      await vi.waitFor(() => expect(client.listeners).toHaveLength(1));
-      client.listeners[0]?.({
-        _tag: "Frame",
-        threadId: THREAD_A,
+      await vi.waitFor(() => expect(browserStreamConnections).toHaveLength(1));
+      browserStreamConnections[0]?.options.onFrame({
         targetId: "target-1",
-        dataBase64: "Zg==",
+        jpegBytes: Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]),
         width: 800,
         height: 600,
         seq: 1,
-        capturedAt: "2026-08-25T00:00:00.000Z" as never,
+        receivedAt: performance.now(),
       });
 
       const interact = page.getByRole("button", { name: "Interact" });
@@ -390,8 +404,9 @@ describe("BrowserPanel subscription visibility", () => {
         canvas.dispatchEvent(new PointerEvent("pointerdown", pointer));
         canvas.dispatchEvent(new PointerEvent("pointerup", pointer));
       }
-      await vi.waitFor(() => expect(client.browser.dispatchInput).toHaveBeenCalledTimes(2));
-      expect(client.browser.dispatchInput.mock.calls.map(([input]) => input.event._tag)).toEqual([
+      const sendInput = browserStreamConnections[0]!.sendInput;
+      await vi.waitFor(() => expect(sendInput).toHaveBeenCalledTimes(2));
+      expect(sendInput.mock.calls.map(([_targetId, event]) => event._tag)).toEqual([
         "PointerDown",
         "PointerUp",
       ]);
@@ -419,29 +434,29 @@ describe("BrowserPanel subscription visibility", () => {
     const screen = await render(<Panel threadId={THREAD_A} visible={false} />);
 
     try {
-      expect(client.subscribeViewport).not.toHaveBeenCalled();
+      expect(createBrowserStreamConnectionMock).not.toHaveBeenCalled();
 
       await screen.rerender(<Panel threadId={THREAD_A} visible />);
-      await vi.waitFor(() => expect(client.subscribeViewport).toHaveBeenCalledTimes(1));
-      expect(client.subscribeViewport.mock.calls[0]?.[0]).toEqual({ threadId: THREAD_A });
+      await vi.waitFor(() => expect(createBrowserStreamConnectionMock).toHaveBeenCalledTimes(1));
+      expect(browserStreamConnections[0]?.options.threadId).toBe(THREAD_A);
 
       await screen.rerender(<Panel threadId={THREAD_A} visible={false} />);
-      await vi.waitFor(() => expect(client.unsubscriptions[0]).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(browserStreamConnections[0]?.dispose).toHaveBeenCalledOnce());
 
       await screen.rerender(<Panel threadId={THREAD_A} visible />);
-      await vi.waitFor(() => expect(client.subscribeViewport).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(createBrowserStreamConnectionMock).toHaveBeenCalledTimes(2));
 
       await screen.rerender(<Panel threadId={THREAD_B} visible />);
       await vi.waitFor(() => {
-        expect(client.unsubscriptions[1]).toHaveBeenCalledOnce();
-        expect(client.subscribeViewport).toHaveBeenCalledTimes(3);
+        expect(browserStreamConnections[1]?.dispose).toHaveBeenCalledOnce();
+        expect(createBrowserStreamConnectionMock).toHaveBeenCalledTimes(3);
       });
-      expect(client.subscribeViewport.mock.calls[2]?.[0]).toEqual({ threadId: THREAD_B });
+      expect(browserStreamConnections[2]?.options.threadId).toBe(THREAD_B);
     } finally {
       await screen.unmount();
     }
 
-    expect(client.unsubscriptions[2]).toHaveBeenCalledOnce();
+    expect(browserStreamConnections[2]?.dispose).toHaveBeenCalledOnce();
   });
 
   it("unsubscribes as soon as a retained responsive sheet starts closing", async () => {
@@ -456,9 +471,9 @@ describe("BrowserPanel subscription visibility", () => {
     const screen = await render(renderSheet(true));
 
     try {
-      await vi.waitFor(() => expect(client.subscribeViewport).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(createBrowserStreamConnectionMock).toHaveBeenCalledOnce());
       await screen.rerender(renderSheet(false));
-      await vi.waitFor(() => expect(client.unsubscriptions[0]).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(browserStreamConnections[0]?.dispose).toHaveBeenCalledOnce());
 
       expect(document.querySelector('[data-right-panel-sheet="true"]')).not.toBeNull();
     } finally {
@@ -479,7 +494,7 @@ describe("BrowserPanel subscription visibility", () => {
     try {
       await expect.element(page.getByText("Owner access required")).toBeVisible();
       expect(client.browser.getState).toHaveBeenCalledOnce();
-      expect(client.subscribeViewport).not.toHaveBeenCalled();
+      expect(createBrowserStreamConnectionMock).not.toHaveBeenCalled();
     } finally {
       await screen.unmount();
     }

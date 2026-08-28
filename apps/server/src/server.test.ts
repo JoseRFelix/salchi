@@ -3,6 +3,11 @@ import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import {
+  decodeBrowserStreamServerMessage,
+  encodeBrowserStreamInput,
+  type BrowserStreamFrameMessage,
+} from "@salchi/shared/browserStreamProtocol";
+import {
   type BrowserSessionState,
   CommandId,
   DEFAULT_SERVER_SETTINGS,
@@ -39,6 +44,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
@@ -59,6 +65,8 @@ import {
 import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
+import { setTimeout as sleepRealTime } from "node:timers/promises";
+import { chromium } from "playwright-core";
 import { vi } from "vitest";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
@@ -117,6 +125,8 @@ import {
   BrowserSessionManager,
   type BrowserSessionManagerShape,
 } from "./browser/Services/BrowserSessionManager.ts";
+import { makeBrowserSessionManagerWithOptions } from "./browser/Layers/BrowserSessionManager.ts";
+import { launchPlaywrightBrowser } from "./browser/PlaywrightBrowserRuntime.ts";
 import {
   BrowserTraceCollector,
   type BrowserTraceCollectorShape,
@@ -871,10 +881,134 @@ const makeWsRpcClient = RpcClient.make(WsRpcGroup);
 type WsRpcClient =
   typeof makeWsRpcClient extends Effect.Effect<infer Client, any, any> ? Client : never;
 
+class BrowserStreamTestSocketError extends Data.TaggedError("BrowserStreamTestSocketError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
 const withWsRpcClient = <A, E, R>(
   wsUrl: string,
   f: (client: WsRpcClient) => Effect.Effect<A, E, R>,
 ) => makeWsRpcClient.pipe(Effect.flatMap(f), Effect.provide(wsRpcProtocolLayer(wsUrl)));
+
+const openRawWebSocket = (url: string) =>
+  Effect.acquireRelease(
+    Effect.callback<NodeSocket.NodeWS.WebSocket, BrowserStreamTestSocketError>((resume) => {
+      const socket = new NodeSocket.NodeWS.WebSocket(url);
+      const onOpen = () => {
+        socket.off("error", onError);
+        resume(Effect.succeed(socket));
+      };
+      const onError = (error: Error) => {
+        socket.off("open", onOpen);
+        resume(
+          Effect.fail(
+            new BrowserStreamTestSocketError({
+              message: "Failed to open the raw browser stream websocket.",
+              cause: error,
+            }),
+          ),
+        );
+      };
+      socket.once("open", onOpen);
+      socket.once("error", onError);
+      return Effect.sync(() => {
+        socket.off("open", onOpen);
+        socket.off("error", onError);
+        socket.terminate();
+      });
+    }),
+    (socket) => Effect.sync(() => socket.terminate()),
+  );
+
+const rejectedWebSocketUpgradeStatus = (url: string) =>
+  Effect.callback<number, BrowserStreamTestSocketError>((resume) => {
+    const socket = new NodeSocket.NodeWS.WebSocket(url);
+    let settled = false;
+    const settle = (effect: Effect.Effect<number, BrowserStreamTestSocketError>) => {
+      if (settled) return;
+      settled = true;
+      socket.removeAllListeners();
+      resume(effect);
+    };
+    socket.once("unexpected-response", (_request, response) => {
+      response.resume();
+      settle(Effect.succeed(response.statusCode ?? 0));
+    });
+    socket.once("open", () =>
+      settle(
+        Effect.fail(
+          new BrowserStreamTestSocketError({
+            message: "WebSocket upgrade unexpectedly succeeded.",
+          }),
+        ),
+      ),
+    );
+    socket.once("error", (error: Error) =>
+      settle(
+        Effect.fail(
+          new BrowserStreamTestSocketError({
+            message: "Rejected websocket upgrade failed unexpectedly.",
+            cause: error,
+          }),
+        ),
+      ),
+    );
+    return Effect.sync(() => {
+      if (!settled) {
+        socket.removeAllListeners();
+        socket.on("error", () => undefined);
+        socket.terminate();
+      }
+      settled = true;
+    });
+  });
+
+const receiveRawBrowserStreamFrame = (socket: NodeSocket.NodeWS.WebSocket, afterSequence = -1) =>
+  Effect.callback<BrowserStreamFrameMessage, BrowserStreamTestSocketError>((resume) => {
+    const cleanup = () => {
+      socket.off("message", onMessage);
+      socket.off("close", onClose);
+      socket.off("error", onError);
+    };
+    const onMessage = (data: NodeSocket.NodeWS.RawData, isBinary: boolean) => {
+      if (!isBinary) return;
+      try {
+        const bytes = Array.isArray(data) ? Buffer.concat(data) : data;
+        const message = decodeBrowserStreamServerMessage(bytes);
+        if (message._tag !== "Frame" || message.frame.seq <= afterSequence) return;
+        cleanup();
+        resume(Effect.succeed(message.frame));
+      } catch {
+        // META events may arrive before the next FRAME.
+      }
+    };
+    const onClose = () => {
+      cleanup();
+      resume(
+        Effect.fail(
+          new BrowserStreamTestSocketError({
+            message: "Browser stream closed before a frame arrived.",
+          }),
+        ),
+      );
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      resume(
+        Effect.fail(
+          new BrowserStreamTestSocketError({
+            message: "Browser stream failed before a frame arrived.",
+            cause: error,
+          }),
+        ),
+      );
+    };
+    socket.on("message", onMessage);
+    socket.once("close", onClose);
+    socket.once("error", onError);
+    return Effect.sync(cleanup);
+  });
 
 const appendSessionCookieToWsUrl = (url: string, sessionCookieHeader: string) => {
   const isAbsoluteUrl = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(url);
@@ -972,6 +1106,25 @@ const getAuthenticatedBearerSessionToken = (credential = defaultDesktopBootstrap
     }
 
     return body.sessionToken;
+  });
+
+const issueWebSocketTicket = (sessionToken: string) =>
+  Effect.gen(function* () {
+    const response = yield* HttpClient.post("/api/auth/websocket-ticket", {
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    if (response.status !== 200) {
+      return yield* new AuthenticationGetterError({
+        message: `Expected websocket ticket response to succeed, got ${response.status}`,
+      });
+    }
+    const body = (yield* response.json) as { readonly ticket?: string };
+    if (!body.ticket) {
+      return yield* new AuthenticationGetterError({
+        message: "Expected websocket ticket response to include a ticket.",
+      });
+    }
+    return body.ticket;
   });
 
 const extractSessionTokenFromSetCookie = (cookieHeader: string): string => {
@@ -1958,6 +2111,292 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.isFalse(dispatchInputCalled);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
+
+  it.effect("rejects browser stream upgrades without browser:operate", () =>
+    Effect.gen(function* () {
+      let managerCalled = false;
+      yield* buildAppUnderTest({
+        layers: {
+          browserSessionManager: {
+            getState: (threadId) =>
+              Effect.sync(() => {
+                managerCalled = true;
+                return {
+                  threadId,
+                  status: "stopped" as const,
+                  tabs: [],
+                  executable: null,
+                };
+              }),
+          },
+        },
+      });
+
+      const tokenResponse = yield* HttpClient.post("/oauth/token", {
+        body: yield* HttpBody.json({
+          credential: defaultDesktopBootstrapToken,
+          scope: "orchestration:read",
+        }),
+      });
+      const tokenBody = (yield* tokenResponse.json) as { readonly access_token: string };
+      const ticket = yield* issueWebSocketTicket(tokenBody.access_token);
+      const wsUrl = `${yield* getWsServerUrl(`/browser-stream/${defaultThreadId}`, {
+        authenticated: false,
+      })}?ticket=${encodeURIComponent(ticket)}`;
+
+      assert.equal(yield* rejectedWebSocketUpgradeStatus(wsUrl), 403);
+      assert.isFalse(managerCalled);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("releases the browser viewport subscription when the raw socket closes", () =>
+    Effect.gen(function* () {
+      const subscribed = yield* Deferred.make<void>();
+      const released = yield* Deferred.make<void>();
+      const inputReceived = yield* Deferred.make<{
+        readonly targetId: string;
+        readonly tag: string;
+      }>();
+      yield* buildAppUnderTest({
+        layers: {
+          browserSessionManager: {
+            dispatchInput: (_threadId, targetId, event) =>
+              Deferred.succeed(inputReceived, { targetId, tag: event._tag }).pipe(Effect.asVoid),
+            subscribeViewport: (threadId) =>
+              Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+                Stream.flatMap(() =>
+                  Stream.make({
+                    _tag: "Status" as const,
+                    threadId,
+                    status: "running" as const,
+                  }).pipe(Stream.concat(Stream.never)),
+                ),
+                Stream.ensuring(Deferred.succeed(released, undefined).pipe(Effect.asVoid)),
+              ),
+          },
+        },
+      });
+
+      const ticket = yield* issueWebSocketTicket(yield* getAuthenticatedBearerSessionToken());
+      const wsUrl = `${yield* getWsServerUrl(`/browser-stream/${defaultThreadId}`, {
+        authenticated: false,
+      })}?ticket=${encodeURIComponent(ticket)}`;
+      const socket = yield* openRawWebSocket(wsUrl);
+      yield* Deferred.await(subscribed).pipe(Effect.timeout("1 second"));
+
+      yield* Effect.sync(() =>
+        socket.send(
+          encodeBrowserStreamInput({
+            targetId: "target-1",
+            event: {
+              _tag: "PointerDown",
+              x: 10,
+              y: 20,
+              button: "left",
+              clickCount: 1,
+            },
+          }),
+        ),
+      );
+      assert.deepEqual(yield* Deferred.await(inputReceived).pipe(Effect.timeout("1 second")), {
+        targetId: "target-1",
+        tag: "PointerDown",
+      });
+
+      yield* Effect.sync(() => socket.close(1000, "test complete"));
+      yield* Deferred.await(released).pipe(Effect.timeout("1 second"));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("runs the gated browser stream click integration and latency comparison", () => {
+    if (process.env.SALCHI_BROWSER_INTEGRATION !== "1") return Effect.void;
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "salchi-browser-stream-router-probe-",
+      });
+      const manager = yield* makeBrowserSessionManagerWithOptions({
+        threadExists: () => Effect.succeed(true),
+        getLaunchConfig: () =>
+          Effect.succeed({
+            idleTimeoutMillis: 60_000,
+            userDataDirectory: path.join(root, "profile"),
+            processRegistryDirectory: path.join(root, "processes"),
+            environmentExecutablePath: process.env.SALCHI_BROWSER_PATH,
+            noSandbox: process.env.SALCHI_BROWSER_NO_SANDBOX === "1",
+            serverHost: "127.0.0.1",
+            serverPort: 3773,
+          }),
+        launchRuntime: (input) =>
+          launchPlaywrightBrowser(input).pipe(Effect.provide(NetService.layer)),
+      });
+      yield* buildAppUnderTest({ layers: { browserSessionManager: manager } });
+
+      yield* manager.start(defaultThreadId);
+      const runningState = yield* manager.getState(defaultThreadId);
+      if (!runningState.cdpWebSocketUrl) {
+        return yield* Effect.die("Browser stream probe received no CDP websocket URL.");
+      }
+      const externalBrowser = yield* Effect.acquireRelease(
+        Effect.promise(() => chromium.connectOverCDP(runningState.cdpWebSocketUrl!)),
+        (browser) => Effect.promise(() => browser.close()).pipe(Effect.ignore),
+      );
+      const context = externalBrowser.contexts()[0];
+      if (context === undefined) {
+        return yield* Effect.die("Browser stream probe received no browser context.");
+      }
+      const existingTargetIds = new Set(runningState.tabs.map((tab) => tab.targetId));
+      const page = yield* Effect.promise(() => context.newPage());
+      let activeTargetId: string | undefined;
+      for (let attempt = 0; attempt < 250; attempt += 1) {
+        const state = yield* manager.getState(defaultThreadId);
+        activeTargetId = state.tabs.find((tab) => !existingTargetIds.has(tab.targetId))?.targetId;
+        if (activeTargetId !== undefined) break;
+        yield* Effect.promise(() => sleepRealTime(20));
+      }
+      if (activeTargetId === undefined) {
+        return yield* Effect.die("Browser stream probe tab did not appear in manager state.");
+      }
+      const html = `<!doctype html>
+            <title>Raw browser stream integration</title>
+            <style>html, body { margin: 0; } button { position: absolute; left: 100px; top: 80px; width: 120px; height: 50px; }</style>
+            <button id="click-target">Click</button>
+            <script>
+              let count = 0;
+              document.querySelector('#click-target').addEventListener('click', (event) => {
+                count += 1;
+                event.currentTarget.textContent = 'Clicked ' + String(count);
+                document.body.dataset.trustedClicks = String(count);
+                document.body.dataset.lastClickTrusted = String(event.isTrusted);
+              });
+            </script>`;
+      yield* Effect.promise(() => page.goto(`data:text/html,${encodeURIComponent(html)}`));
+      yield* manager.setActiveTab(defaultThreadId, activeTargetId);
+
+      const ownerSessionToken = yield* getAuthenticatedBearerSessionToken();
+      const legacyTicket = yield* issueWebSocketTicket(ownerSessionToken);
+      const legacyWsUrl = `${yield* getWsServerUrl("/ws", {
+        authenticated: false,
+      })}?ticket=${encodeURIComponent(legacyTicket)}`;
+      const legacyInputToFrameMillis = yield* Effect.scoped(
+        withWsRpcClient(legacyWsUrl, (client) =>
+          Effect.gen(function* () {
+            const initialFrame = yield* Deferred.make<number>();
+            const responseFrame = yield* Deferred.make<number>();
+            let initialSequence = -1;
+            const subscription = yield* client[WS_METHODS.browserSubscribeViewport]({
+              threadId: defaultThreadId,
+            }).pipe(
+              Stream.filter((event) => event._tag === "Frame"),
+              Stream.take(2),
+              Stream.runForEach((event) => {
+                if (initialSequence < 0) {
+                  initialSequence = event.seq;
+                  return Deferred.succeed(initialFrame, event.seq).pipe(Effect.asVoid);
+                }
+                return event.seq > initialSequence
+                  ? Deferred.succeed(responseFrame, event.seq).pipe(Effect.asVoid)
+                  : Effect.void;
+              }),
+              Effect.forkScoped,
+            );
+            yield* Deferred.await(initialFrame).pipe(Effect.timeout("10 seconds"));
+            const startedAt = performance.now();
+            yield* client[WS_METHODS.browserDispatchInput]({
+              threadId: defaultThreadId,
+              targetId: activeTargetId,
+              event: {
+                _tag: "PointerDown",
+                x: 160,
+                y: 105,
+                button: "left",
+                clickCount: 1,
+              },
+            });
+            yield* client[WS_METHODS.browserDispatchInput]({
+              threadId: defaultThreadId,
+              targetId: activeTargetId,
+              event: {
+                _tag: "PointerUp",
+                x: 160,
+                y: 105,
+                button: "left",
+                clickCount: 1,
+              },
+            });
+            yield* Deferred.await(responseFrame).pipe(Effect.timeout("10 seconds"));
+            yield* Fiber.join(subscription);
+            return performance.now() - startedAt;
+          }),
+        ),
+      );
+      const rawTicket = yield* issueWebSocketTicket(ownerSessionToken);
+      const rawWsUrl = `${yield* getWsServerUrl(`/browser-stream/${defaultThreadId}`, {
+        authenticated: false,
+      })}?ticket=${encodeURIComponent(rawTicket)}`;
+      const rawInputToFrameMillis = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const socket = yield* openRawWebSocket(rawWsUrl);
+          const firstFrameFiber = yield* receiveRawBrowserStreamFrame(socket).pipe(
+            Effect.timeout("10 seconds"),
+            Effect.forkScoped,
+          );
+          yield* Effect.promise(() => sleepRealTime(100));
+          yield* Effect.promise(() =>
+            page.evaluate("document.body.style.backgroundColor = 'rgb(1, 2, 3)'"),
+          );
+          const firstFrame = yield* Fiber.join(firstFrameFiber);
+          assert.equal(firstFrame.jpegBytes[0], 0xff);
+          assert.equal(firstFrame.jpegBytes[1], 0xd8);
+          const responseFrame = yield* receiveRawBrowserStreamFrame(socket, firstFrame.seq).pipe(
+            Effect.timeout("10 seconds"),
+            Effect.forkScoped,
+          );
+          yield* Effect.yieldNow;
+          const startedAt = performance.now();
+          yield* Effect.sync(() => {
+            socket.send(
+              encodeBrowserStreamInput({
+                targetId: activeTargetId,
+                event: {
+                  _tag: "PointerDown",
+                  x: 160,
+                  y: 105,
+                  button: "left",
+                  clickCount: 1,
+                },
+              }),
+            );
+            socket.send(
+              encodeBrowserStreamInput({
+                targetId: activeTargetId,
+                event: {
+                  _tag: "PointerUp",
+                  x: 160,
+                  y: 105,
+                  button: "left",
+                  clickCount: 1,
+                },
+              }),
+            );
+          });
+          yield* Fiber.join(responseFrame);
+          return performance.now() - startedAt;
+        }),
+      );
+      yield* Effect.promise(() =>
+        page.waitForFunction(
+          "Number(document.body.dataset.trustedClicks || '0') > 0 && document.body.dataset.lastClickTrusted === 'true'",
+        ),
+      );
+
+      process.stdout.write(
+        `[browser-stream-measurement] localhost legacy-rpc=${legacyInputToFrameMillis.toFixed(1)}ms raw-binary=${rawInputToFrameMillis.toFixed(1)}ms\n`,
+      );
+      assert.isBelow(rawInputToFrameMillis, 2_000);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest));
+  });
 
   it.effect("negotiates permessage-deflate with clients that offer it", () =>
     Effect.gen(function* () {

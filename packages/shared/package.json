@@ -146,6 +146,10 @@
     "./Record": {
       "types": "./src/Record.ts",
       "import": "./src/Record.ts"
+    },
+    "./browserStreamProtocol": {
+      "types": "./src/browserStreamProtocol.ts",
+      "import": "./src/browserStreamProtocol.ts"
     }
   },
   "scripts": {

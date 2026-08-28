@@ -18,6 +18,14 @@ interface DecodedBrowserFrame {
   readonly close: () => void;
 }
 
+export interface BinaryBrowserViewportFrame {
+  readonly jpegBytes: Uint8Array;
+  readonly seq: number;
+  readonly width: number;
+  readonly height: number;
+  readonly receivedAt: number;
+}
+
 const browserAnimationFrameScheduler: AnimationFrameScheduler = {
   requestAnimationFrame: (callback) => window.requestAnimationFrame(callback),
   cancelAnimationFrame: (handle) => window.cancelAnimationFrame(handle),
@@ -134,8 +142,7 @@ function jpegBlobFromBase64(dataBase64: string): Blob {
   return new Blob([bytes], { type: "image/jpeg" });
 }
 
-async function decodeBrowserFrame(frame: BrowserViewportFrame): Promise<DecodedBrowserFrame> {
-  const blob = jpegBlobFromBase64(frame.dataBase64);
+async function decodeBrowserFrameBlob(blob: Blob): Promise<DecodedBrowserFrame> {
   if (typeof globalThis.createImageBitmap === "function") {
     const bitmap = await globalThis.createImageBitmap(blob);
     return { source: bitmap, close: () => bitmap.close() };
@@ -155,6 +162,15 @@ async function decodeBrowserFrame(frame: BrowserViewportFrame): Promise<DecodedB
     URL.revokeObjectURL(objectUrl);
   }
   return { source: image, close: () => undefined };
+}
+
+function decodeBrowserFrame(frame: BrowserViewportFrame): Promise<DecodedBrowserFrame> {
+  return decodeBrowserFrameBlob(jpegBlobFromBase64(frame.dataBase64));
+}
+
+function decodeBinaryBrowserFrame(frame: BinaryBrowserViewportFrame): Promise<DecodedBrowserFrame> {
+  const jpegBuffer = frame.jpegBytes.slice().buffer;
+  return decodeBrowserFrameBlob(new Blob([jpegBuffer], { type: "image/jpeg" }));
 }
 
 export function drawBrowserFrameToCanvas(
@@ -191,6 +207,21 @@ export function createBrowserFrameRenderer(
   return createLatestFrameRenderer({
     decode: decodeBrowserFrame,
     render: (decoded, frame) => drawBrowserFrameToCanvas(canvas, decoded.source, frame),
+    disposeDecoded: (decoded) => decoded.close(),
+    scheduler: browserAnimationFrameScheduler,
+  });
+}
+
+export function createBrowserBinaryFrameRenderer<TFrame extends BinaryBrowserViewportFrame>(
+  canvas: HTMLCanvasElement,
+  options?: { readonly onRendered?: (frame: TFrame) => void },
+): LatestFrameRenderer<TFrame> {
+  return createLatestFrameRenderer({
+    decode: (frame: TFrame) => decodeBinaryBrowserFrame(frame),
+    render: (decoded, frame) => {
+      drawBrowserFrameToCanvas(canvas, decoded.source, frame);
+      options?.onRendered?.(frame);
+    },
     disposeDecoded: (decoded) => decoded.close(),
     scheduler: browserAnimationFrameScheduler,
   });

@@ -12,7 +12,8 @@ always applied.
 
 Viewport frames use CDP `Page.startScreencast` as JPEG quality 55 at a maximum width of 800 and
 device scale factor 1. Frames are acknowledged immediately and written to a capacity-one latest
-value mailbox. They travel only over the existing JSON Effect RPC WebSocket, never through
+value mailbox. The web client receives them over the dedicated binary browser stream described
+below; the original JSON Effect RPC stream remains as a compatibility API. Frames never enter
 orchestration events or SQLite. Screencasting exists only while there is a subscriber; Chromium may
 stay alive with none. A session idles out only after both CDP activity and the last viewport
 subscriber have been absent for the configured 15-minute default.
@@ -143,8 +144,10 @@ Phase 2b deliberately does not add a `salchi/*` browser tool or alter dynamic-to
 
 The viewport remains view-only until the user explicitly enables **Interact**. Hiding the panel,
 switching views or threads, closing the responsive sheet, stopping/crashing the browser, or losing
-authorization disables interaction. Pointer, wheel, keyboard, and composed text events travel over
-the owner-scoped `browser.dispatchInput` RPC and are accepted only for the active tab.
+authorization disables interaction. Pointer, wheel, keyboard, and composed text events use the
+existing dispatch-input event union and are accepted only for the active tab. Phase 4 sends panel
+input over the binary browser socket; the owner-scoped `browser.dispatchInput` RPC remains available
+for programmatic callers.
 
 The browser viewport is fixed at 800×600 with device scale factor 1. The client inverts the canvas
 aspect-fit transform, including letterbox offsets and device-pixel-ratio backing scale, into streamed
@@ -165,3 +168,54 @@ Manual verification:
 2. Enable **Interact**, click a link or cookie banner, and verify the agent remains attached.
 3. Scroll with a mouse wheel or a one-finger touch drag.
 4. Focus a text field and type with the desktop keyboard or the panel keyboard button on mobile.
+
+## Phase 4 low-latency browser stream
+
+The public Salchi listener now serves
+`ws(s)://<salchi-host>/browser-stream/<threadId>?ticket=<short-lived-ticket>`. It uses the same
+websocket-ticket exchange as `/ws`, enforces `browser:operate` before upgrading, and is intentionally
+reachable through the same Tailscale Serve path as `/ws` so a remote phone can use it. Each raw
+connection owns one ordinary viewport subscription, so multiple phones/desktops compose with the
+existing first-subscriber/last-unsubscriber screencast and idle-controller behavior.
+
+Protocol version 1 starts every binary message with a version byte and a type byte. `FRAME` carries
+sequence, dimensions, a tab-index hint, and raw JPEG bytes. `META` carries UTF-8 JSON for the existing
+`Status` and `Tabs` event shapes. In the other direction, `INPUT` carries UTF-8 JSON containing the
+active target id and the existing browser input event union. There is deliberately no frame ACK:
+Chromium is ACKed immediately at CDP receipt, and the browser stream never waits for a remote client.
+
+The web Browser panel uses the raw socket for frames, status, tabs, and manual input. The unary
+`browser.*` RPCs still own lifecycle/tab/address-bar operations. `browser.subscribeViewport` and
+`browser.dispatchInput` remain supported for compatibility and programmatic clients, but the web
+hot path no longer calls either. Raw JPEGs stay outside Zustand and persistence, enter the existing
+latest-frame renderer through `Blob`/`createImageBitmap`, and are dropped there again if decoding or
+animation-frame rendering falls behind. A running view whose newest frame is over two seconds old
+shows the existing paused overlay.
+
+On the Node server, Effect's websocket abstraction does not expose the underlying WebSocket
+`bufferedAmount`, and its writer completes after `ws.send` rather than after network drain. The
+upgraded Node request does expose its underlying TCP socket's `writableLength`, so each connection
+skips frames while that real unsent-byte count is at least 256 KiB. A connection-owned writer pump
+also keeps only one newest pending frame while a write is in progress; low-frequency metadata keeps
+order independently. Input is consumed by the socket reader and dispatched independently of that
+writer pump. On a non-Node adapter where the request source has no `writableLength`, the latest-only
+slot still prevents an application frame backlog, but the 256 KiB transport threshold is not
+observable; phase 4 is verified and deployed on the repository's Node server path.
+
+Set `SALCHI_BROWSER_STREAM_DEBUG=1` to log, at debug level only, the captured/mailbox-published frame
+to socket-write delta and backpressure skips. Development builds also log receive-to-canvas-render
+and input-send-to-next-render timings in the browser console. The gated localhost comparison uses
+the same Chromium/page for both retained transports; the final verification run measured 28.7 ms
+over the legacy JSON RPC stream and 10.0 ms over the binary socket. These localhost numbers mainly
+show removed serialization/ACK overhead; the intended improvement is larger on a high-RTT phone-to-
+VPS connection.
+
+Manual verification:
+
+1. Start Salchi on the VPS, open a thread and its Browser panel, then start the browser.
+2. From a phone on cellular, enable **Interact**, click a visible link, and confirm the next frame
+   feels immediate while the connection-quality overlay stays clear.
+3. Disable networking or kill the browser-stream websocket mid-stream, restore connectivity, and
+   confirm the ticket/reconnect loop resumes frames.
+4. Hide the panel, switch right-panel views and switch threads; in every case confirm the raw socket
+   closes and the final viewport subscriber stops the screencast.
