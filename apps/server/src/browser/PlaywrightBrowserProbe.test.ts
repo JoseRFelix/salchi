@@ -71,6 +71,30 @@ function makeBrowserStressServer() {
             };
             return;
           }
+          if (request.url === "/service-worker.js") {
+            response.writeHead(200, {
+              "Cache-Control": "no-store",
+              "Content-Type": "application/javascript; charset=utf-8",
+            });
+            response.end(`self.addEventListener("message", (event) => {
+              event.waitUntil((async () => {
+                let blocked = false;
+                try {
+                  await fetch(String(event.data));
+                } catch {
+                  blocked = true;
+                }
+                const clients = await self.clients.matchAll({
+                  includeUncontrolled: true,
+                  type: "window",
+                });
+                for (const client of clients) {
+                  client.postMessage({ blocked, type: "salchi-navigation-guard-result" });
+                }
+              })());
+            });`);
+            return;
+          }
           response.writeHead(200, {
             "Cache-Control": "no-store",
             "Content-Length": String(ONE_PIXEL_GIF.byteLength),
@@ -248,8 +272,9 @@ describe.runIf(process.env.SALCHI_BROWSER_INTEGRATION === "1")(
         const page = yield* Effect.promise(() => context.newPage());
         const stressServer = yield* makeBrowserStressServer();
 
-        // Wait until Salchi's context `page` listener has installed Fetch
-        // interception before asking the external client to navigate.
+        // Wait until Salchi's context `page` listener has attached its page
+        // CDP session before asking the external client to navigate. The
+        // browser-target navigation guard is already active by this point.
         yield* waitForBrowserState(
           manager,
           (state) => state.tabs.length >= ownerState.tabs.length + 1,
@@ -318,6 +343,16 @@ describe.runIf(process.env.SALCHI_BROWSER_INTEGRATION === "1")(
           ),
           Effect.forkScoped,
         );
+        // Input boosts a sampled screencast to every frame. That guarantees a
+        // fresh compositor frame even when this otherwise-static data URL had
+        // already painted before the subscriber attached.
+        yield* manager.dispatchInput(integrationThreadId, externalTab.targetId, {
+          _tag: "PointerMove",
+          x: 0,
+          y: 0,
+          button: "none",
+          clickCount: 0,
+        });
         const initialFrame = yield* Deferred.await(firstFrame).pipe(Effect.timeout("10 seconds"));
         expect(initialFrame.targetId).toBe(externalTab.targetId);
         expect(initialFrame.width).toBeGreaterThan(0);
@@ -458,6 +493,50 @@ describe.runIf(process.env.SALCHI_BROWSER_INTEGRATION === "1")(
         process.stdout.write(
           `[browser-latency-probe] input-during-navigation=${inputDuringNavigationMillis.toFixed(1)}ms subresources=${subresourceLoadMillis.toFixed(1)}ms rapid-input-100=${rapidInputBurstMillis.toFixed(1)}ms rapid-click-25=${rapidClickBurstMillis.toFixed(1)}ms agent-navigation=${agentNavigationMillis.toFixed(1)}ms frames=${String(stressFrameCount)} event-loop-p50=${eventLoopP50Millis.toFixed(1)}ms event-loop-p99=${eventLoopP99Millis.toFixed(1)}ms\n`,
         );
+
+        const serviceWorkerRequestBlocked = yield* Effect.promise(() =>
+          page.evaluate(async () => {
+            interface ServiceWorkerLike {
+              postMessage(message: unknown): void;
+            }
+            interface ServiceWorkerRegistrationLike {
+              readonly active: ServiceWorkerLike | null;
+              readonly installing: ServiceWorkerLike | null;
+              readonly waiting: ServiceWorkerLike | null;
+            }
+            interface ServiceWorkerContainerLike {
+              readonly ready: Promise<ServiceWorkerRegistrationLike>;
+              addEventListener(type: "message", listener: (event: MessageEvent) => void): void;
+              register(scriptURL: string): Promise<ServiceWorkerRegistrationLike>;
+              removeEventListener(type: "message", listener: (event: MessageEvent) => void): void;
+            }
+            const serviceWorkers = (
+              navigator as Navigator & { readonly serviceWorker: ServiceWorkerContainerLike }
+            ).serviceWorker;
+            const registration = await serviceWorkers.register("/service-worker.js");
+            await serviceWorkers.ready;
+            const worker = registration.active ?? registration.waiting ?? registration.installing;
+            if (worker === null) {
+              throw new Error("The service worker did not expose an active worker.");
+            }
+            return new Promise<boolean>((resolve) => {
+              const onMessage = (
+                event: MessageEvent<{
+                  readonly blocked?: unknown;
+                  readonly type?: unknown;
+                }>,
+              ) => {
+                if (event.data?.type !== "salchi-navigation-guard-result") return;
+                serviceWorkers.removeEventListener("message", onMessage);
+                resolve(event.data.blocked === true);
+              };
+              serviceWorkers.addEventListener("message", onMessage);
+              // oxlint-disable-next-line unicorn/require-post-message-target-origin -- ServiceWorker.postMessage has no targetOrigin parameter.
+              worker.postMessage("http://169.254.169.254/latest/meta-data/");
+            });
+          }),
+        ).pipe(Effect.timeout("5 seconds"));
+        expect(serviceWorkerRequestBlocked).toBe(true);
 
         const blockedNavigationMessage = yield* Effect.promise(() =>
           page

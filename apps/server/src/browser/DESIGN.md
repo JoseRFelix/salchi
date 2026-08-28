@@ -84,8 +84,11 @@ The guard statically blocks these destinations:
 - Salchi's own listening host and port; and
 - loopback aliases at Salchi's listening port.
 
-`Fetch.enable` receives only candidate URL patterns for those hosts; it never pauses every request.
-Each matching request is failed and logged at info level. There is deliberately no DNS resolution.
+The targeted `Fetch.enable` guard is installed once on Chromium's browser CDP target, so it covers
+requests initiated by pages and service workers. It receives only candidate URL patterns for the
+blocked hosts and never pauses every request. Each matching request is failed and logged at info
+level. There is deliberately no DNS resolution: a different hostname that resolves to a blocked IP
+is not blocked unless that hostname itself appears in the static list.
 
 The web stream and compatibility RPC both call the same `dispatchInput` path. It resolves the root
 and reads the current running entry without taking the per-thread manager semaphore. The runtime
@@ -306,8 +309,9 @@ Methodology, stage timings, and the legacy comparison are recorded in [BENCHMARK
 
 - JPEG screencast compression, transfer, decode, and canvas paint impose a latency/quality ceiling;
   there is no adaptive codec or WebRTC transport.
-- The navigation guard uses static hostname matching only. It does not resolve DNS or attempt a
-  comprehensive private-network SSRF policy.
+- The navigation guard uses static hostname matching only. A DNS alias that resolves to a blocked
+  IP bypasses the guard unless the alias itself is listed; the guard does not attempt a comprehensive
+  private-network SSRF policy.
 - Stealth mode changes only a small set of automation fingerprints. Browser behavior, timing,
   graphics, installed fonts, IP reputation, and many other detectable signals remain unchanged.
 - Native video PiP (`captureStream`/`requestPictureInPicture`) is not implemented; the current PiP is

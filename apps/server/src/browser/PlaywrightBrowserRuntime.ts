@@ -409,6 +409,58 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
   };
   const serialized = <A, E>(effect: Effect.Effect<A, E>) => operationSemaphore.withPermit(effect);
 
+  // Install the targeted guard on Chromium's browser target rather than on
+  // each page target. Browser-target Fetch interception also observes
+  // requests initiated by service workers, while retaining the same narrow
+  // candidate patterns so ordinary subresources never pause.
+  const onBrowserRequestPaused = (event: FetchRequestPausedEvent) => {
+    const handlerStartedAt = streamDebug ? browserMonotonicMillis() : 0;
+    input.callbacks.onCdpActivity();
+    const blocked = shouldBlockBrowserRequest({
+      url: event.request.url,
+      serverHost: input.serverHost,
+      serverPort: input.serverPort,
+    });
+    if (blocked) {
+      schedule(
+        Effect.logInfo("Blocked browser request", {
+          threadId: input.threadId,
+          url: event.request.url,
+        }),
+      );
+      void browserCdp
+        .send("Fetch.failRequest", {
+          requestId: event.requestId,
+          errorReason: "BlockedByClient",
+        })
+        .catch(() => undefined);
+    } else {
+      void browserCdp
+        .send("Fetch.continueRequest", { requestId: event.requestId })
+        .catch(() => undefined);
+    }
+    if (streamDebug) {
+      schedule(
+        logBrowserHandlerTiming("browser.fetch.request-paused", handlerStartedAt, {
+          threadId: input.threadId,
+          blocked,
+        }),
+      );
+    }
+  };
+  browserCdp.on("Fetch.requestPaused", onBrowserRequestPaused);
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => browserCdp.off("Fetch.requestPaused", onBrowserRequestPaused)),
+  );
+  yield* tryBrowserOperation(input.threadId, "Failed to enable browser request interception.", () =>
+    browserCdp.send("Fetch.enable", {
+      patterns: browserFetchInterceptionPatterns({
+        serverHost: input.serverHost,
+        serverPort: input.serverPort,
+      }),
+    }),
+  );
+
   const refreshTabsUnlocked = Effect.gen(function* () {
     const handlerStartedAt = streamDebug ? browserMonotonicMillis() : 0;
     const tabs = yield* Effect.forEach(pageRuntimes.values(), (runtime) =>
@@ -628,52 +680,6 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
         activeInputRuntime = runtime;
       }
 
-      const onRequestPaused = (event: FetchRequestPausedEvent) => {
-        const handlerStartedAt = streamDebug ? browserMonotonicMillis() : 0;
-        input.callbacks.onCdpActivity();
-        const blocked = shouldBlockBrowserRequest({
-          url: event.request.url,
-          serverHost: input.serverHost,
-          serverPort: input.serverPort,
-        });
-        if (blocked) {
-          schedule(
-            Effect.logInfo("Blocked browser request", {
-              threadId: input.threadId,
-              targetId: runtime.targetId,
-              url: event.request.url,
-            }),
-          );
-          void cdp
-            .send("Fetch.failRequest", {
-              requestId: event.requestId,
-              errorReason: "BlockedByClient",
-            })
-            .catch(() => undefined);
-          if (streamDebug) {
-            schedule(
-              logBrowserHandlerTiming("browser.fetch.request-paused", handlerStartedAt, {
-                threadId: input.threadId,
-                targetId: runtime.targetId,
-                blocked: true,
-              }),
-            );
-          }
-          return;
-        }
-        void cdp
-          .send("Fetch.continueRequest", { requestId: event.requestId })
-          .catch(() => undefined);
-        if (streamDebug) {
-          schedule(
-            logBrowserHandlerTiming("browser.fetch.request-paused", handlerStartedAt, {
-              threadId: input.threadId,
-              targetId: runtime.targetId,
-              blocked: false,
-            }),
-          );
-        }
-      };
       const onScreencastFrame = (event: ScreencastFrameEvent) => {
         const cdpReceivedAtMonotonicMillis = streamDebug ? browserMonotonicMillis() : 0;
         // Start the ACK before doing any publication work. The browser must
@@ -712,42 +718,30 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
           );
         }
       };
-      cdp.on("Fetch.requestPaused", onRequestPaused);
       cdp.on("Page.screencastFrame", onScreencastFrame);
       runtime.disposeListeners = () => {
-        cdp.off("Fetch.requestPaused", onRequestPaused);
         cdp.off("Page.screencastFrame", onScreencastFrame);
       };
       yield* tryBrowserOperation(input.threadId, "Failed to enable browser tab CDP events.", () =>
         cdp.send("Page.enable"),
       );
-      yield* Effect.all([
-        tryBrowserOperation(input.threadId, "Failed to enable browser request interception.", () =>
-          cdp.send("Fetch.enable", {
-            patterns: browserFetchInterceptionPatterns({
-              serverHost: input.serverHost,
-              serverPort: input.serverPort,
-            }),
-          }),
-        ),
-        ...(stealthUserAgent === undefined
-          ? []
-          : [
-              tryBrowserOperation(
-                input.threadId,
-                "Failed to install the browser webdriver override.",
-                () =>
-                  cdp.send("Page.addScriptToEvaluateOnNewDocument", {
-                    source: BROWSER_STEALTH_WEBDRIVER_SCRIPT,
-                  }),
-              ),
-              tryBrowserOperation(
-                input.threadId,
-                "Failed to set the browser user agent override.",
-                () => cdp.send("Network.setUserAgentOverride", { userAgent: stealthUserAgent }),
-              ),
-            ]),
-      ]);
+      if (stealthUserAgent !== undefined) {
+        yield* Effect.all([
+          tryBrowserOperation(
+            input.threadId,
+            "Failed to install the browser webdriver override.",
+            () =>
+              cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+                source: BROWSER_STEALTH_WEBDRIVER_SCRIPT,
+              }),
+          ),
+          tryBrowserOperation(
+            input.threadId,
+            "Failed to set the browser user agent override.",
+            () => cdp.send("Network.setUserAgentOverride", { userAgent: stealthUserAgent }),
+          ),
+        ]);
+      }
 
       const refreshFromPageEvent = () => {
         input.callbacks.onCdpActivity();
@@ -762,7 +756,6 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
       page.on("framenavigated", onFrameNavigated);
       page.on("close", onClose);
       runtime.disposeListeners = () => {
-        cdp.off("Fetch.requestPaused", onRequestPaused);
         cdp.off("Page.screencastFrame", onScreencastFrame);
         page.off("domcontentloaded", refreshFromPageEvent);
         page.off("load", refreshFromPageEvent);
