@@ -4,10 +4,13 @@ import { createServer } from "node:http";
 import { ThreadId, type BrowserSessionState } from "@salchi/contracts";
 import { it } from "@effect/vitest";
 import * as Data from "effect/Data";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Logger from "effect/Logger";
+import * as References from "effect/References";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect } from "vitest";
@@ -19,6 +22,7 @@ import {
   isLoopbackAddress,
   makeBrowserAgentBrokerWithOptions,
   parseBrowserProxyPath,
+  redactBrowserAgentSecrets,
 } from "./BrowserAgentBroker.ts";
 
 const threadId = ThreadId.make("browser-agent-broker-test");
@@ -185,6 +189,63 @@ describe("browser agent broker security", () => {
     expect(parseBrowserProxyPath(`/internal/browser/cdp/thread/extra/${token}`)).toBeNull();
     expect(parseBrowserProxyPath(`/internal/browser/cdp/%20/${token}`)).toBeNull();
   });
+
+  it("redacts capability-shaped values from broker diagnostics", () => {
+    const token = "a".repeat(64);
+    expect(redactBrowserAgentSecrets(`failed at /thread/${token}`)).toBe(
+      "failed at /thread/[redacted-browser-token]",
+    );
+  });
+});
+
+it.effect("never writes the capability token during a complete proxy connect cycle", () => {
+  const captured: string[] = [];
+  const logger = Logger.make(({ cause, message }) => {
+    captured.push(JSON.stringify(message), Cause.pretty(cause));
+  });
+  const token = "a".repeat(64);
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const upstream = yield* makeEchoCdpServer();
+      const closed = yield* Deferred.make<void>();
+      let tokenCall = 0;
+      const broker = yield* makeBrowserAgentBrokerWithOptions({
+        accessEnabled: Effect.succeed(true),
+        randomToken: () => (tokenCall++ === 0 ? token : "b".repeat(64)),
+        browserManager: {
+          start: () =>
+            Effect.succeed({
+              threadId,
+              status: "running",
+              tabs: [],
+              executable: null,
+            }),
+          getCdpWebSocketUrl: () => Effect.succeed(upstream.url),
+          agentConnectionOpened: () => Effect.void,
+          recordAgentCdpActivity: () => Effect.void,
+          recordAgentCdpCommand: () => Effect.void,
+          agentConnectionClosed: () => Deferred.succeed(closed, undefined).pipe(Effect.asVoid),
+        },
+      });
+      const access = yield* broker.acquireSessionAccess(threadId);
+      const stableUrl = access.environment[SALCHI_BROWSER_CDP_URL_ENV]!;
+      const socket = yield* openWebSocket(stableUrl);
+      const response = nextMessage(socket);
+      socket.send('{"id":1,"method":"Browser.getVersion"}');
+      yield* response;
+      yield* closeWebSocket(socket);
+      yield* Deferred.await(closed);
+      yield* access.release;
+
+      expect(captured.length).toBeGreaterThan(0);
+      expect(captured.join("\n")).not.toContain(token);
+      expect(captured.join("\n")).not.toContain(stableUrl);
+    }),
+  ).pipe(
+    Effect.provideService(References.MinimumLogLevel, "Debug"),
+    Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+  );
 });
 
 it.effect("does not issue a CDP URL when browser agent access is disabled", () =>

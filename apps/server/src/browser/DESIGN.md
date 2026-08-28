@@ -207,10 +207,19 @@ connection holds the idle controller through connection accounting and a 30-seco
 traffic also updates CDP activity. Stop/crash closes Chromium and therefore attached pipes, while a
 new connection through an otherwise valid stable URL lazily launches a new process.
 
-The token is a bearer capability, not an operating-system user credential. Another local user cannot
-guess it or use the public listener, but a user who can inspect the provider/MCP process environment
-or command line can steal it and gain CDP access to that thread until the provider credential is
-released. Hosts requiring hostile-local-user isolation need an additional OS boundary.
+### Security model
+
+The accepted threat model is a **single-user host**. The token is a bearer capability, not an
+operating-system user credential. Another OS user on the same machine who can read provider/MCP
+process environments, or who steals the token and can connect to loopback, can control that thread's
+browser until the provider credential is released. Hosts with mutually untrusted local users need an
+additional OS isolation boundary.
+
+Credentials live only in the broker's in-memory map and provider process environment. Salchi does
+not persist tokens or proxy URLs anywhere under `~/.salchi`, so there is no token-bearing file whose
+mode needs hardening to `0600`. Capability-shaped values are redacted from background failure logs,
+and HTTP/WebSocket rejection reasons are generic. `browser.getState` exposes Chromium's direct CDP
+URL only after the owner-only `browser:operate` check; a non-owner receives no state payload.
 
 Salchi pins `@playwright/mcp` 0.0.74 and resolves its installed `cli.js` once, avoiding an
 `npx` network fetch during provider startup. Resolution is best-effort: failure warns, omits only the
@@ -279,9 +288,9 @@ gain is on a high-RTT phone-to-VPS path.
   comprehensive private-network SSRF policy.
 - Native video PiP (`captureStream`/`requestPictureInPicture`) is not implemented; the current PiP is
   an in-app canvas card.
-- Because `agentActive` is delivered on the authenticated browser stream, enabling automatic PiP
-  keeps the shared stream and one viewport subscriber alive for the current thread even while the
-  card and full panel are hidden. Disabling the preview restores panel-visible-only subscription.
+- The activity-only RPC remains subscribed while automatic PiP is enabled, but it owns no viewport
+  or idle lease. A named raw-stream lease exists only for a visible panel or PiP (including linger)
+  and transfers in place between those surfaces.
 - The loopback CDP token is a bearer secret rather than an OS-user-bound credential, as described in
   the proxy security model above.
 - Automatic MCP registration is unavailable for remotely managed OpenCode servers.

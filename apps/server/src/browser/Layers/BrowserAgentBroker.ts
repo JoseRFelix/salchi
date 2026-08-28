@@ -4,6 +4,7 @@ import * as NodeHttp from "node:http";
 import type { Duplex } from "node:stream";
 
 import { ThreadId, ThreadNotFound, type BrowserRpcError } from "@salchi/contracts";
+import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -29,6 +30,7 @@ const BROKER_HOST = "127.0.0.1";
 const BROKER_PATH = "/internal/browser/cdp";
 const MAX_CDP_MESSAGE_BYTES = 32 * 1024 * 1024;
 const TOKEN_PATTERN = /^[0-9a-f]{64}$/;
+const TOKEN_TEXT_PATTERN = /\b[0-9a-f]{64}\b/gi;
 export const BROWSER_AGENT_HEARTBEAT_INTERVAL_MS = 30_000;
 
 interface ActiveProxyConnection {
@@ -108,6 +110,10 @@ export function parseBrowserProxyPath(pathname: string): BrowserProxyPath | null
   } catch {
     return null;
   }
+}
+
+export function redactBrowserAgentSecrets(value: string): string {
+  return value.replaceAll(TOKEN_TEXT_PATTERN, "[redacted-browser-token]");
 }
 
 function rejectUpgrade(socket: Duplex, status: number, reason: string): void {
@@ -240,7 +246,16 @@ export const makeBrowserAgentBrokerWithOptions = Effect.fn("browserAgentBroker.m
     });
 
     const schedule = <A, E>(effect: Effect.Effect<A, E>) => {
-      void runFork(effect.pipe(Effect.ignoreCause({ log: true }), Effect.forkIn(brokerScope)));
+      void runFork(
+        effect.pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("Browser agent broker background task failed", {
+              cause: redactBrowserAgentSecrets(Cause.pretty(cause)),
+            }),
+          ),
+          Effect.forkIn(brokerScope),
+        ),
+      );
     };
 
     const closeConnection = (
@@ -359,6 +374,9 @@ export const makeBrowserAgentBrokerWithOptions = Effect.fn("browserAgentBroker.m
         };
         credential.connections.add(connection);
         connectionInstalled = true;
+        yield* Effect.logDebug("Browser agent CDP proxy connected", {
+          threadId: credential.threadId,
+        });
 
         const recordActivity = () =>
           schedule(
