@@ -10,6 +10,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { vi } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
+import { BrowserAgentBrokerDisabled } from "../../browser/Services/BrowserAgentBroker.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { ClaudeDriver } from "./ClaudeDriver.ts";
 
@@ -71,6 +72,7 @@ const TestLayer = ServerConfig.layerTest(process.cwd(), {
   Layer.provideMerge(NodeServices.layer),
   Layer.provideMerge(TestHttpClientLive),
   Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+  Layer.provideMerge(BrowserAgentBrokerDisabled),
 );
 
 describe("ClaudeDriver", () => {

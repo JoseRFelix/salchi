@@ -28,6 +28,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+import * as NetService from "@salchi/shared/Net";
 
 import { ServerConfig } from "../../config.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -96,6 +97,7 @@ interface BrowserEntry {
   readonly error: string | undefined;
   readonly mailbox: LatestViewportMailbox;
   readonly subscriberCount: number;
+  readonly agentConnectionIds: ReadonlySet<string>;
   readonly starting: StartingBrowserSession | undefined;
   readonly session: RunningBrowserSession | undefined;
 }
@@ -110,12 +112,18 @@ type StartDecision =
       readonly deferred: Deferred.Deferred<BrowserSessionState, BrowserRpcError>;
     };
 
-function snapshot(entry: BrowserEntry): BrowserSessionState {
+function snapshot(
+  entry: BrowserEntry,
+  options?: { readonly includeCdpWebSocketUrl?: boolean },
+): BrowserSessionState {
   return {
     threadId: entry.threadId,
     status: entry.status,
     tabs: entry.tabs,
     executable: entry.executable,
+    ...(options?.includeCdpWebSocketUrl === true && entry.session !== undefined
+      ? { cdpWebSocketUrl: entry.session.runtime.cdpWebSocketUrl }
+      : {}),
     ...(entry.error === undefined ? {} : { error: entry.error }),
   };
 }
@@ -200,6 +208,7 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
       error: undefined,
       mailbox,
       subscriberCount: 0,
+      agentConnectionIds: new Set(),
       starting: undefined,
       session: undefined,
     };
@@ -273,10 +282,14 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
         const entry = yield* getEntry(threadId);
         if (entry?.session?.id !== sessionId || entry.status !== "running") return undefined;
         entry.session.lifecycle.active = false;
+        for (const _connectionId of entry.agentConnectionIds) {
+          yield* entry.session.idle.agentConnectionRemoved;
+        }
         const next: BrowserEntry = {
           ...entry,
           status: "crashed",
           error: message,
+          agentConnectionIds: new Set(),
           session: undefined,
         };
         yield* setEntry(next);
@@ -395,6 +408,9 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
         if (entry?.starting?.id !== input.sessionId) return undefined;
         for (let index = 0; index < entry.subscriberCount; index += 1) {
           yield* idle.subscriberAdded;
+        }
+        for (const _connectionId of entry.agentConnectionIds) {
+          yield* idle.agentConnectionAdded;
         }
         if (entry.subscriberCount > 0) yield* runtime.setScreencastEnabled(true);
         yield* idle.recordCdpActivity;
@@ -534,9 +550,75 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
       threadId,
       Effect.gen(function* () {
         yield* requireThread(threadId);
-        return snapshot(yield* getOrCreateEntry(threadId));
+        return snapshot(yield* getOrCreateEntry(threadId), { includeCdpWebSocketUrl: true });
       }),
     );
+
+  const getCdpWebSocketUrl: BrowserSessionManagerShape["getCdpWebSocketUrl"] = (threadId) =>
+    withThreadLock(
+      threadId,
+      Effect.gen(function* () {
+        yield* requireThread(threadId);
+        const entry = yield* getOrCreateEntry(threadId);
+        if (entry.status === "crashed") {
+          return yield* new BrowserCrashed({
+            threadId,
+            message: entry.error ?? "Chromium exited unexpectedly.",
+          });
+        }
+        if (entry.session === undefined || entry.status !== "running") {
+          return yield* makeOperationError(threadId, "Browser session is not running.");
+        }
+        return entry.session.runtime.cdpWebSocketUrl;
+      }),
+    );
+
+  const agentConnectionOpened: BrowserSessionManagerShape["agentConnectionOpened"] = (
+    threadId,
+    connectionId,
+  ) =>
+    withThreadLock(
+      threadId,
+      Effect.gen(function* () {
+        yield* requireThread(threadId);
+        const entry = yield* getOrCreateEntry(threadId);
+        if (entry.session === undefined || entry.status !== "running") {
+          return yield* makeOperationError(threadId, "Browser session is not running.");
+        }
+        if (entry.agentConnectionIds.has(connectionId)) return;
+        const agentConnectionIds = new Set(entry.agentConnectionIds);
+        agentConnectionIds.add(connectionId);
+        yield* setEntry({ ...entry, agentConnectionIds });
+        yield* entry.session.idle.agentConnectionAdded;
+        yield* entry.session.idle.recordCdpActivity;
+      }),
+    );
+
+  const recordAgentCdpActivity: BrowserSessionManagerShape["recordAgentCdpActivity"] = (
+    threadId,
+    connectionId,
+  ) =>
+    Effect.flatMap(getEntry(threadId), (entry) =>
+      entry?.session !== undefined && entry.agentConnectionIds.has(connectionId)
+        ? entry.session.idle.recordCdpActivity
+        : Effect.void,
+    );
+
+  const agentConnectionClosed: BrowserSessionManagerShape["agentConnectionClosed"] = (
+    threadId,
+    connectionId,
+  ) =>
+    withThreadLock(
+      threadId,
+      Effect.gen(function* () {
+        const entry = yield* getEntry(threadId);
+        if (entry === undefined || !entry.agentConnectionIds.has(connectionId)) return;
+        const agentConnectionIds = new Set(entry.agentConnectionIds);
+        agentConnectionIds.delete(connectionId);
+        yield* setEntry({ ...entry, agentConnectionIds });
+        if (entry.session !== undefined) yield* entry.session.idle.agentConnectionRemoved;
+      }),
+    ).pipe(Effect.ignore);
 
   const withRunningSession = <A>(
     threadId: ThreadId,
@@ -570,6 +652,9 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
 
   const openTab: BrowserSessionManagerShape["openTab"] = (threadId, url) =>
     withRunningSession(threadId, (runtime) => runtime.openTab(url));
+
+  const navigate: BrowserSessionManagerShape["navigate"] = (threadId, targetId, url) =>
+    withRunningSession(threadId, (runtime) => runtime.navigate(targetId, url));
 
   const closeTab: BrowserSessionManagerShape["closeTab"] = (threadId, targetId) =>
     withRunningSession(threadId, (runtime) => runtime.closeTab(targetId));
@@ -636,8 +721,13 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
     start,
     stop,
     getState,
+    getCdpWebSocketUrl,
+    agentConnectionOpened,
+    recordAgentCdpActivity,
+    agentConnectionClosed,
     setActiveTab,
     openTab,
+    navigate,
     closeTab,
     subscribeViewport,
   } satisfies BrowserSessionManagerShape;
@@ -649,6 +739,7 @@ const makeLive = Effect.gen(function* () {
   const path = yield* Path.Path;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const serverSettings = yield* ServerSettingsService;
+  const netService = yield* NetService.NetService;
   const profileRoot = path.join(config.baseDir, "userdata", "browser-profiles");
   const processRegistryDirectory = path.join(config.providerStatusCacheDir, "browser-processes");
 
@@ -702,7 +793,8 @@ const makeLive = Effect.gen(function* () {
           serverPort: config.port,
         };
       }),
-    launchRuntime: launchPlaywrightBrowser,
+    launchRuntime: (input) =>
+      launchPlaywrightBrowser(input).pipe(Effect.provideService(NetService.NetService, netService)),
   });
 });
 

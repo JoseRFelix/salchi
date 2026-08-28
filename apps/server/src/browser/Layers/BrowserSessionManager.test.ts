@@ -6,6 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import type { BrowserRuntime } from "../PlaywrightBrowserRuntime.ts";
 import type { BrowserSessionManagerShape } from "../Services/BrowserSessionManager.ts";
@@ -24,9 +25,11 @@ function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
       executablePath: "/test/chrome",
     },
     processPid: 42,
+    cdpWebSocketUrl: "ws://127.0.0.1:12345/devtools/browser/test",
     getTabs: Effect.succeed([]),
     setActiveTab: () => Effect.void,
     openTab: () => Effect.void,
+    navigate: () => Effect.void,
     closeTab: () => Effect.void,
     setScreencastEnabled: () => Effect.void,
     ...overrides,
@@ -62,7 +65,7 @@ function waitForStatus(
     if (attempts <= 0) {
       return yield* Effect.die(`Timed out waiting for browser status ${expected}`);
     }
-    yield* Effect.sleep("1 milli");
+    yield* Effect.yieldNow;
     return yield* waitForStatus(manager, expected, attempts - 1);
   });
 }
@@ -118,6 +121,99 @@ it.effect("starts screencasting for a subscriber and stops it when the stream is
       yield* Fiber.interrupt(subscription);
       yield* Deferred.await(disabled);
       assert.deepEqual(calls, [true, false]);
+    }),
+  ),
+);
+
+it.effect("navigates the requested tab through the running browser runtime", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const navigations: Array<{ readonly targetId: string; readonly url: string }> = [];
+      const manager = yield* makeBrowserSessionManagerWithOptions(
+        managerOptions(() =>
+          Effect.succeed(
+            fakeRuntime({
+              navigate: (targetId, url) =>
+                Effect.sync(() => {
+                  navigations.push({ targetId, url });
+                }),
+            }),
+          ),
+        ),
+      );
+      yield* manager.start(threadId);
+
+      const state = yield* manager.navigate(threadId, "target-1", "https://example.com/");
+
+      assert.deepEqual(navigations, [{ targetId: "target-1", url: "https://example.com/" }]);
+      assert.equal(state.status, "running");
+    }),
+  ),
+);
+
+it.effect("exposes the raw CDP endpoint only from getState and tracks proxy connections", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const manager = yield* makeBrowserSessionManagerWithOptions(
+        managerOptions(() => Effect.succeed(fakeRuntime())),
+      );
+
+      const started = yield* manager.start(threadId);
+      assert.isUndefined(started.cdpWebSocketUrl);
+
+      const state = yield* manager.getState(threadId);
+      assert.equal(state.cdpWebSocketUrl, "ws://127.0.0.1:12345/devtools/browser/test");
+      assert.equal(
+        yield* manager.getCdpWebSocketUrl(threadId),
+        "ws://127.0.0.1:12345/devtools/browser/test",
+      );
+
+      yield* manager.agentConnectionOpened(threadId, "agent-connection-1");
+      yield* manager.recordAgentCdpActivity(threadId, "agent-connection-1");
+      yield* manager.agentConnectionClosed(threadId, "agent-connection-1");
+
+      const stopped = yield* manager.stop(threadId);
+      assert.isUndefined(stopped.cdpWebSocketUrl);
+    }),
+  ),
+);
+
+it.effect("does not idle out while an agent CDP proxy remains connected", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const closed = yield* Deferred.make<void>();
+      const manager = yield* makeBrowserSessionManagerWithOptions({
+        ...managerOptions(() =>
+          Effect.acquireRelease(Effect.succeed(fakeRuntime()), () =>
+            Deferred.succeed(closed, undefined).pipe(Effect.asVoid),
+          ),
+        ),
+        getLaunchConfig: () =>
+          Effect.succeed({
+            idleTimeoutMillis: 1_000,
+            userDataDirectory: "/tmp/salchi-browser-test-profile",
+            processRegistryDirectory: "/tmp/salchi-browser-test-processes",
+            noSandbox: false,
+            serverHost: "127.0.0.1",
+            serverPort: 3773,
+          }),
+      });
+      yield* manager.start(threadId);
+      yield* manager.agentConnectionOpened(threadId, "agent-idle-hold");
+
+      yield* TestClock.adjust("10 seconds");
+      assert.equal((yield* manager.getState(threadId)).status, "running");
+      assert.isFalse(yield* Deferred.isDone(closed));
+
+      yield* manager.recordAgentCdpActivity(threadId, "agent-idle-hold");
+      yield* manager.agentConnectionClosed(threadId, "agent-idle-hold");
+      yield* TestClock.adjust("999 millis");
+      assert.equal((yield* manager.getState(threadId)).status, "running");
+      yield* TestClock.adjust("1 milli");
+      yield* Effect.yieldNow;
+
+      assert.equal((yield* manager.getState(threadId)).status, "stopped");
+      assert.isTrue(yield* Deferred.isDone(closed));
     }),
   ),
 );
@@ -234,6 +330,7 @@ it.effect("records an unexpected process exit as crashed without restarting", ()
         ),
       );
       yield* manager.start(threadId);
+      yield* manager.agentConnectionOpened(threadId, "agent-crash-connection");
       crash?.("test browser crash");
 
       const crashed = yield* waitForStatus(manager, "crashed");

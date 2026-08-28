@@ -1,4 +1,4 @@
-# Browser use phase 1
+# Browser use
 
 The server owns one headless Chromium process per orchestration thread. Each process uses a
 persistent profile under `~/.salchi/userdata/browser-profiles/<threadId>/`, may contain multiple
@@ -17,10 +17,128 @@ orchestration events or SQLite. Screencasting exists only while there is a subsc
 stay alive with none. A session idles out only after both CDP activity and the last viewport
 subscriber have been absent for the configured 15-minute default.
 
-Requests to the instance's own listening host and port and to `169.254.169.254` are failed through
-CDP interception and logged. Explicit stop, thread deletion, idle timeout, and server-scope shutdown
-close Playwright gracefully and then ensure the Chromium process tree is gone. Unexpected process
-exit is observable as `crashed` and is restarted only by an explicit start.
+Requests to the instance's own listening host and port and to the static metadata hosts
+`169.254.169.254`, `metadata.google.internal`, and `fd00:ec2::254` are failed through CDP
+interception and logged. The same page interception also covers clients attached through the agent
+CDP proxy. Explicit stop, thread deletion, idle timeout, and server-scope shutdown close Playwright
+gracefully and then ensure the Chromium process tree is gone. Unexpected process exit is observable
+as `crashed` and is restarted only by an explicit start.
 
-Phase 2 adds provider-neutral CDP environment/tool injection, the right-panel viewport UI, and
-tap-to-interact input translation.
+## Phase 2a: viewport UI
+
+The web client provides the browser as a normal right-panel view. Frames stay in the component's
+canvas renderer and are not stored in Zustand or persisted. The viewport subscription exists only
+while that panel view is visible.
+
+## Phase 2b: agent CDP access
+
+Chromium also exposes a dynamically allocated remote-debugging port bound to `127.0.0.1`. Salchi
+discovers and validates the browser websocket endpoint after launch. The raw
+`ws://127.0.0.1:<port>/devtools/browser/...` value is retained server-side and appears only in the
+owner-scoped `browser.getState` response.
+
+Provider sessions receive one variable, gated by the `browserAgentAccessEnabled` server setting:
+
+- `SALCHI_BROWSER_CDP_URL=ws://127.0.0.1:<port>/internal/browser/cdp/<threadId>/<token>`
+
+Salchi injects this per-thread URL into the provider process environment automatically. The token
+is random per provider session, embedded in the path because MCP clients accept a URL but cannot
+supply an authorization header, and revoked with that provider session. The URL is stable across
+browser crashes for the credential's lifetime. It is a proxy URL, not Chromium's raw CDP URL, so
+provider startup remains lazy: accepting a websocket connection starts or reuses the thread browser
+and then pipes CDP frames in both directions.
+
+The proxy uses a dedicated listener bound by the kernel to `127.0.0.1:0`; it is not mounted on
+Salchi's public listener or Tailscale Serve. It rejects non-loopback peers, forwarding headers,
+unknown thread/token pairs, query strings, and ordinary HTTP requests. Multiple proxy connections
+may attach independently to Chromium's browser endpoint. Closing either side closes only that pipe,
+not the browser. Browser stop, thread deletion, crash, or server shutdown closes the Chromium side;
+connecting again through a still-valid stable URL lazily relaunches after a crash. Proxy connection
+presence, a periodic heartbeat, and proxied traffic feed the browser idle controller, so an
+attached agent is not stopped while it is working. The tokenized URL is capability material and is
+not logged at info level.
+
+Tabs created by an external CDP client enter the same persistent browser context. Its `page` event
+installs the navigation guard and publishes the tab to the viewport UI. The viewport's independent
+CDP session and concurrent agent clients coexist on Chromium's multi-client browser endpoint.
+
+### Automatic MCP registration
+
+Provider sessions require no user MCP configuration. Salchi pins `@playwright/mcp` 0.0.74 as a
+server dependency, resolves its installed `cli.js` once per Salchi process, and launches it with
+the verified `--cdp-endpoint` flag. This keeps provider startup independent of an `npx` network
+fetch. Version 0.0.74 is the known-good release on Playwright's 1.60 line already used by Salchi;
+newer MCP releases would pull a separate newer Playwright alpha into the server. Package resolution
+is best-effort: failure logs a warning, omits only the browser MCP and its behavioral instruction,
+and lets the provider session start normally.
+
+The MCP server name is consistently `salchi-browser`. When it is registered, providers also
+receive a short instruction to use those tools for browsing, not launch another browser, and
+remember that the user can see the viewport live. Registration follows each provider's native
+configuration seam:
+
+- Claude receives a stdio entry in SDK `query` options beside the existing in-process `salchi`
+  server; the preset system prompt uses its `append` field.
+- Codex receives an `mcp_servers.salchi-browser` override in both `thread/start` and
+  `thread/resume`; this request-scoped config does not materialize or mutate `CODEX_HOME`. The same
+  definition is used by recoverable resume-to-new-thread fallback. Its existing collaboration-mode
+  developer instructions carry the browsing instruction.
+- Cursor and Grok receive a second ACP stdio `mcpServers` entry in every `session/new` and
+  `session/load` path. The existing in-process Salchi MCP server's initialization instructions
+  carry the browsing instruction.
+- A locally spawned OpenCode server receives a per-process `OPENCODE_CONFIG_CONTENT` with a local
+  MCP definition, and per-turn `system` context carries the instruction. Externally configured
+  OpenCode server URLs remain intentionally unsupported for automatic registration because Salchi
+  neither owns their process config nor mutates user config.
+
+All registration and browser instructions are gated by `browserAgentAccessEnabled`. The provider
+process and its MCP child also receive `SALCHI_BROWSER_CDP_URL`; custom setups may continue to use
+the stable proxy directly. For example, the equivalent pinned manual Playwright configuration is:
+
+```json
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "sh",
+      "args": [
+        "-lc",
+        "exec npx -y @playwright/mcp@0.0.74 --cdp-endpoint \"$SALCHI_BROWSER_CDP_URL\""
+      ]
+    }
+  }
+}
+```
+
+The equivalent one-liner is:
+
+```sh
+npx -y @playwright/mcp@0.0.74 --cdp-endpoint "$SALCHI_BROWSER_CDP_URL"
+```
+
+Verified against `chrome-devtools-mcp` 1.8.0, its flag is `--wsEndpoint` (also exposed as the
+`--ws-endpoint` alias):
+
+```json
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "sh",
+      "args": [
+        "-lc",
+        "exec npx -y chrome-devtools-mcp@latest --wsEndpoint \"$SALCHI_BROWSER_CDP_URL\""
+      ]
+    }
+  }
+}
+```
+
+```sh
+npx -y chrome-devtools-mcp@latest --wsEndpoint "$SALCHI_BROWSER_CDP_URL"
+```
+
+Salchi itself does not invoke either `npx` command above; they are examples only for custom setups.
+Phase 2b deliberately does not add a `salchi/*` browser tool or alter dynamic-tool handling.
+
+## Remaining phase 2
+
+Tap-to-interact input translation remains future work.

@@ -572,6 +572,7 @@ const buildAppUnderTest = (options?: {
       getState: (threadId) => Effect.succeed(browserState(threadId, "stopped")),
       setActiveTab: (threadId) => Effect.succeed(browserState(threadId, "running")),
       openTab: (threadId) => Effect.succeed(browserState(threadId, "running")),
+      navigate: (threadId) => Effect.succeed(browserState(threadId, "running")),
       closeTab: (threadId) => Effect.succeed(browserState(threadId, "running")),
       subscribeViewport: () => Stream.empty,
       ...options?.layers?.browserSessionManager,
@@ -1135,6 +1136,24 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const response = yield* HttpClient.get("/");
       assert.equal(response.status, 200);
       assert.include(yield* response.text, "router-static-ok");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("never exposes the browser broker on the public HTTP listener", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const response = yield* HttpClient.get(
+        `/internal/browser/cdp/thread-default/${"a".repeat(64)}`,
+        { headers: { "x-forwarded-for": "127.0.0.1" } },
+      );
+
+      assert.equal(response.status, 404);
+      assert.equal(yield* response.text, "Not Found");
+
+      const proxyResponse = yield* HttpClient.get("/internal/browser/cdp");
+      assert.equal(proxyResponse.status, 404);
+      assert.equal(yield* proxyResponse.text, "Not Found");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

@@ -484,6 +484,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           },
         },
         automaticGitFetchInterval: Duration.seconds(10),
+        browserAgentAccessEnabled: false,
         browserExecutablePath: "/opt/chrome",
         browserIdleTimeout: Duration.minutes(5),
       });
@@ -508,6 +509,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           },
         },
         automaticGitFetchInterval: 10_000,
+        browserAgentAccessEnabled: false,
         browserExecutablePath: "/opt/chrome",
         browserIdleTimeout: 300_000,
       });

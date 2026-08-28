@@ -34,6 +34,7 @@ describe("ServerSettings browser defaults", () => {
     expect(Duration.toMillis(settings.browserIdleTimeout)).toBe(
       Duration.toMillis(DEFAULT_BROWSER_IDLE_TIMEOUT),
     );
+    expect(settings.browserAgentAccessEnabled).toBe(true);
     expect(settings.browserExecutablePath).toBe("");
   });
 
@@ -41,9 +42,11 @@ describe("ServerSettings browser defaults", () => {
     const patch = decodeServerSettingsPatch({
       browserExecutablePath: "  /opt/chrome  ",
       browserIdleTimeout: 42_000,
+      browserAgentAccessEnabled: false,
     });
     expect(patch.browserExecutablePath).toBe("/opt/chrome");
     expect(Duration.toMillis(patch.browserIdleTimeout!)).toBe(42_000);
+    expect(patch.browserAgentAccessEnabled).toBe(false);
   });
 });
 

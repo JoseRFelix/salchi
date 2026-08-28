@@ -37,6 +37,10 @@ import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
 import { TerminalManagerLive } from "./terminal/Layers/Manager.ts";
 import { BrowserSessionManagerLive } from "./browser/Layers/BrowserSessionManager.ts";
+import {
+  BrowserAgentBrokerLive,
+  browserAgentBrokerPublicDenyRouteLayer,
+} from "./browser/Layers/BrowserAgentBroker.ts";
 import * as GitManager from "./git/GitManager.ts";
 import { KeybindingsLive } from "./keybindings.ts";
 import { ServerRuntimeStartup, ServerRuntimeStartupLive } from "./serverRuntimeStartup.ts";
@@ -244,7 +248,13 @@ const CheckpointingLayerLive = Layer.empty.pipe(
 
 const TerminalLayerLive = TerminalManagerLive.pipe(Layer.provide(PtyAdapterLive));
 
-const BrowserLayerLive = BrowserSessionManagerLive.pipe(Layer.provide(OrchestrationLayerLive));
+const BrowserSessionLayerLive = BrowserSessionManagerLive.pipe(
+  Layer.provide(OrchestrationLayerLive),
+);
+const BrowserLayerLive = BrowserAgentBrokerLive.pipe(Layer.provideMerge(BrowserSessionLayerLive));
+const ProviderInstanceRegistryHydrationWithBrowserLive = ProviderInstanceRegistryHydrationLive.pipe(
+  Layer.provideMerge(BrowserLayerLive),
+);
 
 const WorkspaceEntriesLayerLive = WorkspaceEntriesLive.pipe(
   Layer.provide(WorkspacePathsLive),
@@ -286,7 +296,6 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),
   Layer.provideMerge(TerminalLayerLive),
-  Layer.provideMerge(BrowserLayerLive),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(KeybindingsLive),
   Layer.provideMerge(
@@ -297,7 +306,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // through this layer. Built-in drivers come from `BUILT_IN_DRIVERS`;
   // `providerInstances` hydration merges `settings.providers.<kind>`
   // with explicit `providerInstances` entries on boot.
-  Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+  Layer.provideMerge(ProviderInstanceRegistryHydrationWithBrowserLive),
   // Shared native/canonical NDJSON writers used by both the per-instance
   // drivers (native stream, written from inside each `<X>Adapter`) and
   // `ProviderService` (canonical stream, written after event normalization).
@@ -351,6 +360,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   authTokenExchangeRouteLayer,
   authWebSocketTicketRouteLayer,
   authWebSocketTokenRouteLayer,
+  browserAgentBrokerPublicDenyRouteLayer,
   attachmentsRouteLayer,
   transcriptionHttpRouteLayer,
   orchestrationDispatchRouteLayer,

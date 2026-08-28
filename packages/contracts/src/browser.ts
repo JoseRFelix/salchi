@@ -35,6 +35,7 @@ export const BrowserSessionState = Schema.Struct({
   status: BrowserSessionStatus,
   tabs: Schema.Array(BrowserTab),
   executable: Schema.NullOr(BrowserExecutableInfo),
+  cdpWebSocketUrl: Schema.optionalKey(TrimmedNonEmptyString),
   error: Schema.optionalKey(Schema.String),
 });
 export type BrowserSessionState = typeof BrowserSessionState.Type;
@@ -53,6 +54,13 @@ export const BrowserOpenTabInput = Schema.Struct({
   url: TrimmedNonEmptyString,
 });
 export type BrowserOpenTabInput = typeof BrowserOpenTabInput.Type;
+
+export const BrowserNavigateInput = Schema.Struct({
+  threadId: ThreadId,
+  targetId: TrimmedNonEmptyString,
+  url: TrimmedNonEmptyString,
+});
+export type BrowserNavigateInput = typeof BrowserNavigateInput.Type;
 
 export const BrowserCloseTabInput = BrowserSetActiveTabInput;
 export type BrowserCloseTabInput = typeof BrowserCloseTabInput.Type;

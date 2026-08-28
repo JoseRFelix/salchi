@@ -6,6 +6,7 @@ import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import { AuthAccessStreamEvent, EnvironmentAuthorizationError } from "./auth.ts";
 import {
   BrowserCloseTabInput,
+  BrowserNavigateInput,
   BrowserOpenTabInput,
   BrowserRpcError,
   BrowserSessionState,
@@ -197,6 +198,7 @@ export const WS_METHODS = {
   browserGetState: "browser.getState",
   browserSetActiveTab: "browser.setActiveTab",
   browserOpenTab: "browser.openTab",
+  browserNavigate: "browser.navigate",
   browserCloseTab: "browser.closeTab",
   browserSubscribeViewport: "browser.subscribeViewport",
 
@@ -626,6 +628,12 @@ export const WsBrowserOpenTabRpc = Rpc.make(WS_METHODS.browserOpenTab, {
   error: BrowserAuthorizedRpcError,
 });
 
+export const WsBrowserNavigateRpc = Rpc.make(WS_METHODS.browserNavigate, {
+  payload: BrowserNavigateInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
 export const WsBrowserCloseTabRpc = Rpc.make(WS_METHODS.browserCloseTab, {
   payload: BrowserCloseTabInput,
   success: BrowserSessionState,
@@ -805,6 +813,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsBrowserGetStateRpc,
   WsBrowserSetActiveTabRpc,
   WsBrowserOpenTabRpc,
+  WsBrowserNavigateRpc,
   WsBrowserCloseTabRpc,
   WsBrowserSubscribeViewportRpc,
   WsSubscribeTerminalEventsRpc,

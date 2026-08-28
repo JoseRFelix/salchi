@@ -17,6 +17,10 @@ import {
 } from "./AcpSessionRuntime.ts";
 import type { AcpParsedSessionEvent } from "./AcpRuntimeModel.ts";
 import { INDEPENDENT_THREAD_MCP_SERVER_NAME } from "../IndependentThreadTool.ts";
+import {
+  BROWSER_MCP_SERVER_NAME,
+  BROWSER_MCP_USAGE_INSTRUCTION,
+} from "../../browser/BrowserMcp.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mockAgentPath = path.join(__dirname, "../../../scripts/acp-mock-agent.ts");
@@ -30,10 +34,12 @@ class AcpRuntimeTestTimeout extends Data.TaggedError("AcpRuntimeTestTimeout")<{
 
 function runtimeLayer({
   env,
+  browserEnvironment,
   requestEvents,
   resumeSessionId = resumedSessionId,
 }: {
   readonly env?: NodeJS.ProcessEnv;
+  readonly browserEnvironment?: NodeJS.ProcessEnv;
   readonly requestEvents?: Array<AcpSessionRequestLogEvent>;
   readonly resumeSessionId?: string;
 } = {}) {
@@ -43,6 +49,7 @@ function runtimeLayer({
       args: [mockAgentPath],
       ...(env ? { env } : {}),
     },
+    ...(browserEnvironment ? { browserEnvironment } : {}),
     cwd: process.cwd(),
     clientInfo: { name: "salchi-test", version: "0.0.0" },
     authMethodId: "test",
@@ -104,7 +111,32 @@ function firstAssistantItemId(env?: NodeJS.ProcessEnv) {
 }
 
 describe("AcpSessionRuntime resume", () => {
-  it.effect("registers the Salchi MCP server when loading an ACP session", () => {
+  it.effect("injects the browser CDP URL into the actual ACP child environment", () =>
+    Effect.gen(function* () {
+      const events = yield* promptAndCollectLiveEvents;
+      const delta = events.find((event) => event._tag === "ContentDelta");
+      expect(delta?._tag).toBe("ContentDelta");
+      if (delta?._tag === "ContentDelta") {
+        expect(delta.text).toBe("browser environment reached ACP child");
+      }
+    }).pipe(
+      Effect.provide(
+        runtimeLayer({
+          env: {
+            SALCHI_ACP_PROMPT_RESPONSE_TEXT: "provider environment",
+          },
+          browserEnvironment: {
+            SALCHI_ACP_PROMPT_RESPONSE_TEXT: "browser environment reached ACP child",
+            SALCHI_BROWSER_CDP_URL: `ws://127.0.0.1:43125/internal/browser/cdp/acp-test/${"c".repeat(64)}`,
+          },
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
+  it.effect("omits browser MCP when agent access is disabled", () => {
     const requestEvents: Array<AcpSessionRequestLogEvent> = [];
 
     return Effect.gen(function* () {
@@ -127,6 +159,9 @@ describe("AcpSessionRuntime resume", () => {
       const salchiServer = payload?.mcpServers?.find(
         (server) => server.name === INDEPENDENT_THREAD_MCP_SERVER_NAME,
       );
+      const browserServer = payload?.mcpServers?.find(
+        (server) => server.name === BROWSER_MCP_SERVER_NAME,
+      );
 
       expect(salchiServer).toMatchObject({
         name: INDEPENDENT_THREAD_MCP_SERVER_NAME,
@@ -136,8 +171,59 @@ describe("AcpSessionRuntime resume", () => {
       expect(salchiServer?.args).toContain("--input-type=module");
       expect(salchiServer?.args).toContain("--eval");
       expect(salchiServer?.args?.at(-1)).toContain("create_thread");
+      expect(salchiServer?.args?.at(-1)).not.toContain(BROWSER_MCP_USAGE_INSTRUCTION);
+      expect(browserServer).toBeUndefined();
     }).pipe(
       Effect.provide(runtimeLayer({ requestEvents })),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
+  it.effect("registers browser MCP alongside Salchi MCP on ACP session load", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+    const browserUrl = `ws://127.0.0.1:43125/internal/browser/cdp/acp-test/${"c".repeat(64)}`;
+
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      yield* runtime.start();
+
+      const loadStarted = requestEvents.find(
+        (event) => event.method === "session/load" && event.status === "started",
+      );
+      const payload = loadStarted?.payload as
+        | {
+            readonly mcpServers?: ReadonlyArray<{
+              readonly name?: string;
+              readonly command?: string;
+              readonly args?: ReadonlyArray<string>;
+              readonly env?: ReadonlyArray<{ readonly name?: string; readonly value?: string }>;
+            }>;
+          }
+        | undefined;
+      const salchiServer = payload?.mcpServers?.find(
+        (server) => server.name === INDEPENDENT_THREAD_MCP_SERVER_NAME,
+      );
+      const browserServer = payload?.mcpServers?.find(
+        (server) => server.name === BROWSER_MCP_SERVER_NAME,
+      );
+
+      expect(payload?.mcpServers).toHaveLength(2);
+      expect(salchiServer?.args?.at(-1)).toContain(BROWSER_MCP_USAGE_INSTRUCTION);
+      expect(browserServer?.command).toBe(process.execPath);
+      expect(browserServer?.args?.at(-2)).toBe("--cdp-endpoint");
+      expect(browserServer?.args?.at(-1)).toBe(browserUrl);
+      expect(browserServer?.env).toContainEqual({
+        name: "SALCHI_BROWSER_CDP_URL",
+        value: browserUrl,
+      });
+    }).pipe(
+      Effect.provide(
+        runtimeLayer({
+          browserEnvironment: { SALCHI_BROWSER_CDP_URL: browserUrl },
+          requestEvents,
+        }),
+      ),
       Effect.scoped,
       Effect.provide(NodeServices.layer),
     );

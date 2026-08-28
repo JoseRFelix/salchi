@@ -12,7 +12,13 @@ import {
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const SALCHI_ACP_MCP_SERVER_VERSION = "0.1.0";
 
-export const SALCHI_ACP_MCP_SERVER_SCRIPT = `
+export function makeSalchiAcpMcpServerScript(additionalInstructions?: string): string {
+  const instructions = [
+    INDEPENDENT_THREAD_TOOL_MCP_INSTRUCTIONS,
+    ...(additionalInstructions ? [additionalInstructions] : []),
+  ].join("\n\n");
+
+  return `
 import { createInterface } from "node:readline";
 
 const protocolVersion = ${JSON.stringify(MCP_PROTOCOL_VERSION)};
@@ -22,7 +28,7 @@ const toolName = ${JSON.stringify(INDEPENDENT_THREAD_TOOL_NAME)};
 const toolDescription = ${JSON.stringify(INDEPENDENT_THREAD_TOOL_DESCRIPTION)};
 const toolInputSchema = ${JSON.stringify(INDEPENDENT_THREAD_TOOL_INPUT_SCHEMA)};
 const toolResultMarker = ${JSON.stringify(INDEPENDENT_THREAD_TOOL_RESULT_MARKER)};
-const instructions = ${JSON.stringify(INDEPENDENT_THREAD_TOOL_MCP_INSTRUCTIONS)};
+const instructions = ${JSON.stringify(instructions)};
 
 function write(message) {
   process.stdout.write(JSON.stringify(message) + "\\n");
@@ -130,13 +136,21 @@ for await (const line of rl) {
   }
 }
 `.trim();
+}
 
-export function makeSalchiAcpMcpServers(): ReadonlyArray<EffectAcpSchema.McpServer> {
+export const SALCHI_ACP_MCP_SERVER_SCRIPT = makeSalchiAcpMcpServerScript();
+
+export function makeSalchiAcpMcpServers(options?: {
+  readonly additionalInstructions?: string;
+}): ReadonlyArray<EffectAcpSchema.McpServer> {
+  const script = options?.additionalInstructions
+    ? makeSalchiAcpMcpServerScript(options.additionalInstructions)
+    : SALCHI_ACP_MCP_SERVER_SCRIPT;
   return [
     {
       name: INDEPENDENT_THREAD_MCP_SERVER_NAME,
       command: process.execPath,
-      args: ["--input-type=module", "--eval", SALCHI_ACP_MCP_SERVER_SCRIPT],
+      args: ["--input-type=module", "--eval", script],
       env: [],
     },
   ];

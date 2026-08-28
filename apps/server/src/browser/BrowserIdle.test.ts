@@ -33,6 +33,25 @@ it.effect("idles only after both CDP activity and viewport subscribers are absen
   ).pipe(Effect.provide(TestClock.layer())),
 );
 
+it.effect("does not idle while an agent CDP connection is attached", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const idle = yield* makeBrowserIdleController({ idleTimeoutMillis: 1_000 });
+      const fiber = yield* idle.awaitIdle.pipe(Effect.forkScoped);
+      yield* idle.agentConnectionAdded;
+
+      yield* TestClock.adjust("10 seconds");
+      assert.isUndefined(fiber.pollUnsafe());
+
+      yield* idle.agentConnectionRemoved;
+      yield* TestClock.adjust("999 millis");
+      assert.isUndefined(fiber.pollUnsafe());
+      yield* TestClock.adjust("1 milli");
+      yield* Fiber.join(fiber);
+    }),
+  ).pipe(Effect.provide(TestClock.layer())),
+);
+
 it.effect("interrupts the idle fiber when its owning session scope closes", () =>
   Effect.gen(function* () {
     const sessionScope = yield* Scope.make("sequential");

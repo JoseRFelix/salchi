@@ -13,6 +13,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import * as NetService from "@salchi/shared/Net";
 import {
   chromium,
   type Browser,
@@ -55,11 +56,16 @@ export interface BrowserRuntimeCallbacks {
 export interface BrowserRuntime {
   readonly executable: BrowserExecutableInfo;
   readonly processPid: number;
+  readonly cdpWebSocketUrl: string;
   readonly getTabs: Effect.Effect<ReadonlyArray<BrowserTab>, BrowserOperationErrorType>;
   readonly setActiveTab: (
     targetId: string,
   ) => Effect.Effect<void, BrowserOperationErrorType | BrowserTabNotFoundType>;
   readonly openTab: (
+    url: string,
+  ) => Effect.Effect<void, BrowserOperationErrorType | BrowserTabNotFoundType>;
+  readonly navigate: (
+    targetId: string,
     url: string,
   ) => Effect.Effect<void, BrowserOperationErrorType | BrowserTabNotFoundType>;
   readonly closeTab: (
@@ -97,6 +103,52 @@ function tryBrowserOperation<A>(
   });
 }
 
+interface ChromiumVersionPayload {
+  readonly webSocketDebuggerUrl?: unknown;
+}
+
+export function normalizeCdpWebSocketUrl(value: unknown, expectedPort: number): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "ws:" ||
+      (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") ||
+      Number(url.port) !== expectedPort ||
+      !url.pathname.startsWith("/devtools/browser/")
+    ) {
+      return null;
+    }
+    url.hostname = "127.0.0.1";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function discoverCdpWebSocketUrl(
+  threadId: ThreadId,
+  port: number,
+): Effect.Effect<string, BrowserOperationErrorType> {
+  return Effect.tryPromise({
+    try: async () => {
+      // @effect-diagnostics-next-line globalFetchInEffect:off - Chromium's loopback DevTools discovery endpoint is isolated at this Promise boundary.
+      const response = await fetch(`http://127.0.0.1:${port}/json/version`, {
+        signal: AbortSignal.timeout(2_000),
+      });
+      if (!response.ok) throw new Error(`Chromium returned HTTP ${response.status}.`);
+      const payload = (await response.json()) as ChromiumVersionPayload;
+      const endpoint = normalizeCdpWebSocketUrl(payload.webSocketDebuggerUrl, port);
+      if (endpoint === null) {
+        throw new Error("Chromium returned an invalid browser websocket endpoint.");
+      }
+      return endpoint;
+    },
+    catch: (cause) =>
+      operationError(threadId, "Failed to discover Chromium's loopback CDP endpoint.", cause),
+  });
+}
+
 function executablePathFromProcess(input: {
   readonly pid: number;
   readonly commandLine: string;
@@ -124,6 +176,7 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
 ) {
   const sessionScope = yield* Scope.Scope;
   const operationSemaphore = yield* Semaphore.make(1);
+  const netService = yield* NetService.NetService;
   const runtimeContext = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(runtimeContext);
   let closing = false;
@@ -144,32 +197,60 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
     resolveBrowserExecutable({
       candidates,
       launch: (candidate) =>
-        Effect.tryPromise({
-          try: () =>
-            chromium.launchPersistentContext(input.userDataDirectory, {
-              ...candidate.launchOptions,
-              args: [
-                "--disable-dev-shm-usage",
-                "--remote-debugging-address=127.0.0.1",
-                ...(input.noSandbox ? ["--no-sandbox"] : []),
-              ],
-              chromiumSandbox: !input.noSandbox,
-              deviceScaleFactor: 1,
-              headless: true,
-              viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
-            }),
-          catch: (cause) =>
-            operationError(
-              input.threadId,
-              `Failed to launch Chromium using ${candidate.source}:${candidate.resolution}.`,
-              cause,
-            ),
+        Effect.gen(function* () {
+          const remoteDebuggingPort = yield* netService
+            .reserveLoopbackPort("127.0.0.1")
+            .pipe(
+              Effect.mapError((cause) =>
+                operationError(
+                  input.threadId,
+                  "Failed to allocate Chromium's loopback CDP port.",
+                  cause,
+                ),
+              ),
+            );
+          const context = yield* Effect.tryPromise({
+            try: () =>
+              chromium.launchPersistentContext(input.userDataDirectory, {
+                ...candidate.launchOptions,
+                args: [
+                  "--disable-dev-shm-usage",
+                  "--remote-debugging-address=127.0.0.1",
+                  `--remote-debugging-port=${remoteDebuggingPort}`,
+                  ...(input.noSandbox ? ["--no-sandbox"] : []),
+                ],
+                chromiumSandbox: !input.noSandbox,
+                deviceScaleFactor: 1,
+                headless: true,
+                viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+              }),
+            catch: (cause) =>
+              operationError(
+                input.threadId,
+                `Failed to launch Chromium using ${candidate.source}:${candidate.resolution}.`,
+                cause,
+              ),
+          });
+          const endpointExit = yield* Effect.exit(
+            discoverCdpWebSocketUrl(input.threadId, remoteDebuggingPort),
+          );
+          if (endpointExit._tag === "Failure") {
+            yield* Effect.tryPromise({
+              try: () => context.close({ reason: "Failed to discover Salchi CDP endpoint" }),
+              catch: () => undefined,
+            }).pipe(Effect.ignore);
+            return yield* Effect.failCause(endpointExit.cause);
+          }
+          return {
+            context,
+            cdpWebSocketUrl: endpointExit.value,
+          };
         }),
     }),
-    ({ value: context }) => {
+    ({ value }) => {
       closing = true;
       return tryBrowserOperation(input.threadId, "Failed to close Chromium gracefully.", () =>
-        context.close({ reason: "Salchi browser session stopped" }),
+        value.context.close({ reason: "Salchi browser session stopped" }),
       ).pipe(
         Effect.timeout("2 seconds"),
         Effect.ignore,
@@ -187,7 +268,8 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
       );
     },
   );
-  const context: BrowserContext = launched.value;
+  const context: BrowserContext = launched.value.context;
+  const cdpWebSocketUrl = launched.value.cdpWebSocketUrl;
   const browser: Browser | null = context.browser();
   if (browser === null) {
     return yield* operationError(
@@ -327,6 +409,7 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
 
   const configurePageUnlocked = Effect.fn("browser.playwright.configurePage")(function* (
     page: Page,
+    options?: { readonly publishTabs?: boolean },
   ): Effect.fn.Return<PageRuntime, BrowserOperationErrorType> {
     const existing = [...pageRuntimes.values()].find((runtime) => runtime.page === page);
     if (existing !== undefined) return existing;
@@ -421,7 +504,7 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
       page.on("close", () => schedule(serialized(removePageUnlocked(runtime.targetId))));
 
       yield* startActiveScreencastUnlocked;
-      yield* refreshTabsUnlocked;
+      if (options?.publishTabs !== false) yield* refreshTabsUnlocked;
       return runtime;
     }).pipe(
       Effect.onError(() =>
@@ -485,6 +568,7 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
   return {
     executable,
     processPid,
+    cdpWebSocketUrl,
     getTabs: serialized(refreshTabsUnlocked),
     setActiveTab: (targetId) => serialized(setActiveTabUnlocked(targetId)),
     openTab: (url) =>
@@ -495,11 +579,25 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
             "Failed to open a browser tab.",
             () => context.newPage(),
           );
-          const runtime = yield* configurePageUnlocked(page);
-          yield* setActiveTabUnlocked(runtime.targetId);
+          // Keep the context's transient about:blank page out of tab updates.
+          // Request interception must be installed before navigation, so configure
+          // first but publish only after the requested URL has loaded.
+          const runtime = yield* configurePageUnlocked(page, { publishTabs: false });
           yield* tryBrowserOperation(input.threadId, "Failed to navigate the browser tab.", () =>
             page.goto(url),
           );
+          yield* setActiveTabUnlocked(runtime.targetId);
+          yield* refreshTabsUnlocked;
+        }),
+      ),
+    navigate: (targetId, url) =>
+      serialized(
+        Effect.gen(function* () {
+          const runtime = yield* lookupTab(targetId);
+          yield* tryBrowserOperation(input.threadId, "Failed to navigate the browser tab.", () =>
+            runtime.page.goto(url),
+          );
+          input.callbacks.onCdpActivity();
           yield* refreshTabsUnlocked;
         }),
       ),
