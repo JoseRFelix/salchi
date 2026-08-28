@@ -65,6 +65,86 @@ export type BrowserNavigateInput = typeof BrowserNavigateInput.Type;
 export const BrowserCloseTabInput = BrowserSetActiveTabInput;
 export type BrowserCloseTabInput = typeof BrowserCloseTabInput.Type;
 
+export const BrowserPointerButton = Schema.Literals([
+  "none",
+  "left",
+  "middle",
+  "right",
+  "back",
+  "forward",
+]);
+export type BrowserPointerButton = typeof BrowserPointerButton.Type;
+
+export const BrowserInputModifiers = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: 15 }),
+);
+export type BrowserInputModifiers = typeof BrowserInputModifiers.Type;
+
+const BrowserPointerEventFields = {
+  x: Schema.Number,
+  y: Schema.Number,
+  button: BrowserPointerButton,
+  clickCount: NonNegativeInt,
+};
+
+export const BrowserPointerDownInput = Schema.TaggedStruct(
+  "PointerDown",
+  BrowserPointerEventFields,
+);
+export type BrowserPointerDownInput = typeof BrowserPointerDownInput.Type;
+
+export const BrowserPointerUpInput = Schema.TaggedStruct("PointerUp", BrowserPointerEventFields);
+export type BrowserPointerUpInput = typeof BrowserPointerUpInput.Type;
+
+export const BrowserPointerMoveInput = Schema.TaggedStruct(
+  "PointerMove",
+  BrowserPointerEventFields,
+);
+export type BrowserPointerMoveInput = typeof BrowserPointerMoveInput.Type;
+
+export const BrowserWheelInput = Schema.TaggedStruct("Wheel", {
+  x: Schema.Number,
+  y: Schema.Number,
+  deltaX: Schema.Number,
+  deltaY: Schema.Number,
+});
+export type BrowserWheelInput = typeof BrowserWheelInput.Type;
+
+const BrowserKeyEventFields = {
+  key: Schema.String,
+  code: Schema.String,
+  modifiers: BrowserInputModifiers,
+};
+
+export const BrowserKeyDownInput = Schema.TaggedStruct("KeyDown", BrowserKeyEventFields);
+export type BrowserKeyDownInput = typeof BrowserKeyDownInput.Type;
+
+export const BrowserKeyUpInput = Schema.TaggedStruct("KeyUp", BrowserKeyEventFields);
+export type BrowserKeyUpInput = typeof BrowserKeyUpInput.Type;
+
+export const BrowserInsertTextInput = Schema.TaggedStruct("InsertText", {
+  text: Schema.String,
+});
+export type BrowserInsertTextInput = typeof BrowserInsertTextInput.Type;
+
+export const BrowserInputEvent = Schema.Union([
+  BrowserPointerDownInput,
+  BrowserPointerUpInput,
+  BrowserPointerMoveInput,
+  BrowserWheelInput,
+  BrowserKeyDownInput,
+  BrowserKeyUpInput,
+  BrowserInsertTextInput,
+]);
+export type BrowserInputEvent = typeof BrowserInputEvent.Type;
+
+export const BrowserDispatchInput = Schema.Struct({
+  threadId: ThreadId,
+  targetId: TrimmedNonEmptyString,
+  event: BrowserInputEvent,
+});
+export type BrowserDispatchInput = typeof BrowserDispatchInput.Type;
+
 export const BrowserViewportFrame = Schema.TaggedStruct("Frame", {
   threadId: ThreadId,
   targetId: TrimmedNonEmptyString,

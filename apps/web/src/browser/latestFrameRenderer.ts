@@ -1,5 +1,7 @@
 import type { BrowserViewportFrame } from "@salchi/contracts";
 
+import { computeBrowserFrameLayout } from "./browserInput";
+
 export interface AnimationFrameScheduler {
   readonly requestAnimationFrame: (callback: FrameRequestCallback) => number;
   readonly cancelAnimationFrame: (handle: number) => void;
@@ -176,14 +178,11 @@ export function drawBrowserFrameToCanvas(
   context.fillRect(0, 0, cssWidth, cssHeight);
   if (frame.width <= 0 || frame.height <= 0) return;
 
-  const scale = Math.min(cssWidth / frame.width, cssHeight / frame.height);
-  const drawWidth = frame.width * scale;
-  const drawHeight = frame.height * scale;
-  const drawX = (cssWidth - drawWidth) / 2;
-  const drawY = (cssHeight - drawHeight) / 2;
+  const layout = computeBrowserFrameLayout(cssWidth, cssHeight, frame.width, frame.height);
+  if (layout === null) return;
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = "high";
-  context.drawImage(decoded, drawX, drawY, drawWidth, drawHeight);
+  context.drawImage(decoded, layout.drawX, layout.drawY, layout.drawWidth, layout.drawHeight);
 }
 
 export function createBrowserFrameRenderer(

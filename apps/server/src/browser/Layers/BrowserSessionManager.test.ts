@@ -1,4 +1,9 @@
-import { ThreadId, type BrowserRpcError, type BrowserSessionState } from "@salchi/contracts";
+import {
+  ThreadId,
+  type BrowserInputEvent,
+  type BrowserRpcError,
+  type BrowserSessionState,
+} from "@salchi/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -31,6 +36,7 @@ function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
     openTab: () => Effect.void,
     navigate: () => Effect.void,
     closeTab: () => Effect.void,
+    dispatchInput: () => Effect.void,
     setScreencastEnabled: () => Effect.void,
     ...overrides,
   };
@@ -151,6 +157,33 @@ it.effect("navigates the requested tab through the running browser runtime", () 
   ),
 );
 
+it.effect("dispatches input through the running browser runtime", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const dispatched: Array<{ readonly targetId: string; readonly event: BrowserInputEvent }> =
+        [];
+      const manager = yield* makeBrowserSessionManagerWithOptions(
+        managerOptions(() =>
+          Effect.succeed(
+            fakeRuntime({
+              dispatchInput: (targetId, event) =>
+                Effect.sync(() => {
+                  dispatched.push({ targetId, event });
+                }),
+            }),
+          ),
+        ),
+      );
+      yield* manager.start(threadId);
+      const event = { _tag: "InsertText", text: "hello" } as const;
+
+      yield* manager.dispatchInput(threadId, "target-1", event);
+
+      assert.deepEqual(dispatched, [{ targetId: "target-1", event }]);
+    }),
+  ),
+);
+
 it.effect("exposes the raw CDP endpoint only from getState and tracks proxy connections", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -214,6 +247,48 @@ it.effect("does not idle out while an agent CDP proxy remains connected", () =>
 
       assert.equal((yield* manager.getState(threadId)).status, "stopped");
       assert.isTrue(yield* Deferred.isDone(closed));
+    }),
+  ),
+);
+
+it.effect("resets the idle deadline when browser input records CDP activity", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const manager = yield* makeBrowserSessionManagerWithOptions({
+        ...managerOptions((input) =>
+          Effect.succeed(
+            fakeRuntime({
+              dispatchInput: () => Effect.sync(input.callbacks.onCdpActivity),
+            }),
+          ),
+        ),
+        getLaunchConfig: () =>
+          Effect.succeed({
+            idleTimeoutMillis: 1_000,
+            userDataDirectory: "/tmp/salchi-browser-test-profile",
+            processRegistryDirectory: "/tmp/salchi-browser-test-processes",
+            noSandbox: false,
+            serverHost: "127.0.0.1",
+            serverPort: 3773,
+          }),
+      });
+      yield* manager.start(threadId);
+
+      yield* TestClock.adjust("900 millis");
+      yield* manager.dispatchInput(threadId, "target-1", {
+        _tag: "PointerMove",
+        x: 20,
+        y: 30,
+        button: "none",
+        clickCount: 0,
+      });
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("999 millis");
+      assert.equal((yield* manager.getState(threadId)).status, "running");
+
+      yield* TestClock.adjust("1 milli");
+      yield* Effect.yieldNow;
+      assert.equal((yield* manager.getState(threadId)).status, "stopped");
     }),
   ),
 );

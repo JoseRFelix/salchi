@@ -1651,6 +1651,16 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
             ),
             { "rpc.aggregate": "browser" },
           ),
+        [WS_METHODS.browserDispatchInput]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserDispatchInput,
+            requireBrowserOperationScope.pipe(
+              Effect.andThen(
+                browserSessionManager.dispatchInput(input.threadId, input.targetId, input.event),
+              ),
+            ),
+            { "rpc.aggregate": "browser" },
+          ),
         [WS_METHODS.browserSubscribeViewport]: (input) =>
           observeRpcStream(
             WS_METHODS.browserSubscribeViewport,

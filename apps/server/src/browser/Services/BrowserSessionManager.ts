@@ -1,4 +1,5 @@
 import type {
+  BrowserInputEvent,
   BrowserRpcError,
   BrowserSessionState,
   BrowserViewportEvent,
@@ -39,6 +40,11 @@ export interface BrowserSessionManagerShape {
     threadId: ThreadId,
     targetId: string,
   ) => Effect.Effect<BrowserSessionState, BrowserRpcError>;
+  readonly dispatchInput: (
+    threadId: ThreadId,
+    targetId: string,
+    event: BrowserInputEvent,
+  ) => Effect.Effect<void, BrowserRpcError>;
   readonly subscribeViewport: (
     threadId: ThreadId,
   ) => Stream.Stream<BrowserViewportEvent, BrowserRpcError>;

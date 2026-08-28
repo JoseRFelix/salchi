@@ -139,6 +139,29 @@ npx -y chrome-devtools-mcp@latest --wsEndpoint "$SALCHI_BROWSER_CDP_URL"
 Salchi itself does not invoke either `npx` command above; they are examples only for custom setups.
 Phase 2b deliberately does not add a `salchi/*` browser tool or alter dynamic-tool handling.
 
-## Remaining phase 2
+## Phase 3 manual interaction
 
-Tap-to-interact input translation remains future work.
+The viewport remains view-only until the user explicitly enables **Interact**. Hiding the panel,
+switching views or threads, closing the responsive sheet, stopping/crashing the browser, or losing
+authorization disables interaction. Pointer, wheel, keyboard, and composed text events travel over
+the owner-scoped `browser.dispatchInput` RPC and are accepted only for the active tab.
+
+The browser viewport is fixed at 800×600 with device scale factor 1. The client inverts the canvas
+aspect-fit transform, including letterbox offsets and device-pixel-ratio backing scale, into streamed
+frame coordinates. The server clamps those coordinates to the most recently observed frame size
+before dispatching through the tab's existing CDP session. Each successful input records CDP
+activity, and a per-browser rolling limit admits at most 200 events in any one-second window.
+
+Touch uses a deliberate hybrid convention: a quick tap clicks, moving one finger scrolls by
+emitting wheel deltas, and holding for 450 ms before moving enters click-drag mode. Desktop pointer
+moves are coalesced to one per animation frame. Desktop keyboard events go to a focused interactive
+canvas; the mobile keyboard button focuses a hidden text input that supports composed text plus
+Enter and Backspace. File pickers, clipboard synchronization, full IME fidelity, and multi-touch
+gestures remain out of scope.
+
+Manual verification:
+
+1. Have an attached agent navigate to a page while the Browser panel is open.
+2. Enable **Interact**, click a link or cookie banner, and verify the agent remains attached.
+3. Scroll with a mouse wheel or a one-finger touch drag.
+4. Focus a text field and type with the desktop keyboard or the panel keyboard button on mobile.

@@ -4,6 +4,7 @@ import {
   BrowserUnavailable,
   ThreadNotFound,
   type BrowserExecutableInfo,
+  type BrowserInputEvent,
   type BrowserOperationError as BrowserOperationErrorType,
   type BrowserRpcError,
   type BrowserSessionState,
@@ -659,6 +660,29 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
   const closeTab: BrowserSessionManagerShape["closeTab"] = (threadId, targetId) =>
     withRunningSession(threadId, (runtime) => runtime.closeTab(targetId));
 
+  const dispatchInput: BrowserSessionManagerShape["dispatchInput"] = (
+    threadId,
+    targetId,
+    event: BrowserInputEvent,
+  ) =>
+    withThreadLock(
+      threadId,
+      Effect.gen(function* () {
+        yield* requireThread(threadId);
+        const entry = yield* getOrCreateEntry(threadId);
+        if (entry.status === "crashed") {
+          return yield* new BrowserCrashed({
+            threadId,
+            message: entry.error ?? "Chromium exited unexpectedly.",
+          });
+        }
+        if (entry.session === undefined || entry.status !== "running") {
+          return yield* makeOperationError(threadId, "Browser session is not running.");
+        }
+        yield* entry.session.runtime.dispatchInput(targetId, event);
+      }),
+    );
+
   const releaseSubscriber = (threadId: ThreadId) =>
     withThreadLock(
       threadId,
@@ -729,6 +753,7 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
     openTab,
     navigate,
     closeTab,
+    dispatchInput,
     subscribeViewport,
   } satisfies BrowserSessionManagerShape;
 });

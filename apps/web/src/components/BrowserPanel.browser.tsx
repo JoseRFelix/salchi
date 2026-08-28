@@ -1,6 +1,11 @@
 import "../index.css";
 
-import { EnvironmentId, ThreadId, type BrowserViewportEvent } from "@salchi/contracts";
+import {
+  EnvironmentId,
+  ThreadId,
+  type BrowserDispatchInput,
+  type BrowserViewportEvent,
+} from "@salchi/contracts";
 import { page } from "vitest/browser";
 import { useReducer } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -74,6 +79,7 @@ function createBrowserClient() {
     openTab: vi.fn(),
     navigate: vi.fn(async ({ threadId }: { threadId: ThreadId }) => sessionState(threadId)),
     closeTab: vi.fn(),
+    dispatchInput: vi.fn(async (_input: BrowserDispatchInput) => undefined),
     subscribeViewport,
   };
   return { browser, listeners, subscribeViewport, subscriptionOptions, unsubscriptions };
@@ -322,6 +328,81 @@ describe("BrowserPanel subscription visibility", () => {
       client.subscriptionOptions[0]?.onResubscribe?.();
       await expect.element(page.getByText("Paused")).toBeVisible();
       expect(document.querySelector("[data-browser-live-state]")).toBeNull();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("dispatches pointer input only in explicit interact mode and disables it when hidden", async () => {
+    const client = createBrowserClient();
+    readEnvironmentConnectionMock.mockReturnValue({ client });
+    const state = reduceBrowserViewportState(initialBrowserViewportState(THREAD_A), {
+      type: "snapshot",
+      snapshot: {
+        threadId: THREAD_A,
+        status: "running",
+        tabs: [
+          {
+            targetId: "target-1",
+            title: "Example",
+            url: "https://example.com/",
+            active: true,
+          },
+        ],
+        executable: null,
+      },
+    });
+    const screen = await render(<Panel state={state} threadId={THREAD_A} visible />);
+
+    try {
+      await vi.waitFor(() => expect(client.listeners).toHaveLength(1));
+      client.listeners[0]?.({
+        _tag: "Frame",
+        threadId: THREAD_A,
+        targetId: "target-1",
+        dataBase64: "Zg==",
+        width: 800,
+        height: 600,
+        seq: 1,
+        capturedAt: "2026-08-25T00:00:00.000Z" as never,
+      });
+
+      const interact = page.getByRole("button", { name: "Interact" });
+      await expect.element(interact).toBeEnabled();
+      await interact.click();
+      const canvas = document.querySelector<HTMLCanvasElement>(
+        'canvas[aria-label="Interactive browser viewport"]',
+      );
+      expect(canvas).not.toBeNull();
+      const bounds = canvas?.getBoundingClientRect();
+      expect(bounds?.width).toBeGreaterThan(0);
+      expect(bounds?.height).toBeGreaterThan(0);
+      if (canvas && bounds) {
+        const pointer = {
+          bubbles: true,
+          button: 0,
+          clientX: bounds.left + bounds.width / 2,
+          clientY: bounds.top + bounds.height / 2,
+          isPrimary: true,
+          pointerId: 1,
+          pointerType: "mouse",
+        } satisfies PointerEventInit;
+        canvas.dispatchEvent(new PointerEvent("pointerdown", pointer));
+        canvas.dispatchEvent(new PointerEvent("pointerup", pointer));
+      }
+      await vi.waitFor(() => expect(client.browser.dispatchInput).toHaveBeenCalledTimes(2));
+      expect(client.browser.dispatchInput.mock.calls.map(([input]) => input.event._tag)).toEqual([
+        "PointerDown",
+        "PointerUp",
+      ]);
+
+      await screen.rerender(<Panel state={state} threadId={THREAD_A} visible={false} />);
+      await vi.waitFor(() =>
+        expect(document.querySelector('[data-browser-interact="true"]')).toBeNull(),
+      );
+      await expect
+        .element(page.getByRole("button", { name: "Interact" }))
+        .toHaveAttribute("aria-pressed", "false");
     } finally {
       await screen.unmount();
     }

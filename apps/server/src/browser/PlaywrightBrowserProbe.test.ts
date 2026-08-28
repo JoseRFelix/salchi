@@ -150,8 +150,27 @@ describe.runIf(process.env.SALCHI_BROWSER_INTEGRATION === "1")(
           manager,
           (state) => state.tabs.length >= ownerState.tabs.length + 1,
         );
+        const interactivePage = `<!doctype html>
+          <title>External agent tab</title>
+          <style>
+            html, body { margin: 0; }
+            #trusted-click { position: absolute; left: 100px; top: 80px; width: 120px; height: 50px; }
+            #typed-text { position: absolute; left: 100px; top: 160px; width: 240px; height: 36px; }
+          </style>
+          <button id="trusted-click">Click here</button>
+          <input id="typed-text" />
+          <script>
+            globalThis.__salchiTrustedClick = null;
+            document.querySelector('#trusted-click').addEventListener('click', (event) => {
+              globalThis.__salchiTrustedClick = {
+                isTrusted: event.isTrusted,
+                clientX: event.clientX,
+                clientY: event.clientY,
+              };
+            });
+          </script>`;
         yield* Effect.promise(() =>
-          page.goto("data:text/html,<title>External agent tab</title><main>external agent</main>"),
+          page.goto(`data:text/html,${encodeURIComponent(interactivePage)}`),
         );
         const externalTabState = yield* waitForBrowserState(manager, (state) =>
           state.tabs.some((tab) => tab.title === "External agent tab"),
@@ -162,6 +181,21 @@ describe.runIf(process.env.SALCHI_BROWSER_INTEGRATION === "1")(
         }
 
         yield* manager.setActiveTab(integrationThreadId, externalTab.targetId);
+        const inactiveTab = (yield* manager.getState(integrationThreadId)).tabs.find(
+          (tab) => !tab.active,
+        );
+        if (inactiveTab !== undefined) {
+          const inactiveInputError = yield* Effect.flip(
+            manager.dispatchInput(integrationThreadId, inactiveTab.targetId, {
+              _tag: "InsertText",
+              text: "must not reach an inactive tab",
+            }),
+          );
+          expect(inactiveInputError).toMatchObject({
+            _tag: "BrowserOperationError",
+            threadId: integrationThreadId,
+          });
+        }
         const frame = yield* manager.subscribeViewport(integrationThreadId).pipe(
           Stream.filter((event) => event._tag === "Frame"),
           Stream.runHead,
@@ -173,6 +207,58 @@ describe.runIf(process.env.SALCHI_BROWSER_INTEGRATION === "1")(
           expect(frame.value.width).toBeGreaterThan(0);
           expect(frame.value.width).toBeLessThanOrEqual(800);
         }
+
+        yield* manager.dispatchInput(integrationThreadId, externalTab.targetId, {
+          _tag: "PointerDown",
+          x: 160,
+          y: 105,
+          button: "left",
+          clickCount: 1,
+        });
+        yield* manager.dispatchInput(integrationThreadId, externalTab.targetId, {
+          _tag: "PointerUp",
+          x: 160,
+          y: 105,
+          button: "left",
+          clickCount: 1,
+        });
+        const trustedClick = yield* Effect.promise(() =>
+          page.evaluate(
+            () =>
+              (
+                globalThis as typeof globalThis & {
+                  __salchiTrustedClick: {
+                    readonly clientX: number;
+                    readonly clientY: number;
+                    readonly isTrusted: boolean;
+                  } | null;
+                }
+              ).__salchiTrustedClick,
+          ),
+        );
+        expect(trustedClick).toEqual({ isTrusted: true, clientX: 160, clientY: 105 });
+
+        yield* manager.dispatchInput(integrationThreadId, externalTab.targetId, {
+          _tag: "PointerDown",
+          x: 160,
+          y: 178,
+          button: "left",
+          clickCount: 1,
+        });
+        yield* manager.dispatchInput(integrationThreadId, externalTab.targetId, {
+          _tag: "PointerUp",
+          x: 160,
+          y: 178,
+          button: "left",
+          clickCount: 1,
+        });
+        yield* manager.dispatchInput(integrationThreadId, externalTab.targetId, {
+          _tag: "InsertText",
+          text: "typed through Salchi",
+        });
+        expect(yield* Effect.promise(() => page.locator("#typed-text").inputValue())).toBe(
+          "typed through Salchi",
+        );
 
         const blockedNavigationMessage = yield* Effect.promise(() =>
           page

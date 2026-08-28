@@ -129,10 +129,12 @@ describe("wsRpcClient", () => {
     };
     const protocolStart = vi.fn(() => Effect.succeed(state));
     const protocolNavigate = vi.fn(() => Effect.succeed(state));
+    const protocolDispatchInput = vi.fn(() => Effect.void);
     const protocolSubscribe = vi.fn(() => Stream.empty);
     const protocolClient = {
       [WS_METHODS.browserStart]: protocolStart,
       [WS_METHODS.browserNavigate]: protocolNavigate,
+      [WS_METHODS.browserDispatchInput]: protocolDispatchInput,
       [WS_METHODS.browserSubscribeViewport]: protocolSubscribe,
     } as unknown as WsRpcProtocolClient;
     const request = vi.fn(
@@ -160,6 +162,13 @@ describe("wsRpcClient", () => {
     await expect(
       client.browser.navigate({ threadId, targetId: "target-1", url: "https://example.com/" }),
     ).resolves.toEqual(state);
+    await expect(
+      client.browser.dispatchInput({
+        threadId,
+        targetId: "target-1",
+        event: { _tag: "InsertText", text: "hello" },
+      }),
+    ).resolves.toBeUndefined();
     client.browser.subscribeViewport({ threadId }, vi.fn());
 
     expect(protocolStart).toHaveBeenCalledWith({ threadId });
@@ -167,6 +176,11 @@ describe("wsRpcClient", () => {
       threadId,
       targetId: "target-1",
       url: "https://example.com/",
+    });
+    expect(protocolDispatchInput).toHaveBeenCalledWith({
+      threadId,
+      targetId: "target-1",
+      event: { _tag: "InsertText", text: "hello" },
     });
     const connect = subscribe.mock.calls[0]?.[0] as unknown as (
       client: WsRpcProtocolClient,

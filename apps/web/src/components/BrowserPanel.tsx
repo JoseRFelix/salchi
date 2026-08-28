@@ -1,4 +1,5 @@
 import type {
+  BrowserInputEvent,
   BrowserSessionState,
   BrowserViewportFrame,
   EnvironmentId,
@@ -8,7 +9,9 @@ import {
   AppWindowIcon,
   ArrowRightIcon,
   CircleStopIcon,
+  KeyboardIcon,
   LockKeyholeIcon,
+  MousePointer2Icon,
   PanelRightCloseIcon,
   PlusIcon,
   RotateCcwIcon,
@@ -26,6 +29,11 @@ import {
   type BrowserViewportStateAction,
 } from "../browser/browserViewportState";
 import { browserAddressValue, resolveBrowserAddress } from "../browser/browserAddress";
+import {
+  browserKeyboardModifiers,
+  mapCanvasPointToBrowserFrame,
+  type BrowserFramePoint,
+} from "../browser/browserInput";
 import {
   createBrowserFrameRenderer,
   type LatestFrameRenderer,
@@ -52,9 +60,49 @@ import { Spinner } from "./ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 const NOOP = () => undefined;
+const DOUBLE_TAP_DISTANCE_PX = 24;
+const DOUBLE_TAP_WINDOW_MS = 350;
+const TOUCH_CLICK_DRAG_HOLD_MS = 450;
+const TOUCH_SCROLL_THRESHOLD_PX = 8;
 
 type BrowserClient = WsRpcClient["browser"];
 type PendingOperation = "close-tab" | "navigate" | "open-tab" | "set-active-tab" | "start" | "stop";
+type BrowserPointerButton = Extract<BrowserInputEvent, { readonly _tag: "PointerDown" }>["button"];
+
+interface ActivePointerGesture {
+  readonly button: BrowserPointerButton;
+  readonly clickCount: number;
+  holdTimer: number | null;
+  lastPoint: BrowserFramePoint;
+  mode: "mouse-drag" | "touch-drag" | "touch-pending" | "touch-scroll";
+  readonly pointerId: number;
+  readonly startClientX: number;
+  readonly startClientY: number;
+  readonly startPoint: BrowserFramePoint;
+  readonly targetId: string;
+}
+
+interface PendingPointerMove {
+  readonly event: Extract<BrowserInputEvent, { readonly _tag: "PointerMove" }>;
+  readonly targetId: string;
+}
+
+function pointerButtonFromEvent(button: number): BrowserPointerButton {
+  switch (button) {
+    case 0:
+      return "left";
+    case 1:
+      return "middle";
+    case 2:
+      return "right";
+    case 3:
+      return "back";
+    case 4:
+      return "forward";
+    default:
+      return "none";
+  }
+}
 
 function useDocumentVisible(): boolean {
   const [visible, setVisible] = useState(
@@ -108,16 +156,26 @@ export function BrowserPanel(props: {
 }) {
   const sheetOpen = useRightPanelSheetOpen();
   const documentVisible = useDocumentVisible();
+  const actuallyVisible = props.visible && sheetOpen && documentVisible;
   const shouldSubscribe =
-    props.visible &&
-    sheetOpen &&
-    documentVisible &&
+    actuallyVisible &&
     props.state.threadId === props.threadId &&
     props.state.authorization !== "denied";
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const addressInputRef = useRef<HTMLInputElement | null>(null);
+  const mobileKeyboardInputRef = useRef<HTMLInputElement | null>(null);
   const frameRendererRef = useRef<LatestFrameRenderer<BrowserViewportFrame> | null>(null);
   const pendingFrameRef = useRef<BrowserViewportFrame | null>(null);
+  const currentFrameRef = useRef<BrowserViewportFrame | null>(null);
+  const inputDispatchTailRef = useRef<Promise<void>>(Promise.resolve());
+  const activePointerGestureRef = useRef<ActivePointerGesture | null>(null);
+  const pendingPointerMoveRef = useRef<PendingPointerMove | null>(null);
+  const pointerMoveFrameRef = useRef<number | null>(null);
+  const lastTouchTapRef = useRef<{
+    readonly at: number;
+    readonly clientX: number;
+    readonly clientY: number;
+  } | null>(null);
   const operationGenerationRef = useRef(0);
   const autoOpenCheckedRef = useRef(false);
   const displayedActiveTargetId =
@@ -129,6 +187,7 @@ export function BrowserPanel(props: {
   const displayedActiveUrl = browserAddressValue(displayedActiveTab?.url ?? "");
   const hasWebsiteUrl = displayedActiveUrl.length > 0;
   const [hasFrame, setHasFrame] = useState(false);
+  const [interactEnabled, setInteractEnabled] = useState(false);
   const [live, setLive] = useState(false);
   const [addressValue, setAddressValue] = useState(() => displayedActiveUrl);
   const [pendingOperation, setPendingOperation] = useState<PendingOperation | null>(null);
@@ -137,6 +196,7 @@ export function BrowserPanel(props: {
     setLive(false);
   }, []);
   const acceptFrame = useCallback((frame: BrowserViewportFrame) => {
+    currentFrameRef.current = frame;
     setHasFrame(true);
     setLive(true);
 
@@ -150,7 +210,9 @@ export function BrowserPanel(props: {
 
   useEffect(() => {
     pendingFrameRef.current = null;
+    currentFrameRef.current = null;
     setHasFrame(false);
+    setInteractEnabled(false);
     pauseFrame();
   }, [pauseFrame, props.threadId]);
 
@@ -332,6 +394,421 @@ export function BrowserPanel(props: {
     },
     [props.environmentId, props.onStateAction],
   );
+
+  const dispatchBrowserInput = useCallback(
+    (targetId: string, event: BrowserInputEvent) => {
+      const client = readEnvironmentConnection(props.environmentId)?.client.browser;
+      if (!client) return;
+      const execute = async () => {
+        try {
+          await client.dispatchInput({ threadId: props.threadId, targetId, event });
+        } catch (error: unknown) {
+          if (isBrowserAuthorizationError(error)) {
+            props.onStateAction({ type: "authorizationDenied" });
+            return;
+          }
+          props.onStateAction({
+            type: "operationFailed",
+            error: browserErrorMessage(error, "Unable to send browser input."),
+          });
+        }
+      };
+      inputDispatchTailRef.current = inputDispatchTailRef.current.then(execute, execute);
+    },
+    [props.environmentId, props.onStateAction, props.threadId],
+  );
+
+  const mapPointerCoordinates = useCallback(
+    (clientX: number, clientY: number, clampToFrame = false) => {
+      const canvas = canvasRef.current;
+      const frame = currentFrameRef.current;
+      if (
+        canvas === null ||
+        frame === null ||
+        frame.targetId !== displayedActiveTargetId ||
+        frame.width <= 0 ||
+        frame.height <= 0
+      ) {
+        return null;
+      }
+      const bounds = canvas.getBoundingClientRect();
+      const point = mapCanvasPointToBrowserFrame({
+        bounds,
+        clientX,
+        clientY,
+        devicePixelRatio: window.devicePixelRatio || 1,
+        frameWidth: frame.width,
+        frameHeight: frame.height,
+        clampToFrame,
+      });
+      return point === null ? null : { point, targetId: frame.targetId };
+    },
+    [displayedActiveTargetId],
+  );
+
+  const flushPendingPointerMove = useCallback(() => {
+    if (pointerMoveFrameRef.current !== null) {
+      window.cancelAnimationFrame(pointerMoveFrameRef.current);
+      pointerMoveFrameRef.current = null;
+    }
+    const pending = pendingPointerMoveRef.current;
+    pendingPointerMoveRef.current = null;
+    if (pending !== null) dispatchBrowserInput(pending.targetId, pending.event);
+  }, [dispatchBrowserInput]);
+
+  const discardPendingPointerMove = useCallback(() => {
+    if (pointerMoveFrameRef.current !== null) {
+      window.cancelAnimationFrame(pointerMoveFrameRef.current);
+      pointerMoveFrameRef.current = null;
+    }
+    pendingPointerMoveRef.current = null;
+  }, []);
+
+  const queuePointerMove = useCallback(
+    (pending: PendingPointerMove) => {
+      pendingPointerMoveRef.current = pending;
+      if (pointerMoveFrameRef.current !== null) return;
+      pointerMoveFrameRef.current = window.requestAnimationFrame(() => {
+        pointerMoveFrameRef.current = null;
+        const latest = pendingPointerMoveRef.current;
+        pendingPointerMoveRef.current = null;
+        if (latest !== null) dispatchBrowserInput(latest.targetId, latest.event);
+      });
+    },
+    [dispatchBrowserInput],
+  );
+
+  const releaseActiveGesture = useCallback(
+    (sendPointerUp: boolean) => {
+      const gesture = activePointerGestureRef.current;
+      activePointerGestureRef.current = null;
+      if (gesture !== null && gesture.holdTimer !== null) {
+        window.clearTimeout(gesture.holdTimer);
+      }
+      if (
+        sendPointerUp &&
+        gesture !== null &&
+        (gesture.mode === "mouse-drag" || gesture.mode === "touch-drag")
+      ) {
+        flushPendingPointerMove();
+        dispatchBrowserInput(gesture.targetId, {
+          _tag: "PointerUp",
+          x: gesture.lastPoint.x,
+          y: gesture.lastPoint.y,
+          button: gesture.button,
+          clickCount: gesture.clickCount,
+        });
+      } else {
+        discardPendingPointerMove();
+      }
+    },
+    [discardPendingPointerMove, dispatchBrowserInput, flushPendingPointerMove],
+  );
+
+  useEffect(() => {
+    if (
+      !actuallyVisible ||
+      props.state.authorization === "denied" ||
+      props.state.status !== "running"
+    ) {
+      setInteractEnabled(false);
+    }
+  }, [actuallyVisible, props.state.authorization, props.state.status]);
+
+  useEffect(() => {
+    if (interactEnabled) return;
+    mobileKeyboardInputRef.current?.blur();
+    releaseActiveGesture(true);
+  }, [interactEnabled, releaseActiveGesture]);
+
+  useEffect(() => () => releaseActiveGesture(true), [releaseActiveGesture]);
+
+  const toggleInteract = useCallback(() => {
+    setInteractEnabled((enabled) => {
+      const next = !enabled;
+      if (next) {
+        window.requestAnimationFrame(() => canvasRef.current?.focus({ preventScroll: true }));
+      }
+      return next;
+    });
+  }, []);
+
+  const handlePointerDown = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      if (!interactEnabled || !event.isPrimary) return;
+      const mapped = mapPointerCoordinates(event.clientX, event.clientY);
+      if (mapped === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.focus({ preventScroll: true });
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // Some browser-test DOM implementations do not expose pointer capture.
+      }
+
+      const touch = event.pointerType === "touch";
+      const button = touch ? "left" : pointerButtonFromEvent(event.button);
+      const clickCount = touch ? 1 : Math.min(2, Math.max(1, event.detail || 1));
+      const gesture: ActivePointerGesture = {
+        pointerId: event.pointerId,
+        mode: touch ? "touch-pending" : "mouse-drag",
+        button,
+        clickCount,
+        targetId: mapped.targetId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startPoint: mapped.point,
+        lastPoint: mapped.point,
+        holdTimer: null,
+      };
+      activePointerGestureRef.current = gesture;
+
+      if (!touch) {
+        dispatchBrowserInput(mapped.targetId, {
+          _tag: "PointerDown",
+          x: mapped.point.x,
+          y: mapped.point.y,
+          button,
+          clickCount,
+        });
+        return;
+      }
+
+      gesture.holdTimer = window.setTimeout(() => {
+        const current = activePointerGestureRef.current;
+        if (current !== gesture || current.mode !== "touch-pending") return;
+        current.holdTimer = null;
+        current.mode = "touch-drag";
+        dispatchBrowserInput(current.targetId, {
+          _tag: "PointerDown",
+          x: current.startPoint.x,
+          y: current.startPoint.y,
+          button: current.button,
+          clickCount: current.clickCount,
+        });
+      }, TOUCH_CLICK_DRAG_HOLD_MS);
+    },
+    [dispatchBrowserInput, interactEnabled, mapPointerCoordinates],
+  );
+
+  const handlePointerMove = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      if (!interactEnabled || !event.isPrimary) return;
+      const gesture = activePointerGestureRef.current;
+      const mapped = mapPointerCoordinates(
+        event.clientX,
+        event.clientY,
+        gesture?.pointerId === event.pointerId,
+      );
+      if (mapped === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (gesture === null || gesture.pointerId !== event.pointerId) {
+        if (event.pointerType !== "touch") {
+          queuePointerMove({
+            targetId: mapped.targetId,
+            event: {
+              _tag: "PointerMove",
+              x: mapped.point.x,
+              y: mapped.point.y,
+              button: "none",
+              clickCount: 0,
+            },
+          });
+        }
+        return;
+      }
+
+      const previousPoint = gesture.lastPoint;
+      gesture.lastPoint = mapped.point;
+
+      if (gesture.mode === "touch-pending") {
+        const moved = Math.hypot(
+          event.clientX - gesture.startClientX,
+          event.clientY - gesture.startClientY,
+        );
+        if (moved < TOUCH_SCROLL_THRESHOLD_PX) return;
+        if (gesture.holdTimer !== null) window.clearTimeout(gesture.holdTimer);
+        gesture.holdTimer = null;
+        gesture.mode = "touch-scroll";
+      }
+
+      if (gesture.mode === "touch-scroll") {
+        dispatchBrowserInput(gesture.targetId, {
+          _tag: "Wheel",
+          x: mapped.point.x,
+          y: mapped.point.y,
+          deltaX: previousPoint.x - mapped.point.x,
+          deltaY: previousPoint.y - mapped.point.y,
+        });
+        return;
+      }
+
+      queuePointerMove({
+        targetId: gesture.targetId,
+        event: {
+          _tag: "PointerMove",
+          x: mapped.point.x,
+          y: mapped.point.y,
+          button: gesture.button,
+          clickCount: gesture.clickCount,
+        },
+      });
+    },
+    [dispatchBrowserInput, interactEnabled, mapPointerCoordinates, queuePointerMove],
+  );
+
+  const handlePointerUp = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      const gesture = activePointerGestureRef.current;
+      if (!interactEnabled || gesture === null || gesture.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const mapped = mapPointerCoordinates(event.clientX, event.clientY, true);
+      if (mapped !== null) gesture.lastPoint = mapped.point;
+      if (gesture.holdTimer !== null) window.clearTimeout(gesture.holdTimer);
+      gesture.holdTimer = null;
+      activePointerGestureRef.current = null;
+
+      if (gesture.mode === "touch-pending") {
+        const now = Date.now();
+        const previousTap = lastTouchTapRef.current;
+        const doubleTap =
+          previousTap !== null &&
+          now - previousTap.at <= DOUBLE_TAP_WINDOW_MS &&
+          Math.hypot(event.clientX - previousTap.clientX, event.clientY - previousTap.clientY) <=
+            DOUBLE_TAP_DISTANCE_PX;
+        const clickCount = doubleTap ? 2 : 1;
+        lastTouchTapRef.current = doubleTap
+          ? null
+          : { at: now, clientX: event.clientX, clientY: event.clientY };
+        dispatchBrowserInput(gesture.targetId, {
+          _tag: "PointerDown",
+          x: gesture.lastPoint.x,
+          y: gesture.lastPoint.y,
+          button: "left",
+          clickCount,
+        });
+        dispatchBrowserInput(gesture.targetId, {
+          _tag: "PointerUp",
+          x: gesture.lastPoint.x,
+          y: gesture.lastPoint.y,
+          button: "left",
+          clickCount,
+        });
+      } else if (gesture.mode === "mouse-drag" || gesture.mode === "touch-drag") {
+        flushPendingPointerMove();
+        dispatchBrowserInput(gesture.targetId, {
+          _tag: "PointerUp",
+          x: gesture.lastPoint.x,
+          y: gesture.lastPoint.y,
+          button: gesture.button,
+          clickCount: gesture.clickCount,
+        });
+      } else {
+        discardPendingPointerMove();
+      }
+
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {
+        // Pointer capture may already have been released by the browser.
+      }
+    },
+    [
+      discardPendingPointerMove,
+      dispatchBrowserInput,
+      flushPendingPointerMove,
+      interactEnabled,
+      mapPointerCoordinates,
+    ],
+  );
+
+  const handlePointerCancel = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      if (activePointerGestureRef.current?.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      releaseActiveGesture(true);
+    },
+    [releaseActiveGesture],
+  );
+
+  const handleWheel = useCallback(
+    (event: React.WheelEvent<HTMLCanvasElement>) => {
+      if (!interactEnabled) return;
+      const mapped = mapPointerCoordinates(event.clientX, event.clientY);
+      if (mapped === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dispatchBrowserInput(mapped.targetId, {
+        _tag: "Wheel",
+        x: mapped.point.x,
+        y: mapped.point.y,
+        deltaX: event.deltaX,
+        deltaY: event.deltaY,
+      });
+    },
+    [dispatchBrowserInput, interactEnabled, mapPointerCoordinates],
+  );
+
+  const handleCanvasKey = useCallback(
+    (event: React.KeyboardEvent<HTMLCanvasElement>, tag: "KeyDown" | "KeyUp") => {
+      if (!interactEnabled || event.nativeEvent.isComposing) return;
+      const frame = currentFrameRef.current;
+      if (frame === null || frame.targetId !== displayedActiveTargetId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dispatchBrowserInput(frame.targetId, {
+        _tag: tag,
+        key: event.key,
+        code: event.code,
+        modifiers: browserKeyboardModifiers(event),
+      });
+    },
+    [dispatchBrowserInput, displayedActiveTargetId, interactEnabled],
+  );
+
+  const handleMobileKeyboardKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (!interactEnabled || (event.key !== "Enter" && event.key !== "Backspace")) return;
+      const frame = currentFrameRef.current;
+      if (frame === null || frame.targetId !== displayedActiveTargetId) return;
+      event.preventDefault();
+      const code = event.key === "Enter" ? "Enter" : "Backspace";
+      const modifiers = browserKeyboardModifiers(event);
+      dispatchBrowserInput(frame.targetId, {
+        _tag: "KeyDown",
+        key: event.key,
+        code,
+        modifiers,
+      });
+      dispatchBrowserInput(frame.targetId, {
+        _tag: "KeyUp",
+        key: event.key,
+        code,
+        modifiers,
+      });
+    },
+    [dispatchBrowserInput, displayedActiveTargetId, interactEnabled],
+  );
+
+  const handleMobileTextInput = useCallback(
+    (event: React.FormEvent<HTMLInputElement>) => {
+      if (!interactEnabled) return;
+      const frame = currentFrameRef.current;
+      const text = event.currentTarget.value;
+      event.currentTarget.value = "";
+      if (frame === null || frame.targetId !== displayedActiveTargetId || text.length === 0) return;
+      dispatchBrowserInput(frame.targetId, { _tag: "InsertText", text });
+    },
+    [dispatchBrowserInput, displayedActiveTargetId, interactEnabled],
+  );
+
+  const focusMobileKeyboard = useCallback(() => {
+    mobileKeyboardInputRef.current?.focus({ preventScroll: true });
+  }, []);
 
   const startBrowser = useCallback(() => {
     props.onStateAction({ type: "startRequested" });
@@ -533,15 +1010,47 @@ export function BrowserPanel(props: {
             title="Browse the web"
           />
         ) : (
-          <div className="relative min-h-0 flex-1 overflow-hidden bg-zinc-950">
+          <div
+            className={cn(
+              "relative min-h-0 flex-1 overflow-hidden bg-zinc-950",
+              interactEnabled && "ring-1 ring-inset ring-primary",
+            )}
+            data-browser-interact={interactEnabled ? "true" : "false"}
+          >
             <canvas
-              aria-label="Live browser viewport"
+              aria-label={
+                interactEnabled ? "Interactive browser viewport" : "Live browser viewport"
+              }
               className={cn(
                 "block h-full w-full transition-opacity duration-200",
                 hasFrame && !live && "opacity-55",
+                interactEnabled && "touch-none cursor-crosshair select-none outline-none",
               )}
+              onContextMenu={(event) => {
+                if (interactEnabled) event.preventDefault();
+              }}
+              onKeyDown={(event) => handleCanvasKey(event, "KeyDown")}
+              onKeyUp={(event) => handleCanvasKey(event, "KeyUp")}
+              onPointerCancel={handlePointerCancel}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onWheel={handleWheel}
               ref={canvasRef}
-              role="img"
+              role={interactEnabled ? "application" : "img"}
+              tabIndex={interactEnabled ? 0 : -1}
+            />
+            <input
+              aria-label="Browser mobile keyboard input"
+              autoCapitalize="none"
+              autoComplete="off"
+              className="fixed bottom-0 left-0 h-px w-px opacity-0"
+              inputMode="text"
+              onInput={handleMobileTextInput}
+              onKeyDown={handleMobileKeyboardKeyDown}
+              ref={mobileKeyboardInputRef}
+              spellCheck={false}
+              tabIndex={-1}
             />
             {!hasFrame ? (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-zinc-400">
@@ -638,26 +1147,56 @@ export function BrowserPanel(props: {
         </div>
         <div className="ml-1 flex shrink-0 items-center gap-0.5 border-l border-border/60 pl-1">
           {running ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    aria-label="Stop browser"
-                    disabled={pendingOperation !== null}
-                    onClick={stopBrowser}
-                    size="icon-xs"
-                    variant="ghost"
-                  />
-                }
+            <>
+              <Button
+                aria-label={interactEnabled ? "Disable browser interaction" : "Interact"}
+                aria-pressed={interactEnabled}
+                disabled={!hasFrame || !hasWebsiteUrl}
+                onClick={toggleInteract}
+                size="xs"
+                variant={interactEnabled ? "secondary" : "ghost"}
               >
-                {pendingOperation === "stop" ? (
-                  <Spinner className="size-3.5" />
-                ) : (
-                  <CircleStopIcon className="size-3.5" />
-                )}
-              </TooltipTrigger>
-              <TooltipPopup side="bottom">Stop browser</TooltipPopup>
-            </Tooltip>
+                <MousePointer2Icon className="size-3.5" />
+                Interact
+              </Button>
+              {interactEnabled ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        aria-label="Open browser keyboard"
+                        onClick={focusMobileKeyboard}
+                        size="icon-xs"
+                        variant="ghost"
+                      />
+                    }
+                  >
+                    <KeyboardIcon className="size-3.5" />
+                  </TooltipTrigger>
+                  <TooltipPopup side="bottom">Open keyboard</TooltipPopup>
+                </Tooltip>
+              ) : null}
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      aria-label="Stop browser"
+                      disabled={pendingOperation !== null}
+                      onClick={stopBrowser}
+                      size="icon-xs"
+                      variant="ghost"
+                    />
+                  }
+                >
+                  {pendingOperation === "stop" ? (
+                    <Spinner className="size-3.5" />
+                  ) : (
+                    <CircleStopIcon className="size-3.5" />
+                  )}
+                </TooltipTrigger>
+                <TooltipPopup side="bottom">Stop browser</TooltipPopup>
+              </Tooltip>
+            </>
           ) : null}
           <Button
             aria-label="Close browser panel"

@@ -574,6 +574,7 @@ const buildAppUnderTest = (options?: {
       openTab: (threadId) => Effect.succeed(browserState(threadId, "running")),
       navigate: (threadId) => Effect.succeed(browserState(threadId, "running")),
       closeTab: (threadId) => Effect.succeed(browserState(threadId, "running")),
+      dispatchInput: () => Effect.void,
       subscribeViewport: () => Stream.empty,
       ...options?.layers?.browserSessionManager,
     });
@@ -1907,14 +1908,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
   it.effect("enforces browser:operate on browser websocket RPCs", () =>
     Effect.gen(function* () {
-      let getStateCalled = false;
+      let dispatchInputCalled = false;
       yield* buildAppUnderTest({
         layers: {
           browserSessionManager: {
-            getState: (threadId) =>
+            dispatchInput: () =>
               Effect.sync(() => {
-                getStateCalled = true;
-                return { threadId, status: "stopped", tabs: [], executable: null };
+                dispatchInputCalled = true;
               }),
           },
         },
@@ -1936,7 +1936,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const error = yield* Effect.flip(
         Effect.scoped(
           withWsRpcClient(wsUrl, (client) =>
-            client[WS_METHODS.browserGetState]({ threadId: defaultThreadId }),
+            client[WS_METHODS.browserDispatchInput]({
+              threadId: defaultThreadId,
+              targetId: "target-1",
+              event: {
+                _tag: "PointerDown",
+                x: 10,
+                y: 20,
+                button: "left",
+                clickCount: 1,
+              },
+            }),
           ),
         ),
       );
@@ -1945,7 +1955,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       if (error._tag === "EnvironmentAuthorizationError") {
         assert.equal(error.requiredScope, "browser:operate");
       }
-      assert.isFalse(getStateCalled);
+      assert.isFalse(dispatchInputCalled);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

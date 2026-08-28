@@ -232,6 +232,7 @@ export interface WsRpcClient {
     readonly openTab: RpcUnaryMethod<typeof WS_METHODS.browserOpenTab>;
     readonly navigate: RpcUnaryMethod<typeof WS_METHODS.browserNavigate>;
     readonly closeTab: RpcUnaryMethod<typeof WS_METHODS.browserCloseTab>;
+    readonly dispatchInput: RpcUnaryMethod<typeof WS_METHODS.browserDispatchInput>;
     readonly subscribeViewport: RpcInputStreamMethod<typeof WS_METHODS.browserSubscribeViewport>;
   };
   readonly projects: {
@@ -395,6 +396,8 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
       openTab: (input) => transport.request((client) => client[WS_METHODS.browserOpenTab](input)),
       navigate: (input) => transport.request((client) => client[WS_METHODS.browserNavigate](input)),
       closeTab: (input) => transport.request((client) => client[WS_METHODS.browserCloseTab](input)),
+      dispatchInput: (input) =>
+        transport.request((client) => client[WS_METHODS.browserDispatchInput](input)),
       subscribeViewport: (input, listener, options) =>
         transport.subscribe(
           (client) => client[WS_METHODS.browserSubscribeViewport](input),

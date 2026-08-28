@@ -5,6 +5,7 @@ import {
   BrowserOperationError,
   BrowserTabNotFound,
   type BrowserExecutableInfo,
+  type BrowserInputEvent,
   type BrowserOperationError as BrowserOperationErrorType,
   type BrowserTab,
   type BrowserTabNotFound as BrowserTabNotFoundType,
@@ -26,6 +27,12 @@ import {
   makeBrowserResolutionCandidates,
   resolveBrowserExecutable,
 } from "./BrowserExecutableResolver.ts";
+import {
+  BROWSER_INPUT_RATE_LIMIT,
+  BROWSER_INPUT_RATE_WINDOW_MS,
+  makeBrowserInputRateLimiter,
+  toBrowserCdpInputCommand,
+} from "./BrowserInput.ts";
 import { shouldBlockBrowserRequest } from "./NavigationGuard.ts";
 import { registerManagedChildProcess } from "../process/ManagedChildProcessRegistry.ts";
 import { terminateProcessTree } from "../process/ProcessTree.ts";
@@ -38,6 +45,8 @@ interface PageRuntime {
   readonly page: Page;
   readonly cdp: CDPSession;
   readonly targetId: string;
+  frameHeight: number;
+  frameWidth: number;
   screencasting: boolean;
 }
 
@@ -70,6 +79,10 @@ export interface BrowserRuntime {
   ) => Effect.Effect<void, BrowserOperationErrorType | BrowserTabNotFoundType>;
   readonly closeTab: (
     targetId: string,
+  ) => Effect.Effect<void, BrowserOperationErrorType | BrowserTabNotFoundType>;
+  readonly dispatchInput: (
+    targetId: string,
+    event: BrowserInputEvent,
   ) => Effect.Effect<void, BrowserOperationErrorType | BrowserTabNotFoundType>;
   readonly setScreencastEnabled: (
     enabled: boolean,
@@ -335,6 +348,7 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
 
   const pageRuntimes = new Map<string, PageRuntime>();
   const configuringPages = new WeakSet<Page>();
+  const inputRateLimiter = makeBrowserInputRateLimiter();
   let activeTargetId: string | undefined;
   let screencastEnabled = false;
 
@@ -437,6 +451,8 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
         page,
         cdp,
         targetId: target.targetInfo.targetId,
+        frameHeight: VIEWPORT_HEIGHT,
+        frameWidth: VIEWPORT_WIDTH,
         screencasting: false,
       };
       pageRuntimes.set(runtime.targetId, runtime);
@@ -475,12 +491,14 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
         void cdp
           .send("Page.screencastFrameAck", { sessionId: event.sessionId })
           .catch(() => undefined);
+        runtime.frameWidth = Math.max(0, Math.round(event.metadata.deviceWidth));
+        runtime.frameHeight = Math.max(0, Math.round(event.metadata.deviceHeight));
         if (!runtime.screencasting || runtime.targetId !== activeTargetId) return;
         input.callbacks.onFrame({
           targetId: runtime.targetId,
           dataBase64: event.data,
-          width: Math.max(0, Math.round(event.metadata.deviceWidth)),
-          height: Math.max(0, Math.round(event.metadata.deviceHeight)),
+          width: runtime.frameWidth,
+          height: runtime.frameHeight,
         });
       });
       yield* Effect.all([
@@ -565,6 +583,41 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
       input.callbacks.onCdpActivity();
     });
 
+  const dispatchInputUnlocked = (targetId: string, event: BrowserInputEvent) =>
+    Effect.gen(function* () {
+      const runtime = yield* lookupTab(targetId);
+      if (activeTargetId !== targetId) {
+        return yield* operationError(
+          input.threadId,
+          `Browser input target ${targetId} is not the active tab.`,
+          { activeTargetId },
+        );
+      }
+      if (!inputRateLimiter.tryAcquire()) {
+        return yield* operationError(
+          input.threadId,
+          `Browser input exceeded ${BROWSER_INPUT_RATE_LIMIT} events per second.`,
+          { limit: BROWSER_INPUT_RATE_LIMIT, windowMs: BROWSER_INPUT_RATE_WINDOW_MS },
+        );
+      }
+
+      const command = toBrowserCdpInputCommand(event, {
+        width: runtime.frameWidth,
+        height: runtime.frameHeight,
+      });
+      yield* tryBrowserOperation(input.threadId, "Failed to dispatch browser input.", () => {
+        switch (command._tag) {
+          case "Mouse":
+            return runtime.cdp.send("Input.dispatchMouseEvent", command.params);
+          case "Key":
+            return runtime.cdp.send("Input.dispatchKeyEvent", command.params);
+          case "InsertText":
+            return runtime.cdp.send("Input.insertText", command.params);
+        }
+      });
+      input.callbacks.onCdpActivity();
+    });
+
   return {
     executable,
     processPid,
@@ -612,6 +665,7 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
           input.callbacks.onCdpActivity();
         }),
       ),
+    dispatchInput: (targetId, event) => serialized(dispatchInputUnlocked(targetId, event)),
     setScreencastEnabled: (enabled) =>
       serialized(
         Effect.gen(function* () {
