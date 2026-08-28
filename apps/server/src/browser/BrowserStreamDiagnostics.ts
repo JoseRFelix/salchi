@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 
-import type { BrowserViewportFrame } from "@salchi/contracts";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 
@@ -18,7 +17,7 @@ export interface BrowserEventLoopLagSample {
   readonly p99Millis: number;
 }
 
-const frameTimings = new WeakMap<BrowserViewportFrame, BrowserFrameTiming>();
+const frameTimings = new WeakMap<object, BrowserFrameTiming>();
 
 export function browserStreamDebugEnabled(): boolean {
   return process.env.SALCHI_BROWSER_STREAM_DEBUG === "1";
@@ -28,14 +27,11 @@ export function browserMonotonicMillis(): number {
   return performance.now();
 }
 
-export function recordBrowserFrameTiming(
-  frame: BrowserViewportFrame,
-  timing: BrowserFrameTiming,
-): void {
+export function recordBrowserFrameTiming(frame: object, timing: BrowserFrameTiming): void {
   frameTimings.set(frame, timing);
 }
 
-export function getBrowserFrameTiming(frame: BrowserViewportFrame): BrowserFrameTiming | undefined {
+export function getBrowserFrameTiming(frame: object): BrowserFrameTiming | undefined {
   return frameTimings.get(frame);
 }
 

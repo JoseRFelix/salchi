@@ -3,7 +3,6 @@ import {
   ThreadId,
   type BrowserRpcError,
   type BrowserTab,
-  type BrowserViewportFrame,
 } from "@salchi/contracts";
 import {
   BROWSER_STREAM_UNKNOWN_TAB_INDEX,
@@ -31,6 +30,7 @@ import {
 } from "../BrowserStreamDiagnostics.ts";
 import { BrowserSessionManager } from "../Services/BrowserSessionManager.ts";
 import type { BrowserSessionManagerShape } from "../Services/BrowserSessionManager.ts";
+import type { BrowserBinaryViewportFrame } from "../LatestViewportMailbox.ts";
 
 export const BROWSER_STREAM_ROUTE = "/browser-stream/:threadId";
 
@@ -134,7 +134,7 @@ export function runBrowserStreamConnection(input: {
       let tabs: ReadonlyArray<BrowserTab> = [];
 
       const viewportEvents = input.browserManager
-        .subscribeViewport(input.threadId, "binary-surface")
+        .subscribeViewportBinary(input.threadId, "binary-surface")
         .pipe(Stream.map((event) => ({ _tag: "Viewport" as const, event })));
       const agentActivityEvents = input.browserManager
         .subscribeAgentActivity(input.threadId)
@@ -156,7 +156,7 @@ export function runBrowserStreamConnection(input: {
             return outbox.offerMeta("status", encodeBrowserStreamMeta(event));
           }
 
-          const frame = event satisfies BrowserViewportFrame;
+          const frame = event satisfies BrowserBinaryViewportFrame;
           const handlerStartedAt = streamDebug ? browserMonotonicMillis() : 0;
           const timing = streamDebug
             ? (getBrowserFrameTiming(frame) ??
@@ -178,7 +178,7 @@ export function runBrowserStreamConnection(input: {
                 width: frame.width,
                 height: frame.height,
                 tabIndexHint: tabIndexHint(tabs, frame.targetId),
-                jpegBytes: Buffer.from(frame.dataBase64, "base64"),
+                jpegBytes: frame.jpegBytes,
               }),
               ...timing,
               seq: frame.seq,

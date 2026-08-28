@@ -76,7 +76,7 @@ export interface BrowserRuntimeCallbacks {
   readonly onCdpActivity: () => void;
   readonly onFrame: (frame: {
     readonly targetId: string;
-    readonly dataBase64: string;
+    readonly jpegBytes: Uint8Array;
     readonly width: number;
     readonly height: number;
     readonly receivedAtMonotonicMillis: number;
@@ -607,7 +607,9 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
         if (!runtime.screencasting || runtime.targetId !== activeTargetId) return;
         input.callbacks.onFrame({
           targetId: runtime.targetId,
-          dataBase64: event.data,
+          // CDP is the sole base64 boundary on the binary hot path. Decode at
+          // receipt and retain bytes through the mailbox and raw socket write.
+          jpegBytes: Buffer.from(event.data, "base64"),
           width: runtime.frameWidth,
           height: runtime.frameHeight,
           receivedAtMonotonicMillis: cdpReceivedAtMonotonicMillis,

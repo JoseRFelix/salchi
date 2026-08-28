@@ -1,4 +1,4 @@
-import { ThreadId, type BrowserViewportFrame } from "@salchi/contracts";
+import { ThreadId } from "@salchi/contracts";
 import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -6,16 +6,19 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 
-import { makeLatestViewportMailbox } from "./LatestViewportMailbox.ts";
+import {
+  makeLatestViewportMailbox,
+  type BrowserBinaryViewportFrame,
+} from "./LatestViewportMailbox.ts";
 
 const threadId = ThreadId.make("viewport-mailbox-test");
 
-function frame(seq: number): BrowserViewportFrame {
+function frame(seq: number): BrowserBinaryViewportFrame {
   return {
     _tag: "Frame",
     threadId,
     targetId: "target-1",
-    dataBase64: `frame-${seq}`,
+    jpegBytes: Uint8Array.of(seq),
     width: 800,
     height: 600,
     seq,
@@ -30,13 +33,13 @@ it.effect("keeps only the latest screencast frame for a slow subscriber", () =>
       for (let seq = 1; seq <= 100; seq += 1) mailbox.publishFrame(frame(seq));
 
       const frames = yield* mailbox.stream.pipe(
-        Stream.filter((event): event is BrowserViewportFrame => event._tag === "Frame"),
+        Stream.filter((event): event is BrowserBinaryViewportFrame => event._tag === "Frame"),
         Stream.take(1),
         Stream.runCollect,
       );
       assert.equal(frames.length, 1);
       assert.equal(frames[0]?.seq, 100);
-      assert.equal(frames[0]?.dataBase64, "frame-100");
+      assert.deepEqual(frames[0]?.jpegBytes, Uint8Array.of(100));
     }),
   ),
 );

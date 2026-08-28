@@ -592,6 +592,7 @@ const buildAppUnderTest = (options?: {
       agentConnectionClosed: () => Effect.void,
       getCdpWebSocketUrl: () => Effect.die("No browser CDP endpoint configured for this test"),
       subscribeViewport: () => Stream.empty,
+      subscribeViewportBinary: () => Stream.empty,
       subscribeAgentActivity: () => Stream.make(false).pipe(Stream.concat(Stream.never)),
       ...options?.layers?.browserSessionManager,
     });
@@ -2183,7 +2184,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 targetId,
                 tag: event._tag,
               }).pipe(Effect.asVoid),
-            subscribeViewport: (threadId) =>
+            subscribeViewportBinary: (threadId) =>
               Stream.fromEffect(Deferred.succeed(subscribed, threadId)).pipe(
                 Stream.flatMap(() =>
                   Stream.make({

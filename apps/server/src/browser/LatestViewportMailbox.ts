@@ -1,8 +1,9 @@
 import type {
   BrowserSessionStatus,
   BrowserTab,
-  BrowserViewportEvent,
-  BrowserViewportFrame,
+  BrowserViewportStatus,
+  BrowserViewportTabs,
+  BrowserViewportFrame as LegacyBrowserViewportFrame,
   ThreadId,
 } from "@salchi/contracts";
 import * as Effect from "effect/Effect";
@@ -15,9 +16,25 @@ interface VersionedViewportState {
   readonly statusRevision: number;
   readonly tabs: ReadonlyArray<BrowserTab>;
   readonly tabsRevision: number;
-  readonly frame: BrowserViewportFrame | undefined;
+  readonly frame: BrowserBinaryViewportFrame | undefined;
   readonly frameRevision: number;
 }
+
+export interface BrowserBinaryViewportFrame {
+  readonly _tag: "Frame";
+  readonly threadId: ThreadId;
+  readonly targetId: string;
+  readonly jpegBytes: Uint8Array;
+  readonly width: number;
+  readonly height: number;
+  readonly seq: number;
+  readonly capturedAt: LegacyBrowserViewportFrame["capturedAt"];
+}
+
+export type BrowserBinaryViewportEvent =
+  | BrowserBinaryViewportFrame
+  | BrowserViewportTabs
+  | BrowserViewportStatus;
 
 interface SeenViewportRevisions {
   readonly status: number;
@@ -28,8 +45,8 @@ interface SeenViewportRevisions {
 export interface LatestViewportMailbox {
   readonly publishStatus: (status: BrowserSessionStatus, error?: string) => void;
   readonly publishTabs: (tabs: ReadonlyArray<BrowserTab>) => void;
-  readonly publishFrame: (frame: BrowserViewportFrame) => void;
-  readonly stream: Stream.Stream<BrowserViewportEvent>;
+  readonly publishFrame: (frame: BrowserBinaryViewportFrame) => void;
+  readonly stream: Stream.Stream<BrowserBinaryViewportEvent>;
 }
 
 export const makeLatestViewportMailbox = Effect.fn("viewportMailbox.make")(function* (
@@ -84,7 +101,7 @@ export const makeLatestViewportMailbox = Effect.fn("viewportMailbox.make")(funct
     signal();
   };
 
-  const publishFrame = (frame: BrowserViewportFrame) => {
+  const publishFrame = (frame: BrowserBinaryViewportFrame) => {
     revision += 1;
     state = {
       ...state,
@@ -99,7 +116,7 @@ export const makeLatestViewportMailbox = Effect.fn("viewportMailbox.make")(funct
     Stream.mapAccum(
       (): SeenViewportRevisions => ({ status: 0, tabs: 0, frame: 0 }),
       (seen, snapshot) => {
-        const events: BrowserViewportEvent[] = [];
+        const events: BrowserBinaryViewportEvent[] = [];
         if (snapshot.statusRevision > seen.status) {
           events.push({
             _tag: "Status",

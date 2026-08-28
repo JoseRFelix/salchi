@@ -104,7 +104,8 @@ the previous value: the newest frame wins and no frame queue exists in the brows
 ```text
 Page.screencastFrame (base64 from CDP)
   -> immediate Page.screencastFrameAck
-  -> latest-value mailbox (replace stale frame)
+  -> decode once to JPEG bytes
+  -> latest-value binary mailbox (replace stale frame)
   -> per-connection outbox (one writing + one newest pending)
   -> raw JPEG browser-stream FRAME
   -> Blob/createImageBitmap
@@ -113,8 +114,9 @@ Page.screencastFrame (base64 from CDP)
 
 The first subscriber starts the screencast. The last release stops it but leaves Chromium running.
 Frames never enter Zustand, client persistence, orchestration events, or SQLite. The original
-`browser.subscribeViewport` Effect RPC stream remains a compatibility API and still carries base64
-JPEG in JSON; the web application uses the raw browser stream for frames and metadata.
+`browser.subscribeViewport` Effect RPC stream remains a compatibility API and re-encodes base64
+JPEG only at that legacy edge; the binary mailbox-to-socket hot path never re-encodes or decodes.
+The web application uses the raw browser stream for frames and metadata.
 
 ## Public browser stream
 

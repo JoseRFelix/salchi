@@ -13,7 +13,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
-import type { BrowserRuntime } from "../PlaywrightBrowserRuntime.ts";
+import type { BrowserRuntime, BrowserRuntimeCallbacks } from "../PlaywrightBrowserRuntime.ts";
 import type { BrowserSessionManagerShape } from "../Services/BrowserSessionManager.ts";
 import {
   makeBrowserSessionManagerWithOptions,
@@ -130,6 +130,62 @@ it.effect("starts screencasting for a subscriber and stops it when the stream is
       assert.deepEqual(calls, [true, false]);
     }),
   ),
+);
+
+it.effect(
+  "keeps screencast bytes binary internally and base64-encodes only at the legacy edge",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let callbacks: BrowserRuntimeCallbacks | undefined;
+        const manager = yield* makeBrowserSessionManagerWithOptions(
+          managerOptions((input) =>
+            Effect.sync(() => {
+              callbacks = input.callbacks;
+              return fakeRuntime();
+            }),
+          ),
+        );
+        yield* manager.start(threadId);
+
+        const binaryFrames = yield* manager
+          .subscribeViewportBinary(threadId, "binary-surface")
+          .pipe(
+            Stream.filter((event) => event._tag === "Frame"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
+          );
+        yield* Effect.yieldNow;
+        const jpegBytes = Uint8Array.of(0xff, 0xd8, 1, 2, 0xff, 0xd9);
+        callbacks?.onFrame({
+          targetId: "target-1",
+          jpegBytes,
+          width: 800,
+          height: 600,
+          receivedAtMonotonicMillis: 1,
+        });
+        const binaryFrame = Array.from(yield* Fiber.join(binaryFrames))[0];
+        assert.strictEqual(binaryFrame?.jpegBytes, jpegBytes);
+
+        const legacyFrames = yield* manager.subscribeViewport(threadId).pipe(
+          Stream.filter((event) => event._tag === "Frame"),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        yield* Effect.yieldNow;
+        callbacks?.onFrame({
+          targetId: "target-1",
+          jpegBytes,
+          width: 800,
+          height: 600,
+          receivedAtMonotonicMillis: 2,
+        });
+        const legacyFrame = Array.from(yield* Fiber.join(legacyFrames))[0];
+        assert.equal(legacyFrame?.dataBase64, Buffer.from(jpegBytes).toString("base64"));
+      }),
+    ),
 );
 
 it.effect("navigates the requested tab through the running browser runtime", () =>

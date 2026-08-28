@@ -58,6 +58,10 @@ import {
   type PlaywrightBrowserLaunchInput,
 } from "../PlaywrightBrowserRuntime.ts";
 import { makeLatestViewportMailbox, type LatestViewportMailbox } from "../LatestViewportMailbox.ts";
+import type {
+  BrowserBinaryViewportEvent,
+  BrowserBinaryViewportFrame,
+} from "../LatestViewportMailbox.ts";
 import {
   BrowserSessionManager,
   type BrowserSessionManagerShape,
@@ -160,14 +164,14 @@ function stateForRequestedThread(
   return state.threadId === requestedThreadId ? state : { ...state, threadId: requestedThreadId };
 }
 
-function viewportEventForRequestedThread(
-  event: BrowserViewportEvent,
+function binaryViewportEventForRequestedThread(
+  event: BrowserBinaryViewportEvent,
   requestedThreadId: ThreadId,
-): BrowserViewportEvent {
+): BrowserBinaryViewportEvent {
   if (event.threadId === requestedThreadId) return event;
   switch (event._tag) {
     case "Frame": {
-      const requestedFrame: BrowserViewportFrame = {
+      const requestedFrame: BrowserBinaryViewportFrame = {
         ...event,
         threadId: requestedThreadId,
       };
@@ -180,6 +184,23 @@ function viewportEventForRequestedThread(
     case "Status":
       return { ...event, threadId: requestedThreadId };
   }
+}
+
+function legacyViewportEvent(event: BrowserBinaryViewportEvent): BrowserViewportEvent {
+  if (event._tag !== "Frame") return event;
+  const frame: BrowserViewportFrame = {
+    _tag: "Frame",
+    threadId: event.threadId,
+    targetId: event.targetId,
+    dataBase64: Buffer.from(event.jpegBytes).toString("base64"),
+    width: event.width,
+    height: event.height,
+    seq: event.seq,
+    capturedAt: event.capturedAt,
+  };
+  const timing = getBrowserFrameTiming(event);
+  if (timing !== undefined) recordBrowserFrameTiming(frame, timing);
+  return frame;
 }
 
 function makeOperationError(threadId: ThreadId, message: string, cause?: unknown) {
@@ -453,12 +474,12 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
           _tag: "Frame",
           threadId: input.threadId,
           targetId: frame.targetId,
-          dataBase64: frame.dataBase64,
+          jpegBytes: frame.jpegBytes,
           width: frame.width,
           height: frame.height,
           seq: input.lifecycle.frameSequence,
           capturedAt: DateTime.nowUnsafe(),
-        } satisfies BrowserViewportFrame;
+        } satisfies BrowserBinaryViewportFrame;
         const mailboxPublishedAtMonotonicMillis = streamDebug ? browserMonotonicMillis() : 0;
         if (streamDebug) {
           recordBrowserFrameTiming(viewportFrame, {
@@ -936,7 +957,7 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
       );
     });
 
-  const subscribeViewport: BrowserSessionManagerShape["subscribeViewport"] = (
+  const subscribeViewportBinary: BrowserSessionManagerShape["subscribeViewportBinary"] = (
     threadId,
     leaseKind = "legacy-rpc-surface",
   ) =>
@@ -951,7 +972,12 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
           ({ leaseId, rootThreadId }) => releaseSubscriber(rootThreadId, leaseId),
         ),
       ).pipe(Stream.flatMap(({ mailbox }) => mailbox.stream)),
-    ).pipe(Stream.map((event) => viewportEventForRequestedThread(event, threadId)));
+    ).pipe(Stream.map((event) => binaryViewportEventForRequestedThread(event, threadId)));
+
+  const subscribeViewport: BrowserSessionManagerShape["subscribeViewport"] = (
+    threadId,
+    leaseKind = "legacy-rpc-surface",
+  ) => subscribeViewportBinary(threadId, leaseKind).pipe(Stream.map(legacyViewportEvent));
 
   const checkViewportLeaseInvariants = Effect.gen(function* () {
     const now = browserMonotonicMillis();
@@ -1015,6 +1041,7 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
     closeTab,
     dispatchInput,
     subscribeViewport,
+    subscribeViewportBinary,
     subscribeAgentActivity,
   } satisfies BrowserSessionManagerShape;
 });

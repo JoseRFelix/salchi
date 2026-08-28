@@ -10,6 +10,8 @@ import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 
+import type { BrowserBinaryViewportEvent } from "../LatestViewportMailbox.ts";
+
 export interface BrowserSessionManagerShape {
   readonly resolveRootThreadId?: (threadId: ThreadId) => Effect.Effect<ThreadId, BrowserRpcError>;
   readonly start: (threadId: ThreadId) => Effect.Effect<BrowserSessionState, BrowserRpcError>;
@@ -57,6 +59,10 @@ export interface BrowserSessionManagerShape {
     threadId: ThreadId,
     leaseKind?: BrowserViewportLeaseKind,
   ) => Stream.Stream<BrowserViewportEvent, BrowserRpcError>;
+  readonly subscribeViewportBinary: (
+    threadId: ThreadId,
+    leaseKind?: BrowserViewportLeaseKind,
+  ) => Stream.Stream<BrowserBinaryViewportEvent, BrowserRpcError>;
   readonly subscribeAgentActivity: (threadId: ThreadId) => Stream.Stream<boolean, BrowserRpcError>;
 }
 
