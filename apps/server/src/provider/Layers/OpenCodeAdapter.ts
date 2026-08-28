@@ -110,6 +110,7 @@ export interface OpenCodeAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly acquireBrowserAgentSessionAccess?: AcquireBrowserAgentSessionAccess;
+  readonly browserAgentAccessEnabled?: Effect.Effect<boolean>;
 }
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -1042,6 +1043,17 @@ export function makeOpenCodeAdapter(
         if (existing) {
           yield* stopOpenCodeContext(existing);
           sessions.delete(input.threadId);
+        }
+
+        if (
+          serverUrl.trim().length > 0 &&
+          options?.browserAgentAccessEnabled !== undefined &&
+          (yield* options.browserAgentAccessEnabled)
+        ) {
+          yield* Effect.logDebug(
+            "Remote OpenCode does not support automatic Salchi browser agent access",
+            { threadId: input.threadId, providerInstanceId: boundInstanceId },
+          );
         }
 
         const started = yield* Effect.gen(function* () {

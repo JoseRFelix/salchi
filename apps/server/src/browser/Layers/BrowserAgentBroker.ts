@@ -501,6 +501,7 @@ export const makeBrowserAgentBrokerWithOptions = Effect.fn("browserAgentBroker.m
 
     return {
       port: brokerPort,
+      isAccessEnabled: options.accessEnabled,
       acquireSessionAccess,
     } satisfies BrowserAgentBrokerShape;
   },

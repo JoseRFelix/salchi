@@ -7,6 +7,7 @@ import type { BrowserAgentSessionAccess } from "../BrowserAgentAccess.ts";
 
 export interface BrowserAgentBrokerShape {
   readonly port: number;
+  readonly isAccessEnabled: Effect.Effect<boolean>;
   readonly acquireSessionAccess: (threadId: ThreadId) => Effect.Effect<BrowserAgentSessionAccess>;
 }
 
@@ -17,6 +18,7 @@ export class BrowserAgentBroker extends Context.Service<
 
 export const BrowserAgentBrokerDisabled = Layer.succeed(BrowserAgentBroker, {
   port: 0,
+  isAccessEnabled: Effect.succeed(false),
   acquireSessionAccess: () =>
     Effect.succeed({
       environment: {},

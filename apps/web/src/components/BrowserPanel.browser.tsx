@@ -91,6 +91,7 @@ function createBrowserClient() {
 }
 
 function Panel(props: {
+  readonly agentAccessNotice?: string;
   readonly onClose?: () => void;
   readonly state?: ReturnType<typeof viewportState>;
   readonly threadId: ThreadId;
@@ -108,6 +109,9 @@ function Panel(props: {
   }, [props.visible, state.authorization, streamLease]);
   return (
     <BrowserPanel
+      {...(props.agentAccessNotice === undefined
+        ? {}
+        : { agentAccessNotice: props.agentAccessNotice })}
       environmentId={ENVIRONMENT_ID}
       mode="sidebar"
       onClose={props.onClose ?? vi.fn()}
@@ -559,6 +563,24 @@ describe("BrowserPanel subscription visibility", () => {
     try {
       await expect.element(page.getByText("Owner access required")).toBeVisible();
       expect(createBrowserStreamConnectionMock).not.toHaveBeenCalled();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("surfaces the remote OpenCode agent-access limitation", async () => {
+    const screen = await render(
+      <Panel
+        agentAccessNotice="Agent browser control unavailable for remote OpenCode"
+        threadId={THREAD_A}
+        visible
+      />,
+    );
+
+    try {
+      await expect
+        .element(page.getByText("Agent browser control unavailable for remote OpenCode"))
+        .toBeVisible();
     } finally {
       await screen.unmount();
     }

@@ -233,7 +233,9 @@ browser MCP/instruction, and starts the provider normally. Registration uses the
   `CODEX_HOME`;
 - Cursor/Grok: ACP `mcpServers` for new and loaded sessions, beside `SalchiAcpMcpServer`;
 - local OpenCode: per-process `OPENCODE_CONFIG_CONTENT`; externally hosted OpenCode is unsupported
-  because Salchi does not own its process configuration.
+  because Salchi does not own its process configuration. When agent access is enabled, a remote
+  OpenCode session logs this limitation at debug level and the Browser panel shows a one-line
+  notice instead of silently implying that the remote agent received browser tools.
 
 Registration, the behavioral instruction, and proxy environment injection are all setting-gated
 and repeat on recovery/resume paths. Custom provider setups may use the injected URL directly. The
@@ -295,4 +297,5 @@ gain is on a high-RTT phone-to-VPS path.
   and transfers in place between those surfaces.
 - The loopback CDP token is a bearer secret rather than an OS-user-bound credential, as described in
   the proxy security model above.
-- Automatic MCP registration is unavailable for remotely managed OpenCode servers.
+- Automatic MCP registration is unavailable for remotely managed OpenCode servers; this is shown
+  in the Browser panel and logged at remote session start when browser agent access is enabled.

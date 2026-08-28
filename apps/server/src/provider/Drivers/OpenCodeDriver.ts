@@ -136,6 +136,7 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
         instanceId,
         environment: processEnv,
         acquireBrowserAgentSessionAccess: browserAgentBroker.acquireSessionAccess,
+        browserAgentAccessEnabled: browserAgentBroker.isAccessEnabled,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       });
       const textGeneration = yield* makeOpenCodeTextGeneration(effectiveConfig, processEnv);

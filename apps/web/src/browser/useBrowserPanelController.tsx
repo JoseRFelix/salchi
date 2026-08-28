@@ -61,6 +61,7 @@ function useDocumentVisible(): boolean {
 }
 
 export function useBrowserPanelController(input: {
+  readonly agentAccessNotice: string | null;
   readonly enabled: boolean;
   readonly environmentId: EnvironmentId;
   readonly showAgentPreview: boolean;
@@ -299,6 +300,7 @@ export function useBrowserPanelController(input: {
       onClose: close,
       render: (mode: "sheet" | "sidebar") => (
         <BrowserPanel
+          agentAccessNotice={input.agentAccessNotice}
           environmentId={input.environmentId}
           mode={mode}
           onClose={close}
@@ -312,6 +314,7 @@ export function useBrowserPanelController(input: {
     }),
     [
       close,
+      input.agentAccessNotice,
       input.enabled,
       input.environmentId,
       input.threadId,

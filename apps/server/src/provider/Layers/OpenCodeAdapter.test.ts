@@ -7,7 +7,9 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
+import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -268,6 +270,7 @@ const makeOpenCodeAdapterTestLayer = (
   Layer.effect(
     OpenCodeAdapter,
     makeOpenCodeAdapter(settings, {
+      browserAgentAccessEnabled: Effect.succeed(options?.browserAccessEnabled !== false),
       acquireBrowserAgentSessionAccess: (threadId) =>
         Effect.sync(() => {
           runtimeMock.state.browserAccessCalls.push(threadId);
@@ -386,6 +389,43 @@ it.effect("omits local OpenCode browser MCP when agent access is disabled", () =
     );
   }).pipe(
     Effect.provide(makeOpenCodeAdapterTestLayer(localSettings, { browserAccessEnabled: false })),
+  );
+});
+
+it.effect("logs the remote OpenCode browser limitation only when agent access is enabled", () => {
+  const messages: string[] = [];
+  const logger = Logger.make(({ message }) => {
+    messages.push(String(message));
+  });
+  const startRemote = (browserAccessEnabled: boolean, threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+    }).pipe(
+      Effect.provide(
+        makeOpenCodeAdapterTestLayer(openCodeAdapterTestSettings, { browserAccessEnabled }),
+      ),
+    );
+
+  return Effect.gen(function* () {
+    yield* startRemote(true, asThreadId("thread-opencode-remote-enabled"));
+    assert.equal(
+      messages.some((message) =>
+        message.includes("Remote OpenCode does not support automatic Salchi browser agent access"),
+      ),
+      true,
+    );
+
+    messages.length = 0;
+    yield* startRemote(false, asThreadId("thread-opencode-remote-disabled"));
+    assert.deepEqual(messages, []);
+  }).pipe(
+    Effect.provideService(References.MinimumLogLevel, "Debug"),
+    Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
   );
 });
 

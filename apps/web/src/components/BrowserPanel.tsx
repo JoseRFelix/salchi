@@ -175,6 +175,7 @@ function BrowserNavigationButton(props: {
 }
 
 export function BrowserPanel(props: {
+  readonly agentAccessNotice?: string | null;
   readonly environmentId: EnvironmentId;
   readonly mode: Extract<DiffPanelMode, "sheet" | "sidebar">;
   readonly onClose: () => void;
@@ -1159,6 +1160,14 @@ export function BrowserPanel(props: {
           </Button>
         </div>
       </div>
+      {props.agentAccessNotice ? (
+        <div
+          className="shrink-0 border-b border-amber-500/20 bg-amber-500/8 px-3 py-1.5 text-amber-700 text-xs dark:text-amber-300"
+          role="note"
+        >
+          {props.agentAccessNotice}
+        </div>
+      ) : null}
       {content}
     </DiffPanelShell>
   );

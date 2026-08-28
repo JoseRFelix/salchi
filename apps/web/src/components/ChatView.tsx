@@ -121,6 +121,7 @@ import { buildTemporaryWorktreeBranchName } from "@salchi/shared/git";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useMobileEdgeSwipe } from "../hooks/useMobileEdgeSwipe";
 import { useBrowserPanelController } from "../browser/useBrowserPanelController";
+import { getRemoteOpenCodeBrowserNotice } from "../browser/remoteOpenCodeBrowserNotice";
 import { providerSupportsActiveTurnSteering } from "../providerTurnCapabilities";
 import { markRightPanelUsed, openRightPanel, useRegisterRightPanel } from "../rightPanelGesture";
 import { useRegisterPlanRightPanelContent } from "../rightPanelContentRegistry";
@@ -1031,14 +1032,19 @@ export default function ChatView(props: ChatViewProps) {
     [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
   );
   const isServerThread = routeKind === "server" && serverThread !== undefined;
+  const activeThread = isServerThread ? serverThread : localDraftThread;
+  const browserAgentAccessNotice = getRemoteOpenCodeBrowserNotice({
+    settings,
+    thread: isServerThread ? activeThread : null,
+  });
   const browserPanel = useBrowserPanelController({
+    agentAccessNotice: browserAgentAccessNotice,
     enabled: isServerThread,
     environmentId,
     showAgentPreview: settings.showBrowserAgentPreview,
     threadId,
     useSheet: shouldUsePlanSidebarSheet,
   });
-  const activeThread = isServerThread ? serverThread : localDraftThread;
   const isInitialThreadDetailLoading =
     routeKind === "server" &&
     shouldShowThreadDetailLoading(activeThread, {
