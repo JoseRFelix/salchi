@@ -90,4 +90,42 @@ describe("BrowserStreamOutbox", () => {
       expect(yield* Deferred.isDone(writeInterrupted)).toBe(true);
     }).pipe(Effect.scoped),
   );
+
+  it.effect("keeps only the newest metadata state per kind for a stalled consumer", () =>
+    Effect.gen(function* () {
+      const firstWriteStarted = yield* Deferred.make<void>();
+      const releaseFirstWrite = yield* Deferred.make<void>();
+      const received: number[] = [];
+      const outbox = yield* makeBrowserStreamOutbox<number, number, never, "tabs" | "status">({
+        getBufferedBytes: () => 0,
+        writeFrame: () => Effect.void,
+        writeMeta: (value) =>
+          Effect.gen(function* () {
+            received.push(value);
+            if (value === 0) {
+              yield* Deferred.succeed(firstWriteStarted, undefined);
+              yield* Deferred.await(releaseFirstWrite);
+            }
+          }),
+      });
+      const writer = yield* Effect.forkScoped(outbox.run);
+
+      yield* outbox.offerMeta("tabs", 0);
+      yield* Deferred.await(firstWriteStarted);
+      for (let value = 1; value <= 1_000; value += 1) {
+        yield* outbox.offerMeta("tabs", value);
+      }
+      yield* outbox.offerMeta("status", -1);
+      expect(yield* outbox.pendingMetaCount).toBe(2);
+
+      yield* Deferred.succeed(releaseFirstWrite, undefined);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      expect(received).toEqual([0, 1_000, -1]);
+      expect(yield* outbox.pendingMetaCount).toBe(0);
+      yield* Fiber.interrupt(writer);
+    }).pipe(Effect.scoped),
+  );
 });

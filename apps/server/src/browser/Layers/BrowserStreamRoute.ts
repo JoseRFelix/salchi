@@ -143,16 +143,17 @@ export function runBrowserStreamConnection(input: {
         Stream.runForEach((outboundEvent) => {
           if (outboundEvent._tag === "AgentActivity") {
             return outbox.offerMeta(
+              "activity",
               encodeBrowserStreamMeta({ agentActive: outboundEvent.agentActive }),
             );
           }
           const event = outboundEvent.event;
           if (event._tag === "Tabs") {
             tabs = event.tabs;
-            return outbox.offerMeta(encodeBrowserStreamMeta(event));
+            return outbox.offerMeta("tabs", encodeBrowserStreamMeta(event));
           }
           if (event._tag === "Status") {
-            return outbox.offerMeta(encodeBrowserStreamMeta(event));
+            return outbox.offerMeta("status", encodeBrowserStreamMeta(event));
           }
 
           const frame = event satisfies BrowserViewportFrame;

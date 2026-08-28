@@ -7,9 +7,10 @@ type OutboundMessage<TFrame, TMeta> =
   | { readonly _tag: "Frame"; readonly value: TFrame }
   | { readonly _tag: "Meta"; readonly value: TMeta };
 
-export interface BrowserStreamOutbox<TFrame, TMeta, E> {
+export interface BrowserStreamOutbox<TFrame, TMeta, E, TMetaKind extends PropertyKey = string> {
   readonly offerFrame: (frame: TFrame) => Effect.Effect<void>;
-  readonly offerMeta: (meta: TMeta) => Effect.Effect<void>;
+  readonly offerMeta: (kind: TMetaKind, meta: TMeta) => Effect.Effect<void>;
+  readonly pendingMetaCount: Effect.Effect<number>;
   readonly run: Effect.Effect<void, E>;
 }
 
@@ -22,33 +23,45 @@ export interface BrowserStreamOutboxOptions<TFrame, TMeta, E> {
 }
 
 /**
- * A connection-owned writer pump. META messages retain their order, while the
- * frame slot is overwritten on every offer. A slow socket can therefore have
- * one write in progress and one newest frame waiting, never a frame backlog.
+ * A connection-owned writer pump. Frames use one latest-wins slot and META uses
+ * one latest-wins slot per kind. A slow socket can therefore have one write in
+ * progress, one newest frame, and a fixed number of metadata states waiting.
  */
 export const makeBrowserStreamOutbox = Effect.fn("browserStream.outbox.make")(function* <
   TFrame,
   TMeta,
   E,
+  TMetaKind extends PropertyKey = string,
 >(options: BrowserStreamOutboxOptions<TFrame, TMeta, E>) {
   const wakeup = yield* Effect.acquireRelease(Queue.sliding<void>(1), Queue.shutdown);
   const threshold = options.bufferThresholdBytes ?? DEFAULT_BROWSER_STREAM_BUFFER_THRESHOLD_BYTES;
   let latestFrame: TFrame | undefined;
-  const metadata: TMeta[] = [];
+  let nextMetaOrder = 0;
+  const metadata = new Map<TMetaKind, { readonly order: number; readonly value: TMeta }>();
 
   const signal = Queue.offer(wakeup, undefined).pipe(Effect.asVoid);
   const offerFrame = (frame: TFrame) =>
     Effect.sync(() => {
       latestFrame = frame;
     }).pipe(Effect.andThen(signal));
-  const offerMeta = (meta: TMeta) =>
+  const offerMeta = (kind: TMetaKind, meta: TMeta) =>
     Effect.sync(() => {
-      metadata.push(meta);
+      metadata.set(kind, { order: ++nextMetaOrder, value: meta });
     }).pipe(Effect.andThen(signal));
 
   const takePending = Effect.sync((): OutboundMessage<TFrame, TMeta> | undefined => {
-    const meta = metadata.shift();
-    if (meta !== undefined) return { _tag: "Meta", value: meta };
+    let oldestKind: TMetaKind | undefined;
+    let oldest: { readonly order: number; readonly value: TMeta } | undefined;
+    for (const [kind, entry] of metadata) {
+      if (oldest === undefined || entry.order < oldest.order) {
+        oldestKind = kind;
+        oldest = entry;
+      }
+    }
+    if (oldestKind !== undefined && oldest !== undefined) {
+      metadata.delete(oldestKind);
+      return { _tag: "Meta", value: oldest.value };
+    }
     const frame = latestFrame;
     latestFrame = undefined;
     return frame === undefined ? undefined : { _tag: "Frame", value: frame };
@@ -74,5 +87,10 @@ export const makeBrowserStreamOutbox = Effect.fn("browserStream.outbox.make")(fu
 
   const run = Effect.forever(Queue.take(wakeup).pipe(Effect.andThen(drain)));
 
-  return { offerFrame, offerMeta, run } satisfies BrowserStreamOutbox<TFrame, TMeta, E>;
+  return {
+    offerFrame,
+    offerMeta,
+    pendingMetaCount: Effect.sync(() => metadata.size),
+    run,
+  } satisfies BrowserStreamOutbox<TFrame, TMeta, E, TMetaKind>;
 });
