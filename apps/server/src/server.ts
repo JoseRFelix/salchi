@@ -36,6 +36,7 @@ import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
 import { TerminalManagerLive } from "./terminal/Layers/Manager.ts";
+import { BrowserSessionManagerLive } from "./browser/Layers/BrowserSessionManager.ts";
 import * as GitManager from "./git/GitManager.ts";
 import { KeybindingsLive } from "./keybindings.ts";
 import { ServerRuntimeStartup, ServerRuntimeStartupLive } from "./serverRuntimeStartup.ts";
@@ -243,6 +244,8 @@ const CheckpointingLayerLive = Layer.empty.pipe(
 
 const TerminalLayerLive = TerminalManagerLive.pipe(Layer.provide(PtyAdapterLive));
 
+const BrowserLayerLive = BrowserSessionManagerLive.pipe(Layer.provide(OrchestrationLayerLive));
+
 const WorkspaceEntriesLayerLive = WorkspaceEntriesLive.pipe(
   Layer.provide(WorkspacePathsLive),
   Layer.provideMerge(VcsDriverRegistryLayerLive),
@@ -283,6 +286,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),
   Layer.provideMerge(TerminalLayerLive),
+  Layer.provideMerge(BrowserLayerLive),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(KeybindingsLive),
   Layer.provideMerge(
@@ -316,8 +320,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(RepositoryIdentityResolverLive),
   Layer.provideMerge(ServerEnvironmentLive),
   Layer.provideMerge(AuthLayerLive),
-  Layer.provideMerge(WebPushLayerLive),
-);
+).pipe(Layer.provideMerge(WebPushLayerLive));
 
 const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   // Misc.

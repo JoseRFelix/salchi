@@ -3,6 +3,7 @@ import {
   AuthAccessTokenResult,
   type AuthBearerBootstrapResult,
   AuthBrowserSessionResult,
+  type AuthClientMetadata,
   type AuthClientSession,
   type AuthBootstrapResult,
   type AuthEnvironmentScope,
@@ -104,7 +105,7 @@ export const makeServerAuth = Effect.gen(function* () {
         subject: session.subject,
         method: session.method,
         role: session.role,
-        scopes: new Set(scopesForSessionRole(session.role)),
+        scopes: new Set(session.scopes ?? scopesForSessionRole(session.role)),
         ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
       })),
       Effect.mapError(
@@ -216,54 +217,65 @@ export const makeServerAuth = Effect.gen(function* () {
         ),
       );
 
+  const exchangeBootstrapCredentialForBearerSessionWithScopes = (
+    credential: string,
+    requestMetadata: AuthClientMetadata,
+    requestedScopes?: ReadonlyArray<AuthEnvironmentScope>,
+  ) =>
+    bootstrapCredentials.consume(credential).pipe(
+      Effect.mapError(toBootstrapExchangeAuthError),
+      Effect.flatMap((grant) => {
+        const scopes = selectGrantedScopes({
+          role: grant.role,
+          ...(requestedScopes ? { requestedScopes } : {}),
+        });
+        return sessions
+          .issue({
+            method: "bearer-access-token",
+            subject: grant.subject,
+            role: grant.role,
+            scopes,
+            client: {
+              ...requestMetadata,
+              ...(grant.label ? { label: grant.label } : {}),
+            },
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new AuthError({
+                  message: "Failed to issue authenticated session.",
+                  cause,
+                }),
+            ),
+          );
+      }),
+      Effect.map(
+        (session) =>
+          ({
+            authenticated: true,
+            role: session.role,
+            scopes: session.scopes ?? scopesForSessionRole(session.role),
+            sessionMethod: "bearer-access-token",
+            expiresAt: DateTime.toUtc(session.expiresAt),
+            sessionToken: session.token,
+          }) satisfies AuthBearerBootstrapResult,
+      ),
+    );
+
   const exchangeBootstrapCredentialForBearerSession: ServerAuthShape["exchangeBootstrapCredentialForBearerSession"] =
     (credential, requestMetadata) =>
-      bootstrapCredentials.consume(credential).pipe(
-        Effect.mapError(toBootstrapExchangeAuthError),
-        Effect.flatMap((grant) =>
-          sessions
-            .issue({
-              method: "bearer-access-token",
-              subject: grant.subject,
-              role: grant.role,
-              client: {
-                ...requestMetadata,
-                ...(grant.label ? { label: grant.label } : {}),
-              },
-            })
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new AuthError({
-                    message: "Failed to issue authenticated session.",
-                    cause,
-                  }),
-              ),
-            ),
-        ),
-        Effect.map(
-          (session) =>
-            ({
-              authenticated: true,
-              role: session.role,
-              scopes: scopesForSessionRole(session.role),
-              sessionMethod: "bearer-access-token",
-              expiresAt: DateTime.toUtc(session.expiresAt),
-              sessionToken: session.token,
-            }) satisfies AuthBearerBootstrapResult,
-        ),
-      );
+      exchangeBootstrapCredentialForBearerSessionWithScopes(credential, requestMetadata);
 
   const exchangeBootstrapCredentialForAccessToken: ServerAuthShape["exchangeBootstrapCredentialForAccessToken"] =
     (credential, requestMetadata, requestedScopes) =>
-      exchangeBootstrapCredentialForBearerSession(credential, requestMetadata).pipe(
+      exchangeBootstrapCredentialForBearerSessionWithScopes(
+        credential,
+        requestMetadata,
+        requestedScopes,
+      ).pipe(
         Effect.flatMap((session) =>
           Effect.map(Clock.currentTimeMillis, (now) => {
-            const scopeInput = {
-              role: session.role,
-              ...(requestedScopes ? { requestedScopes } : {}),
-            };
-            const scopes = selectGrantedScopes(scopeInput);
             return {
               access_token: session.sessionToken,
               issued_token_type: AuthAccessTokenType,
@@ -272,7 +284,7 @@ export const makeServerAuth = Effect.gen(function* () {
                 0,
                 Math.floor((DateTime.toDate(session.expiresAt).getTime() - now) / 1000),
               ),
-              scope: encodeOAuthScope(scopes),
+              scope: encodeOAuthScope(session.scopes ?? scopesForSessionRole(session.role)),
             } satisfies AuthAccessTokenResult;
           }),
         ),
@@ -402,7 +414,7 @@ export const makeServerAuth = Effect.gen(function* () {
     );
 
   const issueWebSocketToken: ServerAuthShape["issueWebSocketToken"] = (session) =>
-    sessions.issueWebSocketToken(session.sessionId).pipe(
+    sessions.issueWebSocketToken(session.sessionId, { scopes: [...session.scopes] }).pipe(
       Effect.mapError(
         (cause) =>
           new AuthError({
@@ -444,7 +456,7 @@ export const makeServerAuth = Effect.gen(function* () {
               subject: session.subject,
               method: session.method,
               role: session.role,
-              scopes: new Set(scopesForSessionRole(session.role)),
+              scopes: new Set(session.scopes ?? scopesForSessionRole(session.role)),
               ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
             })),
             Effect.mapError(

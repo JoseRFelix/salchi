@@ -396,6 +396,7 @@ export const ObservabilitySettings = Schema.Struct({
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
 export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.seconds(30);
+export const DEFAULT_BROWSER_IDLE_TIMEOUT = Duration.minutes(15);
 
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -403,6 +404,10 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(
       Effect.succeed(Duration.toMillis(DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL)),
     ),
+  ),
+  browserExecutablePath: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  browserIdleTimeout: Schema.DurationFromMillis.pipe(
+    Schema.withDecodingDefault(Effect.succeed(Duration.toMillis(DEFAULT_BROWSER_IDLE_TIMEOUT))),
   ),
   defaultThreadEnvMode: ThreadEnvMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("local" as const satisfies ThreadEnvMode)),
@@ -538,6 +543,8 @@ export const ServerSettingsPatch = Schema.Struct({
   // Server settings
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
   automaticGitFetchInterval: Schema.optionalKey(Schema.DurationFromMillis),
+  browserExecutablePath: Schema.optionalKey(TrimmedString),
+  browserIdleTimeout: Schema.optionalKey(Schema.DurationFromMillis),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   transcriptionModel: Schema.optionalKey(TranscriptionModel),

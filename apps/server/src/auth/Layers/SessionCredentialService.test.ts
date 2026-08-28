@@ -103,6 +103,24 @@ it.layer(NodeServices.layer)("SessionCredentialServiceLive", (it) => {
     }).pipe(Effect.provide(Layer.merge(makeSessionCredentialLayer(), TestClock.layer()))),
   );
 
+  it.effect("preserves explicit scopes in session and websocket credentials", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionCredentialService;
+      const scopes = ["orchestration:read" as const];
+      const issued = yield* sessions.issue({
+        method: "bearer-access-token",
+        subject: "scoped-client",
+        scopes,
+      });
+      const verified = yield* sessions.verify(issued.token);
+      const websocket = yield* sessions.issueWebSocketToken(issued.sessionId, { scopes });
+      const verifiedWebsocket = yield* sessions.verifyWebSocketToken(websocket.token);
+
+      expect(verified.scopes).toEqual(scopes);
+      expect(verifiedWebsocket.scopes).toEqual(scopes);
+    }).pipe(Effect.provide(makeSessionCredentialLayer())),
+  );
+
   it.effect("lists active sessions, tracks connectivity, and revokes other sessions", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionCredentialService;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 
 import { ProviderInstanceId } from "./providerInstance.ts";
@@ -6,6 +7,7 @@ import {
   ClientSettingsSchema,
   CURRENT_CLIENT_SETTINGS_VERSION,
   DEFAULT_CLIENT_SETTINGS,
+  DEFAULT_BROWSER_IDLE_TIMEOUT,
   DEFAULT_SERVER_SETTINGS,
   ServerSettings,
   ServerSettingsPatch,
@@ -23,6 +25,25 @@ describe("ClientSettings defaults", () => {
     const legacySettings = decodeClientSettings({});
     expect(legacySettings.clientSettingsVersion).toBe(0);
     expect(legacySettings.autoOpenPlanSidebar).toBe(false);
+  });
+});
+
+describe("ServerSettings browser defaults", () => {
+  it("defaults to a 15-minute idle timeout and automatic executable resolution", () => {
+    const settings = decodeServerSettings({});
+    expect(Duration.toMillis(settings.browserIdleTimeout)).toBe(
+      Duration.toMillis(DEFAULT_BROWSER_IDLE_TIMEOUT),
+    );
+    expect(settings.browserExecutablePath).toBe("");
+  });
+
+  it("decodes browser setting patches with normalized paths and millisecond durations", () => {
+    const patch = decodeServerSettingsPatch({
+      browserExecutablePath: "  /opt/chrome  ",
+      browserIdleTimeout: 42_000,
+    });
+    expect(patch.browserExecutablePath).toBe("/opt/chrome");
+    expect(Duration.toMillis(patch.browserIdleTimeout!)).toBe(42_000);
   });
 });
 

@@ -3,6 +3,7 @@ import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import {
+  type BrowserSessionState,
   CommandId,
   DEFAULT_SERVER_SETTINGS,
   EMPTY_ORCHESTRATION_THREAD_DETAIL_PAGE_INFO,
@@ -112,6 +113,10 @@ import { ServerLifecycleEvents, type ServerLifecycleEventsShape } from "./server
 import { ServerRuntimeStartup, type ServerRuntimeStartupShape } from "./serverRuntimeStartup.ts";
 import { ServerSettingsService, type ServerSettingsShape } from "./serverSettings.ts";
 import { TerminalManager, type TerminalManagerShape } from "./terminal/Services/Manager.ts";
+import {
+  BrowserSessionManager,
+  type BrowserSessionManagerShape,
+} from "./browser/Services/BrowserSessionManager.ts";
 import {
   BrowserTraceCollector,
   type BrowserTraceCollectorShape,
@@ -362,6 +367,7 @@ const buildAppUnderTest = (options?: {
     vcsStatusBroadcaster?: Partial<VcsStatusBroadcaster.VcsStatusBroadcasterShape>;
     projectSetupScriptRunner?: Partial<ProjectSetupScriptRunnerShape>;
     terminalManager?: Partial<TerminalManagerShape>;
+    browserSessionManager?: Partial<BrowserSessionManagerShape>;
     orchestrationEngine?: Partial<OrchestrationEngineShape>;
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQueryShape>;
     checkpointDiffQuery?: Partial<CheckpointDiffQueryShape>;
@@ -555,6 +561,20 @@ const buildAppUnderTest = (options?: {
       updateProvider: () =>
         providerRegistryMock.getProviders.pipe(Effect.map((providers) => ({ providers }))),
       ...options?.layers?.providerMaintenanceRunner,
+    });
+    const browserState = (
+      threadId: BrowserSessionState["threadId"],
+      status: BrowserSessionState["status"],
+    ): BrowserSessionState => ({ threadId, status, tabs: [], executable: null });
+    const browserSessionManagerLayer = Layer.mock(BrowserSessionManager)({
+      start: (threadId) => Effect.succeed(browserState(threadId, "running")),
+      stop: (threadId) => Effect.succeed(browserState(threadId, "stopped")),
+      getState: (threadId) => Effect.succeed(browserState(threadId, "stopped")),
+      setActiveTab: (threadId) => Effect.succeed(browserState(threadId, "running")),
+      openTab: (threadId) => Effect.succeed(browserState(threadId, "running")),
+      closeTab: (threadId) => Effect.succeed(browserState(threadId, "running")),
+      subscribeViewport: () => Stream.empty,
+      ...options?.layers?.browserSessionManager,
     });
 
     const servedRoutesLayer = HttpRouter.serve(makeRoutesLayer, {
@@ -761,8 +781,11 @@ const buildAppUnderTest = (options?: {
       ),
       Layer.provide(WebPushServiceNoop),
     );
+    const browserServedRoutesLayer = servedRoutesLayer.pipe(
+      Layer.provide(browserSessionManagerLayer),
+    );
 
-    const appLayer = servedRoutesLayer.pipe(
+    const appLayer = browserServedRoutesLayer.pipe(
       Layer.provide(
         Layer.mock(BrowserTraceCollector)({
           record: () => Effect.void,
@@ -1860,6 +1883,50 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(response.environment.environmentId, testEnvironmentDescriptor.environmentId);
       assert.equal(response.auth.policy, "desktop-managed-local");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("enforces browser:operate on browser websocket RPCs", () =>
+    Effect.gen(function* () {
+      let getStateCalled = false;
+      yield* buildAppUnderTest({
+        layers: {
+          browserSessionManager: {
+            getState: (threadId) =>
+              Effect.sync(() => {
+                getStateCalled = true;
+                return { threadId, status: "stopped", tabs: [], executable: null };
+              }),
+          },
+        },
+      });
+
+      const tokenResponse = yield* HttpClient.post("/oauth/token", {
+        body: yield* HttpBody.json({
+          credential: defaultDesktopBootstrapToken,
+          scope: "orchestration:read",
+        }),
+      });
+      const tokenBody = (yield* tokenResponse.json) as { readonly access_token: string };
+      const ticketResponse = yield* HttpClient.post("/api/auth/websocket-ticket", {
+        headers: { authorization: `Bearer ${tokenBody.access_token}` },
+      });
+      const ticketBody = (yield* ticketResponse.json) as { readonly ticket: string };
+      const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?ticket=${encodeURIComponent(ticketBody.ticket)}`;
+
+      const error = yield* Effect.flip(
+        Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.browserGetState]({ threadId: defaultThreadId }),
+          ),
+        ),
+      );
+
+      assert.equal(error._tag, "EnvironmentAuthorizationError");
+      if (error._tag === "EnvironmentAuthorizationError") {
+        assert.equal(error.requiredScope, "browser:operate");
+      }
+      assert.isFalse(getStateCalled);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

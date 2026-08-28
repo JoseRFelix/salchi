@@ -3,7 +3,16 @@ import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
-import { AuthAccessStreamEvent } from "./auth.ts";
+import { AuthAccessStreamEvent, EnvironmentAuthorizationError } from "./auth.ts";
+import {
+  BrowserCloseTabInput,
+  BrowserOpenTabInput,
+  BrowserRpcError,
+  BrowserSessionState,
+  BrowserSetActiveTabInput,
+  BrowserThreadInput,
+  BrowserViewportEvent,
+} from "./browser.ts";
 import {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
@@ -181,6 +190,15 @@ export const WS_METHODS = {
   terminalSnapshot: "terminal.snapshot",
   terminalRestart: "terminal.restart",
   terminalClose: "terminal.close",
+
+  // Browser methods
+  browserStart: "browser.start",
+  browserStop: "browser.stop",
+  browserGetState: "browser.getState",
+  browserSetActiveTab: "browser.setActiveTab",
+  browserOpenTab: "browser.openTab",
+  browserCloseTab: "browser.closeTab",
+  browserSubscribeViewport: "browser.subscribeViewport",
 
   // Server meta
   serverGetConfig: "server.getConfig",
@@ -576,6 +594,51 @@ export const WsTerminalCloseRpc = Rpc.make(WS_METHODS.terminalClose, {
   error: TerminalError,
 });
 
+const BrowserAuthorizedRpcError = Schema.Union([BrowserRpcError, EnvironmentAuthorizationError]);
+
+export const WsBrowserStartRpc = Rpc.make(WS_METHODS.browserStart, {
+  payload: BrowserThreadInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserStopRpc = Rpc.make(WS_METHODS.browserStop, {
+  payload: BrowserThreadInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserGetStateRpc = Rpc.make(WS_METHODS.browserGetState, {
+  payload: BrowserThreadInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserSetActiveTabRpc = Rpc.make(WS_METHODS.browserSetActiveTab, {
+  payload: BrowserSetActiveTabInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserOpenTabRpc = Rpc.make(WS_METHODS.browserOpenTab, {
+  payload: BrowserOpenTabInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserCloseTabRpc = Rpc.make(WS_METHODS.browserCloseTab, {
+  payload: BrowserCloseTabInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserSubscribeViewportRpc = Rpc.make(WS_METHODS.browserSubscribeViewport, {
+  payload: BrowserThreadInput,
+  success: BrowserViewportEvent,
+  error: BrowserAuthorizedRpcError,
+  stream: true,
+});
+
 export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.dispatchCommand,
   {
@@ -737,6 +800,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsTerminalSnapshotRpc,
   WsTerminalRestartRpc,
   WsTerminalCloseRpc,
+  WsBrowserStartRpc,
+  WsBrowserStopRpc,
+  WsBrowserGetStateRpc,
+  WsBrowserSetActiveTabRpc,
+  WsBrowserOpenTabRpc,
+  WsBrowserCloseTabRpc,
+  WsBrowserSubscribeViewportRpc,
   WsSubscribeTerminalEventsRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,

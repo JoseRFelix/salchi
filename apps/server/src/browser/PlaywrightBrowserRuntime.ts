@@ -1,0 +1,532 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import { readlinkSync } from "node:fs";
+
+import {
+  BrowserOperationError,
+  BrowserTabNotFound,
+  type BrowserExecutableInfo,
+  type BrowserOperationError as BrowserOperationErrorType,
+  type BrowserTab,
+  type BrowserTabNotFound as BrowserTabNotFoundType,
+  type ThreadId,
+} from "@salchi/contracts";
+import * as Effect from "effect/Effect";
+import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type CDPSession,
+  type Page,
+} from "playwright-core";
+
+import {
+  makeBrowserResolutionCandidates,
+  resolveBrowserExecutable,
+} from "./BrowserExecutableResolver.ts";
+import { shouldBlockBrowserRequest } from "./NavigationGuard.ts";
+import { registerManagedChildProcess } from "../process/ManagedChildProcessRegistry.ts";
+import { terminateProcessTree } from "../process/ProcessTree.ts";
+
+const VIEWPORT_WIDTH = 800;
+const VIEWPORT_HEIGHT = 600;
+const SCREENCAST_QUALITY = 55;
+
+interface PageRuntime {
+  readonly page: Page;
+  readonly cdp: CDPSession;
+  readonly targetId: string;
+  screencasting: boolean;
+}
+
+export interface BrowserRuntimeCallbacks {
+  readonly onCdpActivity: () => void;
+  readonly onFrame: (frame: {
+    readonly targetId: string;
+    readonly dataBase64: string;
+    readonly width: number;
+    readonly height: number;
+  }) => void;
+  readonly onTabs: (tabs: ReadonlyArray<BrowserTab>) => void;
+  readonly onCrashed: (message: string) => void;
+}
+
+export interface BrowserRuntime {
+  readonly executable: BrowserExecutableInfo;
+  readonly processPid: number;
+  readonly getTabs: Effect.Effect<ReadonlyArray<BrowserTab>, BrowserOperationErrorType>;
+  readonly setActiveTab: (
+    targetId: string,
+  ) => Effect.Effect<void, BrowserOperationErrorType | BrowserTabNotFoundType>;
+  readonly openTab: (
+    url: string,
+  ) => Effect.Effect<void, BrowserOperationErrorType | BrowserTabNotFoundType>;
+  readonly closeTab: (
+    targetId: string,
+  ) => Effect.Effect<void, BrowserOperationErrorType | BrowserTabNotFoundType>;
+  readonly setScreencastEnabled: (
+    enabled: boolean,
+  ) => Effect.Effect<void, BrowserOperationErrorType>;
+}
+
+export interface PlaywrightBrowserLaunchInput {
+  readonly threadId: ThreadId;
+  readonly userDataDirectory: string;
+  readonly processRegistryDirectory: string;
+  readonly environmentExecutablePath?: string | undefined;
+  readonly settingExecutablePath?: string | undefined;
+  readonly noSandbox: boolean;
+  readonly serverHost?: string | undefined;
+  readonly serverPort: number;
+  readonly callbacks: BrowserRuntimeCallbacks;
+}
+
+function operationError(threadId: ThreadId, message: string, cause: unknown) {
+  return new BrowserOperationError({ threadId, message, cause });
+}
+
+function tryBrowserOperation<A>(
+  threadId: ThreadId,
+  message: string,
+  operation: () => Promise<A>,
+): Effect.Effect<A, BrowserOperationErrorType> {
+  return Effect.tryPromise({
+    try: operation,
+    catch: (cause) => operationError(threadId, message, cause),
+  });
+}
+
+function executablePathFromProcess(input: {
+  readonly pid: number;
+  readonly commandLine: string;
+  readonly fallback: string;
+}): string {
+  if (process.platform === "linux") {
+    try {
+      const executablePath = readlinkSync(`/proc/${input.pid}/exe`).trim();
+      if (executablePath) return executablePath;
+    } catch {
+      // Fall through to the CDP command line / resolution label.
+    }
+  }
+  const commandLine = input.commandLine.trim();
+  if (commandLine.startsWith('"')) {
+    const quoteEnd = commandLine.indexOf('"', 1);
+    if (quoteEnd > 1) return commandLine.slice(1, quoteEnd);
+  }
+  const firstToken = commandLine.split(/\s+/g)[0];
+  return firstToken || input.fallback;
+}
+
+export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(function* (
+  input: PlaywrightBrowserLaunchInput,
+) {
+  const sessionScope = yield* Scope.Scope;
+  const operationSemaphore = yield* Semaphore.make(1);
+  const runtimeContext = yield* Effect.context<never>();
+  const runFork = Effect.runForkWith(runtimeContext);
+  let closing = false;
+  let processPid: number | undefined;
+
+  if (input.noSandbox) {
+    yield* Effect.logWarning(
+      "SECURITY WARNING: Chromium sandbox disabled by SALCHI_BROWSER_NO_SANDBOX=1",
+      { threadId: input.threadId },
+    );
+  }
+
+  const candidates = makeBrowserResolutionCandidates({
+    environmentPath: input.environmentExecutablePath,
+    settingPath: input.settingExecutablePath,
+  });
+  const launched = yield* Effect.acquireRelease(
+    resolveBrowserExecutable({
+      candidates,
+      launch: (candidate) =>
+        Effect.tryPromise({
+          try: () =>
+            chromium.launchPersistentContext(input.userDataDirectory, {
+              ...candidate.launchOptions,
+              args: [
+                "--disable-dev-shm-usage",
+                "--remote-debugging-address=127.0.0.1",
+                ...(input.noSandbox ? ["--no-sandbox"] : []),
+              ],
+              chromiumSandbox: !input.noSandbox,
+              deviceScaleFactor: 1,
+              headless: true,
+              viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+            }),
+          catch: (cause) =>
+            operationError(
+              input.threadId,
+              `Failed to launch Chromium using ${candidate.source}:${candidate.resolution}.`,
+              cause,
+            ),
+        }),
+    }),
+    ({ value: context }) => {
+      closing = true;
+      return tryBrowserOperation(input.threadId, "Failed to close Chromium gracefully.", () =>
+        context.close({ reason: "Salchi browser session stopped" }),
+      ).pipe(
+        Effect.timeout("2 seconds"),
+        Effect.ignore,
+        Effect.andThen(
+          Effect.suspend(() =>
+            processPid === undefined
+              ? Effect.void
+              : terminateProcessTree({
+                  rootPid: processPid,
+                  label: `browser:${input.threadId}`,
+                }),
+          ),
+        ),
+        Effect.ignore,
+      );
+    },
+  );
+  const context: BrowserContext = launched.value;
+  const browser: Browser | null = context.browser();
+  if (browser === null) {
+    return yield* operationError(
+      input.threadId,
+      "Persistent Chromium context did not expose a browser process.",
+      null,
+    );
+  }
+
+  const browserCdp = yield* tryBrowserOperation(
+    input.threadId,
+    "Failed to attach to Chromium's browser CDP target.",
+    () => browser.newBrowserCDPSession(),
+  );
+  const [processes, systemInfo] = yield* Effect.all([
+    tryBrowserOperation(input.threadId, "Failed to inspect Chromium processes.", () =>
+      browserCdp.send("SystemInfo.getProcessInfo"),
+    ),
+    tryBrowserOperation(input.threadId, "Failed to inspect the Chromium executable.", () =>
+      browserCdp.send("SystemInfo.getInfo"),
+    ),
+  ]);
+  const browserProcess = processes.processInfo.find((entry) => entry.type === "browser");
+  if (browserProcess === undefined || browserProcess.id < 1) {
+    return yield* operationError(
+      input.threadId,
+      "Chromium did not report its browser process identifier.",
+      processes.processInfo,
+    );
+  }
+  processPid = browserProcess.id;
+  const executable: BrowserExecutableInfo = {
+    source: launched.candidate.source,
+    resolution: launched.candidate.resolution,
+    executablePath: executablePathFromProcess({
+      pid: processPid,
+      commandLine: systemInfo.commandLine,
+      fallback: launched.candidate.resolution,
+    }),
+  };
+
+  const terminateOwnedBrowser = tryBrowserOperation(
+    input.threadId,
+    "Failed to close Chromium gracefully.",
+    () => context.close({ reason: "Salchi browser session stopped" }),
+  ).pipe(
+    Effect.timeout("2 seconds"),
+    Effect.ignore,
+    Effect.andThen(
+      terminateProcessTree({ rootPid: processPid, label: `browser:${input.threadId}` }),
+    ),
+    Effect.ignore,
+  );
+  if (process.platform === "linux") {
+    yield* registerManagedChildProcess({
+      registryDirectory: input.processRegistryDirectory,
+      childPid: processPid,
+      terminate: Effect.sync(() => {
+        closing = true;
+      }).pipe(Effect.andThen(terminateOwnedBrowser)),
+    });
+  }
+
+  const pageRuntimes = new Map<string, PageRuntime>();
+  const configuringPages = new WeakSet<Page>();
+  let activeTargetId: string | undefined;
+  let screencastEnabled = false;
+
+  const schedule = <A, E>(effect: Effect.Effect<A, E>) => {
+    void runFork(effect.pipe(Effect.ignoreCause({ log: true }), Effect.forkIn(sessionScope)));
+  };
+  const serialized = <A, E>(effect: Effect.Effect<A, E>) => operationSemaphore.withPermit(effect);
+
+  const refreshTabsUnlocked = Effect.gen(function* () {
+    const tabs = yield* Effect.forEach(pageRuntimes.values(), (runtime) =>
+      tryBrowserOperation(
+        input.threadId,
+        "Failed to read browser tab metadata.",
+        async () =>
+          ({
+            targetId: runtime.targetId,
+            title: await runtime.page.title().catch(() => ""),
+            url: runtime.page.url(),
+            active: runtime.targetId === activeTargetId,
+          }) satisfies BrowserTab,
+      ),
+    );
+    input.callbacks.onTabs(tabs);
+    return tabs;
+  });
+
+  const stopScreencastUnlocked = (runtime: PageRuntime) =>
+    runtime.screencasting
+      ? tryBrowserOperation(input.threadId, "Failed to stop the browser screencast.", () =>
+          runtime.cdp.send("Page.stopScreencast"),
+        ).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              runtime.screencasting = false;
+            }),
+          ),
+          Effect.asVoid,
+        )
+      : Effect.void;
+
+  const startActiveScreencastUnlocked = Effect.gen(function* () {
+    if (!screencastEnabled || activeTargetId === undefined) return;
+    const runtime = pageRuntimes.get(activeTargetId);
+    if (runtime === undefined || runtime.screencasting) return;
+    yield* tryBrowserOperation(input.threadId, "Failed to focus the active browser tab.", () =>
+      runtime.page.bringToFront(),
+    );
+    yield* tryBrowserOperation(input.threadId, "Failed to start the browser screencast.", () =>
+      runtime.cdp.send("Page.startScreencast", {
+        format: "jpeg",
+        quality: SCREENCAST_QUALITY,
+        maxWidth: VIEWPORT_WIDTH,
+        everyNthFrame: 1,
+      }),
+    );
+    runtime.screencasting = true;
+    input.callbacks.onCdpActivity();
+  });
+
+  const removePageUnlocked = Effect.fn("browser.playwright.removePage")(function* (
+    targetId: string,
+  ) {
+    const runtime = pageRuntimes.get(targetId);
+    if (runtime === undefined) return;
+    pageRuntimes.delete(targetId);
+    if (activeTargetId === targetId) {
+      activeTargetId = pageRuntimes.keys().next().value;
+      yield* startActiveScreencastUnlocked;
+    }
+    yield* refreshTabsUnlocked.pipe(Effect.ignore);
+  });
+
+  const configurePageUnlocked = Effect.fn("browser.playwright.configurePage")(function* (
+    page: Page,
+  ): Effect.fn.Return<PageRuntime, BrowserOperationErrorType> {
+    const existing = [...pageRuntimes.values()].find((runtime) => runtime.page === page);
+    if (existing !== undefined) return existing;
+    if (configuringPages.has(page)) {
+      return yield* operationError(
+        input.threadId,
+        "Browser tab configuration was already in progress.",
+        page.url(),
+      );
+    }
+    configuringPages.add(page);
+
+    return yield* Effect.gen(function* () {
+      const cdp = yield* tryBrowserOperation(
+        input.threadId,
+        "Failed to attach to a browser tab CDP target.",
+        () => context.newCDPSession(page),
+      );
+      const target = yield* tryBrowserOperation(
+        input.threadId,
+        "Failed to identify a browser tab CDP target.",
+        () => cdp.send("Target.getTargetInfo"),
+      );
+      const runtime: PageRuntime = {
+        page,
+        cdp,
+        targetId: target.targetInfo.targetId,
+        screencasting: false,
+      };
+      pageRuntimes.set(runtime.targetId, runtime);
+      if (activeTargetId === undefined) activeTargetId = runtime.targetId;
+
+      cdp.on("Fetch.requestPaused", (event) => {
+        input.callbacks.onCdpActivity();
+        const blocked = shouldBlockBrowserRequest({
+          url: event.request.url,
+          serverHost: input.serverHost,
+          serverPort: input.serverPort,
+        });
+        if (blocked) {
+          schedule(
+            Effect.logInfo("Blocked browser request", {
+              threadId: input.threadId,
+              targetId: runtime.targetId,
+              url: event.request.url,
+            }),
+          );
+          void cdp
+            .send("Fetch.failRequest", {
+              requestId: event.requestId,
+              errorReason: "BlockedByClient",
+            })
+            .catch(() => undefined);
+          return;
+        }
+        void cdp
+          .send("Fetch.continueRequest", { requestId: event.requestId })
+          .catch(() => undefined);
+      });
+      cdp.on("Page.screencastFrame", (event) => {
+        // Start the ACK before doing any publication work. The browser must
+        // never wait for websocket consumers before it can produce the next frame.
+        void cdp
+          .send("Page.screencastFrameAck", { sessionId: event.sessionId })
+          .catch(() => undefined);
+        if (!runtime.screencasting || runtime.targetId !== activeTargetId) return;
+        input.callbacks.onFrame({
+          targetId: runtime.targetId,
+          dataBase64: event.data,
+          width: Math.max(0, Math.round(event.metadata.deviceWidth)),
+          height: Math.max(0, Math.round(event.metadata.deviceHeight)),
+        });
+      });
+      yield* Effect.all([
+        tryBrowserOperation(input.threadId, "Failed to enable browser tab CDP events.", () =>
+          cdp.send("Page.enable"),
+        ),
+        tryBrowserOperation(input.threadId, "Failed to enable browser request interception.", () =>
+          cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }),
+        ),
+      ]);
+
+      const refreshFromPageEvent = () => {
+        input.callbacks.onCdpActivity();
+        schedule(serialized(refreshTabsUnlocked));
+      };
+      page.on("domcontentloaded", refreshFromPageEvent);
+      page.on("load", refreshFromPageEvent);
+      page.on("framenavigated", (frame) => {
+        if (frame === page.mainFrame()) refreshFromPageEvent();
+      });
+      page.on("close", () => schedule(serialized(removePageUnlocked(runtime.targetId))));
+
+      yield* startActiveScreencastUnlocked;
+      yield* refreshTabsUnlocked;
+      return runtime;
+    }).pipe(
+      Effect.onError(() =>
+        Effect.sync(() => {
+          configuringPages.delete(page);
+        }),
+      ),
+      Effect.tap(() =>
+        Effect.sync(() => {
+          configuringPages.delete(page);
+        }),
+      ),
+    );
+  });
+
+  browser.on("disconnected", () => {
+    if (!closing) input.callbacks.onCrashed("Chromium exited unexpectedly.");
+  });
+  context.on("page", (page) => schedule(serialized(configurePageUnlocked(page))));
+
+  let pages = context.pages();
+  if (pages.length === 0) {
+    pages = [
+      yield* tryBrowserOperation(input.threadId, "Failed to create the initial browser tab.", () =>
+        context.newPage(),
+      ),
+    ];
+  }
+  for (const page of pages) {
+    yield* serialized(configurePageUnlocked(page));
+  }
+
+  const lookupTab = (targetId: string): Effect.Effect<PageRuntime, BrowserTabNotFoundType> => {
+    const runtime = pageRuntimes.get(targetId);
+    return runtime === undefined
+      ? Effect.fail(
+          new BrowserTabNotFound({
+            threadId: input.threadId,
+            targetId,
+            message: `Browser tab ${targetId} was not found.`,
+          }),
+        )
+      : Effect.succeed(runtime);
+  };
+
+  const setActiveTabUnlocked = (targetId: string) =>
+    Effect.gen(function* () {
+      const next = yield* lookupTab(targetId);
+      if (activeTargetId === targetId) return;
+      const previous = activeTargetId === undefined ? undefined : pageRuntimes.get(activeTargetId);
+      if (previous !== undefined) yield* stopScreencastUnlocked(previous);
+      activeTargetId = targetId;
+      yield* tryBrowserOperation(input.threadId, "Failed to focus the selected browser tab.", () =>
+        next.page.bringToFront(),
+      );
+      yield* startActiveScreencastUnlocked;
+      yield* refreshTabsUnlocked;
+      input.callbacks.onCdpActivity();
+    });
+
+  return {
+    executable,
+    processPid,
+    getTabs: serialized(refreshTabsUnlocked),
+    setActiveTab: (targetId) => serialized(setActiveTabUnlocked(targetId)),
+    openTab: (url) =>
+      serialized(
+        Effect.gen(function* () {
+          const page = yield* tryBrowserOperation(
+            input.threadId,
+            "Failed to open a browser tab.",
+            () => context.newPage(),
+          );
+          const runtime = yield* configurePageUnlocked(page);
+          yield* setActiveTabUnlocked(runtime.targetId);
+          yield* tryBrowserOperation(input.threadId, "Failed to navigate the browser tab.", () =>
+            page.goto(url),
+          );
+          yield* refreshTabsUnlocked;
+        }),
+      ),
+    closeTab: (targetId) =>
+      serialized(
+        Effect.gen(function* () {
+          const runtime = yield* lookupTab(targetId);
+          yield* tryBrowserOperation(input.threadId, "Failed to close the browser tab.", () =>
+            runtime.page.close(),
+          );
+          yield* removePageUnlocked(targetId);
+          input.callbacks.onCdpActivity();
+        }),
+      ),
+    setScreencastEnabled: (enabled) =>
+      serialized(
+        Effect.gen(function* () {
+          if (screencastEnabled === enabled) return;
+          screencastEnabled = enabled;
+          if (enabled) {
+            yield* startActiveScreencastUnlocked;
+            return;
+          }
+          for (const runtime of pageRuntimes.values()) {
+            yield* stopScreencastUnlocked(runtime);
+          }
+        }),
+      ),
+  } satisfies BrowserRuntime;
+});

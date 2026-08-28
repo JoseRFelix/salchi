@@ -10,6 +10,7 @@ import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers
 import { TurnFileSnapshotsLive } from "../../persistence/Layers/TurnFileSnapshots.ts";
 import { TurnFileSnapshots } from "../../persistence/Services/TurnFileSnapshots.ts";
 import { TerminalManager } from "../../terminal/Services/Manager.ts";
+import { BrowserSessionManager } from "../../browser/Services/BrowserSessionManager.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ThreadDeletionReactor,
@@ -18,15 +19,23 @@ import {
 
 type ThreadDeletedEvent = Extract<OrchestrationEvent, { type: "thread.deleted" }>;
 
-export function runThreadDeletionCleanup<StopError, TerminalError, SnapshotError, LogError>(input: {
+export function runThreadDeletionCleanup<
+  StopError,
+  TerminalError,
+  BrowserError,
+  SnapshotError,
+  LogError,
+>(input: {
   readonly stopProviderSession: Effect.Effect<void, StopError>;
   readonly closeThreadTerminals: Effect.Effect<void, TerminalError>;
+  readonly stopThreadBrowser: Effect.Effect<void, BrowserError>;
   readonly deleteTurnFileSnapshots: Effect.Effect<void, SnapshotError>;
   readonly deleteProviderEventLogs: Effect.Effect<void, LogError>;
-}): Effect.Effect<void, StopError | TerminalError | SnapshotError | LogError> {
+}): Effect.Effect<void, StopError | TerminalError | BrowserError | SnapshotError | LogError> {
   return Effect.gen(function* () {
     yield* input.stopProviderSession;
     yield* input.closeThreadTerminals;
+    yield* input.stopThreadBrowser;
     yield* input.deleteTurnFileSnapshots;
     yield* input.deleteProviderEventLogs;
   });
@@ -58,6 +67,7 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const providerEventLoggers = yield* ProviderEventLoggers;
   const terminalManager = yield* TerminalManager;
+  const browserSessionManager = yield* BrowserSessionManager;
   const turnFileSnapshots = yield* TurnFileSnapshots;
 
   const stopProviderSession = (threadId: ThreadDeletedEvent["payload"]["threadId"]) =>
@@ -71,6 +81,13 @@ const make = Effect.gen(function* () {
     logCleanupCauseUnlessInterrupted({
       effect: terminalManager.close({ threadId, deleteHistory: true }),
       message: "thread deletion cleanup skipped terminal close",
+      threadId,
+    });
+
+  const stopThreadBrowser = (threadId: ThreadDeletedEvent["payload"]["threadId"]) =>
+    logCleanupCauseUnlessInterrupted({
+      effect: browserSessionManager.stop(threadId).pipe(Effect.asVoid),
+      message: "thread deletion cleanup skipped browser stop",
       threadId,
     });
 
@@ -95,6 +112,7 @@ const make = Effect.gen(function* () {
     yield* runThreadDeletionCleanup({
       stopProviderSession: stopProviderSession(threadId),
       closeThreadTerminals: closeThreadTerminals(threadId),
+      stopThreadBrowser: stopThreadBrowser(threadId),
       deleteTurnFileSnapshots: deleteTurnFileSnapshots(threadId),
       deleteProviderEventLogs: deleteProviderEventLogs(threadId),
     });

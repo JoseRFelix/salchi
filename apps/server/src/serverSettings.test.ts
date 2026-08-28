@@ -484,6 +484,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           },
         },
         automaticGitFetchInterval: Duration.seconds(10),
+        browserExecutablePath: "/opt/chrome",
+        browserIdleTimeout: Duration.minutes(5),
       });
 
       assert.equal(next.providers.codex.binaryPath, "/opt/homebrew/bin/codex");
@@ -506,6 +508,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           },
         },
         automaticGitFetchInterval: 10_000,
+        browserExecutablePath: "/opt/chrome",
+        browserIdleTimeout: 300_000,
       });
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
