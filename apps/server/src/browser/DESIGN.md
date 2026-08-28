@@ -154,8 +154,9 @@ There is no application-level frame ACK. CDP frames are acknowledged on receipt,
 and dispatched by a fiber independent of the frame writer. Effect's socket writer does not expose a
 browser-style `bufferedAmount`; on Node the route reads the upgraded TCP socket's `writableLength`
 and skips a frame at or above the 256 KiB default threshold. Its outbox permits one write plus one
-replaceable pending frame. Metadata uses a separate ordered low-frequency queue. On adapters without
-`writableLength`, the replaceable pending slot remains the application-level backlog bound.
+replaceable pending frame. Metadata has one replaceable latest slot per kind (status, tabs, and
+activity), so a stalled consumer never accumulates a history. On adapters without `writableLength`,
+the replaceable pending frame remains the application-level backlog bound.
 
 The client exchanges a fresh ticket and reconnects with exponential backoff, reconnecting promptly
 when document visibility returns. It does not retry authorization failures. Frames decode with
@@ -280,9 +281,10 @@ restarted in the background.
 Debug mode reports event-loop lag p50/p99 every five seconds, input receive-to-CDP completion,
 CDP-frame receive/mailbox/socket-write timing, page CDP attach/detach counts, backpressure skips, and
 instrumented handlers over 50 ms. Development clients log frame receive-to-render and
-input-send-to-next-render gaps. The retained localhost comparison measured 28.7 ms on the legacy
-JSON RPC stream and 10.0 ms on the binary stream using the same Chromium page. The primary expected
-gain is on a high-RTT phone-to-VPS path.
+input-send-to-next-render gaps. The five-run post-fix benchmark measured median binary
+click-to-fresh-frame times of 10.4 ms at 0 ms RTT, 95.0 ms at 80 ms RTT, and 215.2 ms at 200 ms RTT
+with 1% loss. The corresponding internal CDP-frame-to-socket-write medians stayed near 1.2 ms.
+Methodology, stage timings, and the legacy comparison are recorded in [BENCHMARK.md](BENCHMARK.md).
 
 ## Known limitations
 

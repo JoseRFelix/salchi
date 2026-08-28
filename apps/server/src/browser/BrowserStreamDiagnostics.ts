@@ -17,7 +17,14 @@ export interface BrowserEventLoopLagSample {
   readonly p99Millis: number;
 }
 
+export interface BrowserHandlerTimingSample {
+  readonly durationMillis: number;
+  readonly fields: Readonly<Record<string, unknown>>;
+  readonly label: string;
+}
+
 const frameTimings = new WeakMap<object, BrowserFrameTiming>();
+const handlerTimingObservers = new Set<(sample: BrowserHandlerTimingSample) => void>();
 
 export function browserStreamDebugEnabled(): boolean {
   return process.env.SALCHI_BROWSER_STREAM_DEBUG === "1";
@@ -35,6 +42,14 @@ export function getBrowserFrameTiming(frame: object): BrowserFrameTiming | undef
   return frameTimings.get(frame);
 }
 
+/** Test/benchmark seam for the same samples emitted by debug logging. */
+export function observeBrowserHandlerTimings(
+  observer: (sample: BrowserHandlerTimingSample) => void,
+): () => void {
+  handlerTimingObservers.add(observer);
+  return () => handlerTimingObservers.delete(observer);
+}
+
 export function logBrowserHandlerTiming(
   label: string,
   startedAtMonotonicMillis: number,
@@ -42,10 +57,20 @@ export function logBrowserHandlerTiming(
 ): Effect.Effect<void> {
   if (!browserStreamDebugEnabled()) return Effect.void;
   const durationMillis = Math.max(0, browserMonotonicMillis() - startedAtMonotonicMillis);
+  const sample = { label, durationMillis, fields } satisfies BrowserHandlerTimingSample;
   const annotations = { label, durationMillis, ...fields };
-  return durationMillis > SLOW_HANDLER_MILLIS
-    ? Effect.logWarning("browser handler exceeded 50ms", annotations)
-    : Effect.logDebug("browser handler timing", annotations);
+  const notifyObservers = Effect.forEach(
+    [...handlerTimingObservers],
+    (observer) => Effect.sync(() => observer(sample)).pipe(Effect.ignore),
+    { discard: true },
+  );
+  return notifyObservers.pipe(
+    Effect.andThen(
+      durationMillis > SLOW_HANDLER_MILLIS
+        ? Effect.logWarning("browser handler exceeded 50ms", annotations)
+        : Effect.logDebug("browser handler timing", annotations),
+    ),
+  );
 }
 
 export function installBrowserEventLoopLagMonitor(options?: {

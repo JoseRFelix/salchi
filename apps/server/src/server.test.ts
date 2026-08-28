@@ -69,6 +69,11 @@ import { setTimeout as sleepRealTime } from "node:timers/promises";
 import { chromium } from "playwright-core";
 import { vi } from "vitest";
 
+import {
+  observeBrowserHandlerTimings,
+  type BrowserHandlerTimingSample,
+} from "./browser/BrowserStreamDiagnostics.ts";
+
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 
 function emptyWorkingTree() {
@@ -2361,8 +2366,29 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const rawWsUrl = `${yield* getWsServerUrl(`/browser-stream/${defaultThreadId}`, {
         authenticated: false,
       })}?ticket=${encodeURIComponent(rawTicket)}`;
-      const rawInputToFrameMillis = yield* Effect.scoped(
+      const rawMeasurement = yield* Effect.scoped(
         Effect.gen(function* () {
+          const timingSamples: BrowserHandlerTimingSample[] = [];
+          const inputDispatchCompleted = yield* Deferred.make<void>();
+          const frameAfterDispatch = yield* Deferred.make<BrowserHandlerTimingSample>();
+          let inputDispatchCount = 0;
+          let inputDispatchObserved = false;
+          const stopObservingTimings = observeBrowserHandlerTimings((sample) => {
+            timingSamples.push(sample);
+            if (sample.label === "browser.input.socket-receive-to-cdp-complete") {
+              inputDispatchCount += 1;
+              if (inputDispatchCount >= 2) {
+                inputDispatchObserved = true;
+                Deferred.doneUnsafe(inputDispatchCompleted, Effect.void);
+              }
+            } else if (
+              inputDispatchObserved &&
+              sample.label === "browser.frame.cdp-receive-to-socket-write"
+            ) {
+              Deferred.doneUnsafe(frameAfterDispatch, Effect.succeed(sample));
+            }
+          });
+          yield* Effect.addFinalizer(() => Effect.sync(stopObservingTimings));
           const socket = yield* openRawWebSocket(rawWsUrl);
           const firstFrameFiber = yield* receiveRawBrowserStreamFrame(socket).pipe(
             Effect.timeout("10 seconds"),
@@ -2375,10 +2401,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           const firstFrame = yield* Fiber.join(firstFrameFiber);
           assert.equal(firstFrame.jpegBytes[0], 0xff);
           assert.equal(firstFrame.jpegBytes[1], 0xd8);
-          const responseFrame = yield* receiveRawBrowserStreamFrame(socket, firstFrame.seq).pipe(
-            Effect.timeout("10 seconds"),
-            Effect.forkScoped,
-          );
+          timingSamples.length = 0;
           yield* Effect.yieldNow;
           const startedAt = performance.now();
           yield* Effect.sync(() => {
@@ -2407,10 +2430,32 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               }),
             );
           });
+          const clickToDispatchMillis =
+            process.env.SALCHI_BROWSER_STREAM_DEBUG === "1"
+              ? yield* Deferred.await(inputDispatchCompleted).pipe(
+                  Effect.timeout("10 seconds"),
+                  Effect.map(() => performance.now() - startedAt),
+                )
+              : undefined;
+          const responseFrame = yield* receiveRawBrowserStreamFrame(socket, firstFrame.seq).pipe(
+            Effect.timeout("10 seconds"),
+            Effect.forkScoped,
+          );
           yield* Fiber.join(responseFrame);
-          return performance.now() - startedAt;
+          const frameTiming =
+            process.env.SALCHI_BROWSER_STREAM_DEBUG === "1"
+              ? yield* Deferred.await(frameAfterDispatch).pipe(Effect.timeout("10 seconds"))
+              : undefined;
+          yield* Effect.yieldNow;
+          return {
+            clickToDispatchMillis,
+            frameTiming,
+            inputToFrameMillis: performance.now() - startedAt,
+            timingSamples: [...timingSamples],
+          };
         }),
       );
+      const rawInputToFrameMillis = rawMeasurement.inputToFrameMillis;
       yield* Effect.promise(() =>
         page.waitForFunction(
           "Number(document.body.dataset.trustedClicks || '0') > 0 && document.body.dataset.lastClickTrusted === 'true'",
@@ -2418,8 +2463,22 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       process.stdout.write(
-        `[browser-stream-measurement] localhost legacy-rpc=${legacyInputToFrameMillis.toFixed(1)}ms raw-binary=${rawInputToFrameMillis.toFixed(1)}ms\n`,
+        `[browser-stream-measurement] simulated-rtt=${process.env.SALCHI_BROWSER_BENCHMARK_RTT_MS ?? "0"}ms legacy-rpc=${legacyInputToFrameMillis.toFixed(1)}ms raw-binary=${rawInputToFrameMillis.toFixed(1)}ms\n`,
       );
+      if (process.env.SALCHI_BROWSER_STREAM_DEBUG === "1") {
+        const inputTimings = rawMeasurement.timingSamples
+          .filter((sample) => sample.label === "browser.input.socket-receive-to-cdp-complete")
+          .map((sample) => sample.durationMillis.toFixed(2))
+          .join(",");
+        const frameTiming = rawMeasurement.frameTiming;
+        const frameField = (name: string) => {
+          const value = frameTiming?.fields[name];
+          return typeof value === "number" ? value.toFixed(2) : "missing";
+        };
+        process.stdout.write(
+          `[browser-stream-pipeline] simulated-rtt=${process.env.SALCHI_BROWSER_BENCHMARK_RTT_MS ?? "0"}ms click-to-dispatch=${rawMeasurement.clickToDispatchMillis?.toFixed(2) ?? "missing"}ms input-socket-to-cdp=${inputTimings || "missing"}ms frame-cdp-to-mailbox=${frameField("cdpReceiveToMailboxPublishMs")}ms frame-mailbox-to-socket=${frameField("mailboxPublishToSocketWriteMs")}ms frame-cdp-to-socket=${frameField("cdpReceiveToSocketWriteMs")}ms\n`,
+        );
+      }
       assert.isBelow(rawInputToFrameMillis, 2_000);
     }).pipe(Effect.provide(NodeHttpServer.layerTest));
   });
