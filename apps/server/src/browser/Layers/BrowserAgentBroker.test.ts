@@ -208,6 +208,41 @@ it.effect("does not issue a CDP URL when browser agent access is disabled", () =
   ),
 );
 
+it.effect("injects the root thread into provider browser environments", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const virtualThreadId = ThreadId.make("codex-tool:exec-browser-proxy");
+      const rootThreadId = ThreadId.make("browser-agent-root");
+      const resolved: ThreadId[] = [];
+      const broker = yield* makeBrowserAgentBrokerWithOptions({
+        accessEnabled: Effect.succeed(true),
+        randomToken: nextTokenFactory(),
+        resolveRootThreadId: (requestedThreadId) =>
+          Effect.sync(() => {
+            resolved.push(requestedThreadId);
+            return rootThreadId;
+          }),
+        browserManager: {
+          start: () => Effect.die("browser must remain lazy"),
+          getCdpWebSocketUrl: () => Effect.die("browser must remain lazy"),
+          agentConnectionOpened: () => Effect.die("browser must remain lazy"),
+          recordAgentCdpActivity: () => Effect.void,
+          agentConnectionClosed: () => Effect.void,
+        },
+      });
+
+      const access = yield* broker.acquireSessionAccess(virtualThreadId);
+      const stableUrl = access.environment[SALCHI_BROWSER_CDP_URL_ENV];
+
+      expect(resolved).toEqual([virtualThreadId]);
+      expect(stableUrl).toMatch(
+        /^ws:\/\/127\.0\.0\.1:\d+\/internal\/browser\/cdp\/browser-agent-root\/[0-9a-f]{64}$/,
+      );
+      yield* access.release;
+    }),
+  ),
+);
+
 it.effect("validates stable URLs and relays concurrent CDP connections with heartbeats", () =>
   Effect.scoped(
     Effect.gen(function* () {

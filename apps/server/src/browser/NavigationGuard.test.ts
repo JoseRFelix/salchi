@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { shouldBlockBrowserRequest } from "./NavigationGuard.ts";
+import { browserFetchInterceptionPatterns, shouldBlockBrowserRequest } from "./NavigationGuard.ts";
 
 describe("browser navigation guard", () => {
   it("blocks cloud instance metadata on every port", () => {
@@ -65,5 +65,23 @@ describe("browser navigation guard", () => {
         serverPort: 3773,
       }),
     ).toBe(false);
+  });
+
+  it("intercepts only metadata and Salchi host candidates", () => {
+    const patterns = browserFetchInterceptionPatterns({
+      serverHost: "0.0.0.0",
+      serverPort: 3773,
+    });
+    const values = patterns.map((pattern) => pattern.urlPattern);
+
+    expect(values).toContain("http://169.254.169.254/*");
+    expect(values).toContain("https://metadata.google.internal:*/*");
+    expect(values).toContain("http://[fd00:ec2::254]/*");
+    expect(values).toContain("http://127.0.0.1:3773/*");
+    expect(values).toContain("http://localhost:3773/*");
+    expect(values).toContain("http://[::1]:3773/*");
+    expect(values).not.toContain("*");
+    expect(values.some((value) => value.includes("example.com"))).toBe(false);
+    expect(patterns.every((pattern) => pattern.requestStage === "Request")).toBe(true);
   });
 });

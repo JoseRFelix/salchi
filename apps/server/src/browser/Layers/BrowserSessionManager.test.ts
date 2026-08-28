@@ -184,6 +184,96 @@ it.effect("dispatches input through the running browser runtime", () =>
   ),
 );
 
+it.effect("dispatches input without waiting for the manager's per-thread operation lock", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const tabOperationStarted = yield* Deferred.make<void>();
+      const releaseTabOperation = yield* Deferred.make<void>();
+      const inputDispatched = yield* Deferred.make<void>();
+      let getTabsCalls = 0;
+      const manager = yield* makeBrowserSessionManagerWithOptions(
+        managerOptions(() =>
+          Effect.succeed(
+            fakeRuntime({
+              getTabs: Effect.sync(() => {
+                getTabsCalls += 1;
+                return [];
+              }),
+              setActiveTab: () =>
+                Deferred.succeed(tabOperationStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseTabOperation)),
+                  Effect.asVoid,
+                ),
+              dispatchInput: () => Deferred.succeed(inputDispatched, undefined).pipe(Effect.asVoid),
+            }),
+          ),
+        ),
+      );
+      yield* manager.start(threadId);
+      const tabOperation = yield* manager
+        .setActiveTab(threadId, "target-1")
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(tabOperationStarted);
+
+      yield* manager.dispatchInput(threadId, "target-1", {
+        _tag: "PointerMove",
+        x: 20,
+        y: 30,
+        button: "none",
+        clickCount: 0,
+      });
+      yield* Deferred.await(inputDispatched);
+      assert.equal(getTabsCalls, 1);
+
+      yield* Deferred.succeed(releaseTabOperation, undefined);
+      yield* Fiber.join(tabOperation);
+    }),
+  ),
+);
+
+it.effect("shares a root browser session while preserving the requested API thread ID", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const rootThreadId = ThreadId.make("browser-root-test");
+      const childThreadId = ThreadId.make("codex-tool:exec-browser-child");
+      const existenceChecks: ThreadId[] = [];
+      const launchThreadIds: ThreadId[] = [];
+      const manager = yield* makeBrowserSessionManagerWithOptions({
+        ...managerOptions((input) =>
+          Effect.sync(() => {
+            launchThreadIds.push(input.threadId);
+            return fakeRuntime();
+          }),
+        ),
+        resolveRootThreadId: (requestedThreadId) =>
+          Effect.succeed(requestedThreadId === childThreadId ? rootThreadId : requestedThreadId),
+        threadExists: (requestedThreadId) =>
+          Effect.sync(() => {
+            existenceChecks.push(requestedThreadId);
+            return requestedThreadId === rootThreadId;
+          }),
+      });
+
+      const started = yield* manager.start(childThreadId);
+      const state = yield* manager.getState(childThreadId);
+      const controlled = yield* manager.setActiveTab(childThreadId, "target-1");
+      const events = yield* manager
+        .subscribeViewport(childThreadId)
+        .pipe(Stream.take(2), Stream.runCollect);
+
+      assert.equal(started.threadId, childThreadId);
+      assert.equal(state.threadId, childThreadId);
+      assert.equal(controlled.threadId, childThreadId);
+      assert.deepEqual(
+        events.map((event) => event.threadId),
+        [childThreadId, childThreadId],
+      );
+      assert.isTrue(existenceChecks.every((checkedThreadId) => checkedThreadId === rootThreadId));
+      assert.deepEqual(launchThreadIds, [rootThreadId]);
+    }),
+  ),
+);
+
 it.effect("exposes the raw CDP endpoint only from getState and tracks proxy connections", () =>
   Effect.scoped(
     Effect.gen(function* () {

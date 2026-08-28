@@ -71,6 +71,7 @@ export interface BrowserAgentBrokerOptions {
     | "agentConnectionClosed"
   >;
   readonly accessEnabled: Effect.Effect<boolean>;
+  readonly resolveRootThreadId?: (threadId: ThreadId) => Effect.Effect<ThreadId, BrowserRpcError>;
   readonly randomToken?: (() => string) | undefined;
   readonly heartbeatIntervalMillis?: number | undefined;
 }
@@ -441,13 +442,27 @@ export const makeBrowserAgentBrokerWithOptions = Effect.fn("browserAgentBroker.m
             release: Effect.void,
           } satisfies BrowserAgentSessionAccess;
         }
+        const resolvedThreadId = yield* Effect.result(
+          options.resolveRootThreadId?.(threadId) ?? Effect.succeed(threadId),
+        );
+        if (resolvedThreadId._tag === "Failure") {
+          yield* Effect.logWarning("Browser agent access could not resolve its root thread", {
+            threadId,
+            error: resolvedThreadId.failure.message,
+          });
+          return {
+            environment: {},
+            release: Effect.void,
+          } satisfies BrowserAgentSessionAccess;
+        }
+        const rootThreadId = resolvedThreadId.success;
         const token = nextToken();
         if (!TOKEN_PATTERN.test(token)) {
           return yield* Effect.die("Browser broker token generator returned an invalid token.");
         }
         const credential: ProviderCredential = {
           token,
-          threadId,
+          threadId: rootThreadId,
           connections: new Set(),
           pendingClientSockets: new Set(),
           active: true,
@@ -455,7 +470,7 @@ export const makeBrowserAgentBrokerWithOptions = Effect.fn("browserAgentBroker.m
         credentials.set(token, credential);
         return {
           environment: {
-            [SALCHI_BROWSER_CDP_URL_ENV]: `ws://${BROKER_HOST}:${brokerPort}${BROKER_PATH}/${encodeURIComponent(threadId)}/${token}`,
+            [SALCHI_BROWSER_CDP_URL_ENV]: `ws://${BROKER_HOST}:${brokerPort}${BROKER_PATH}/${encodeURIComponent(rootThreadId)}/${token}`,
           },
           release: releaseCredential(credential),
         } satisfies BrowserAgentSessionAccess;
@@ -473,6 +488,9 @@ const makeLive = Effect.gen(function* () {
   const settings = yield* ServerSettingsService;
   return yield* makeBrowserAgentBrokerWithOptions({
     browserManager,
+    ...(browserManager.resolveRootThreadId === undefined
+      ? {}
+      : { resolveRootThreadId: browserManager.resolveRootThreadId }),
     accessEnabled: settings.getSettings.pipe(
       Effect.map((value) => value.browserAgentAccessEnabled),
       Effect.catch((cause) =>

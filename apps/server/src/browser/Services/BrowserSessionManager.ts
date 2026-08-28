@@ -10,6 +10,7 @@ import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 
 export interface BrowserSessionManagerShape {
+  readonly resolveRootThreadId?: (threadId: ThreadId) => Effect.Effect<ThreadId, BrowserRpcError>;
   readonly start: (threadId: ThreadId) => Effect.Effect<BrowserSessionState, BrowserRpcError>;
   readonly stop: (threadId: ThreadId) => Effect.Effect<BrowserSessionState, BrowserRpcError>;
   readonly getState: (threadId: ThreadId) => Effect.Effect<BrowserSessionState, BrowserRpcError>;

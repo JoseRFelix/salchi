@@ -1,9 +1,15 @@
 # Browser use
 
-The server owns one headless Chromium process per orchestration thread. Each process uses a
+The server owns one headless Chromium process per root orchestration thread. Browser API and agent
+proxy inputs follow both `parentThreadId` and `createdByThreadId` ancestry before lookup, so
+materialized children and provider-created virtual sessions share the root process and profile.
+Only a thread with neither relationship is accepted as an owner. Each process uses a
 persistent profile under `~/.salchi/userdata/browser-profiles/<threadId>/`, may contain multiple
 tabs, and is independent of provider-session reaping. Process and live URL state are intentionally
-not recovered after a server restart.
+not recovered after a server restart. Startup warns about legacy profile directories that no
+longer correspond to a real root orchestration thread; it does not delete or migrate them.
+Although ownership stays root-keyed internally, browser API snapshots and viewport metadata retain
+the caller's requested thread id so child-thread panels can safely discard genuinely stale events.
 
 Chromium is resolved from `SALCHI_BROWSER_PATH`, then the server setting, then Playwright's system
 Chrome/Chromium channels. `playwright-core` never downloads a browser. The sandbox is enabled unless
@@ -20,8 +26,10 @@ subscriber have been absent for the configured 15-minute default.
 
 Requests to the instance's own listening host and port and to the static metadata hosts
 `169.254.169.254`, `metadata.google.internal`, and `fd00:ec2::254` are failed through CDP
-interception and logged. The same page interception also covers clients attached through the agent
-CDP proxy. Explicit stop, thread deletion, idle timeout, and server-scope shutdown close Playwright
+interception and logged. `Fetch.enable` contains only patterns for those hosts plus the Salchi
+host/port and loopback aliases; it never uses a catch-all pattern, so ordinary documents and
+subresources never pause in Node. The same page interception also covers clients attached through
+the agent CDP proxy. Explicit stop, thread deletion, idle timeout, and server-scope shutdown close Playwright
 gracefully and then ensure the Chromium process tree is gone. Unexpected process exit is observable
 as `crashed` and is restarted only by an explicit start.
 
@@ -203,8 +211,10 @@ slot still prevents an application frame backlog, but the 256 KiB transport thre
 observable; phase 4 is verified and deployed on the repository's Node server path.
 
 Set `SALCHI_BROWSER_STREAM_DEBUG=1` to log, at debug level only, the captured/mailbox-published frame
-to socket-write delta and backpressure skips. Development builds also log receive-to-canvas-render
-and input-send-to-next-render timings in the browser console. The gated localhost comparison uses
+to socket-write delta, each input's receive-to-CDP-complete time, event-loop delay p50/p99 every five
+seconds, any instrumented browser handler over 50 ms, page-CDP attach/detach counts, and backpressure
+skips. Development builds also log receive-to-canvas-render and input-send-to-next-render timings in
+the browser console. The gated localhost comparison uses
 the same Chromium/page for both retained transports; the final verification run measured 28.7 ms
 over the legacy JSON RPC stream and 10.0 ms over the binary socket. These localhost numbers mainly
 show removed serialization/ACK overhead; the intended improvement is larger on a high-RTT phone-to-
@@ -219,3 +229,21 @@ Manual verification:
    confirm the ticket/reconnect loop resumes frames.
 4. Hide the panel, switch right-panel views and switch threads; in every case confirm the raw socket
    closes and the final viewport subscriber stops the screencast.
+
+## Latency investigation notes
+
+Browser input bypasses both manager and Playwright per-thread operation semaphores. The manager
+reads the already-running entry, and the runtime uses the active tab's cached `CDPSession`; a
+successful event performs exactly one `Input.dispatchMouseEvent`, `Input.dispatchKeyEvent`, or
+`Input.insertText` command. The cache is invalidated before active-tab replacement/removal and set
+to the new active tab before input resumes. Input socket reads run independently from the frame
+outbox writer, so a slow frame write cannot hold an input message. Tab/title refreshes remain on the
+serialized control path and navigation notifications are coalesced.
+
+The Playwright MCP implementation pinned by Salchi retains its current tab and creates a page only
+when no current tab exists or the agent explicitly requests a new one. A live inspection that showed
+one top-level page but hundreds of targets identified ad-heavy out-of-process iframes, not a fresh
+Playwright page per tool call; Chromium renderer client ids are monotonic and therefore are not a
+live-page count. Salchi still detaches each per-page CDP session and removes all CDP/Page listeners
+when that page closes, including configuration-failure cleanup. A page pool would conflict with
+explicit MCP new-tab semantics and is therefore not added.

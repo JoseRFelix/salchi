@@ -11,8 +11,6 @@ import {
   encodeBrowserStreamFrame,
   encodeBrowserStreamMeta,
 } from "@salchi/shared/browserStreamProtocol";
-import * as Clock from "effect/Clock";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -25,6 +23,12 @@ import {
   DEFAULT_BROWSER_STREAM_BUFFER_THRESHOLD_BYTES,
   makeBrowserStreamOutbox,
 } from "../BrowserStreamOutbox.ts";
+import {
+  browserMonotonicMillis,
+  browserStreamDebugEnabled,
+  getBrowserFrameTiming,
+  logBrowserHandlerTiming,
+} from "../BrowserStreamDiagnostics.ts";
 import { BrowserSessionManager } from "../Services/BrowserSessionManager.ts";
 import type { BrowserSessionManagerShape } from "../Services/BrowserSessionManager.ts";
 
@@ -38,7 +42,8 @@ interface NodeWritableRequestSource {
 
 interface EncodedFrame {
   readonly bytes: Uint8Array;
-  readonly capturedAtEpochMillis: number;
+  readonly cdpReceivedAtMonotonicMillis: number;
+  readonly mailboxPublishedAtMonotonicMillis: number;
   readonly seq: number;
   readonly targetId: string;
 }
@@ -72,7 +77,7 @@ export function runBrowserStreamConnection(input: {
   return Effect.scoped(
     Effect.gen(function* () {
       const writer = yield* input.socket.writer;
-      const streamDebug = process.env.SALCHI_BROWSER_STREAM_DEBUG === "1";
+      const streamDebug = browserStreamDebugEnabled();
       const outbox = yield* makeBrowserStreamOutbox<EncodedFrame, Uint8Array, Socket.SocketError>({
         getBufferedBytes: input.getBufferedBytes,
         bufferThresholdBytes:
@@ -81,20 +86,37 @@ export function runBrowserStreamConnection(input: {
           writer(frame.bytes).pipe(
             Effect.tap(() =>
               streamDebug
-                ? Clock.currentTimeMillis.pipe(
-                    Effect.flatMap((writtenAtEpochMillis) =>
-                      Effect.logDebug("browser stream frame written", {
-                        threadId: input.threadId,
-                        targetId: frame.targetId,
-                        seq: frame.seq,
-                        mailboxPublishToSocketWriteMs: Math.max(
-                          0,
-                          writtenAtEpochMillis - frame.capturedAtEpochMillis,
+                ? Effect.suspend(() => {
+                    const socketWrittenAtMonotonicMillis = browserMonotonicMillis();
+                    const fields = {
+                      threadId: input.threadId,
+                      targetId: frame.targetId,
+                      seq: frame.seq,
+                      cdpReceiveToMailboxPublishMs: Math.max(
+                        0,
+                        frame.mailboxPublishedAtMonotonicMillis -
+                          frame.cdpReceivedAtMonotonicMillis,
+                      ),
+                      mailboxPublishToSocketWriteMs: Math.max(
+                        0,
+                        socketWrittenAtMonotonicMillis - frame.mailboxPublishedAtMonotonicMillis,
+                      ),
+                      cdpReceiveToSocketWriteMs: Math.max(
+                        0,
+                        socketWrittenAtMonotonicMillis - frame.cdpReceivedAtMonotonicMillis,
+                      ),
+                      bytes: frame.bytes.byteLength,
+                    };
+                    return Effect.logDebug("browser stream frame timing", fields).pipe(
+                      Effect.andThen(
+                        logBrowserHandlerTiming(
+                          "browser.frame.cdp-receive-to-socket-write",
+                          frame.cdpReceivedAtMonotonicMillis,
+                          fields,
                         ),
-                        bytes: frame.bytes.byteLength,
-                      }),
-                    ),
-                  )
+                      ),
+                    );
+                  })
                 : Effect.void,
             ),
           ),
@@ -122,22 +144,53 @@ export function runBrowserStreamConnection(input: {
           }
 
           const frame = event satisfies BrowserViewportFrame;
-          return outbox.offerFrame({
-            bytes: encodeBrowserStreamFrame({
+          const handlerStartedAt = streamDebug ? browserMonotonicMillis() : 0;
+          const timing = streamDebug
+            ? (getBrowserFrameTiming(frame) ??
+              (() => {
+                const fallbackTiming = browserMonotonicMillis();
+                return {
+                  cdpReceivedAtMonotonicMillis: fallbackTiming,
+                  mailboxPublishedAtMonotonicMillis: fallbackTiming,
+                };
+              })())
+            : {
+                cdpReceivedAtMonotonicMillis: 0,
+                mailboxPublishedAtMonotonicMillis: 0,
+              };
+          return outbox
+            .offerFrame({
+              bytes: encodeBrowserStreamFrame({
+                seq: frame.seq,
+                width: frame.width,
+                height: frame.height,
+                tabIndexHint: tabIndexHint(tabs, frame.targetId),
+                jpegBytes: Buffer.from(frame.dataBase64, "base64"),
+              }),
+              ...timing,
               seq: frame.seq,
-              width: frame.width,
-              height: frame.height,
-              tabIndexHint: tabIndexHint(tabs, frame.targetId),
-              jpegBytes: Buffer.from(frame.dataBase64, "base64"),
-            }),
-            capturedAtEpochMillis: DateTime.toEpochMillis(frame.capturedAt),
-            seq: frame.seq,
-            targetId: frame.targetId,
-          });
+              targetId: frame.targetId,
+            })
+            .pipe(
+              Effect.andThen(
+                streamDebug
+                  ? logBrowserHandlerTiming(
+                      "browser.stream.frame-mailbox-handler",
+                      handlerStartedAt,
+                      {
+                        threadId: input.threadId,
+                        targetId: frame.targetId,
+                        seq: frame.seq,
+                      },
+                    )
+                  : Effect.void,
+              ),
+            );
         }),
       );
 
       const incoming = input.socket.runRaw((message) => {
+        const inputReceivedAtMonotonicMillis = streamDebug ? browserMonotonicMillis() : 0;
         if (typeof message === "string") {
           return Effect.logDebug("Ignoring text browser stream message", {
             threadId: input.threadId,
@@ -159,6 +212,19 @@ export function runBrowserStreamConnection(input: {
               : input.browserManager
                   .dispatchInput(input.threadId, result.value.targetId, result.value.event)
                   .pipe(
+                    Effect.tap(() =>
+                      streamDebug
+                        ? logBrowserHandlerTiming(
+                            "browser.input.socket-receive-to-cdp-complete",
+                            inputReceivedAtMonotonicMillis,
+                            {
+                              threadId: input.threadId,
+                              targetId: result.value.targetId,
+                              inputType: result.value.event._tag,
+                            },
+                          )
+                        : Effect.void,
+                    ),
                     Effect.catch((error) =>
                       Effect.logDebug("Browser stream input was not dispatched", {
                         threadId: input.threadId,

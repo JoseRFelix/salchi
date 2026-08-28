@@ -2151,19 +2151,33 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
   it.effect("releases the browser viewport subscription when the raw socket closes", () =>
     Effect.gen(function* () {
-      const subscribed = yield* Deferred.make<void>();
+      const requestedThreadId = ThreadId.make("codex-tool:exec-browser-stream-child");
+      const rootThreadId = ThreadId.make("browser-stream-root");
+      const subscribed = yield* Deferred.make<ThreadId>();
       const released = yield* Deferred.make<void>();
       const inputReceived = yield* Deferred.make<{
+        readonly threadId: ThreadId;
         readonly targetId: string;
         readonly tag: string;
       }>();
       yield* buildAppUnderTest({
         layers: {
           browserSessionManager: {
-            dispatchInput: (_threadId, targetId, event) =>
-              Deferred.succeed(inputReceived, { targetId, tag: event._tag }).pipe(Effect.asVoid),
+            getState: () =>
+              Effect.succeed({
+                threadId: rootThreadId,
+                status: "stopped",
+                tabs: [],
+                executable: null,
+              }),
+            dispatchInput: (threadId, targetId, event) =>
+              Deferred.succeed(inputReceived, {
+                threadId,
+                targetId,
+                tag: event._tag,
+              }).pipe(Effect.asVoid),
             subscribeViewport: (threadId) =>
-              Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+              Stream.fromEffect(Deferred.succeed(subscribed, threadId)).pipe(
                 Stream.flatMap(() =>
                   Stream.make({
                     _tag: "Status" as const,
@@ -2178,11 +2192,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
 
       const ticket = yield* issueWebSocketTicket(yield* getAuthenticatedBearerSessionToken());
-      const wsUrl = `${yield* getWsServerUrl(`/browser-stream/${defaultThreadId}`, {
+      const wsUrl = `${yield* getWsServerUrl(`/browser-stream/${requestedThreadId}`, {
         authenticated: false,
       })}?ticket=${encodeURIComponent(ticket)}`;
       const socket = yield* openRawWebSocket(wsUrl);
-      yield* Deferred.await(subscribed).pipe(Effect.timeout("1 second"));
+      assert.equal(
+        yield* Deferred.await(subscribed).pipe(Effect.timeout("1 second")),
+        requestedThreadId,
+      );
 
       yield* Effect.sync(() =>
         socket.send(
@@ -2199,6 +2216,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
       assert.deepEqual(yield* Deferred.await(inputReceived).pipe(Effect.timeout("1 second")), {
+        threadId: requestedThreadId,
         targetId: "target-1",
         tag: "PointerDown",
       });
