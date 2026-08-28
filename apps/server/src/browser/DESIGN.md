@@ -65,6 +65,12 @@ Chromium process group/tree. On Linux the process is also registered with
 `ManagedChildProcessRegistry`, following the provider process-group precedent, so server cleanup can
 reap descendants that escape the graceful path.
 
+Optional `browserStealthMode` removes Playwright's `--enable-automation` default argument, installs
+a `Page.addScriptToEvaluateOnNewDocument` override that suppresses `navigator.webdriver`, and uses
+the launched browser's own current user agent after replacing its `HeadlessChrome` product marker
+with `Chrome`. This is best-effort fingerprint reduction only: it does not make automation
+undetectable or guarantee that a captcha provider will accept a session.
+
 ### Tabs, interception, and input
 
 Each page has one cached CDP session. Page listeners publish coalesced tab/title/navigation updates;
@@ -274,15 +280,19 @@ restarted in the background.
 
 ## Settings and diagnostics
 
-| Name                               | Default    | Purpose                                                          |
-| ---------------------------------- | ---------- | ---------------------------------------------------------------- |
-| server `browserExecutablePath`     | empty      | explicit executable after `SALCHI_BROWSER_PATH`                  |
-| server `browserIdleTimeout`        | 15 minutes | inactivity deadline after the final subscriber/agent connection  |
-| server `browserAgentAccessEnabled` | `true`     | proxy credentials, MCP registration, and browser-use instruction |
-| client `showBrowserAgentPreview`   | `true`     | automatic activity listener and PiP                              |
-| `SALCHI_BROWSER_PATH`              | unset      | highest-priority Chromium executable                             |
-| `SALCHI_BROWSER_NO_SANDBOX`        | unset      | `1` is the explicit sandbox opt-out                              |
-| `SALCHI_BROWSER_STREAM_DEBUG`      | unset      | `1` enables browser hot-path debug instrumentation               |
+| Name                                    | Default    | Purpose                                                          |
+| --------------------------------------- | ---------- | ---------------------------------------------------------------- |
+| server `browserExecutablePath`          | empty      | explicit executable after `SALCHI_BROWSER_PATH`                  |
+| server `browserIdleTimeout`             | 15 minutes | inactivity deadline after the final subscriber/agent connection  |
+| server `browserAgentAccessEnabled`      | `true`     | proxy credentials, MCP registration, and browser-use instruction |
+| server `browserKillRogueBrowsers`       | `false`    | terminate provider-descended external Chromium trees             |
+| server `browserScreencastQuality`       | `45`       | CDP JPEG screencast quality, from 0 through 100                  |
+| server `browserScreencastEveryNthFrame` | `2`        | idle compositor-frame sampling cadence, from 1 through 60        |
+| server `browserStealthMode`             | `false`    | best-effort automation fingerprint reduction                     |
+| client `showBrowserAgentPreview`        | `true`     | automatic activity listener and PiP                              |
+| `SALCHI_BROWSER_PATH`                   | unset      | highest-priority Chromium executable                             |
+| `SALCHI_BROWSER_NO_SANDBOX`             | unset      | `1` is the explicit sandbox opt-out                              |
+| `SALCHI_BROWSER_STREAM_DEBUG`           | unset      | `1` enables browser hot-path debug instrumentation               |
 
 Debug mode reports event-loop lag p50/p99 every five seconds, input receive-to-CDP completion,
 CDP-frame receive/mailbox/socket-write timing, page CDP attach/detach counts, backpressure skips, and
@@ -298,6 +308,8 @@ Methodology, stage timings, and the legacy comparison are recorded in [BENCHMARK
   there is no adaptive codec or WebRTC transport.
 - The navigation guard uses static hostname matching only. It does not resolve DNS or attempt a
   comprehensive private-network SSRF policy.
+- Stealth mode changes only a small set of automation fingerprints. Browser behavior, timing,
+  graphics, installed fonts, IP reputation, and many other detectable signals remain unchanged.
 - Native video PiP (`captureStream`/`requestPictureInPicture`) is not implemented; the current PiP is
   an in-app canvas card.
 - The activity-only RPC remains subscribed while automatic PiP is enabled, but it owns no viewport

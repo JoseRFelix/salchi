@@ -92,6 +92,7 @@ export interface BrowserManagerLaunchConfig {
   readonly environmentExecutablePath?: string | undefined;
   readonly settingExecutablePath?: string | undefined;
   readonly noSandbox: boolean;
+  readonly stealthMode: boolean;
   readonly serverHost?: string | undefined;
   readonly serverPort: number;
 }
@@ -555,6 +556,7 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
         environmentExecutablePath: launchConfig.environmentExecutablePath,
         settingExecutablePath: launchConfig.settingExecutablePath,
         noSandbox: launchConfig.noSandbox,
+        stealthMode: launchConfig.stealthMode,
         screencastQuality: launchConfig.screencastQuality,
         screencastEveryNthFrame: launchConfig.screencastEveryNthFrame,
         serverHost: launchConfig.serverHost,
@@ -1213,6 +1215,7 @@ const makeLive = Effect.gen(function* () {
           environmentExecutablePath: process.env.SALCHI_BROWSER_PATH,
           settingExecutablePath: settings.browserExecutablePath,
           noSandbox: process.env.SALCHI_BROWSER_NO_SANDBOX === "1",
+          stealthMode: settings.browserStealthMode,
           serverHost: config.host,
           serverPort: config.port,
         };

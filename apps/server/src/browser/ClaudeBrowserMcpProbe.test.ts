@@ -54,6 +54,7 @@ describe.runIf(process.env.SALCHI_BROWSER_INTEGRATION === "1")(
               processRegistryDirectory: path.join(root, "processes"),
               environmentExecutablePath: process.env.SALCHI_BROWSER_PATH,
               noSandbox: process.env.SALCHI_BROWSER_NO_SANDBOX === "1",
+              stealthMode: false,
               serverHost: "127.0.0.1",
               serverPort: 3773,
             }),

@@ -411,6 +411,7 @@ export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   browserAgentAccessEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   browserKillRogueBrowsers: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  browserStealthMode: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   browserScreencastQuality: BrowserScreencastQuality.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_BROWSER_SCREENCAST_QUALITY)),
   ),
@@ -561,6 +562,7 @@ export const ServerSettingsPatch = Schema.Struct({
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
   browserAgentAccessEnabled: Schema.optionalKey(Schema.Boolean),
   browserKillRogueBrowsers: Schema.optionalKey(Schema.Boolean),
+  browserStealthMode: Schema.optionalKey(Schema.Boolean),
   browserScreencastQuality: Schema.optionalKey(BrowserScreencastQuality),
   browserScreencastEveryNthFrame: Schema.optionalKey(BrowserScreencastEveryNthFrame),
   automaticGitFetchInterval: Schema.optionalKey(Schema.DurationFromMillis),

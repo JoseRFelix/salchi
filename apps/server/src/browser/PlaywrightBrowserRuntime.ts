@@ -45,6 +45,7 @@ import {
   browserScreencastEveryNthFrameForStart,
   makeBrowserScreencastFrameRateController,
 } from "./BrowserScreencastPolicy.ts";
+import { browserStealthUserAgent, BROWSER_STEALTH_WEBDRIVER_SCRIPT } from "./BrowserStealth.ts";
 import { registerManagedChildProcess } from "../process/ManagedChildProcessRegistry.ts";
 import { terminateProcessTree } from "../process/ProcessTree.ts";
 
@@ -128,6 +129,7 @@ export interface PlaywrightBrowserLaunchInput {
   readonly environmentExecutablePath?: string | undefined;
   readonly settingExecutablePath?: string | undefined;
   readonly noSandbox: boolean;
+  readonly stealthMode: boolean;
   readonly screencastQuality: number;
   readonly screencastEveryNthFrame: number;
   readonly serverHost?: string | undefined;
@@ -261,6 +263,7 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
             try: () =>
               chromium.launchPersistentContext(input.userDataDirectory, {
                 ...candidate.launchOptions,
+                ...(input.stealthMode ? { ignoreDefaultArgs: ["--enable-automation"] } : {}),
                 args: [
                   "--disable-dev-shm-usage",
                   "--remote-debugging-address=127.0.0.1",
@@ -332,14 +335,23 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
     "Failed to attach to Chromium's browser CDP target.",
     () => browser.newBrowserCDPSession(),
   );
-  const [processes, systemInfo] = yield* Effect.all([
-    tryBrowserOperation(input.threadId, "Failed to inspect Chromium processes.", () =>
+  const { browserVersion, processes, systemInfo } = yield* Effect.all({
+    processes: tryBrowserOperation(input.threadId, "Failed to inspect Chromium processes.", () =>
       browserCdp.send("SystemInfo.getProcessInfo"),
     ),
-    tryBrowserOperation(input.threadId, "Failed to inspect the Chromium executable.", () =>
-      browserCdp.send("SystemInfo.getInfo"),
+    systemInfo: tryBrowserOperation(
+      input.threadId,
+      "Failed to inspect the Chromium executable.",
+      () => browserCdp.send("SystemInfo.getInfo"),
     ),
-  ]);
+    browserVersion: input.stealthMode
+      ? tryBrowserOperation(input.threadId, "Failed to inspect the Chromium user agent.", () =>
+          browserCdp.send("Browser.getVersion"),
+        )
+      : Effect.succeed(undefined),
+  });
+  const stealthUserAgent =
+    browserVersion === undefined ? undefined : browserStealthUserAgent(browserVersion.userAgent);
   const browserProcess = processes.processInfo.find((entry) => entry.type === "browser");
   if (browserProcess === undefined || browserProcess.id < 1) {
     return yield* operationError(
@@ -706,10 +718,10 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
         cdp.off("Fetch.requestPaused", onRequestPaused);
         cdp.off("Page.screencastFrame", onScreencastFrame);
       };
+      yield* tryBrowserOperation(input.threadId, "Failed to enable browser tab CDP events.", () =>
+        cdp.send("Page.enable"),
+      );
       yield* Effect.all([
-        tryBrowserOperation(input.threadId, "Failed to enable browser tab CDP events.", () =>
-          cdp.send("Page.enable"),
-        ),
         tryBrowserOperation(input.threadId, "Failed to enable browser request interception.", () =>
           cdp.send("Fetch.enable", {
             patterns: browserFetchInterceptionPatterns({
@@ -718,6 +730,23 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
             }),
           }),
         ),
+        ...(stealthUserAgent === undefined
+          ? []
+          : [
+              tryBrowserOperation(
+                input.threadId,
+                "Failed to install the browser webdriver override.",
+                () =>
+                  cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+                    source: BROWSER_STEALTH_WEBDRIVER_SCRIPT,
+                  }),
+              ),
+              tryBrowserOperation(
+                input.threadId,
+                "Failed to set the browser user agent override.",
+                () => cdp.send("Network.setUserAgentOverride", { userAgent: stealthUserAgent }),
+              ),
+            ]),
       ]);
 
       const refreshFromPageEvent = () => {
