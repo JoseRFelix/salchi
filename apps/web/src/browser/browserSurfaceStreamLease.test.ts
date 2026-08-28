@@ -52,6 +52,31 @@ describe("browser surface stream lease", () => {
     expect(dispose).toHaveBeenCalledTimes(2);
   });
 
+  it("does not toggle screencasting during a PiP-to-panel handoff", () => {
+    const setScreencastEnabled = vi.fn();
+    const lease = createBrowserSurfaceStreamLease({
+      environmentId,
+      threadId,
+      acquire: () => {
+        setScreencastEnabled(true);
+        return {
+          dispose: () => setScreencastEnabled(false),
+          sendInput: () => true,
+        };
+      },
+    });
+
+    lease.setSurface("pip");
+    expect(setScreencastEnabled).toHaveBeenCalledExactlyOnceWith(true);
+
+    setScreencastEnabled.mockClear();
+    lease.setSurface("panel");
+    expect(setScreencastEnabled).not.toHaveBeenCalled();
+
+    lease.dispose();
+    expect(setScreencastEnabled).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
   it("releases immediately on close, panel hide, thread-switch disposal, and PiP socket drop", () => {
     let subscriber: BrowserStreamSubscriber | undefined;
     const dispose = vi.fn();
