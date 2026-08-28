@@ -174,6 +174,8 @@ describe.runIf(process.env.SALCHI_BROWSER_INTEGRATION === "1")(
           getLaunchConfig: () =>
             Effect.succeed({
               idleTimeoutMillis: 60_000,
+              screencastQuality: 45,
+              screencastEveryNthFrame: 2,
               userDataDirectory: path.join(root, "profile"),
               processRegistryDirectory: path.join(root, "processes"),
               environmentExecutablePath: process.env.SALCHI_BROWSER_PATH,

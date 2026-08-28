@@ -2252,6 +2252,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         getLaunchConfig: () =>
           Effect.succeed({
             idleTimeoutMillis: 60_000,
+            screencastQuality: 45,
+            screencastEveryNthFrame: 2,
             userDataDirectory: path.join(root, "profile"),
             processRegistryDirectory: path.join(root, "processes"),
             environmentExecutablePath: process.env.SALCHI_BROWSER_PATH,

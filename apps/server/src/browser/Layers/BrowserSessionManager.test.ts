@@ -52,6 +52,8 @@ function managerOptions(
     getLaunchConfig: () =>
       Effect.succeed({
         idleTimeoutMillis: 60 * 60 * 1_000,
+        screencastQuality: 45,
+        screencastEveryNthFrame: 2,
         userDataDirectory: "/tmp/salchi-browser-test-profile",
         processRegistryDirectory: "/tmp/salchi-browser-test-processes",
         noSandbox: false,
@@ -482,6 +484,8 @@ it.effect("does not idle out while an agent CDP proxy remains connected", () =>
         getLaunchConfig: () =>
           Effect.succeed({
             idleTimeoutMillis: 1_000,
+            screencastQuality: 45,
+            screencastEveryNthFrame: 2,
             userDataDirectory: "/tmp/salchi-browser-test-profile",
             processRegistryDirectory: "/tmp/salchi-browser-test-processes",
             noSandbox: false,
@@ -523,6 +527,8 @@ it.effect("resets the idle deadline when browser input records CDP activity", ()
         getLaunchConfig: () =>
           Effect.succeed({
             idleTimeoutMillis: 1_000,
+            screencastQuality: 45,
+            screencastEveryNthFrame: 2,
             userDataDirectory: "/tmp/salchi-browser-test-profile",
             processRegistryDirectory: "/tmp/salchi-browser-test-processes",
             noSandbox: false,

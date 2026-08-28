@@ -38,6 +38,8 @@ describe("ServerSettings browser defaults", () => {
     );
     expect(settings.browserAgentAccessEnabled).toBe(true);
     expect(settings.browserKillRogueBrowsers).toBe(false);
+    expect(settings.browserScreencastQuality).toBe(45);
+    expect(settings.browserScreencastEveryNthFrame).toBe(2);
     expect(settings.browserExecutablePath).toBe("");
   });
 
@@ -47,11 +49,15 @@ describe("ServerSettings browser defaults", () => {
       browserIdleTimeout: 42_000,
       browserAgentAccessEnabled: false,
       browserKillRogueBrowsers: true,
+      browserScreencastQuality: 60,
+      browserScreencastEveryNthFrame: 3,
     });
     expect(patch.browserExecutablePath).toBe("/opt/chrome");
     expect(Duration.toMillis(patch.browserIdleTimeout!)).toBe(42_000);
     expect(patch.browserAgentAccessEnabled).toBe(false);
     expect(patch.browserKillRogueBrowsers).toBe(true);
+    expect(patch.browserScreencastQuality).toBe(60);
+    expect(patch.browserScreencastEveryNthFrame).toBe(3);
   });
 });
 

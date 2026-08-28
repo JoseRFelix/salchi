@@ -398,11 +398,25 @@ export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
 export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.seconds(30);
 export const DEFAULT_BROWSER_IDLE_TIMEOUT = Duration.minutes(15);
+export const DEFAULT_BROWSER_SCREENCAST_QUALITY = 45;
+export const DEFAULT_BROWSER_SCREENCAST_EVERY_NTH_FRAME = 2;
+export const BrowserScreencastQuality = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: 100 }),
+);
+export const BrowserScreencastEveryNthFrame = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: 60 }),
+);
 
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   browserAgentAccessEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   browserKillRogueBrowsers: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  browserScreencastQuality: BrowserScreencastQuality.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_BROWSER_SCREENCAST_QUALITY)),
+  ),
+  browserScreencastEveryNthFrame: BrowserScreencastEveryNthFrame.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_BROWSER_SCREENCAST_EVERY_NTH_FRAME)),
+  ),
   automaticGitFetchInterval: Schema.DurationFromMillis.pipe(
     Schema.withDecodingDefault(
       Effect.succeed(Duration.toMillis(DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL)),
@@ -547,6 +561,8 @@ export const ServerSettingsPatch = Schema.Struct({
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
   browserAgentAccessEnabled: Schema.optionalKey(Schema.Boolean),
   browserKillRogueBrowsers: Schema.optionalKey(Schema.Boolean),
+  browserScreencastQuality: Schema.optionalKey(BrowserScreencastQuality),
+  browserScreencastEveryNthFrame: Schema.optionalKey(BrowserScreencastEveryNthFrame),
   automaticGitFetchInterval: Schema.optionalKey(Schema.DurationFromMillis),
   browserExecutablePath: Schema.optionalKey(TrimmedString),
   browserIdleTimeout: Schema.optionalKey(Schema.DurationFromMillis),

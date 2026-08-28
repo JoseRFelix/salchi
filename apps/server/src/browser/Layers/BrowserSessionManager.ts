@@ -85,6 +85,8 @@ import {
 
 export interface BrowserManagerLaunchConfig {
   readonly idleTimeoutMillis: number;
+  readonly screencastQuality: number;
+  readonly screencastEveryNthFrame: number;
   readonly userDataDirectory: string;
   readonly processRegistryDirectory: string;
   readonly environmentExecutablePath?: string | undefined;
@@ -553,6 +555,8 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
         environmentExecutablePath: launchConfig.environmentExecutablePath,
         settingExecutablePath: launchConfig.settingExecutablePath,
         noSandbox: launchConfig.noSandbox,
+        screencastQuality: launchConfig.screencastQuality,
+        screencastEveryNthFrame: launchConfig.screencastEveryNthFrame,
         serverHost: launchConfig.serverHost,
         serverPort: launchConfig.serverPort,
         callbacks,
@@ -1202,6 +1206,8 @@ const makeLive = Effect.gen(function* () {
           );
         return {
           idleTimeoutMillis: Duration.toMillis(settings.browserIdleTimeout),
+          screencastQuality: settings.browserScreencastQuality,
+          screencastEveryNthFrame: settings.browserScreencastEveryNthFrame,
           userDataDirectory,
           processRegistryDirectory,
           environmentExecutablePath: process.env.SALCHI_BROWSER_PATH,

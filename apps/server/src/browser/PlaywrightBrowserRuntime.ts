@@ -41,12 +41,15 @@ import {
   browserStreamDebugEnabled,
   logBrowserHandlerTiming,
 } from "./BrowserStreamDiagnostics.ts";
+import {
+  browserScreencastEveryNthFrameForStart,
+  makeBrowserScreencastFrameRateController,
+} from "./BrowserScreencastPolicy.ts";
 import { registerManagedChildProcess } from "../process/ManagedChildProcessRegistry.ts";
 import { terminateProcessTree } from "../process/ProcessTree.ts";
 
 const VIEWPORT_WIDTH = 800;
 const VIEWPORT_HEIGHT = 600;
-const SCREENCAST_QUALITY = 55;
 
 interface PageRuntime {
   readonly page: Page;
@@ -54,6 +57,8 @@ interface PageRuntime {
   readonly targetId: string;
   frameHeight: number;
   frameWidth: number;
+  initialScreencastFramePending: boolean;
+  screencastGeneration: number;
   screencasting: boolean;
   disposeListeners: () => void;
 }
@@ -123,6 +128,8 @@ export interface PlaywrightBrowserLaunchInput {
   readonly environmentExecutablePath?: string | undefined;
   readonly settingExecutablePath?: string | undefined;
   readonly noSandbox: boolean;
+  readonly screencastQuality: number;
+  readonly screencastEveryNthFrame: number;
   readonly serverHost?: string | undefined;
   readonly serverPort: number;
   readonly callbacks: BrowserRuntimeCallbacks;
@@ -380,6 +387,7 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
   let activeTargetId: string | undefined;
   let activeInputRuntime: PageRuntime | undefined;
   let screencastEnabled = false;
+  let appliedScreencastEveryNthFrame = input.screencastEveryNthFrame;
   let tabRefreshScheduled = false;
   let configuredPageCount = 0;
   let detachedPageCount = 0;
@@ -436,6 +444,7 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
         ).pipe(
           Effect.ensuring(
             Effect.sync(() => {
+              runtime.initialScreencastFramePending = false;
               runtime.screencasting = false;
             }),
           ),
@@ -443,24 +452,80 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
         )
       : Effect.void;
 
-  const startActiveScreencastUnlocked = Effect.gen(function* () {
-    if (!screencastEnabled || activeTargetId === undefined) return;
-    const runtime = pageRuntimes.get(activeTargetId);
-    if (runtime === undefined || runtime.screencasting) return;
-    yield* tryBrowserOperation(input.threadId, "Failed to focus the active browser tab.", () =>
-      runtime.page.bringToFront(),
-    );
-    yield* tryBrowserOperation(input.threadId, "Failed to start the browser screencast.", () =>
-      runtime.cdp.send("Page.startScreencast", {
-        format: "jpeg",
-        quality: SCREENCAST_QUALITY,
-        maxWidth: VIEWPORT_WIDTH,
-        everyNthFrame: 1,
-      }),
-    );
-    runtime.screencasting = true;
-    input.callbacks.onCdpActivity();
+  const startActiveScreencastUnlocked = (primeInitialFrame = true) =>
+    Effect.gen(function* () {
+      if (!screencastEnabled || activeTargetId === undefined) return;
+      const runtime = pageRuntimes.get(activeTargetId);
+      if (runtime === undefined || runtime.screencasting) return;
+      yield* tryBrowserOperation(input.threadId, "Failed to focus the active browser tab.", () =>
+        runtime.page.bringToFront(),
+      );
+      const everyNthFrame = browserScreencastEveryNthFrameForStart(
+        appliedScreencastEveryNthFrame,
+        primeInitialFrame,
+      );
+      runtime.initialScreencastFramePending = everyNthFrame !== appliedScreencastEveryNthFrame;
+      runtime.screencastGeneration += 1;
+      runtime.screencasting = true;
+      yield* tryBrowserOperation(input.threadId, "Failed to start the browser screencast.", () =>
+        runtime.cdp.send("Page.startScreencast", {
+          format: "jpeg",
+          quality: input.screencastQuality,
+          maxWidth: VIEWPORT_WIDTH,
+          everyNthFrame,
+        }),
+      ).pipe(
+        Effect.onError(() =>
+          Effect.sync(() => {
+            runtime.initialScreencastFramePending = false;
+            runtime.screencasting = false;
+          }),
+        ),
+      );
+      input.callbacks.onCdpActivity();
+    });
+
+  const finishInitialScreencastFrameUnlocked = (targetId: string, expectedGeneration: number) =>
+    Effect.gen(function* () {
+      if (
+        !screencastEnabled ||
+        activeTargetId !== targetId ||
+        appliedScreencastEveryNthFrame === 1
+      ) {
+        return;
+      }
+      const runtime = pageRuntimes.get(targetId);
+      if (
+        runtime === undefined ||
+        !runtime.screencasting ||
+        runtime.screencastGeneration !== expectedGeneration
+      ) {
+        return;
+      }
+      yield* stopScreencastUnlocked(runtime);
+      yield* startActiveScreencastUnlocked(false);
+    });
+
+  const setScreencastEveryNthFrameUnlocked = (everyNthFrame: number) =>
+    Effect.gen(function* () {
+      if (appliedScreencastEveryNthFrame === everyNthFrame) return;
+      appliedScreencastEveryNthFrame = everyNthFrame;
+      if (!screencastEnabled || activeTargetId === undefined) return;
+      const runtime = pageRuntimes.get(activeTargetId);
+      if (runtime === undefined || !runtime.screencasting) return;
+      // The mailbox and socket stay alive while CDP alone is restarted. This
+      // operation shares the existing page-operation semaphore with tab and
+      // screencast transitions, so stop/start cannot interleave with them.
+      yield* stopScreencastUnlocked(runtime);
+      yield* startActiveScreencastUnlocked(false);
+    });
+
+  const screencastFrameRate = makeBrowserScreencastFrameRateController({
+    configuredEveryNthFrame: input.screencastEveryNthFrame,
+    onEveryNthFrameChange: (everyNthFrame) =>
+      schedule(serialized(setScreencastEveryNthFrameUnlocked(everyNthFrame))),
   });
+  yield* Effect.addFinalizer(() => Effect.sync(screencastFrameRate.dispose));
 
   const removePageUnlocked = Effect.fn("browser.playwright.removePage")(function* (
     targetId: string,
@@ -489,7 +554,7 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
       activeTargetId = pageRuntimes.keys().next().value;
       activeInputRuntime =
         activeTargetId === undefined ? undefined : pageRuntimes.get(activeTargetId);
-      yield* startActiveScreencastUnlocked;
+      yield* startActiveScreencastUnlocked();
     }
     yield* refreshTabsUnlocked.pipe(Effect.ignore);
   });
@@ -527,6 +592,8 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
         targetId: target.targetInfo.targetId,
         frameHeight: VIEWPORT_HEIGHT,
         frameWidth: VIEWPORT_WIDTH,
+        initialScreencastFramePending: false,
+        screencastGeneration: 0,
         screencasting: false,
         disposeListeners: () => undefined,
       };
@@ -605,6 +672,9 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
         runtime.frameWidth = Math.max(0, Math.round(event.metadata.deviceWidth));
         runtime.frameHeight = Math.max(0, Math.round(event.metadata.deviceHeight));
         if (!runtime.screencasting || runtime.targetId !== activeTargetId) return;
+        const finishInitialFrame = runtime.initialScreencastFramePending;
+        const screencastGeneration = runtime.screencastGeneration;
+        runtime.initialScreencastFramePending = false;
         input.callbacks.onFrame({
           targetId: runtime.targetId,
           // CDP is the sole base64 boundary on the binary hot path. Decode at
@@ -614,6 +684,13 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
           height: runtime.frameHeight,
           receivedAtMonotonicMillis: cdpReceivedAtMonotonicMillis,
         });
+        if (finishInitialFrame) {
+          schedule(
+            serialized(
+              finishInitialScreencastFrameUnlocked(runtime.targetId, screencastGeneration),
+            ),
+          );
+        }
         if (streamDebug) {
           schedule(
             logBrowserHandlerTiming("browser.frame.cdp-handler", cdpReceivedAtMonotonicMillis, {
@@ -664,7 +741,7 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
         page.off("close", onClose);
       };
 
-      yield* startActiveScreencastUnlocked;
+      yield* startActiveScreencastUnlocked();
       if (options?.publishTabs !== false) yield* refreshTabsUnlocked;
       return runtime;
     }).pipe(
@@ -727,7 +804,7 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
       yield* tryBrowserOperation(input.threadId, "Failed to focus the selected browser tab.", () =>
         next.page.bringToFront(),
       );
-      yield* startActiveScreencastUnlocked;
+      yield* startActiveScreencastUnlocked();
       yield* refreshTabsUnlocked;
       input.callbacks.onCdpActivity();
     });
@@ -765,6 +842,7 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
             return runtime.cdp.send("Input.insertText", command.params);
         }
       });
+      screencastFrameRate.recordInput();
       input.callbacks.onCdpActivity();
       if (streamDebug) {
         yield* logBrowserHandlerTiming("browser.input.cdp-dispatch", handlerStartedAt, {
@@ -851,7 +929,7 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
           if (screencastEnabled === enabled) return;
           screencastEnabled = enabled;
           if (enabled) {
-            yield* startActiveScreencastUnlocked;
+            yield* startActiveScreencastUnlocked();
             return;
           }
           for (const runtime of pageRuntimes.values()) {

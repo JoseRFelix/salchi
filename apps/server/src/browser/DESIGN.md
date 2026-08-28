@@ -97,7 +97,13 @@ active tab is changed or removed. Input never refreshes tab metadata or waits be
 ## Viewport data path
 
 While at least one viewport subscriber exists, the active tab runs `Page.startScreencast` with JPEG
-quality 55, maximum width 800, and device scale factor 1. The runtime acknowledges each
+quality 45 by default, maximum width 800, and device scale factor 1. The idle cadence emits every
+second compositor frame by default. A new screencast is primed at every frame until its first JPEG
+arrives, preventing an already-painted static page from being skipped, and then returns to its
+configured cadence. Input temporarily boosts the active screencast to every frame; two seconds after
+the most recent input, it returns to the configured cadence. CDP stop/start for a cadence change is
+serialized with existing page operations while the mailbox, transport, and last frame remain live.
+The runtime acknowledges each
 `Page.screencastFrame` immediately, then publishes it to a capacity-one mailbox. Publishing replaces
 the previous value: the newest frame wins and no frame queue exists in the browser manager.
 
