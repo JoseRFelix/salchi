@@ -40,12 +40,8 @@ import {
   type LatestFrameRenderer,
 } from "../browser/latestFrameRenderer";
 import type { BrowserStreamViewportFrame } from "../browser/browserStreamConnection";
-import { acquireBrowserStream, type BrowserStreamSubscription } from "../browser/browserStreamPool";
-import {
-  readEnvironmentConnection,
-  subscribeEnvironmentConnections,
-} from "../environments/runtime";
-import { isTransportConnectionErrorMessage } from "../rpc/transportError";
+import type { BrowserSurfaceStreamLease } from "../browser/browserSurfaceStreamLease";
+import { readEnvironmentConnection } from "../environments/runtime";
 import type { WsRpcClient } from "../rpc/wsRpcClient";
 import { cn } from "../lib/utils";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
@@ -187,6 +183,7 @@ export function BrowserPanel(props: {
   readonly onClose: () => void;
   readonly onStateAction: (action: BrowserViewportStateAction) => void;
   readonly state: BrowserViewportState;
+  readonly streamLease: BrowserSurfaceStreamLease;
   readonly threadId: ThreadId;
   readonly visible: boolean;
 }) {
@@ -203,7 +200,6 @@ export function BrowserPanel(props: {
   const frameRendererRef = useRef<LatestFrameRenderer<BrowserStreamViewportFrame> | null>(null);
   const pendingFrameRef = useRef<BrowserStreamViewportFrame | null>(null);
   const currentFrameRef = useRef<BrowserStreamViewportFrame | null>(null);
-  const browserStreamConnectionRef = useRef<BrowserStreamSubscription | null>(null);
   const lastFrameReceivedAtRef = useRef(0);
   const inputMeasurementRef = useRef<{
     readonly afterSeq: number;
@@ -330,115 +326,23 @@ export function BrowserPanel(props: {
       pauseFrame();
       return;
     }
-
-    let disposed = false;
-    let currentClient: BrowserClient | null = null;
-    let currentConnection: BrowserStreamSubscription | null = null;
-    let connectionGeneration = 0;
-
-    const disposeCurrentConnection = () => {
-      const connection = currentConnection;
-      currentConnection = null;
-      if (browserStreamConnectionRef.current === connection) {
-        browserStreamConnectionRef.current = null;
-      }
-      connection?.dispose();
-    };
-
-    const connect = (client: BrowserClient) => {
-      connectionGeneration += 1;
-      const generation = connectionGeneration;
-      const startStream = () => {
-        if (disposed || generation !== connectionGeneration) return;
-        const connection = acquireBrowserStream({
-          environmentId: props.environmentId,
-          threadId: props.threadId,
-          onFrame: (frame) => {
-            if (!disposed && generation === connectionGeneration) acceptFrame(frame);
-          },
-          onEvent: (event) => {
-            if (!disposed && generation === connectionGeneration && !("agentActive" in event)) {
-              props.onStateAction({ type: "event", event });
-            }
-          },
-          onConnectionState: (state) => {
-            if (!disposed && generation === connectionGeneration && state !== "open") pauseFrame();
-          },
-          onAuthorizationDenied: () => {
-            if (!disposed && generation === connectionGeneration) {
-              props.onStateAction({ type: "authorizationDenied" });
-              disposeCurrentConnection();
-            }
-          },
-          onError: (error) => {
-            if (disposed || generation !== connectionGeneration) return;
-            const message = browserErrorMessage(error, "The browser viewport disconnected.");
-            if (isBrowserAuthorizationErrorMessage(message)) {
-              props.onStateAction({ type: "authorizationDenied" });
-            }
-          },
-        });
-        if (disposed || generation !== connectionGeneration) {
-          connection.dispose();
-          return;
+    return props.streamLease.attach("panel", {
+      onFrame: acceptFrame,
+      onEvent: (event) => {
+        if (!("agentActive" in event)) props.onStateAction({ type: "event", event });
+      },
+      onConnectionState: (state) => {
+        if (state !== "open") pauseFrame();
+      },
+      onAuthorizationDenied: () => props.onStateAction({ type: "authorizationDenied" }),
+      onError: (error) => {
+        const message = browserErrorMessage(error, "The browser viewport disconnected.");
+        if (isBrowserAuthorizationErrorMessage(message)) {
+          props.onStateAction({ type: "authorizationDenied" });
         }
-        currentConnection = connection;
-        browserStreamConnectionRef.current = connection;
-      };
-
-      void client.getState({ threadId: props.threadId }).then(
-        (snapshot) => {
-          if (disposed || generation !== connectionGeneration) return;
-          props.onStateAction({ type: "snapshot", snapshot });
-          startStream();
-        },
-        (error: unknown) => {
-          if (disposed || generation !== connectionGeneration) return;
-          if (isBrowserAuthorizationError(error)) {
-            props.onStateAction({ type: "authorizationDenied" });
-            return;
-          }
-          const message = browserErrorMessage(error, "Unable to subscribe to the browser.");
-          props.onStateAction({ type: "operationFailed", error: message });
-          if (isTransportConnectionErrorMessage(message)) startStream();
-        },
-      );
-    };
-
-    const syncConnection = () => {
-      const nextClient = readEnvironmentConnection(props.environmentId)?.client.browser ?? null;
-      if (nextClient === currentClient) return;
-      connectionGeneration += 1;
-      disposeCurrentConnection();
-      currentClient = nextClient;
-      pauseFrame();
-      if (nextClient) {
-        connect(nextClient);
-      } else {
-        props.onStateAction({
-          type: "operationFailed",
-          error: "The environment connection is unavailable.",
-        });
-      }
-    };
-
-    const unsubscribeConnections = subscribeEnvironmentConnections(syncConnection);
-    syncConnection();
-    return () => {
-      disposed = true;
-      connectionGeneration += 1;
-      unsubscribeConnections();
-      disposeCurrentConnection();
-      pauseFrame();
-    };
-  }, [
-    acceptFrame,
-    pauseFrame,
-    props.environmentId,
-    props.onStateAction,
-    props.threadId,
-    shouldSubscribe,
-  ]);
+      },
+    });
+  }, [acceptFrame, pauseFrame, props.onStateAction, props.streamLease, shouldSubscribe]);
 
   useEffect(
     () => () => {
@@ -482,14 +386,16 @@ export function BrowserPanel(props: {
     [props.environmentId, props.onStateAction],
   );
 
-  const dispatchBrowserInput = useCallback((targetId: string, event: BrowserInputEvent) => {
-    const connection = browserStreamConnectionRef.current;
-    if (!connection?.sendInput(targetId, event)) return;
-    inputMeasurementRef.current = {
-      afterSeq: currentFrameRef.current?.seq ?? -1,
-      sentAt: performance.now(),
-    };
-  }, []);
+  const dispatchBrowserInput = useCallback(
+    (targetId: string, event: BrowserInputEvent) => {
+      if (!props.streamLease.sendInput(targetId, event)) return;
+      inputMeasurementRef.current = {
+        afterSeq: currentFrameRef.current?.seq ?? -1,
+        sentAt: performance.now(),
+      };
+    },
+    [props.streamLease],
+  );
 
   const mapPointerCoordinates = useCallback(
     (clientX: number, clientY: number, clampToFrame = false) => {

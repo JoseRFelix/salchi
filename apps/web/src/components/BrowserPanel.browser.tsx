@@ -2,7 +2,7 @@ import "../index.css";
 
 import { EnvironmentId, ThreadId } from "@salchi/contracts";
 import { page } from "vitest/browser";
-import { useReducer } from "react";
+import { useLayoutEffect, useMemo } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -10,6 +10,7 @@ import {
   initialBrowserViewportState,
   reduceBrowserViewportState,
 } from "../browser/browserViewportState";
+import { createBrowserSurfaceStreamLease } from "../browser/browserSurfaceStreamLease";
 import { BrowserPanel } from "./BrowserPanel";
 import { RightPanelSheet } from "./RightPanelSheet";
 
@@ -95,6 +96,15 @@ function Panel(props: {
   readonly threadId: ThreadId;
   readonly visible: boolean;
 }) {
+  const streamLease = useMemo(
+    () =>
+      createBrowserSurfaceStreamLease({ environmentId: ENVIRONMENT_ID, threadId: props.threadId }),
+    [props.threadId],
+  );
+  useLayoutEffect(() => () => streamLease.dispose(), [streamLease]);
+  useLayoutEffect(() => {
+    streamLease.setSurface(props.visible ? "panel" : null);
+  }, [props.visible, streamLease]);
   return (
     <BrowserPanel
       environmentId={ENVIRONMENT_ID}
@@ -102,25 +112,7 @@ function Panel(props: {
       onClose={props.onClose ?? vi.fn()}
       onStateAction={vi.fn()}
       state={props.state ?? viewportState(props.threadId)}
-      threadId={props.threadId}
-      visible={props.visible}
-    />
-  );
-}
-
-function StatefulPanel(props: { readonly threadId: ThreadId; readonly visible: boolean }) {
-  const [state, dispatch] = useReducer(
-    reduceBrowserViewportState,
-    props.threadId,
-    initialBrowserViewportState,
-  );
-  return (
-    <BrowserPanel
-      environmentId={ENVIRONMENT_ID}
-      mode="sidebar"
-      onClose={vi.fn()}
-      onStateAction={dispatch}
-      state={state}
+      streamLease={streamLease}
       threadId={props.threadId}
       visible={props.visible}
     />
@@ -539,7 +531,7 @@ describe("BrowserPanel subscription visibility", () => {
 
     const renderSheet = (open: boolean) => (
       <RightPanelSheet open={open} onClose={vi.fn()}>
-        <Panel threadId={THREAD_A} visible />
+        <Panel threadId={THREAD_A} visible={open} />
       </RightPanelSheet>
     );
     const screen = await render(renderSheet(true));
@@ -555,19 +547,16 @@ describe("BrowserPanel subscription visibility", () => {
     }
   });
 
-  it("shows the owner-access state without starting an unauthorized retry loop", async () => {
+  it("shows the owner-access state without starting an unauthorized viewport connection", async () => {
     const client = createBrowserClient();
-    client.browser.getState.mockRejectedValue({
-      _tag: "EnvironmentAuthorizationError",
-      message: "The authenticated session requires the browser:operate scope.",
-      requiredScope: "browser:operate",
-    });
     readEnvironmentConnectionMock.mockReturnValue({ client });
-    const screen = await render(<StatefulPanel threadId={THREAD_A} visible />);
+    const state = reduceBrowserViewportState(initialBrowserViewportState(THREAD_A), {
+      type: "authorizationDenied",
+    });
+    const screen = await render(<Panel state={state} threadId={THREAD_A} visible />);
 
     try {
       await expect.element(page.getByText("Owner access required")).toBeVisible();
-      expect(client.browser.getState).toHaveBeenCalledOnce();
       expect(createBrowserStreamConnectionMock).not.toHaveBeenCalled();
     } finally {
       await screen.unmount();

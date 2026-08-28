@@ -22,6 +22,7 @@ export type BrowserPipAction =
   | { readonly type: "fadeElapsed" }
   | { readonly type: "lingerElapsed" }
   | { readonly type: "panelVisibility"; readonly open: boolean }
+  | { readonly type: "socketDrop" }
   | {
       readonly type: "reset";
       readonly agentActive?: boolean;
@@ -102,6 +103,8 @@ export function reduceBrowserPipState(
     }
     case "close":
       return { ...state, dismissedForCurrentBurst: true, phase: "hidden" };
+    case "socketDrop":
+      return { ...state, phase: "hidden" };
     case "lingerElapsed":
       return state.phase === "lingering" ? { ...state, phase: "fading" } : state;
     case "fadeElapsed":

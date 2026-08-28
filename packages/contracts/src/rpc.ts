@@ -205,6 +205,7 @@ export const WS_METHODS = {
   browserCloseTab: "browser.closeTab",
   browserDispatchInput: "browser.dispatchInput",
   browserSubscribeViewport: "browser.subscribeViewport",
+  browserSubscribeAgentActivity: "browser.subscribeAgentActivity",
 
   // Server meta
   serverGetConfig: "server.getConfig",
@@ -662,6 +663,16 @@ export const WsBrowserSubscribeViewportRpc = Rpc.make(WS_METHODS.browserSubscrib
   stream: true,
 });
 
+export const WsBrowserSubscribeAgentActivityRpc = Rpc.make(
+  WS_METHODS.browserSubscribeAgentActivity,
+  {
+    payload: BrowserThreadInput,
+    success: Schema.Boolean,
+    error: BrowserAuthorizedRpcError,
+    stream: true,
+  },
+);
+
 export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.dispatchCommand,
   {
@@ -833,6 +844,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsBrowserCloseTabRpc,
   WsBrowserDispatchInputRpc,
   WsBrowserSubscribeViewportRpc,
+  WsBrowserSubscribeAgentActivityRpc,
   WsSubscribeTerminalEventsRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,

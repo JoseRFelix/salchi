@@ -134,7 +134,7 @@ export function runBrowserStreamConnection(input: {
       let tabs: ReadonlyArray<BrowserTab> = [];
 
       const viewportEvents = input.browserManager
-        .subscribeViewport(input.threadId)
+        .subscribeViewport(input.threadId, "binary-surface")
         .pipe(Stream.map((event) => ({ _tag: "Viewport" as const, event })));
       const agentActivityEvents = input.browserManager
         .subscribeAgentActivity(input.threadId)

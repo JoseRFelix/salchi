@@ -132,12 +132,14 @@ describe("wsRpcClient", () => {
     const protocolNavigateHistory = vi.fn(() => Effect.succeed(state));
     const protocolDispatchInput = vi.fn(() => Effect.void);
     const protocolSubscribe = vi.fn(() => Stream.empty);
+    const protocolSubscribeAgentActivity = vi.fn(() => Stream.empty);
     const protocolClient = {
       [WS_METHODS.browserStart]: protocolStart,
       [WS_METHODS.browserNavigate]: protocolNavigate,
       [WS_METHODS.browserNavigateHistory]: protocolNavigateHistory,
       [WS_METHODS.browserDispatchInput]: protocolDispatchInput,
       [WS_METHODS.browserSubscribeViewport]: protocolSubscribe,
+      [WS_METHODS.browserSubscribeAgentActivity]: protocolSubscribeAgentActivity,
     } as unknown as WsRpcProtocolClient;
     const request = vi.fn(
       async <TSuccess>(
@@ -175,6 +177,7 @@ describe("wsRpcClient", () => {
       }),
     ).resolves.toBeUndefined();
     client.browser.subscribeViewport({ threadId }, vi.fn());
+    client.browser.subscribeAgentActivity({ threadId }, vi.fn());
 
     expect(protocolStart).toHaveBeenCalledWith({ threadId });
     expect(protocolNavigate).toHaveBeenCalledWith({
@@ -192,6 +195,7 @@ describe("wsRpcClient", () => {
       targetId: "target-1",
       event: { _tag: "InsertText", text: "hello" },
     });
+    expect(subscribe).toHaveBeenCalledTimes(2);
     const connect = subscribe.mock.calls[0]?.[0] as unknown as (
       client: WsRpcProtocolClient,
     ) => unknown;

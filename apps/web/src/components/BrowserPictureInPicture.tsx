@@ -1,11 +1,10 @@
-import type { EnvironmentId, ThreadId } from "@salchi/contracts";
 import * as Schema from "effect/Schema";
 import { BotIcon, GripIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { BrowserPipPhase } from "../browser/browserPipState";
 import type { BrowserStreamViewportFrame } from "../browser/browserStreamConnection";
-import { acquireBrowserStream } from "../browser/browserStreamPool";
+import type { BrowserSurfaceStreamLease } from "../browser/browserSurfaceStreamLease";
 import {
   createBrowserBinaryFrameRenderer,
   type LatestFrameRenderer,
@@ -81,11 +80,10 @@ function mobileCornerClasses(corner: MobileCorner): string {
 }
 
 export function BrowserPictureInPicture(props: {
-  readonly environmentId: EnvironmentId;
   readonly onClose: () => void;
   readonly onOpenPanel: () => void;
   readonly phase: Exclude<BrowserPipPhase, "hidden">;
-  readonly threadId: ThreadId;
+  readonly streamLease: BrowserSurfaceStreamLease;
 }) {
   const isMobile = useIsMobile();
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -115,9 +113,7 @@ export function BrowserPictureInPicture(props: {
   const [transientDesktopLayout, setTransientDesktopLayout] = useState<DesktopLayout | null>(null);
 
   useEffect(() => {
-    const subscription = acquireBrowserStream({
-      environmentId: props.environmentId,
-      threadId: props.threadId,
+    return props.streamLease.attach("pip", {
       onFrame: (frame) => {
         setHasFrame(true);
         const renderer = rendererRef.current;
@@ -125,8 +121,7 @@ export function BrowserPictureInPicture(props: {
         else pendingFrameRef.current = frame;
       },
     });
-    return subscription.dispose;
-  }, [props.environmentId, props.threadId]);
+  }, [props.streamLease]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

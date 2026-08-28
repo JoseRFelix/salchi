@@ -55,9 +55,13 @@ export interface BrowserSessionManagerShape {
   ) => Effect.Effect<void, BrowserRpcError>;
   readonly subscribeViewport: (
     threadId: ThreadId,
+    leaseKind?: BrowserViewportLeaseKind,
   ) => Stream.Stream<BrowserViewportEvent, BrowserRpcError>;
   readonly subscribeAgentActivity: (threadId: ThreadId) => Stream.Stream<boolean, BrowserRpcError>;
 }
+
+/** Every viewport subscription is an explicit visible-surface lease. */
+export type BrowserViewportLeaseKind = "binary-surface" | "legacy-rpc-surface";
 
 export class BrowserSessionManager extends Context.Service<
   BrowserSessionManager,

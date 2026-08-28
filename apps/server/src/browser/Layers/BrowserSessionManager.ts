@@ -61,7 +61,13 @@ import { makeLatestViewportMailbox, type LatestViewportMailbox } from "../Latest
 import {
   BrowserSessionManager,
   type BrowserSessionManagerShape,
+  type BrowserViewportLeaseKind,
 } from "../Services/BrowserSessionManager.ts";
+import {
+  initialBrowserViewportLeaseInvariantState,
+  updateBrowserViewportLeaseInvariant,
+  type BrowserViewportLeaseInvariantState,
+} from "../BrowserViewportLeaseInvariant.ts";
 
 export interface BrowserManagerLaunchConfig {
   readonly idleTimeoutMillis: number;
@@ -115,6 +121,7 @@ interface BrowserEntry {
   readonly mailbox: LatestViewportMailbox;
   readonly agentActivity: BrowserAgentActivityController;
   readonly subscriberCount: number;
+  readonly viewportLeases: ReadonlyMap<number, BrowserViewportLeaseKind>;
   readonly agentConnectionIds: ReadonlySet<string>;
   readonly starting: StartingBrowserSession | undefined;
   readonly session: RunningBrowserSession | undefined;
@@ -216,6 +223,8 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
   const resolvedThreadIds = new Map<string, ThreadId>();
   const streamDebug = browserStreamDebugEnabled();
   let nextSessionId = 0;
+  let nextViewportLeaseId = 0;
+  const viewportLeaseInvariantStates = new Map<string, BrowserViewportLeaseInvariantState>();
 
   const resolveThreadId = (
     requestedThreadId: ThreadId,
@@ -295,6 +304,7 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
       mailbox,
       agentActivity,
       subscriberCount: 0,
+      viewportLeases: new Map(),
       agentConnectionIds: new Set(),
       starting: undefined,
       session: undefined,
@@ -872,14 +882,16 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
       }),
     );
 
-  const releaseSubscriber = (threadId: ThreadId) =>
+  const releaseSubscriber = (threadId: ThreadId, leaseId: number) =>
     withThreadLock(
       threadId,
       Effect.gen(function* () {
         const entry = yield* getEntry(threadId);
-        if (entry === undefined || entry.subscriberCount === 0) return;
-        const subscriberCount = entry.subscriberCount - 1;
-        const next = { ...entry, subscriberCount };
+        if (entry === undefined || !entry.viewportLeases.has(leaseId)) return;
+        const viewportLeases = new Map(entry.viewportLeases);
+        viewportLeases.delete(leaseId);
+        const subscriberCount = viewportLeases.size;
+        const next = { ...entry, subscriberCount, viewportLeases };
         yield* setEntry(next);
         if (entry.session !== undefined) {
           yield* entry.session.idle.subscriberRemoved;
@@ -897,45 +909,82 @@ export const makeBrowserSessionManagerWithOptions = Effect.fn(
       }),
     );
 
-  const acquireSubscriber = (threadId: ThreadId) =>
+  const acquireSubscriber = (threadId: ThreadId, leaseKind: BrowserViewportLeaseKind) =>
     Effect.suspend(() => {
-      let subscriberCountIncremented = false;
+      const leaseId = ++nextViewportLeaseId;
+      let leaseAcquired = false;
       return withThreadLock(
         threadId,
         Effect.gen(function* () {
           yield* requireThread(threadId);
           const entry = yield* getOrCreateEntry(threadId);
-          const subscriberCount = entry.subscriberCount + 1;
-          yield* setEntry({ ...entry, subscriberCount });
-          subscriberCountIncremented = true;
+          const viewportLeases = new Map(entry.viewportLeases);
+          viewportLeases.set(leaseId, leaseKind);
+          const subscriberCount = viewportLeases.size;
+          yield* setEntry({ ...entry, subscriberCount, viewportLeases });
+          leaseAcquired = true;
           if (entry.session !== undefined) {
             yield* entry.session.idle.subscriberAdded;
             if (entry.subscriberCount === 0) {
               yield* entry.session.runtime.setScreencastEnabled(true);
             }
           }
-          return entry.mailbox;
+          return { leaseId, mailbox: entry.mailbox };
         }),
       ).pipe(
-        Effect.onError(() =>
-          subscriberCountIncremented ? releaseSubscriber(threadId) : Effect.void,
-        ),
+        Effect.onError(() => (leaseAcquired ? releaseSubscriber(threadId, leaseId) : Effect.void)),
       );
     });
 
-  const subscribeViewport: BrowserSessionManagerShape["subscribeViewport"] = (threadId) =>
+  const subscribeViewport: BrowserSessionManagerShape["subscribeViewport"] = (
+    threadId,
+    leaseKind = "legacy-rpc-surface",
+  ) =>
     Stream.scoped(
       Stream.fromEffect(
         Effect.acquireRelease(
           Effect.flatMap(resolveThreadId(threadId), (rootThreadId) =>
-            acquireSubscriber(rootThreadId).pipe(
-              Effect.map((mailbox) => ({ mailbox, rootThreadId })),
+            acquireSubscriber(rootThreadId, leaseKind).pipe(
+              Effect.map(({ leaseId, mailbox }) => ({ leaseId, mailbox, rootThreadId })),
             ),
           ),
-          ({ rootThreadId }) => releaseSubscriber(rootThreadId),
+          ({ leaseId, rootThreadId }) => releaseSubscriber(rootThreadId, leaseId),
         ),
       ).pipe(Stream.flatMap(({ mailbox }) => mailbox.stream)),
     ).pipe(Stream.map((event) => viewportEventForRequestedThread(event, threadId)));
+
+  const checkViewportLeaseInvariants = Effect.gen(function* () {
+    const now = browserMonotonicMillis();
+    const entries = yield* SynchronizedRef.get(entriesRef);
+    yield* Effect.forEach(
+      entries.values(),
+      (entry) => {
+        const previous =
+          viewportLeaseInvariantStates.get(entry.threadId) ??
+          initialBrowserViewportLeaseInvariantState;
+        const result = updateBrowserViewportLeaseInvariant(previous, {
+          now,
+          subscriberCount: entry.subscriberCount,
+          visibleLeaseCount: entry.viewportLeases.size,
+        });
+        viewportLeaseInvariantStates.set(entry.threadId, result.state);
+        return result.shouldLog
+          ? Effect.logWarning("Browser viewport lease invariant violated", {
+              threadId: entry.threadId,
+              subscriberCount: entry.subscriberCount,
+              visibleLeaseCount: entry.viewportLeases.size,
+            })
+          : Effect.void;
+      },
+      { discard: true },
+    );
+  });
+
+  if (streamDebug) {
+    scheduleInManager(
+      Effect.forever(Effect.sleep("5 seconds").pipe(Effect.andThen(checkViewportLeaseInvariants))),
+    );
+  }
 
   const subscribeAgentActivity: BrowserSessionManagerShape["subscribeAgentActivity"] = (threadId) =>
     Stream.unwrap(

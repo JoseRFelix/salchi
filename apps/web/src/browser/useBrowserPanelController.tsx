@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useLayoutEffect,
   useReducer,
   useRef,
   useState,
@@ -22,6 +23,7 @@ import {
   browserErrorMessage,
   initialBrowserViewportState,
   isBrowserAuthorizationError,
+  isBrowserAuthorizationErrorMessage,
   reduceBrowserViewportState,
   type BrowserViewportStateAction,
 } from "./browserViewportState";
@@ -31,7 +33,10 @@ import {
   initialBrowserPipState,
   reduceBrowserPipState,
 } from "./browserPipState";
-import { acquireBrowserStream } from "./browserStreamPool";
+import {
+  createBrowserSurfaceStreamLease,
+  resolveBrowserViewportSurface,
+} from "./browserSurfaceStreamLease";
 
 const HIDDEN_BROWSER_STATE_REFRESH_INTERVAL_MS = 15_000;
 
@@ -41,6 +46,18 @@ export interface BrowserPanelController {
   readonly pictureInPicture: ReactNode;
   readonly running: boolean;
   readonly toggle: () => void;
+}
+
+function useDocumentVisible(): boolean {
+  const [visible, setVisible] = useState(
+    () => typeof document === "undefined" || document.visibilityState === "visible",
+  );
+  useEffect(() => {
+    const sync = () => setVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", sync);
+    return () => document.removeEventListener("visibilitychange", sync);
+  }, []);
+  return visible;
 }
 
 export function useBrowserPanelController(input: {
@@ -60,6 +77,17 @@ export function useBrowserPanelController(input: {
     reduceBrowserPipState,
     { enabled: input.enabled && input.showAgentPreview, threadId: input.threadId },
     initialBrowserPipState,
+  );
+  const documentVisible = useDocumentVisible();
+  const streamLease = useMemo(
+    () =>
+      createBrowserSurfaceStreamLease({
+        environmentId: input.environmentId,
+        threadId: input.threadId,
+        debug: import.meta.env.DEV,
+        onPipSocketDrop: () => dispatchPip({ type: "socketDrop" }),
+      }),
+    [input.environmentId, input.threadId],
   );
   const pipThreadMemoryRef = useRef(
     new Map<string, { readonly agentActive: boolean; readonly dismissed: boolean }>(),
@@ -98,6 +126,8 @@ export function useBrowserPanelController(input: {
     });
   }, [input.enabled, input.showAgentPreview, input.threadId]);
 
+  useLayoutEffect(() => () => streamLease.dispose(), [streamLease]);
+
   useEffect(() => {
     pipThreadMemoryRef.current.set(pipState.threadId, {
       agentActive: pipState.agentActive,
@@ -119,31 +149,54 @@ export function useBrowserPanelController(input: {
   }, [state.status]);
 
   useEffect(() => {
-    if (!input.enabled || !input.showAgentPreview || state.authorization === "denied") return;
-    const subscription = acquireBrowserStream({
-      environmentId: input.environmentId,
-      threadId: input.threadId,
-      onEvent: (event) => {
-        if ("agentActive" in event) {
-          dispatchPip({ type: "activity", active: event.agentActive });
-        } else {
-          dispatch({ type: "event", event });
-          if (event._tag === "Status") {
-            dispatchPip({ type: "status", status: event.status });
-          }
-        }
-      },
-      onConnectionState: (connectionState) => {
-        if (connectionState === "closed") {
-          dispatchPip({ type: "activity", active: false });
-        }
-      },
-      onAuthorizationDenied: () => {
-        dispatch({ type: "authorizationDenied" });
-        dispatchPip({ type: "status", status: "stopped" });
-      },
-    });
-    return subscription.dispose;
+    if (!input.enabled || !input.showAgentPreview || state.authorization !== "granted") return;
+    let currentClient = readEnvironmentConnection(input.environmentId)?.client.browser ?? null;
+    let unsubscribeActivity: (() => void) | null = null;
+
+    const stopActivity = () => {
+      const unsubscribe = unsubscribeActivity;
+      unsubscribeActivity = null;
+      unsubscribe?.();
+    };
+    const subscribeActivity = () => {
+      stopActivity();
+      if (currentClient === null) return;
+      unsubscribeActivity = currentClient.subscribeAgentActivity(
+        { threadId: input.threadId },
+        (agentActive) => {
+          dispatchPip({ type: "activity", active: agentActive });
+          if (!agentActive || currentClient === null) return;
+          void currentClient.getState({ threadId: input.threadId }).then(
+            (snapshot) => dispatch({ type: "snapshot", snapshot }),
+            () => undefined,
+          );
+        },
+        {
+          onSubscriptionError: (info) => {
+            if (isBrowserAuthorizationErrorMessage(info.error)) {
+              stopActivity();
+              dispatch({ type: "authorizationDenied" });
+              dispatchPip({ type: "status", status: "stopped" });
+              return;
+            }
+            dispatchPip({ type: "activity", active: false });
+          },
+        },
+      );
+    };
+    const syncConnection = () => {
+      const nextClient = readEnvironmentConnection(input.environmentId)?.client.browser ?? null;
+      if (nextClient === currentClient) return;
+      currentClient = nextClient;
+      subscribeActivity();
+    };
+
+    subscribeActivity();
+    const unsubscribeConnections = subscribeEnvironmentConnections(syncConnection);
+    return () => {
+      stopActivity();
+      unsubscribeConnections();
+    };
   }, [
     input.enabled,
     input.environmentId,
@@ -160,6 +213,15 @@ export function useBrowserPanelController(input: {
     );
     return () => window.clearTimeout(timer);
   }, [pipState.phase]);
+
+  const viewportSurface = resolveBrowserViewportSurface({
+    documentVisible,
+    panelVisible: input.enabled && open && state.authorization !== "denied",
+    pipPhase: pipState.phase,
+  });
+  useLayoutEffect(() => {
+    streamLease.setSurface(viewportSurface);
+  }, [streamLease, viewportSurface]);
 
   useEffect(() => {
     if (pipState.phase !== "fading") return;
@@ -242,12 +304,22 @@ export function useBrowserPanelController(input: {
           onClose={close}
           onStateAction={onStateAction}
           state={state}
+          streamLease={streamLease}
           threadId={input.threadId}
           visible={input.enabled && open}
         />
       ),
     }),
-    [close, input.enabled, input.environmentId, input.threadId, onStateAction, open, state],
+    [
+      close,
+      input.enabled,
+      input.environmentId,
+      input.threadId,
+      onStateAction,
+      open,
+      state,
+      streamLease,
+    ],
   );
   useRegisterBrowserRightPanelContent(registration);
   useRegisterRightPanel({
@@ -274,14 +346,13 @@ export function useBrowserPanelController(input: {
   const pictureInPicture =
     pipState.threadId !== input.threadId || pipState.phase === "hidden" || open ? null : (
       <BrowserPictureInPicture
-        environmentId={input.environmentId}
         onClose={() => dispatchPip({ type: "close" })}
         onOpenPanel={() => {
           dispatchPip({ type: "panelVisibility", open: true });
           openRightPanel("browser");
         }}
         phase={pipState.phase}
-        threadId={input.threadId}
+        streamLease={streamLease}
       />
     );
 

@@ -1675,7 +1675,17 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
           observeRpcStream(
             WS_METHODS.browserSubscribeViewport,
             Stream.fromEffect(requireBrowserOperationScope).pipe(
-              Stream.flatMap(() => browserSessionManager.subscribeViewport(input.threadId)),
+              Stream.flatMap(() =>
+                browserSessionManager.subscribeViewport(input.threadId, "legacy-rpc-surface"),
+              ),
+            ),
+            { "rpc.aggregate": "browser" },
+          ),
+        [WS_METHODS.browserSubscribeAgentActivity]: (input) =>
+          observeRpcStream(
+            WS_METHODS.browserSubscribeAgentActivity,
+            Stream.fromEffect(requireBrowserOperationScope).pipe(
+              Stream.flatMap(() => browserSessionManager.subscribeAgentActivity(input.threadId)),
             ),
             { "rpc.aggregate": "browser" },
           ),

@@ -73,6 +73,13 @@ describe("browser PiP visibility", () => {
     );
   });
 
+  it("hides immediately when its viewport socket drops during linger", () => {
+    let state = reduceBrowserPipState(runningState(), { type: "activity", active: true });
+    state = reduceBrowserPipState(state, { type: "activity", active: false });
+    expect(state.phase).toBe("lingering");
+    expect(reduceBrowserPipState(state, { type: "socketDrop" }).phase).toBe("hidden");
+  });
+
   it("restores per-thread suppression without treating a replayed active snapshot as a new burst", () => {
     let state = initialBrowserPipState({
       agentActive: true,

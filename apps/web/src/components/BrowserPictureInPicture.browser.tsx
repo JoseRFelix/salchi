@@ -1,20 +1,23 @@
 import "../index.css";
 
-import { EnvironmentId, ThreadId } from "@salchi/contracts";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { BrowserPictureInPicture } from "./BrowserPictureInPicture";
 
-const { acquireBrowserStreamMock, disposeMock } = vi.hoisted(() => ({
-  acquireBrowserStreamMock: vi.fn(),
-  disposeMock: vi.fn(),
+const { attachMock, detachMock } = vi.hoisted(() => ({
+  attachMock: vi.fn(),
+  detachMock: vi.fn(),
 }));
 
-vi.mock("../browser/browserStreamPool", () => ({
-  acquireBrowserStream: acquireBrowserStreamMock,
-}));
+const streamLease = {
+  attach: attachMock,
+  dispose: vi.fn(),
+  sendInput: vi.fn(),
+  setSurface: vi.fn(),
+  snapshot: vi.fn(() => ({ connected: true, surface: "pip" as const })),
+};
 
 vi.mock("../browser/latestFrameRenderer", () => ({
   createBrowserBinaryFrameRenderer: () => ({
@@ -32,23 +35,26 @@ describe("BrowserPictureInPicture", () => {
   });
 
   it("acquires frames while mounted, opens the panel from its body, and releases on unmount", async () => {
-    acquireBrowserStreamMock.mockReturnValue({ dispose: disposeMock, sendInput: vi.fn() });
+    attachMock.mockReturnValue(detachMock);
     const onOpenPanel = vi.fn();
     const screen = await render(
       <BrowserPictureInPicture
-        environmentId={EnvironmentId.make("environment-pip")}
         onClose={vi.fn()}
         onOpenPanel={onOpenPanel}
         phase="visible"
-        threadId={ThreadId.make("thread-pip")}
+        streamLease={streamLease}
       />,
     );
 
-    expect(acquireBrowserStreamMock).toHaveBeenCalledOnce();
+    expect(attachMock).toHaveBeenCalledOnce();
+    expect(attachMock).toHaveBeenCalledWith(
+      "pip",
+      expect.objectContaining({ onFrame: expect.any(Function) }),
+    );
     await page.getByRole("button", { name: "Open Browser panel" }).click();
     expect(onOpenPanel).toHaveBeenCalledOnce();
 
     await screen.unmount();
-    expect(disposeMock).toHaveBeenCalledOnce();
+    expect(detachMock).toHaveBeenCalledOnce();
   });
 });
