@@ -1,292 +1,287 @@
-# Browser use
+# Browser use architecture
 
-The server owns one headless Chromium process per root orchestration thread. Browser API and agent
-proxy inputs follow both `parentThreadId` and `createdByThreadId` ancestry before lookup, so
-materialized children and provider-created virtual sessions share the root process and profile.
-Only a thread with neither relationship is accepted as an owner. Each process uses a
-persistent profile under `~/.salchi/userdata/browser-profiles/<threadId>/`, may contain multiple
-tabs, and is independent of provider-session reaping. Process and live URL state are intentionally
-not recovered after a server restart. Startup warns about legacy profile directories that no
-longer correspond to a real root orchestration thread; it does not delete or migrate them.
-Although ownership stays root-keyed internally, browser API snapshots and viewport metadata retain
-the caller's requested thread id so child-thread panels can safely discard genuinely stale events.
+Salchi owns one headless Chromium process for each **root orchestration thread**. The process is
+provider-neutral: the user controls it through the Browser panel, while coding agents attach to the
+same process through a protected CDP proxy. A browser can contain multiple tabs and uses a persistent
+profile at `~/.salchi/userdata/browser-profiles/<rootThreadId>/`, so cookies and logins survive browser
+and server restarts. Live processes, tabs, and CDP URLs are not reconstructed after a server restart.
 
-Chromium is resolved from `SALCHI_BROWSER_PATH`, then the server setting, then Playwright's system
-Chrome/Chromium channels. `playwright-core` never downloads a browser. The sandbox is enabled unless
-`SALCHI_BROWSER_NO_SANDBOX=1`; shared-memory avoidance and a loopback-only CDP debug address are
-always applied.
-
-Viewport frames use CDP `Page.startScreencast` as JPEG quality 55 at a maximum width of 800 and
-device scale factor 1. Frames are acknowledged immediately and written to a capacity-one latest
-value mailbox. The web client receives them over the dedicated binary browser stream described
-below; the original JSON Effect RPC stream remains as a compatibility API. Frames never enter
-orchestration events or SQLite. Screencasting exists only while there is a subscriber; Chromium may
-stay alive with none. A session idles out only after both CDP activity and the last viewport
-subscriber have been absent for the configured 15-minute default.
-
-Requests to the instance's own listening host and port and to the static metadata hosts
-`169.254.169.254`, `metadata.google.internal`, and `fd00:ec2::254` are failed through CDP
-interception and logged. `Fetch.enable` contains only patterns for those hosts plus the Salchi
-host/port and loopback aliases; it never uses a catch-all pattern, so ordinary documents and
-subresources never pause in Node. The same page interception also covers clients attached through
-the agent CDP proxy. Explicit stop, thread deletion, idle timeout, and server-scope shutdown close Playwright
-gracefully and then ensure the Chromium process tree is gone. Unexpected process exit is observable
-as `crashed` and is restarted only by an explicit start.
-
-## Phase 2a: viewport UI
-
-The web client provides the browser as a normal right-panel view. Frames stay in the component's
-canvas renderer and are not stored in Zustand or persisted. The viewport subscription exists only
-while that panel view is visible. Its browser-style address bar exposes back, forward, reload, and
-direct navigation through owner-scoped unary browser RPCs.
-
-## Phase 2b: agent CDP access
-
-Chromium also exposes a dynamically allocated remote-debugging port bound to `127.0.0.1`. Salchi
-discovers and validates the browser websocket endpoint after launch. The raw
-`ws://127.0.0.1:<port>/devtools/browser/...` value is retained server-side and appears only in the
-owner-scoped `browser.getState` response.
-
-Provider sessions receive one variable, gated by the `browserAgentAccessEnabled` server setting:
-
-- `SALCHI_BROWSER_CDP_URL=ws://127.0.0.1:<port>/internal/browser/cdp/<threadId>/<token>`
-
-Salchi injects this per-thread URL into the provider process environment automatically. The token
-is random per provider session, embedded in the path because MCP clients accept a URL but cannot
-supply an authorization header, and revoked with that provider session. The URL is stable across
-browser crashes for the credential's lifetime. It is a proxy URL, not Chromium's raw CDP URL, so
-provider startup remains lazy: accepting a websocket connection starts or reuses the thread browser
-and then pipes CDP frames in both directions.
-
-The proxy uses a dedicated listener bound by the kernel to `127.0.0.1:0`; it is not mounted on
-Salchi's public listener or Tailscale Serve. It rejects non-loopback peers, forwarding headers,
-unknown thread/token pairs, query strings, and ordinary HTTP requests. Multiple proxy connections
-may attach independently to Chromium's browser endpoint. Closing either side closes only that pipe,
-not the browser. Browser stop, thread deletion, crash, or server shutdown closes the Chromium side;
-connecting again through a still-valid stable URL lazily relaunches after a crash. Proxy connection
-presence, a periodic heartbeat, and proxied traffic feed the browser idle controller, so an
-attached agent is not stopped while it is working. The tokenized URL is capability material and is
-not logged at info level.
-
-Tabs created by an external CDP client enter the same persistent browser context. Its `page` event
-installs the navigation guard and publishes the tab to the viewport UI. The viewport's independent
-CDP session and concurrent agent clients coexist on Chromium's multi-client browser endpoint.
-
-### Automatic MCP registration
-
-Provider sessions require no user MCP configuration. Salchi pins `@playwright/mcp` 0.0.74 as a
-server dependency, resolves its installed `cli.js` once per Salchi process, and launches it with
-the verified `--cdp-endpoint` flag. This keeps provider startup independent of an `npx` network
-fetch. Version 0.0.74 is the known-good release on Playwright's 1.60 line already used by Salchi;
-newer MCP releases would pull a separate newer Playwright alpha into the server. Package resolution
-is best-effort: failure logs a warning, omits only the browser MCP and its behavioral instruction,
-and lets the provider session start normally.
-
-The MCP server name is consistently `salchi-browser`. When it is registered, providers also
-receive a short instruction to use those tools for browsing, not launch another browser, and
-remember that the user can see the viewport live. Registration follows each provider's native
-configuration seam:
-
-- Claude receives a stdio entry in SDK `query` options beside the existing in-process `salchi`
-  server; the preset system prompt uses its `append` field.
-- Codex receives an `mcp_servers.salchi-browser` override in both `thread/start` and
-  `thread/resume`; this request-scoped config does not materialize or mutate `CODEX_HOME`. The same
-  definition is used by recoverable resume-to-new-thread fallback. Its existing collaboration-mode
-  developer instructions carry the browsing instruction.
-- Cursor and Grok receive a second ACP stdio `mcpServers` entry in every `session/new` and
-  `session/load` path. The existing in-process Salchi MCP server's initialization instructions
-  carry the browsing instruction.
-- A locally spawned OpenCode server receives a per-process `OPENCODE_CONFIG_CONTENT` with a local
-  MCP definition, and per-turn `system` context carries the instruction. Externally configured
-  OpenCode server URLs remain intentionally unsupported for automatic registration because Salchi
-  neither owns their process config nor mutates user config.
-
-All registration and browser instructions are gated by `browserAgentAccessEnabled`. The provider
-process and its MCP child also receive `SALCHI_BROWSER_CDP_URL`; custom setups may continue to use
-the stable proxy directly. For example, the equivalent pinned manual Playwright configuration is:
-
-```json
-{
-  "mcpServers": {
-    "playwright": {
-      "command": "sh",
-      "args": [
-        "-lc",
-        "exec npx -y @playwright/mcp@0.0.74 --cdp-endpoint \"$SALCHI_BROWSER_CDP_URL\""
-      ]
-    }
-  }
-}
+```text
+                                         server process
+  web app                                +----------------------------------------------+
+  +----------------------+               | Effect RPC (owner-only browser.* controls)   |
+  | Browser panel        |---- unary ----+------------------+                           |
+  | agent-activity PiP   |               |                  v                           |
+  | shared stream pool   |---- ticketed raw WS ----> BrowserSessionManager              |
+  +----------------------+       /browser-stream/:id    | one scoped session/root       |
+                                                         |                               |
+  provider process                                       | Playwright control CDP        |
+  +----------------------+                               v                               |
+  | injected MCP config  |  dedicated 127.0.0.1 WS   Chromium + persistent context     |
+  | @playwright/mcp      |-- stable token URL ------>  ^    |                           |
+  | custom CDP clients   |  BrowserAgentBroker         |    +-- tab CDP sessions        |
+  +----------------------+                    proxied browser CDP                        |
+                                         +----------------------------------------------+
 ```
 
-The equivalent one-liner is:
+The browser manager and agent broker are runtime-layer services. They are independent of
+`ProviderSessionReaper`; browser lifetime follows the rules below, while each agent credential is
+released with its provider session.
+
+## Ownership and root-thread normalization
+
+Browser state is keyed only by a thread with neither `parentThreadId` nor `createdByThreadId`.
+`resolveBrowserRootThreadId` follows both relationships, detects cycles, and fails when any thread in
+the chain is missing. Every manager operation normalizes its requested id before accessing the
+session map. This includes unary RPC operations, viewport/activity subscriptions, input dispatch,
+and agent-connection accounting. Returned snapshots and viewport metadata retain the caller's
+requested id so a child-thread UI can still reject stale events without creating another browser.
+
+The public stream route passes its requested id through the same manager boundary. Agent access is
+normalized before the credential and stable proxy URL are created, so every provider seam receives
+the root id in `SALCHI_BROWSER_CDP_URL`. The live `threadExists` predicate accepts only a real root
+orchestration thread. On startup Salchi warns—but never deletes or migrates—profile directories that
+do not correspond to a current root thread.
+
+## Browser runtime
+
+### Executable acquisition and process isolation
+
+Salchi uses `playwright-core`, which does not download browsers. Resolution order is:
+
+1. `SALCHI_BROWSER_PATH`;
+2. the `browserExecutablePath` server setting;
+3. Playwright's installed system Chrome/Chromium channels.
+
+Failure reports every attempted path/channel as a typed `BrowserUnavailable` error. Chromium uses a
+fixed 800×600 viewport with device scale factor 1. Its sandbox remains enabled unless
+`SALCHI_BROWSER_NO_SANDBOX=1`; that opt-out emits a prominent warning. The process always receives
+`--disable-dev-shm-usage`, a dynamically allocated remote-debugging port, and
+`--remote-debugging-address=127.0.0.1`.
+
+The session scope owns the persistent Playwright context, page CDP sessions, idle monitor, and
+launch fiber. Its finalizer first attempts a bounded graceful Playwright close, then terminates the
+Chromium process group/tree. On Linux the process is also registered with
+`ManagedChildProcessRegistry`, following the provider process-group precedent, so server cleanup can
+reap descendants that escape the graceful path.
+
+### Tabs, interception, and input
+
+Each page has one cached CDP session. Page listeners publish coalesced tab/title/navigation updates;
+closing a page removes those listeners and detaches its CDP session. Pages created by an external
+CDP client are observed through the persistent context's `page` event and enter the same setup path,
+so they appear in the tab bar and receive the navigation guard.
+
+The guard statically blocks these destinations:
+
+- `169.254.169.254`, `metadata.google.internal`, and `fd00:ec2::254`, regardless of port;
+- Salchi's own listening host and port; and
+- loopback aliases at Salchi's listening port.
+
+`Fetch.enable` receives only candidate URL patterns for those hosts; it never pauses every request.
+Each matching request is failed and logged at info level. There is deliberately no DNS resolution.
+
+The web stream and compatibility RPC both call the same `dispatchInput` path. It resolves the root
+and reads the current running entry without taking the per-thread manager semaphore. The runtime
+uses the active tab's cached CDP session without its control-operation semaphore, rejects a stale or
+inactive target, applies a rolling 200-events-per-second session limit, clamps coordinates to the
+latest frame dimensions, and performs exactly one of:
+
+- `Input.dispatchMouseEvent` for pointer and wheel input;
+- `Input.dispatchKeyEvent` for key input; or
+- `Input.insertText` for composed text.
+
+Successful input records ordinary CDP activity. The active input session is invalidated before an
+active tab is changed or removed. Input never refreshes tab metadata or waits behind frame output.
+
+## Viewport data path
+
+While at least one viewport subscriber exists, the active tab runs `Page.startScreencast` with JPEG
+quality 55, maximum width 800, and device scale factor 1. The runtime acknowledges each
+`Page.screencastFrame` immediately, then publishes it to a capacity-one mailbox. Publishing replaces
+the previous value: the newest frame wins and no frame queue exists in the browser manager.
+
+```text
+Page.screencastFrame (base64 from CDP)
+  -> immediate Page.screencastFrameAck
+  -> latest-value mailbox (replace stale frame)
+  -> per-connection outbox (one writing + one newest pending)
+  -> raw JPEG browser-stream FRAME
+  -> Blob/createImageBitmap
+  -> one newest pending requestAnimationFrame paint
+```
+
+The first subscriber starts the screencast. The last release stops it but leaves Chromium running.
+Frames never enter Zustand, client persistence, orchestration events, or SQLite. The original
+`browser.subscribeViewport` Effect RPC stream remains a compatibility API and still carries base64
+JPEG in JSON; the web application uses the raw browser stream for frames and metadata.
+
+## Public browser stream
+
+The public listener exposes:
+
+```text
+ws(s)://<salchi-host>/browser-stream/<threadId>?ticket=<short-lived-websocket-ticket>
+```
+
+It authenticates the ticket with the same websocket-upgrade mechanism as `/ws` and requires the
+owner-only `browser:operate` scope **before** calling `request.upgrade`. A missing/invalid ticket is
+rejected by authentication and a valid non-owner session is rejected with HTTP 403. Unlike the agent
+proxy, this route is intentionally available through the same external/Tailscale Serve listener as
+`/ws`, because browsers and phones use it.
+
+Each connection acquires one normal manager viewport subscription and releases it when its Effect
+connection scope completes, including abrupt socket loss. Multiple clients are supported. The web
+side adds a ref-counted pool keyed by environment and thread: the Browser panel, PiP, and hidden
+agent-activity listener are logical consumers of one physical ticketed socket, and thus one server
+subscriber. The retained RPC stream independently counts as a subscriber when a programmatic client
+uses it.
+
+### Version 1 wire protocol
+
+Every binary websocket message starts with a one-byte version (`0x01`) and one-byte type.
+Multi-byte integer fields use network byte order.
+
+| Direction       | Type             | Body                                                                    |
+| --------------- | ---------------- | ----------------------------------------------------------------------- |
+| server → client | `FRAME` (`0x01`) | `u32 seq`, `u16 width`, `u16 height`, `u8 tabIndexHint`, raw JPEG bytes |
+| server → client | `META` (`0x02`)  | UTF-8 JSON: viewport `Status`, viewport `Tabs`, or `{agentActive}`      |
+| client → server | `INPUT` (`0x03`) | UTF-8 JSON: `{targetId, event}` using the browser input tagged union    |
+
+There is no application-level frame ACK. CDP frames are acknowledged on receipt, and input is read
+and dispatched by a fiber independent of the frame writer. Effect's socket writer does not expose a
+browser-style `bufferedAmount`; on Node the route reads the upgraded TCP socket's `writableLength`
+and skips a frame at or above the 256 KiB default threshold. Its outbox permits one write plus one
+replaceable pending frame. Metadata uses a separate ordered low-frequency queue. On adapters without
+`writableLength`, the replaceable pending slot remains the application-level backlog bound.
+
+The client exchanges a fresh ticket and reconnects with exponential backoff, reconnecting promptly
+when document visibility returns. It does not retry authorization failures. Frames decode with
+`Blob`/`createImageBitmap` when available and paint on `requestAnimationFrame`; both decode and paint
+stages retain only the newest pending frame. Aspect-fit rendering preserves the image, accounts for
+device pixel ratio, and letterboxes within the panel.
+
+## Browser panel and PiP
+
+The Browser view is part of the existing resizable right-panel registry and responsive sheet. Its
+address bar provides back, forward, reload, and navigation; its tab strip supports selection, open,
+and close. Stopped, starting, running, crashed, and authorization states are order-tolerant. The
+first valid viewport click/tap enables interaction and forwards that same gesture—there is no header
+toggle. Hiding the panel, changing view/thread, closing the sheet, stopping/crashing, or losing
+authorization disables it. A quick touch taps, a moving single finger scrolls, and a 450 ms hold
+before movement begins click-drag. Desktop keyboard input targets the focused canvas; mobile uses a
+hidden input for text, Enter, and Backspace.
+
+The stream's agent-activity metadata drives a view-only PiP. An authenticated proxy's first CDP
+command publishes `agentActive: true` immediately. Further commands extend a four-second active
+window; the transition to false waits another two seconds to avoid flapping. Proxy open/close,
+heartbeat, Chromium responses, viewport traffic, and user input affect idle activity but do not mark
+the agent active. Stop and crash reset the signal immediately.
+
+With the client setting **Show browser preview while agent browses** enabled, activity starts a PiP
+when the full panel is closed. It lingers for three seconds after inactivity, suppresses itself for
+the remainder of an activity burst after manual close, and hides immediately for panel open,
+thread change, stop, or crash. Desktop position/size and mobile snapped corner are device-local. PiP
+is never interactive; clicking it opens the full panel.
+
+## Agent CDP proxy and automatic MCP
+
+Each provider session receives a random 256-bit credential and, when
+`browserAgentAccessEnabled` is true, this stable capability URL:
+
+```text
+SALCHI_BROWSER_CDP_URL=ws://127.0.0.1:<brokerPort>/internal/browser/cdp/<rootThreadId>/<token>
+```
+
+The broker is a dedicated kernel-assigned listener bound only to `127.0.0.1`; it is not mounted on
+the public listener or Tailscale Serve. An explicit public deny route returns 404 for
+`/internal/browser/cdp/*`. Upgrades reject non-loopback peers, any forwarding headers, query strings,
+malformed paths, inactive/unknown tokens, and a token used with a different thread. Ordinary HTTP
+requests receive 404. The credential is revoked with the provider session and the capability URL is
+never logged at info level.
+
+After validation the broker lazily starts or reuses the root browser, resolves its private Chromium
+browser websocket, and pipes CDP messages bidirectionally. Chromium supports multiple independent
+browser-endpoint clients. Closing one side closes only that proxy pipe, not Chromium. A live proxy
+connection holds the idle controller through connection accounting and a 30-second heartbeat;
+traffic also updates CDP activity. Stop/crash closes Chromium and therefore attached pipes, while a
+new connection through an otherwise valid stable URL lazily launches a new process.
+
+The token is a bearer capability, not an operating-system user credential. Another local user cannot
+guess it or use the public listener, but a user who can inspect the provider/MCP process environment
+or command line can steal it and gain CDP access to that thread until the provider credential is
+released. Hosts requiring hostile-local-user isolation need an additional OS boundary.
+
+Salchi pins `@playwright/mcp` 0.0.74 and resolves its installed `cli.js` once, avoiding an
+`npx` network fetch during provider startup. Resolution is best-effort: failure warns, omits only the
+browser MCP/instruction, and starts the provider normally. Registration uses the name
+`salchi-browser` and tells the agent to use it instead of launching a separate browser:
+
+- Claude: SDK query options beside the in-process `salchi` MCP server;
+- Codex: request-scoped `mcp_servers.salchi-browser` config for start and resume, without modifying
+  `CODEX_HOME`;
+- Cursor/Grok: ACP `mcpServers` for new and loaded sessions, beside `SalchiAcpMcpServer`;
+- local OpenCode: per-process `OPENCODE_CONFIG_CONTENT`; externally hosted OpenCode is unsupported
+  because Salchi does not own its process configuration.
+
+Registration, the behavioral instruction, and proxy environment injection are all setting-gated
+and repeat on recovery/resume paths. Custom provider setups may use the injected URL directly. The
+equivalent manual commands (Salchi does not run these) are:
 
 ```sh
 npx -y @playwright/mcp@0.0.74 --cdp-endpoint "$SALCHI_BROWSER_CDP_URL"
+npx -y chrome-devtools-mcp@1.8.0 --wsEndpoint "$SALCHI_BROWSER_CDP_URL"
 ```
 
-Verified against `chrome-devtools-mcp` 1.8.0, its flag is `--wsEndpoint` (also exposed as the
-`--ws-endpoint` alias):
+## Lifecycle
 
-```json
-{
-  "mcpServers": {
-    "chrome-devtools": {
-      "command": "sh",
-      "args": [
-        "-lc",
-        "exec npx -y chrome-devtools-mcp@latest --wsEndpoint \"$SALCHI_BROWSER_CDP_URL\""
-      ]
-    }
-  }
-}
-```
+A browser does not start with a provider session. `browser.start`, an agent proxy connection, or a
+compatible explicit caller starts it lazily. It remains alive with zero viewport subscribers. Idle
+shutdown occurs only when there are no subscribers, no attached proxy connections, and no CDP
+activity for the configured timeout (15 minutes by default).
 
-```sh
-npx -y chrome-devtools-mcp@latest --wsEndpoint "$SALCHI_BROWSER_CDP_URL"
-```
+| Trigger         | Browser session                                                                                           | Agent proxy                                                                                | Public/RPC viewport consumer                                                              |
+| --------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| `browser.stop`  | publishes `stopped`, closes session scope, gracefully closes Playwright, then enforces process-tree death | Chromium side closes each pipe; stable credential remains reconnectable                    | subscription remains and observes stopped metadata; screencast is gone                    |
+| thread deletion | invokes browser stop beside terminal cleanup; later starts fail root existence                            | attached pipes close; a retained token cannot restart a deleted thread                     | UI/thread teardown closes the client; server subscription releases on socket/stream close |
+| idle timeout    | same finalizers as stop; impossible while a subscriber or agent connection is present                     | therefore no attached proxy at the instant idle wins                                       | therefore no open viewport subscriber at the instant idle wins                            |
+| Chromium crash  | publishes `crashed`, resets agent activity, closes the failed session scope; no automatic restart         | Chromium side drops; reconnect through a valid credential explicitly/lazily restarts       | connection stays subscribed to manager metadata and can observe crash/restart             |
+| server shutdown | manager scope closes all session scopes/fibers; runtime/process-registry finalizers reap Chromium         | broker scope terminates pending/active pipes, revokes credentials, closes WS/HTTP listener | public HTTP/WS scope interrupts routes; RPC/raw subscription scopes release               |
 
-Salchi itself does not invoke either `npx` command above; they are examples only for custom setups.
-Phase 2b deliberately does not add a `salchi/*` browser tool or alter dynamic-tool handling.
+The manager transfers already-held subscriber and agent-connection counts into a newly launched
+session, so an explicit restart restores screencasting when appropriate. Unexpected exit is never
+restarted in the background.
 
-## Phase 3 manual interaction
+## Settings and diagnostics
 
-The viewport enters interaction mode on the first valid click or tap and forwards that same gesture;
-there is no separate interaction control. Hiding the panel, switching views or threads, closing the
-responsive sheet, stopping/crashing the browser, or losing authorization disables interaction.
-Pointer, wheel, keyboard, and composed text events use the existing dispatch-input event union and
-are accepted only for the active tab. Phase 4 sends panel input over the binary browser socket; the
-owner-scoped `browser.dispatchInput` RPC remains available for programmatic callers.
+| Name                               | Default    | Purpose                                                          |
+| ---------------------------------- | ---------- | ---------------------------------------------------------------- |
+| server `browserExecutablePath`     | empty      | explicit executable after `SALCHI_BROWSER_PATH`                  |
+| server `browserIdleTimeout`        | 15 minutes | inactivity deadline after the final subscriber/agent connection  |
+| server `browserAgentAccessEnabled` | `true`     | proxy credentials, MCP registration, and browser-use instruction |
+| client `showBrowserAgentPreview`   | `true`     | automatic activity listener and PiP                              |
+| `SALCHI_BROWSER_PATH`              | unset      | highest-priority Chromium executable                             |
+| `SALCHI_BROWSER_NO_SANDBOX`        | unset      | `1` is the explicit sandbox opt-out                              |
+| `SALCHI_BROWSER_STREAM_DEBUG`      | unset      | `1` enables browser hot-path debug instrumentation               |
 
-The browser viewport is fixed at 800×600 with device scale factor 1. The client inverts the canvas
-aspect-fit transform, including letterbox offsets and device-pixel-ratio backing scale, into streamed
-frame coordinates. The server clamps those coordinates to the most recently observed frame size
-before dispatching through the tab's existing CDP session. Each successful input records CDP
-activity, and a per-browser rolling limit admits at most 200 events in any one-second window.
+Debug mode reports event-loop lag p50/p99 every five seconds, input receive-to-CDP completion,
+CDP-frame receive/mailbox/socket-write timing, page CDP attach/detach counts, backpressure skips, and
+instrumented handlers over 50 ms. Development clients log frame receive-to-render and
+input-send-to-next-render gaps. The retained localhost comparison measured 28.7 ms on the legacy
+JSON RPC stream and 10.0 ms on the binary stream using the same Chromium page. The primary expected
+gain is on a high-RTT phone-to-VPS path.
 
-Touch uses a deliberate hybrid convention: a quick tap clicks, moving one finger scrolls by
-emitting wheel deltas, and holding for 450 ms before moving enters click-drag mode. Desktop pointer
-moves are coalesced to one per animation frame. Desktop keyboard events go to a focused interactive
-canvas; the mobile keyboard button focuses a hidden text input that supports composed text plus
-Enter and Backspace. File pickers, clipboard synchronization, full IME fidelity, and multi-touch
-gestures remain out of scope.
+## Known limitations
 
-Manual verification:
-
-1. Have an attached agent navigate to a page while the Browser panel is open.
-2. Click a link or cookie banner in the viewport and verify the first click is forwarded while the
-   agent remains attached.
-3. Scroll with a mouse wheel or a one-finger touch drag.
-4. Focus a text field and type with the desktop keyboard or the panel keyboard button on mobile.
-
-## Phase 4 low-latency browser stream
-
-The public Salchi listener now serves
-`ws(s)://<salchi-host>/browser-stream/<threadId>?ticket=<short-lived-ticket>`. It uses the same
-websocket-ticket exchange as `/ws`, enforces `browser:operate` before upgrading, and is intentionally
-reachable through the same Tailscale Serve path as `/ws` so a remote phone can use it. Each raw
-connection owns one ordinary viewport subscription, so multiple phones/desktops compose with the
-existing first-subscriber/last-unsubscriber screencast and idle-controller behavior.
-
-Protocol version 1 starts every binary message with a version byte and a type byte. `FRAME` carries
-sequence, dimensions, a tab-index hint, and raw JPEG bytes. `META` carries UTF-8 JSON for the existing
-`Status` and `Tabs` event shapes. In the other direction, `INPUT` carries UTF-8 JSON containing the
-active target id and the existing browser input event union. There is deliberately no frame ACK:
-Chromium is ACKed immediately at CDP receipt, and the browser stream never waits for a remote client.
-
-The web Browser panel uses the raw socket for frames, status, tabs, and manual input. The unary
-`browser.*` RPCs still own lifecycle/tab/address-bar operations. `browser.subscribeViewport` and
-`browser.dispatchInput` remain supported for compatibility and programmatic clients, but the web
-hot path no longer calls either. Raw JPEGs stay outside Zustand and persistence, enter the existing
-latest-frame renderer through `Blob`/`createImageBitmap`, and are dropped there again if decoding or
-animation-frame rendering falls behind. A running view whose newest frame is over two seconds old
-shows the existing paused overlay.
-
-On the Node server, Effect's websocket abstraction does not expose the underlying WebSocket
-`bufferedAmount`, and its writer completes after `ws.send` rather than after network drain. The
-upgraded Node request does expose its underlying TCP socket's `writableLength`, so each connection
-skips frames while that real unsent-byte count is at least 256 KiB. A connection-owned writer pump
-also keeps only one newest pending frame while a write is in progress; low-frequency metadata keeps
-order independently. Input is consumed by the socket reader and dispatched independently of that
-writer pump. On a non-Node adapter where the request source has no `writableLength`, the latest-only
-slot still prevents an application frame backlog, but the 256 KiB transport threshold is not
-observable; phase 4 is verified and deployed on the repository's Node server path.
-
-Set `SALCHI_BROWSER_STREAM_DEBUG=1` to log, at debug level only, the captured/mailbox-published frame
-to socket-write delta, each input's receive-to-CDP-complete time, event-loop delay p50/p99 every five
-seconds, any instrumented browser handler over 50 ms, page-CDP attach/detach counts, and backpressure
-skips. Development builds also log receive-to-canvas-render and input-send-to-next-render timings in
-the browser console. The gated localhost comparison uses
-the same Chromium/page for both retained transports; the final verification run measured 28.7 ms
-over the legacy JSON RPC stream and 10.0 ms over the binary socket. These localhost numbers mainly
-show removed serialization/ACK overhead; the intended improvement is larger on a high-RTT phone-to-
-VPS connection.
-
-Manual verification:
-
-1. Start Salchi on the VPS, open a thread and its Browser panel, then start the browser.
-2. From a phone on cellular, tap a visible link and confirm the first tap enables interaction and
-   the next frame feels immediate while the connection-quality overlay stays clear.
-3. Disable networking or kill the browser-stream websocket mid-stream, restore connectivity, and
-   confirm the ticket/reconnect loop resumes frames.
-4. Hide the panel, switch right-panel views and switch threads; in every case confirm the raw socket
-   closes and the final viewport subscriber stops the screencast.
-
-## Latency investigation notes
-
-Browser input bypasses both manager and Playwright per-thread operation semaphores. The manager
-reads the already-running entry, and the runtime uses the active tab's cached `CDPSession`; a
-successful event performs exactly one `Input.dispatchMouseEvent`, `Input.dispatchKeyEvent`, or
-`Input.insertText` command. The cache is invalidated before active-tab replacement/removal and set
-to the new active tab before input resumes. Input socket reads run independently from the frame
-outbox writer, so a slow frame write cannot hold an input message. Tab/title refreshes remain on the
-serialized control path and navigation notifications are coalesced.
-
-The Playwright MCP implementation pinned by Salchi retains its current tab and creates a page only
-when no current tab exists or the agent explicitly requests a new one. A live inspection that showed
-one top-level page but hundreds of targets identified ad-heavy out-of-process iframes, not a fresh
-Playwright page per tool call; Chromium renderer client ids are monotonic and therefore are not a
-live-page count. Salchi still detaches each per-page CDP session and removes all CDP/Page listeners
-when that page closes, including configuration-failure cleanup. A page pool would conflict with
-explicit MCP new-tab semantics and is therefore not added.
-
-## Agent browsing picture-in-picture
-
-The browser stream's version-1 `META` union also carries `{ "agentActive": boolean }`. A session
-becomes agent-active on the first CDP command received from an authenticated agent proxy. Proxy
-open/close, heartbeats, Chromium responses, viewport subscribers, and user input do not activate
-the signal. The active window is four seconds after the latest command; its inactive transition is
-held for another two seconds to avoid flapping during short command gaps. Stop and crash reset the
-signal immediately. The manager owns the transition monitor and replay-one activity feed, so server
-scope shutdown interrupts both the monitor and its subscriptions.
-
-The web app uses a ref-counted connection pool keyed by environment and root thread. The hidden
-activity listener, full Browser panel, and picture-in-picture canvas are logical consumers of that
-pool, but they share exactly one ticketed raw websocket and therefore one server viewport
-subscriber. Raw frames remain outside Zustand and persistence; both canvases use the existing
-latest-only JPEG renderer. Because activity is delivered only on the browser stream, enabling the
-automatic preview keeps that one stream connected for the current thread even while the card is
-hidden. Consequently it also holds the current route's viewport-subscriber/idle lease. This is the
-unavoidable lifecycle consequence of the phase's fixed protocol; disabling **Show browser preview
-while agent browses** restores subscribe-only-while-panel-visible behavior.
-
-On desktop, the view-only card is draggable and corner-resizable, and its pixel position/size are
-stored in device-local storage. On mobile it is a fixed 16:10 card at roughly 40% viewport width;
-dragging its header snaps it to the nearest corner. Clicking the image opens the full Browser panel,
-while close suppresses the card until the next inactive-to-active transition for that thread. The
-last frame lingers for three seconds after activity stops and then fades. Opening the panel,
-switching threads, stopping, or crashing hides it immediately. Native video PiP remains out of
-scope, but the preview is isolated behind the same canvas renderer so a future capture-stream
-consumer does not require another browser socket.
-
-Manual verification:
-
-1. Leave the Browser panel closed and ask an agent to navigate; confirm the preview appears over
-   the lower-right chat area and follows the live page.
-2. Click the preview body; confirm the full Browser panel opens and the preview disappears without
-   creating a second browser-stream connection.
-3. Close the preview during an activity burst; confirm it stays hidden until activity ends and a
-   later command burst begins.
-4. Let the agent finish; confirm the final frame remains for three seconds and fades.
-5. On desktop, drag and resize the card, then reload and confirm its layout persists. On mobile,
-   drag it across the chat and confirm it snaps to the nearest corner.
+- JPEG screencast compression, transfer, decode, and canvas paint impose a latency/quality ceiling;
+  there is no adaptive codec or WebRTC transport.
+- The navigation guard uses static hostname matching only. It does not resolve DNS or attempt a
+  comprehensive private-network SSRF policy.
+- Native video PiP (`captureStream`/`requestPictureInPicture`) is not implemented; the current PiP is
+  an in-app canvas card.
+- Because `agentActive` is delivered on the authenticated browser stream, enabling automatic PiP
+  keeps the shared stream and one viewport subscriber alive for the current thread even while the
+  card and full panel are hidden. Disabling the preview restores panel-visible-only subscription.
+- The loopback CDP token is a bearer secret rather than an OS-user-bound credential, as described in
+  the proxy security model above.
+- Automatic MCP registration is unavailable for remotely managed OpenCode servers.
