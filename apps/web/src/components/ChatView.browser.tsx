@@ -4555,7 +4555,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("does not steal printable keys from editable targets or shortcut modifiers", async () => {
+  it("does not steal printable keys from editable targets, keyboard capture regions, or shortcut modifiers", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -4564,7 +4564,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
       }),
     });
     const input = document.createElement("input");
-    document.body.append(input);
+    const keyboardCapture = document.createElement("canvas");
+    keyboardCapture.dataset.chatKeyboardCapture = "true";
+    keyboardCapture.tabIndex = 0;
+    document.body.append(input, keyboardCapture);
 
     try {
       input.focus();
@@ -4576,6 +4579,19 @@ describe("ChatView timeline estimator parity (full app)", () => {
         }),
       );
       await waitForLayout();
+      expect(useComposerDraftStore.getState().draftsByThreadKey[THREAD_KEY]?.prompt ?? "").toBe("");
+
+      keyboardCapture.focus();
+      keyboardCapture.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "b",
+          code: "KeyB",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await waitForLayout();
+      expect(document.activeElement).toBe(keyboardCapture);
       expect(useComposerDraftStore.getState().draftsByThreadKey[THREAD_KEY]?.prompt ?? "").toBe("");
 
       window.dispatchEvent(
@@ -4590,6 +4606,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       expect(useComposerDraftStore.getState().draftsByThreadKey[THREAD_KEY]?.prompt ?? "").toBe("");
     } finally {
       input.remove();
+      keyboardCapture.remove();
       await mounted.cleanup();
     }
   });

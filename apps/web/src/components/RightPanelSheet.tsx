@@ -1,8 +1,21 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { RIGHT_PANEL_SHEET_CLASS_NAME } from "../rightPanelLayout";
 import { Sheet, SheetPopup } from "./ui/sheet";
 import { isToastPortalDismissalRequest } from "./ui/sheetDismissal";
+
+const RightPanelSheetOpenContext = createContext(true);
+
+export function useRightPanelSheetOpen(): boolean {
+  return useContext(RightPanelSheetOpenContext);
+}
 
 export function RightPanelSheet(props: {
   children: ReactNode;
@@ -59,7 +72,9 @@ export function RightPanelSheet(props: {
         className={RIGHT_PANEL_SHEET_CLASS_NAME}
       >
         <div className="flex h-full min-h-0 w-full flex-col max-[760px]:pb-safe max-[760px]:pr-safe max-[760px]:pt-safe">
-          {renderedChildren}
+          <RightPanelSheetOpenContext value={props.open}>
+            {renderedChildren}
+          </RightPanelSheetOpenContext>
         </div>
       </SheetPopup>
     </Sheet>

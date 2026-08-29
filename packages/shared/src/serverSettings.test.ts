@@ -1,5 +1,6 @@
 import { DEFAULT_SERVER_SETTINGS, ProviderDriverKind, ProviderInstanceId } from "@salchi/contracts";
 import { describe, expect, it } from "vitest";
+import * as Duration from "effect/Duration";
 import { createModelSelection } from "./model.ts";
 import {
   applyServerSettingsPatch,
@@ -10,6 +11,13 @@ import {
 } from "./serverSettings.ts";
 
 describe("serverSettings helpers", () => {
+  it("replaces the browser idle duration atomically", () => {
+    const next = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      browserIdleTimeout: Duration.seconds(45),
+    });
+    expect(Duration.toMillis(next.browserIdleTimeout)).toBe(45_000);
+  });
+
   it("normalizes optional persisted strings", () => {
     expect(normalizePersistedServerSettingString(undefined)).toBeUndefined();
     expect(normalizePersistedServerSettingString("   ")).toBeUndefined();

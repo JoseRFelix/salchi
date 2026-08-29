@@ -120,6 +120,8 @@ import { useCommandPaletteStore } from "../commandPaletteStore";
 import { buildTemporaryWorktreeBranchName } from "@salchi/shared/git";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useMobileEdgeSwipe } from "../hooks/useMobileEdgeSwipe";
+import { useBrowserPanelController } from "../browser/useBrowserPanelController";
+import { getRemoteOpenCodeBrowserNotice } from "../browser/remoteOpenCodeBrowserNotice";
 import { providerSupportsActiveTurnSteering } from "../providerTurnCapabilities";
 import { markRightPanelUsed, openRightPanel, useRegisterRightPanel } from "../rightPanelGesture";
 import { useRegisterPlanRightPanelContent } from "../rightPanelContentRegistry";
@@ -310,6 +312,7 @@ const TYPE_TO_FOCUS_FLOATING_LAYER_SELECTOR = [
   '[data-slot="combobox-popup"]',
   '[data-slot="autocomplete-popup"]',
 ].join(",");
+const CHAT_KEYBOARD_CAPTURE_SELECTOR = '[data-chat-keyboard-capture="true"]';
 
 type EnvironmentUnavailableState = {
   readonly environmentId: EnvironmentId;
@@ -1030,6 +1033,18 @@ export default function ChatView(props: ChatViewProps) {
   );
   const isServerThread = routeKind === "server" && serverThread !== undefined;
   const activeThread = isServerThread ? serverThread : localDraftThread;
+  const browserAgentAccessNotice = getRemoteOpenCodeBrowserNotice({
+    settings,
+    thread: isServerThread ? activeThread : null,
+  });
+  const browserPanel = useBrowserPanelController({
+    agentAccessNotice: browserAgentAccessNotice,
+    enabled: isServerThread,
+    environmentId,
+    showAgentPreview: settings.showBrowserAgentPreview,
+    threadId,
+    useSheet: shouldUsePlanSidebarSheet,
+  });
   const isInitialThreadDetailLoading =
     routeKind === "server" &&
     shouldShowThreadDetailLoading(activeThread, {
@@ -2421,10 +2436,12 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeFileExplorerContext) {
       return;
     }
+    browserPanel.close();
     dismissPlanSidebarForCurrentTurn();
     openWorkspaceFileExplorer(activeFileExplorerContext, { navigation: "replace" });
   }, [
     activeFileExplorerContext,
+    browserPanel.close,
     dismissPlanSidebarForCurrentTurn,
     diffOpen,
     draftId,
@@ -2485,9 +2502,10 @@ export default function ChatView(props: ChatViewProps) {
   );
   const openDiffPanelExclusive = useCallback(() => {
     closeWorkspaceFilePreview();
+    browserPanel.close();
     dismissPlanSidebarForCurrentTurn();
     onDiffPanelOpen?.();
-  }, [dismissPlanSidebarForCurrentTurn, onDiffPanelOpen]);
+  }, [browserPanel.close, dismissPlanSidebarForCurrentTurn, onDiffPanelOpen]);
   const onToggleDiff = useCallback(() => {
     if (routeKind === "server" && !isServerThread) {
       return;
@@ -3709,6 +3727,7 @@ export default function ChatView(props: ChatViewProps) {
       if (!activeThreadId || useCommandPaletteStore.getState().open || event.defaultPrevented) {
         return;
       }
+      if (eventPathContainsSelector(event, CHAT_KEYBOARD_CAPTURE_SELECTOR)) return;
       const shortcutContext = {
         terminalFocus: isTerminalFocused(),
         terminalOpen: Boolean(terminalState.terminalOpen),
@@ -5080,6 +5099,9 @@ export default function ChatView(props: ChatViewProps) {
           availableEditors={availableEditors}
           terminalAvailable={activeProject !== undefined}
           terminalOpen={terminalState.terminalOpen}
+          browserAvailable={isServerThread}
+          browserOpen={browserPanel.open}
+          browserRunning={browserPanel.running}
           terminalToggleShortcutLabel={terminalToggleShortcutLabel}
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           sourceControlToggleShortcutLabel={sourceControlShortcutLabel}
@@ -5096,6 +5118,7 @@ export default function ChatView(props: ChatViewProps) {
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
           onToggleFileExplorer={toggleFileExplorerSidebar}
+          onToggleBrowser={browserPanel.toggle}
           onToggleTerminal={toggleTerminalVisibility}
           onToggleDiff={onToggleDiff}
           onToggleSourceControl={onToggleSourceControl}
@@ -5153,6 +5176,8 @@ export default function ChatView(props: ChatViewProps) {
               onIsAtEndChange={onIsAtEndChange}
               onUserScrollIntent={onTimelineUserScrollIntent}
             />
+
+            {browserPanel.pictureInPicture}
 
             {/* scroll to bottom pill — shown when user has scrolled away from the bottom */}
             {showScrollToBottom && (

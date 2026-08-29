@@ -41,6 +41,7 @@ import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { ServerConfig } from "../../config.ts";
+import type { AcquireBrowserAgentSessionAccess } from "../../browser/BrowserAgentAccess.ts";
 import { buildAcpAttachmentPromptParts } from "../attachmentInputs.ts";
 import {
   ProviderAdapterProcessError,
@@ -115,6 +116,7 @@ export interface CursorAdapterLiveOptions {
    */
   readonly resolveSettings?: Effect.Effect<CursorSettings>;
   readonly interruptGraceMs?: number;
+  readonly acquireBrowserAgentSessionAccess?: AcquireBrowserAgentSessionAccess;
 }
 
 interface PendingApproval {
@@ -591,6 +593,12 @@ export function makeCursorAdapter(
           yield* Effect.addFinalizer(() =>
             sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
           );
+          const browserAgentAccess = options?.acquireBrowserAgentSessionAccess
+            ? yield* options.acquireBrowserAgentSessionAccess(input.threadId)
+            : undefined;
+          if (browserAgentAccess !== undefined) {
+            yield* Scope.addFinalizer(sessionScope, browserAgentAccess.release);
+          }
           let ctx!: CursorSessionContext;
 
           const resumeSessionId = parseCursorResume(input.resumeCursor)?.sessionId;
@@ -613,10 +621,14 @@ export function makeCursorAdapter(
             : cursorSettings;
 
           const acp = yield* makeCursorAcpRuntime({
+            threadId: input.threadId,
             cursorSettings: effectiveCursorSettings,
             ...(options?.environment ? { environment: options.environment } : {}),
             childProcessSpawner,
             cwd,
+            ...(browserAgentAccess !== undefined
+              ? { browserEnvironment: browserAgentAccess.environment }
+              : {}),
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientInfo: { name: "salchi", version: "0.0.0" },
             ...acpNativeLoggers,

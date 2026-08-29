@@ -19,7 +19,7 @@ function getDiffPanelHeaderRowClassName(mode: DiffPanelMode) {
 
 export function DiffPanelShell(props: {
   mode: DiffPanelMode;
-  header: ReactNode;
+  header?: ReactNode;
   children: ReactNode;
 }) {
   const shouldUseDragRegion = isElectron && props.mode !== "sheet";
@@ -33,7 +33,7 @@ export function DiffPanelShell(props: {
           : "w-full",
       )}
     >
-      {shouldUseDragRegion ? (
+      {props.header === undefined || props.header === null ? null : shouldUseDragRegion ? (
         <div className={getDiffPanelHeaderRowClassName(props.mode)}>{props.header}</div>
       ) : (
         <div className="border-b border-border">

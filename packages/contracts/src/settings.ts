@@ -3,6 +3,7 @@ import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { NonNegativeInt, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
+import { BrowserManagedVariant } from "./browser.ts";
 import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT,
@@ -66,6 +67,7 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   diffIgnoreWhitespace: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   diffWordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  showBrowserAgentPreview: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Model favorites. Historically keyed by provider kind, now
   // widened to `ProviderInstanceId` so users can favorite a specific model
   // on a custom provider instance (e.g. "Codex Personal · gpt-5") without
@@ -396,13 +398,41 @@ export const ObservabilitySettings = Schema.Struct({
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
 export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.seconds(30);
+export const DEFAULT_BROWSER_IDLE_TIMEOUT = Duration.minutes(15);
+export const DEFAULT_BROWSER_SCREENCAST_QUALITY = 45;
+export const DEFAULT_BROWSER_SCREENCAST_EVERY_NTH_FRAME = 2;
+export const BrowserScreencastQuality = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: 100 }),
+);
+export const BrowserScreencastEveryNthFrame = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: 60 }),
+);
 
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  browserAgentAccessEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  browserKillRogueBrowsers: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  browserManagedVariant: BrowserManagedVariant.pipe(
+    Schema.withDecodingDefault(Effect.succeed("headless-shell" as const)),
+  ),
+  browserViewportFollowsPanel: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+  ),
+  browserStealthMode: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  browserScreencastQuality: BrowserScreencastQuality.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_BROWSER_SCREENCAST_QUALITY)),
+  ),
+  browserScreencastEveryNthFrame: BrowserScreencastEveryNthFrame.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_BROWSER_SCREENCAST_EVERY_NTH_FRAME)),
+  ),
   automaticGitFetchInterval: Schema.DurationFromMillis.pipe(
     Schema.withDecodingDefault(
       Effect.succeed(Duration.toMillis(DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL)),
     ),
+  ),
+  browserExecutablePath: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  browserIdleTimeout: Schema.DurationFromMillis.pipe(
+    Schema.withDecodingDefault(Effect.succeed(Duration.toMillis(DEFAULT_BROWSER_IDLE_TIMEOUT))),
   ),
   defaultThreadEnvMode: ThreadEnvMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("local" as const satisfies ThreadEnvMode)),
@@ -537,7 +567,16 @@ const OpenCodeSettingsPatch = Schema.Struct({
 export const ServerSettingsPatch = Schema.Struct({
   // Server settings
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
+  browserAgentAccessEnabled: Schema.optionalKey(Schema.Boolean),
+  browserKillRogueBrowsers: Schema.optionalKey(Schema.Boolean),
+  browserManagedVariant: Schema.optionalKey(BrowserManagedVariant),
+  browserViewportFollowsPanel: Schema.optionalKey(Schema.Boolean),
+  browserStealthMode: Schema.optionalKey(Schema.Boolean),
+  browserScreencastQuality: Schema.optionalKey(BrowserScreencastQuality),
+  browserScreencastEveryNthFrame: Schema.optionalKey(BrowserScreencastEveryNthFrame),
   automaticGitFetchInterval: Schema.optionalKey(Schema.DurationFromMillis),
+  browserExecutablePath: Schema.optionalKey(TrimmedString),
+  browserIdleTimeout: Schema.optionalKey(Schema.DurationFromMillis),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   transcriptionModel: Schema.optionalKey(TranscriptionModel),
@@ -576,6 +615,7 @@ export const ClientSettingsPatch = Schema.Struct({
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   diffWordWrap: Schema.optionalKey(Schema.Boolean),
+  showBrowserAgentPreview: Schema.optionalKey(Schema.Boolean),
   favorites: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({

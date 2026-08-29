@@ -8,6 +8,7 @@ import { render } from "vitest-browser-react";
 import { isStandalonePwa } from "../../env";
 import {
   __resetRightPanelContentRegistryForTests,
+  useRegisterBrowserRightPanelContent,
   useRegisterPlanRightPanelContent,
 } from "../../rightPanelContentRegistry";
 import { ChatRightPanels } from "./ChatRightPanels";
@@ -32,6 +33,7 @@ describe("ChatRightPanels", () => {
 
   function PanelHarness(props: {
     activeView: "diff" | "files" | null;
+    browserOpen?: boolean;
     planOpen?: boolean;
     useSheet: boolean;
   }) {
@@ -44,6 +46,15 @@ describe("ChatRightPanels", () => {
       [props.planOpen],
     );
     useRegisterPlanRightPanelContent(planRegistration);
+    const browserRegistration = useMemo(
+      () => ({
+        open: props.browserOpen ?? false,
+        onClose: vi.fn(),
+        render: () => <div>Browser panel content</div>,
+      }),
+      [props.browserOpen],
+    );
+    useRegisterBrowserRightPanelContent(browserRegistration);
     return (
       <ChatRightPanels
         activeView={props.activeView}
@@ -61,7 +72,15 @@ describe("ChatRightPanels", () => {
     activeView: "diff" | "files" | null,
     useSheet: boolean,
     planOpen = false,
-  ) => <PanelHarness activeView={activeView} planOpen={planOpen} useSheet={useSheet} />;
+    browserOpen = false,
+  ) => (
+    <PanelHarness
+      activeView={activeView}
+      browserOpen={browserOpen}
+      planOpen={planOpen}
+      useSheet={useSheet}
+    />
+  );
 
   it("uses one expanded web sidebar while the active stack view changes", async () => {
     await page.viewport(1200, 800);
@@ -94,6 +113,11 @@ describe("ChatRightPanels", () => {
 
       await screen.rerender(renderPanels(null, false, true));
       await expect.element(page.getByText("Plan panel content")).toBeVisible();
+      expect(document.querySelector('[data-chat-right-panel-primary="true"]')).toBe(primaryShell);
+      expect(document.querySelectorAll('[data-slot="sidebar"]')).toHaveLength(1);
+
+      await screen.rerender(renderPanels(null, false, false, true));
+      await expect.element(page.getByText("Browser panel content")).toBeVisible();
       expect(document.querySelector('[data-chat-right-panel-primary="true"]')).toBe(primaryShell);
       expect(document.querySelectorAll('[data-slot="sidebar"]')).toHaveLength(1);
     } finally {

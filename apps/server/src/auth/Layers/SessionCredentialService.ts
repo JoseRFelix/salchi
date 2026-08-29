@@ -1,4 +1,9 @@
-import { AuthSessionId, type AuthClientMetadata, type AuthClientSession } from "@salchi/contracts";
+import {
+  AuthEnvironmentScope,
+  AuthSessionId,
+  type AuthClientMetadata,
+  type AuthClientSession,
+} from "@salchi/contracts";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -46,6 +51,7 @@ const SessionClaims = Schema.Struct({
     "bearer-access-token",
     "bearer-session-token",
   ]),
+  scopes: Schema.optionalKey(Schema.Array(AuthEnvironmentScope)),
   iat: Schema.Number,
   exp: Schema.Number,
 });
@@ -55,6 +61,7 @@ const WebSocketClaims = Schema.Struct({
   v: Schema.Literal(1),
   kind: Schema.Literal("websocket"),
   sid: AuthSessionId,
+  scopes: Schema.optionalKey(Schema.Array(AuthEnvironmentScope)),
   iat: Schema.Number,
   exp: Schema.Number,
 });
@@ -221,6 +228,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         sub: input?.subject ?? "browser",
         role: input?.role ?? "client",
         method: input?.method ?? "browser-session-cookie",
+        ...(input?.scopes ? { scopes: input.scopes } : {}),
         iat: issuedAt.epochMilliseconds,
         exp: expiresAt.epochMilliseconds,
       };
@@ -255,6 +263,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
           subject: claims.sub,
           role: claims.role,
           method: claims.method,
+          ...(claims.scopes ? { scopes: claims.scopes } : {}),
           client,
           issuedAt,
           expiresAt,
@@ -270,6 +279,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         client,
         expiresAt: expiresAt,
         role: claims.role,
+        ...(claims.scopes ? { scopes: claims.scopes } : {}),
       } satisfies IssuedSession;
     }).pipe(Effect.mapError(toSessionCredentialError("Failed to issue session credential.")));
 
@@ -333,6 +343,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         expiresAt: expiresAt.value,
         subject: claims.sub,
         role: claims.role,
+        ...(claims.scopes ? { scopes: claims.scopes } : {}),
       } satisfies VerifiedSession;
     }).pipe(
       Effect.mapError((cause) =>
@@ -359,6 +370,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         v: 1,
         kind: "websocket",
         sid: sessionId,
+        ...(input?.scopes ? { scopes: input.scopes } : {}),
         iat: issuedAt.epochMilliseconds,
         exp: expiresAt.epochMilliseconds,
       };
@@ -433,6 +445,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         expiresAt: row.value.expiresAt,
         subject: row.value.subject,
         role: row.value.role,
+        ...(claims.scopes ? { scopes: claims.scopes } : {}),
       } satisfies VerifiedSession;
     }).pipe(
       Effect.mapError((cause) =>

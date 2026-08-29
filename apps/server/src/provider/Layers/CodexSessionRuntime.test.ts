@@ -16,12 +16,24 @@ import {
   INDEPENDENT_THREAD_TOOL_SPEC,
 } from "../IndependentThreadTool.ts";
 import {
+  BROWSER_MCP_SERVER_NAME,
+  BROWSER_MCP_USAGE_INSTRUCTION,
+  type PreparedBrowserMcpServer,
+} from "../../browser/BrowserMcp.ts";
+import {
   buildTurnStartParams,
   buildTurnSteerParams,
   isRecoverableThreadResumeError,
   openCodexThread,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
+const browserCdpUrl = `ws://127.0.0.1:43131/internal/browser/cdp/thread-codex/${"b".repeat(64)}`;
+const browserMcpServer = {
+  name: BROWSER_MCP_SERVER_NAME,
+  command: process.execPath,
+  args: ["/opt/salchi/playwright-mcp/cli.js", "--cdp-endpoint", browserCdpUrl],
+  environment: { SALCHI_BROWSER_CDP_URL: browserCdpUrl },
+} satisfies PreparedBrowserMcpServer;
 
 function makeThreadOpenResponse(
   threadId: string,
@@ -146,6 +158,23 @@ describe("buildTurnStartParams", () => {
         },
       },
     });
+  });
+
+  it("adds browser MCP usage instructions only when browser registration is enabled", () => {
+    const params = Effect.runSync(
+      buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "Browse the site",
+        interactionMode: "default",
+        browserMcpEnabled: true,
+      }),
+    );
+
+    assert.equal(
+      params.collaborationMode?.settings.developer_instructions,
+      `${CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS}\n\n${BROWSER_MCP_USAGE_INSTRUCTION}`,
+    );
   });
 
   it("includes PDF attachments as mention inputs", () => {
@@ -351,6 +380,49 @@ describe("openCodexThread", () => {
     ]);
   });
 
+  it("registers browser MCP through isolated per-thread config", async () => {
+    const calls: Array<{ method: string; payload: unknown }> = [];
+    const started = makeThreadOpenResponse("fresh-browser-thread");
+    const client = {
+      raw: {
+        request: (method: string, payload?: unknown) => {
+          calls.push({ method, payload });
+          return Effect.succeed(started);
+        },
+      },
+      request: <M extends "thread/start" | "thread/resume">(
+        _method: M,
+        _payload: CodexRpc.ClientRequestParamsByMethod[M],
+      ) => Effect.succeed(started as CodexRpc.ClientRequestResponsesByMethod[M]),
+    };
+
+    await Effect.runPromise(
+      openCodexThread({
+        client,
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: undefined,
+        serviceTier: undefined,
+        approvalsReviewer: undefined,
+        resumeThreadId: undefined,
+        browserMcpServer,
+      }),
+    );
+
+    const firstCall = calls[0];
+    assert.ok(firstCall);
+    assert.deepStrictEqual((firstCall.payload as { config?: unknown }).config, {
+      mcp_servers: {
+        [BROWSER_MCP_SERVER_NAME]: {
+          command: process.execPath,
+          args: [...browserMcpServer.args],
+          env: { SALCHI_BROWSER_CDP_URL: browserCdpUrl },
+        },
+      },
+    });
+  });
+
   it("falls back to thread/start when resume fails recoverably", async () => {
     const calls: Array<{ method: "thread/start" | "thread/resume"; payload: unknown }> = [];
     const started = makeThreadOpenResponse("fresh-thread");
@@ -388,6 +460,7 @@ describe("openCodexThread", () => {
         serviceTier: undefined,
         approvalsReviewer: "auto_review",
         resumeThreadId: "stale-thread",
+        browserMcpServer,
       }),
     );
 
@@ -403,6 +476,15 @@ describe("openCodexThread", () => {
       sandbox: "danger-full-access",
       model: "gpt-5.3-codex",
       approvalsReviewer: "auto_review",
+      config: {
+        mcp_servers: {
+          [BROWSER_MCP_SERVER_NAME]: {
+            command: process.execPath,
+            args: [...browserMcpServer.args],
+            env: { SALCHI_BROWSER_CDP_URL: browserCdpUrl },
+          },
+        },
+      },
     });
     assert.deepStrictEqual(calls[1]?.payload, {
       cwd: "/tmp/project",
@@ -411,6 +493,15 @@ describe("openCodexThread", () => {
       dynamicTools: [INDEPENDENT_THREAD_TOOL_SPEC],
       model: "gpt-5.3-codex",
       approvalsReviewer: "auto_review",
+      config: {
+        mcp_servers: {
+          [BROWSER_MCP_SERVER_NAME]: {
+            command: process.execPath,
+            args: [...browserMcpServer.args],
+            env: { SALCHI_BROWSER_CDP_URL: browserCdpUrl },
+          },
+        },
+      },
     });
   });
 

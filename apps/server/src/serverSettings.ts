@@ -146,12 +146,15 @@ export class ServerSettingsService extends Context.Service<
     Layer.effect(
       ServerSettingsService,
       Effect.gen(function* () {
-        const { automaticGitFetchInterval, ...overridesForMerge } = overrides;
+        const { automaticGitFetchInterval, browserIdleTimeout, ...overridesForMerge } = overrides;
         const merged = deepMerge(DEFAULT_SERVER_SETTINGS, overridesForMerge);
         const initialSettings = yield* normalizeServerSettings({
           ...merged,
           ...(automaticGitFetchInterval !== undefined
             ? { automaticGitFetchInterval: automaticGitFetchInterval as Duration.Duration }
+            : {}),
+          ...(browserIdleTimeout !== undefined
+            ? { browserIdleTimeout: browserIdleTimeout as Duration.Duration }
             : {}),
         });
         const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
@@ -239,6 +242,7 @@ function fallbackTextGenerationProvider(settings: ServerSettings): ServerSetting
 const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "importedThemes",
   "automaticGitFetchInterval",
+  "browserIdleTimeout",
   "textGenerationModelSelection",
 ]);
 

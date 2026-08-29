@@ -31,6 +31,7 @@ import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { ServerConfig } from "../../config.ts";
+import type { AcquireBrowserAgentSessionAccess } from "../../browser/BrowserAgentAccess.ts";
 import { buildAcpAttachmentPromptParts } from "../attachmentInputs.ts";
 import {
   ProviderAdapterProcessError,
@@ -81,6 +82,7 @@ export interface GrokAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly instanceId?: ProviderInstanceId;
+  readonly acquireBrowserAgentSessionAccess?: AcquireBrowserAgentSessionAccess;
 }
 
 interface PendingApproval {
@@ -403,6 +405,12 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           yield* Effect.addFinalizer(() =>
             sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
           );
+          const browserAgentAccess = options?.acquireBrowserAgentSessionAccess
+            ? yield* options.acquireBrowserAgentSessionAccess(input.threadId)
+            : undefined;
+          if (browserAgentAccess !== undefined) {
+            yield* Scope.addFinalizer(sessionScope, browserAgentAccess.release);
+          }
 
           const resumeSessionId = parseGrokResume(input.resumeCursor)?.sessionId;
           const acpNativeLoggers = makeAcpNativeLoggers({
@@ -412,10 +420,14 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           });
 
           const acp = yield* makeGrokAcpRuntime({
+            threadId: input.threadId,
             grokSettings,
             ...(options?.environment ? { environment: options.environment } : {}),
             childProcessSpawner,
             cwd,
+            ...(browserAgentAccess !== undefined
+              ? { browserEnvironment: browserAgentAccess.environment }
+              : {}),
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientInfo: { name: "salchi", version: "0.0.0" },
             ...acpNativeLoggers,

@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
+import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -23,11 +26,17 @@ import {
 import { createModelSelection } from "@salchi/shared/model";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  BROWSER_MCP_SERVER_NAME,
+  BROWSER_MCP_USAGE_INSTRUCTION,
+  type PreparedBrowserMcpServer,
+} from "../../browser/BrowserMcp.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import type { OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
   OpenCodeRuntime,
   OpenCodeRuntimeError,
+  makeOpenCodeConfigContent,
   toOpenCodeFileParts,
   type OpenCodeRuntimeShape,
 } from "../opencodeRuntime.ts";
@@ -44,6 +53,7 @@ class OpenCodeAdapter extends Context.Service<OpenCodeAdapter, OpenCodeAdapterSh
 
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
+const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
 
 it.effect("maps PDF attachments to OpenCode file parts", () =>
   Effect.sync(() => {
@@ -82,6 +92,17 @@ type MessageEntry = {
 const runtimeMock = {
   state: {
     startCalls: [] as string[],
+    connectCalls: [] as Array<{
+      readonly serverUrl?: string | null;
+      readonly browserEnvironment?: NodeJS.ProcessEnv;
+      readonly browserMcpServer?: PreparedBrowserMcpServer;
+    }>,
+    browserAccessCalls: [] as Array<ThreadId>,
+    browserAccessReleases: [] as Array<ThreadId>,
+    connectBarrier: null as null | {
+      readonly started: Deferred.Deferred<void>;
+      readonly release: Deferred.Deferred<void>;
+    },
     sessionCreateUrls: [] as string[],
     authHeaders: [] as Array<string | null>,
     abortCalls: [] as string[],
@@ -95,6 +116,10 @@ const runtimeMock = {
   },
   reset() {
     this.state.startCalls.length = 0;
+    this.state.connectCalls.length = 0;
+    this.state.browserAccessCalls.length = 0;
+    this.state.browserAccessReleases.length = 0;
+    this.state.connectBarrier = null;
     this.state.sessionCreateUrls.length = 0;
     this.state.authHeaders.length = 0;
     this.state.abortCalls.length = 0;
@@ -126,9 +151,19 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
         exitCode: Effect.never,
       };
     }),
-  connectToOpenCodeServer: ({ serverUrl }) =>
+  connectToOpenCodeServer: ({ serverUrl, browserEnvironment, browserMcpServer }) =>
     Effect.gen(function* () {
-      const url = serverUrl ?? "http://127.0.0.1:4301";
+      runtimeMock.state.connectCalls.push({
+        ...(serverUrl !== undefined ? { serverUrl } : {}),
+        ...(browserEnvironment !== undefined ? { browserEnvironment } : {}),
+        ...(browserMcpServer !== undefined ? { browserMcpServer } : {}),
+      });
+      const connectBarrier = runtimeMock.state.connectBarrier;
+      if (connectBarrier !== null) {
+        yield* Deferred.succeed(connectBarrier.started, undefined);
+        yield* Deferred.await(connectBarrier.release);
+      }
+      const url = serverUrl?.trim() || "http://127.0.0.1:4301";
       // Unconditionally register a scope finalizer for test observability —
       // preserves the `closeCalls` / `closeError` probes that the existing
       // suites rely on. Production code never attaches a finalizer to an
@@ -144,7 +179,7 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
       return {
         url,
         exitCode: null,
-        external: Boolean(serverUrl),
+        external: Boolean(serverUrl?.trim()),
       };
     }),
   runOpenCodeCommand: () => Effect.succeed({ stdout: "", stderr: "", code: 0 }),
@@ -222,32 +257,55 @@ const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory
 // the layer graph reach for it — but the routing values the assertions
 // probe (serverUrl, serverPassword) must be threaded directly through the
 // decoded `OpenCodeSettings`.
-const openCodeAdapterTestSettings = Schema.decodeSync(OpenCodeSettings)({
+const openCodeAdapterTestSettings = decodeOpenCodeSettings({
   binaryPath: "fake-opencode",
   serverUrl: "http://127.0.0.1:9999",
   serverPassword: "secret-password",
 });
 
-const OpenCodeAdapterTestLayer = Layer.effect(
-  OpenCodeAdapter,
-  makeOpenCodeAdapter(openCodeAdapterTestSettings),
-).pipe(
-  Layer.provideMerge(Layer.succeed(OpenCodeRuntime, OpenCodeRuntimeTestDouble)),
-  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
-  Layer.provideMerge(
-    ServerSettingsService.layerTest({
-      providers: {
-        opencode: {
-          binaryPath: "fake-opencode",
-          serverUrl: "http://127.0.0.1:9999",
-          serverPassword: "secret-password",
-        },
-      },
+const makeOpenCodeAdapterTestLayer = (
+  settings: OpenCodeSettings,
+  options?: { readonly browserAccessEnabled?: boolean },
+) =>
+  Layer.effect(
+    OpenCodeAdapter,
+    makeOpenCodeAdapter(settings, {
+      browserAgentAccessEnabled: Effect.succeed(options?.browserAccessEnabled !== false),
+      acquireBrowserAgentSessionAccess: (threadId) =>
+        Effect.sync(() => {
+          runtimeMock.state.browserAccessCalls.push(threadId);
+          return {
+            environment:
+              options?.browserAccessEnabled === false
+                ? {}
+                : {
+                    SALCHI_BROWSER_CDP_URL: `ws://127.0.0.1:43126/internal/browser/cdp/${threadId}/${"d".repeat(64)}`,
+                  },
+            release: Effect.sync(() => {
+              runtimeMock.state.browserAccessReleases.push(threadId);
+            }),
+          };
+        }),
     }),
-  ),
-  Layer.provideMerge(providerSessionDirectoryTestLayer),
-  Layer.provideMerge(NodeServices.layer),
-);
+  ).pipe(
+    Layer.provideMerge(Layer.succeed(OpenCodeRuntime, OpenCodeRuntimeTestDouble)),
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(
+      ServerSettingsService.layerTest({
+        providers: {
+          opencode: {
+            binaryPath: "fake-opencode",
+            serverUrl: "http://127.0.0.1:9999",
+            serverPassword: "secret-password",
+          },
+        },
+      }),
+    ),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  );
+
+const OpenCodeAdapterTestLayer = makeOpenCodeAdapterTestLayer(openCodeAdapterTestSettings);
 
 beforeEach(() => {
   runtimeMock.reset();
@@ -255,6 +313,170 @@ beforeEach(() => {
 
 const advanceTestClock = (ms: number) =>
   TestClock.adjust(`${ms} millis`).pipe(Effect.andThen(Effect.yieldNow));
+
+it.effect("registers browser MCP only in a locally spawned OpenCode server", () => {
+  const localSettings = decodeOpenCodeSettings({
+    binaryPath: "fake-opencode",
+    serverUrl: "",
+  });
+  const threadId = asThreadId("thread-opencode-browser-access");
+  return Effect.gen(function* () {
+    const adapter = yield* OpenCodeAdapter;
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      runtimeMode: "full-access",
+    });
+
+    assert.deepEqual(runtimeMock.state.browserAccessCalls, [threadId]);
+    assert.deepEqual(runtimeMock.state.connectCalls[0]?.browserEnvironment, {
+      SALCHI_BROWSER_CDP_URL: `ws://127.0.0.1:43126/internal/browser/cdp/thread-opencode-browser-access/${"d".repeat(64)}`,
+    });
+    const browserMcpServer = runtimeMock.state.connectCalls[0]?.browserMcpServer;
+    assert.equal(browserMcpServer?.name, BROWSER_MCP_SERVER_NAME);
+    assert.equal(browserMcpServer?.command, process.execPath);
+    assert.equal(browserMcpServer?.args.at(-2), "--cdp-endpoint");
+    assert.equal(
+      browserMcpServer?.args.at(-1),
+      `ws://127.0.0.1:43126/internal/browser/cdp/thread-opencode-browser-access/${"d".repeat(64)}`,
+    );
+
+    yield* adapter.sendTurn({
+      threadId,
+      input: "Browse the site",
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("opencode"),
+        model: "openai/gpt-5",
+      },
+    });
+    assert.equal(
+      (runtimeMock.state.promptCalls[0] as { readonly system?: string } | undefined)?.system,
+      BROWSER_MCP_USAGE_INSTRUCTION,
+    );
+
+    yield* adapter.stopSession(threadId);
+    assert.deepEqual(runtimeMock.state.browserAccessReleases, [threadId]);
+  }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(localSettings)));
+});
+
+it.effect("omits local OpenCode browser MCP when agent access is disabled", () => {
+  const localSettings = decodeOpenCodeSettings({
+    binaryPath: "fake-opencode",
+    serverUrl: "",
+  });
+  const threadId = asThreadId("thread-opencode-browser-disabled");
+  return Effect.gen(function* () {
+    const adapter = yield* OpenCodeAdapter;
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      runtimeMode: "full-access",
+    });
+
+    assert.deepEqual(runtimeMock.state.connectCalls[0]?.browserEnvironment, {});
+    assert.equal(runtimeMock.state.connectCalls[0]?.browserMcpServer, undefined);
+    yield* adapter.sendTurn({
+      threadId,
+      input: "Browse the site",
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("opencode"),
+        model: "openai/gpt-5",
+      },
+    });
+    assert.equal(
+      (runtimeMock.state.promptCalls[0] as { readonly system?: string } | undefined)?.system,
+      undefined,
+    );
+  }).pipe(
+    Effect.provide(makeOpenCodeAdapterTestLayer(localSettings, { browserAccessEnabled: false })),
+  );
+});
+
+it.effect("logs the remote OpenCode browser limitation only when agent access is enabled", () => {
+  const messages: string[] = [];
+  const logger = Logger.make(({ message }) => {
+    messages.push(String(message));
+  });
+  const startRemote = (browserAccessEnabled: boolean, threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+    }).pipe(
+      Effect.provide(
+        makeOpenCodeAdapterTestLayer(openCodeAdapterTestSettings, { browserAccessEnabled }),
+      ),
+    );
+
+  return Effect.gen(function* () {
+    yield* startRemote(true, asThreadId("thread-opencode-remote-enabled"));
+    assert.equal(
+      messages.some((message) =>
+        message.includes("Remote OpenCode does not support automatic Salchi browser agent access"),
+      ),
+      true,
+    );
+
+    messages.length = 0;
+    yield* startRemote(false, asThreadId("thread-opencode-remote-disabled"));
+    assert.deepEqual(messages, []);
+  }).pipe(
+    Effect.provideService(References.MinimumLogLevel, "Debug"),
+    Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+  );
+});
+
+it("materializes browser MCP in isolated OpenCode config content", () => {
+  const browserUrl = `ws://127.0.0.1:43126/internal/browser/cdp/opencode-config/${"e".repeat(64)}`;
+  const server = {
+    name: BROWSER_MCP_SERVER_NAME,
+    command: process.execPath,
+    args: ["/opt/salchi/playwright-mcp/cli.js", "--cdp-endpoint", browserUrl],
+    environment: { SALCHI_BROWSER_CDP_URL: browserUrl },
+  } satisfies PreparedBrowserMcpServer;
+
+  assert.deepEqual(JSON.parse(makeOpenCodeConfigContent(server)), {
+    mcp: {
+      [BROWSER_MCP_SERVER_NAME]: {
+        type: "local",
+        command: [process.execPath, ...server.args],
+        environment: { SALCHI_BROWSER_CDP_URL: browserUrl },
+        enabled: true,
+      },
+    },
+  });
+  assert.equal(makeOpenCodeConfigContent(undefined), "{}");
+});
+
+it.effect("revokes local OpenCode browser access when startup is interrupted", () => {
+  const localSettings = decodeOpenCodeSettings({
+    binaryPath: "fake-opencode",
+    serverUrl: "",
+  });
+  const threadId = asThreadId("thread-opencode-browser-interrupt");
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      runtimeMock.state.connectBarrier = { started, release };
+      const adapter = yield* OpenCodeAdapter;
+      const startFiber = yield* adapter
+        .startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId,
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkScoped);
+
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(startFiber);
+      assert.deepEqual(runtimeMock.state.browserAccessReleases, [threadId]);
+    }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(localSettings))),
+  );
+});
 
 it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
   it.effect("reuses a configured OpenCode server URL instead of spawning a local server", () =>
@@ -270,6 +492,8 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       assert.equal(session.provider, "opencode");
       assert.equal(session.threadId, "thread-opencode");
       assert.deepEqual(runtimeMock.state.startCalls, []);
+      assert.deepEqual(runtimeMock.state.browserAccessCalls, []);
+      assert.equal(runtimeMock.state.connectCalls[0]?.browserEnvironment, undefined);
       assert.deepEqual(runtimeMock.state.sessionCreateUrls, ["http://127.0.0.1:9999"]);
       assert.deepEqual(runtimeMock.state.authHeaders, [
         `Basic ${btoa("opencode:secret-password")}`,

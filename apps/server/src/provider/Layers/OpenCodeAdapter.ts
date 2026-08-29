@@ -26,6 +26,11 @@ import type { OpencodeClient, Part, PermissionRequest, QuestionRequest } from "@
 import { getModelSelectionStringOptionValue } from "@salchi/shared/model";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import type { AcquireBrowserAgentSessionAccess } from "../../browser/BrowserAgentAccess.ts";
+import {
+  BROWSER_MCP_USAGE_INSTRUCTION,
+  prepareBrowserMcpServer,
+} from "../../browser/BrowserMcp.ts";
 import { ServerConfig } from "../../config.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
@@ -96,6 +101,7 @@ interface OpenCodeSessionContext {
    *   - tears down the OpenCode server process for scope-owned servers.
    */
   readonly sessionScope: Scope.Closeable;
+  readonly browserMcpEnabled: boolean;
 }
 
 export interface OpenCodeAdapterLiveOptions {
@@ -103,6 +109,8 @@ export interface OpenCodeAdapterLiveOptions {
   readonly environment?: NodeJS.ProcessEnv;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  readonly acquireBrowserAgentSessionAccess?: AcquireBrowserAgentSessionAccess;
+  readonly browserAgentAccessEnabled?: Effect.Effect<boolean>;
 }
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -1037,8 +1045,27 @@ export function makeOpenCodeAdapter(
           sessions.delete(input.threadId);
         }
 
+        if (
+          serverUrl.trim().length > 0 &&
+          options?.browserAgentAccessEnabled !== undefined &&
+          (yield* options.browserAgentAccessEnabled)
+        ) {
+          yield* Effect.logDebug(
+            "Remote OpenCode does not support automatic Salchi browser agent access",
+            { threadId: input.threadId, providerInstanceId: boundInstanceId },
+          );
+        }
+
         const started = yield* Effect.gen(function* () {
           const sessionScope = yield* Scope.make();
+          const browserAgentAccess =
+            !serverUrl.trim() && options?.acquireBrowserAgentSessionAccess
+              ? yield* options.acquireBrowserAgentSessionAccess(input.threadId)
+              : undefined;
+          if (browserAgentAccess !== undefined) {
+            yield* Scope.addFinalizer(sessionScope, browserAgentAccess.release);
+          }
+          const browserMcpServer = yield* prepareBrowserMcpServer(browserAgentAccess?.environment);
           const startedExit = yield* Effect.exit(
             Effect.gen(function* () {
               // The runtime binds the server's lifetime to the Scope.Scope
@@ -1046,8 +1073,13 @@ export function makeOpenCodeAdapter(
               // process automatically. No manual `server.close()` needed.
               const server = yield* openCodeRuntime.connectToOpenCodeServer({
                 binaryPath,
+                threadId: input.threadId,
                 serverUrl,
                 ...(options?.environment ? { environment: options.environment } : {}),
+                ...(browserAgentAccess !== undefined
+                  ? { browserEnvironment: browserAgentAccess.environment }
+                  : {}),
+                ...(browserMcpServer ? { browserMcpServer } : {}),
               });
               const client = openCodeRuntime.createOpenCodeSdkClient({
                 baseUrl: server.url,
@@ -1071,8 +1103,12 @@ export function makeOpenCodeAdapter(
                 server,
                 client,
                 openCodeSession: openCodeSession.data,
+                browserMcpEnabled: browserMcpServer !== undefined,
               };
-            }).pipe(Effect.provideService(Scope.Scope, sessionScope)),
+            }).pipe(
+              Effect.provideService(Scope.Scope, sessionScope),
+              Effect.onInterrupt(() => Scope.close(sessionScope, Exit.void).pipe(Effect.ignore)),
+            ),
           );
           if (Exit.isFailure(startedExit)) {
             yield* Scope.close(sessionScope, Exit.void).pipe(Effect.ignore);
@@ -1127,6 +1163,7 @@ export function makeOpenCodeAdapter(
           activeVariant: undefined,
           stopped: yield* Ref.make(false),
           sessionScope: started.sessionScope,
+          browserMcpEnabled: started.browserMcpEnabled,
         };
         sessions.set(input.threadId, context);
         yield* startEventPump(context);
@@ -1238,6 +1275,7 @@ export function makeOpenCodeAdapter(
           model: parsedModel,
           ...(context.activeAgent ? { agent: context.activeAgent } : {}),
           ...(context.activeVariant ? { variant: context.activeVariant } : {}),
+          ...(context.browserMcpEnabled ? { system: BROWSER_MCP_USAGE_INSTRUCTION } : {}),
           parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
         }),
       ).pipe(

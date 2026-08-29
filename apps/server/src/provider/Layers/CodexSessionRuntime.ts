@@ -38,6 +38,14 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { resolveSpawnCommand } from "@salchi/shared/shell";
+import { mergeBrowserAgentEnvironment } from "../../browser/BrowserAgentAccess.ts";
+import {
+  BROWSER_MCP_SERVER_NAME,
+  BROWSER_MCP_USAGE_INSTRUCTION,
+  prepareBrowserMcpServer,
+  type PreparedBrowserMcpServer,
+} from "../../browser/BrowserMcp.ts";
+import { registerBrowserProviderProcess } from "../../browser/BrowserProviderProcessRegistry.ts";
 import { terminateChildProcess } from "@salchi/shared/childProcess";
 import { registerManagedChildProcess } from "../../process/ManagedChildProcessRegistry.ts";
 
@@ -125,6 +133,7 @@ export interface CodexSessionRuntimeOptions {
   readonly binaryPath: string;
   readonly homePath?: string;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly browserEnvironment?: NodeJS.ProcessEnv;
   readonly cwd: string;
   readonly processRegistryDirectory?: string;
   readonly runtimeMode: RuntimeMode;
@@ -370,6 +379,7 @@ function buildThreadStartParams(input: {
   readonly model: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly approvalsReviewer: EffectCodexSchema.V2ThreadStartParams__ApprovalsReviewer | undefined;
+  readonly browserMcpServer?: PreparedBrowserMcpServer;
 }): CodexThreadStartParamsWithDynamicTools {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
   return {
@@ -377,6 +387,9 @@ function buildThreadStartParams(input: {
     approvalPolicy: config.approvalPolicy,
     sandbox: config.sandbox,
     dynamicTools: [INDEPENDENT_THREAD_TOOL_SPEC],
+    ...(input.browserMcpServer
+      ? { config: makeCodexBrowserMcpConfig(input.browserMcpServer) }
+      : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
     ...(input.approvalsReviewer ? { approvalsReviewer: input.approvalsReviewer } : {}),
@@ -390,6 +403,7 @@ function buildThreadResumeParams(input: {
   readonly model: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly approvalsReviewer: EffectCodexSchema.V2ThreadResumeParams__ApprovalsReviewer | undefined;
+  readonly browserMcpServer?: PreparedBrowserMcpServer;
 }): EffectCodexSchema.V2ThreadResumeParams {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
   return {
@@ -397,9 +411,26 @@ function buildThreadResumeParams(input: {
     cwd: input.cwd,
     approvalPolicy: config.approvalPolicy,
     sandbox: config.sandbox,
+    ...(input.browserMcpServer
+      ? { config: makeCodexBrowserMcpConfig(input.browserMcpServer) }
+      : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
     ...(input.approvalsReviewer ? { approvalsReviewer: input.approvalsReviewer } : {}),
+  };
+}
+
+function makeCodexBrowserMcpConfig(
+  browserMcpServer: PreparedBrowserMcpServer,
+): Record<string, unknown> {
+  return {
+    mcp_servers: {
+      [BROWSER_MCP_SERVER_NAME]: {
+        command: browserMcpServer.command,
+        args: [...browserMcpServer.args],
+        env: { ...browserMcpServer.environment },
+      },
+    },
   };
 }
 
@@ -427,6 +458,7 @@ function buildCodexCollaborationMode(input: {
   readonly interactionMode?: ProviderInteractionMode;
   readonly model?: string;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
+  readonly browserMcpEnabled?: boolean;
 }): EffectCodexSchema.V2TurnStartParams__CollaborationMode | undefined {
   if (input.interactionMode === undefined) {
     return undefined;
@@ -437,10 +469,12 @@ function buildCodexCollaborationMode(input: {
     settings: {
       model,
       reasoning_effort: input.effort ?? "medium",
-      developer_instructions:
+      developer_instructions: [
         input.interactionMode === "plan"
           ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
           : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+        ...(input.browserMcpEnabled ? [BROWSER_MCP_USAGE_INSTRUCTION] : []),
+      ].join("\n\n"),
     },
   };
 }
@@ -455,6 +489,7 @@ export function buildTurnStartParams(input: {
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly approvalsReviewer?: EffectCodexSchema.V2TurnStartParams__ApprovalsReviewer;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly browserMcpEnabled?: boolean;
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -475,6 +510,7 @@ export function buildTurnStartParams(input: {
     ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
+    ...(input.browserMcpEnabled ? { browserMcpEnabled: true } : {}),
   });
 
   return decodeCodexTurnStartParamsWithCollaborationMode({
@@ -597,6 +633,7 @@ export const openCodexThread = (input: {
   readonly serviceTier: CodexServiceTier | undefined;
   readonly approvalsReviewer: EffectCodexSchema.V2ThreadStartParams__ApprovalsReviewer | undefined;
   readonly resumeThreadId: string | undefined;
+  readonly browserMcpServer?: PreparedBrowserMcpServer;
 }): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -605,6 +642,7 @@ export const openCodexThread = (input: {
     model: input.requestedModel,
     serviceTier: input.serviceTier,
     approvalsReviewer: input.approvalsReviewer,
+    ...(input.browserMcpServer ? { browserMcpServer: input.browserMcpServer } : {}),
   });
 
   if (resumeThreadId === undefined) {
@@ -621,6 +659,7 @@ export const openCodexThread = (input: {
         model: input.requestedModel,
         serviceTier: input.serviceTier,
         approvalsReviewer: input.approvalsReviewer,
+        ...(input.browserMcpServer ? { browserMcpServer: input.browserMcpServer } : {}),
       }),
     )
     .pipe(
@@ -985,7 +1024,12 @@ export const makeCodexSessionRuntime = (
     const activeProviderThreadTurnsRef = yield* Ref.make(new Map<string, TurnId>());
     const closedRef = yield* Ref.make(false);
     const providerInstanceId = options.providerInstanceId ?? ProviderInstanceId.make("codex");
+    const browserMcpServer = yield* prepareBrowserMcpServer(options.browserEnvironment);
 
+    const appServerEnvironment = mergeBrowserAgentEnvironment(
+      options.environment,
+      options.browserEnvironment,
+    );
     const { client, child } = yield* makeCodexAppServerClient({
       binaryPath: options.binaryPath,
       ...(options.homePath ? { homePath: options.homePath } : {}),
@@ -993,8 +1037,13 @@ export const makeCodexSessionRuntime = (
       ...(options.processRegistryDirectory
         ? { processRegistryDirectory: options.processRegistryDirectory }
         : {}),
-      ...(options.environment ? { environment: options.environment } : {}),
+      ...(appServerEnvironment ? { environment: appServerEnvironment } : {}),
     });
+    const unregisterProviderProcess = registerBrowserProviderProcess({
+      pid: Number(child.pid),
+      threadId: options.threadId,
+    });
+    yield* Scope.addFinalizer(runtimeScope, Effect.sync(unregisterProviderProcess));
     const serverNotifications = yield* Queue.unbounded<CodexServerNotification>();
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const randomUUIDv4 = crypto.randomUUIDv4.pipe(
@@ -1656,6 +1705,7 @@ export const makeCodexSessionRuntime = (
         serviceTier: options.serviceTier,
         approvalsReviewer: options.approvalsReviewer,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
+        ...(browserMcpServer ? { browserMcpServer } : {}),
       });
 
       const providerThreadId = opened.thread.id;
@@ -1726,6 +1776,7 @@ export const makeCodexSessionRuntime = (
           ...(input.effort ? { effort: input.effort } : {}),
           ...(input.approvalsReviewer ? { approvalsReviewer: input.approvalsReviewer } : {}),
           ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
+          ...(browserMcpServer ? { browserMcpEnabled: true } : {}),
         });
         const rawResponse = yield* client.raw.request("turn/start", params);
         const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(

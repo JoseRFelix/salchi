@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 
 import { ProviderInstanceId } from "./providerInstance.ts";
@@ -6,6 +7,7 @@ import {
   ClientSettingsSchema,
   CURRENT_CLIENT_SETTINGS_VERSION,
   DEFAULT_CLIENT_SETTINGS,
+  DEFAULT_BROWSER_IDLE_TIMEOUT,
   DEFAULT_SERVER_SETTINGS,
   ServerSettings,
   ServerSettingsPatch,
@@ -20,9 +22,51 @@ describe("ClientSettings defaults", () => {
   it("keeps the task and plan sidebar closed until the user opens it", () => {
     expect(DEFAULT_CLIENT_SETTINGS.clientSettingsVersion).toBe(CURRENT_CLIENT_SETTINGS_VERSION);
     expect(DEFAULT_CLIENT_SETTINGS.autoOpenPlanSidebar).toBe(false);
+    expect(DEFAULT_CLIENT_SETTINGS.showBrowserAgentPreview).toBe(true);
     const legacySettings = decodeClientSettings({});
     expect(legacySettings.clientSettingsVersion).toBe(0);
     expect(legacySettings.autoOpenPlanSidebar).toBe(false);
+    expect(legacySettings.showBrowserAgentPreview).toBe(true);
+  });
+});
+
+describe("ServerSettings browser defaults", () => {
+  it("defaults to a 15-minute idle timeout and automatic executable resolution", () => {
+    const settings = decodeServerSettings({});
+    expect(Duration.toMillis(settings.browserIdleTimeout)).toBe(
+      Duration.toMillis(DEFAULT_BROWSER_IDLE_TIMEOUT),
+    );
+    expect(settings.browserAgentAccessEnabled).toBe(true);
+    expect(settings.browserKillRogueBrowsers).toBe(false);
+    expect(settings.browserManagedVariant).toBe("headless-shell");
+    expect(settings.browserViewportFollowsPanel).toBe(true);
+    expect(settings.browserStealthMode).toBe(false);
+    expect(settings.browserScreencastQuality).toBe(45);
+    expect(settings.browserScreencastEveryNthFrame).toBe(2);
+    expect(settings.browserExecutablePath).toBe("");
+  });
+
+  it("decodes browser setting patches with normalized paths and millisecond durations", () => {
+    const patch = decodeServerSettingsPatch({
+      browserExecutablePath: "  /opt/chrome  ",
+      browserIdleTimeout: 42_000,
+      browserAgentAccessEnabled: false,
+      browserKillRogueBrowsers: true,
+      browserManagedVariant: "chrome",
+      browserViewportFollowsPanel: false,
+      browserStealthMode: true,
+      browserScreencastQuality: 60,
+      browserScreencastEveryNthFrame: 3,
+    });
+    expect(patch.browserExecutablePath).toBe("/opt/chrome");
+    expect(Duration.toMillis(patch.browserIdleTimeout!)).toBe(42_000);
+    expect(patch.browserAgentAccessEnabled).toBe(false);
+    expect(patch.browserKillRogueBrowsers).toBe(true);
+    expect(patch.browserManagedVariant).toBe("chrome");
+    expect(patch.browserViewportFollowsPanel).toBe(false);
+    expect(patch.browserStealthMode).toBe(true);
+    expect(patch.browserScreencastQuality).toBe(60);
+    expect(patch.browserScreencastEveryNthFrame).toBe(3);
   });
 });
 

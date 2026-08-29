@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - CLI integration exercises Node HTTP and filesystem boundaries.
 import * as NodeHttp from "node:http";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -259,6 +259,34 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       assert.equal(ttlError.value, "soon");
       assert.isTrue(ttlError.message.includes("Invalid duration"));
       assert.isTrue(ttlError.message.includes("5m, 1h, 30d, or 15 minutes"));
+    }),
+  );
+
+  it.effect("lists orphaned browser profiles and deletes them only with --confirm", () =>
+    Effect.gen(function* () {
+      const baseDir = mkdtempSync(join(tmpdir(), "salchi-cli-browser-profiles-test-"));
+      const profilePath = join(
+        baseDir,
+        "userdata",
+        "browser-profiles",
+        encodeURIComponent("deleted/browser-thread"),
+      );
+      mkdirSync(profilePath, { recursive: true });
+      writeFileSync(join(profilePath, "Preferences"), "{}", "utf8");
+
+      const listed = yield* captureStdout(
+        runCli(["browser", "prune-profiles", "--base-dir", baseDir]),
+      );
+      assert.isTrue(listed.output.includes("Found 1 orphaned browser profile"));
+      assert.isTrue(listed.output.includes(profilePath));
+      assert.isTrue(listed.output.includes("--confirm"));
+      assert.isTrue(existsSync(profilePath));
+
+      const deleted = yield* captureStdout(
+        runCli(["browser", "prune-profiles", "--base-dir", baseDir, "--confirm"]),
+      );
+      assert.isTrue(deleted.output.includes("Deleted 1 orphaned browser profile"));
+      assert.isFalse(existsSync(profilePath));
     }),
   );
 
