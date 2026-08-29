@@ -1,8 +1,14 @@
 import "../index.css";
 
-import { EnvironmentId, ThreadId } from "@salchi/contracts";
+import {
+  EnvironmentId,
+  ThreadId,
+  type BrowserInstallProgress,
+  type BrowserInstallState,
+  type BrowserSessionState,
+} from "@salchi/contracts";
 import { page } from "vitest/browser";
-import { useLayoutEffect, useMemo } from "react";
+import { useLayoutEffect, useMemo, useReducer } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -60,12 +66,13 @@ const ENVIRONMENT_ID = EnvironmentId.make("environment-browser-panel");
 const THREAD_A = ThreadId.make("thread-browser-a");
 const THREAD_B = ThreadId.make("thread-browser-b");
 
-function sessionState(threadId: ThreadId) {
+function sessionState(threadId: ThreadId): BrowserSessionState {
   return {
     threadId,
     status: "stopped" as const,
     tabs: [],
     executable: null,
+    viewport: { width: 800, height: 600 },
   };
 }
 
@@ -81,13 +88,59 @@ function createBrowserClient() {
     start: vi.fn(async ({ threadId }: { threadId: ThreadId }) => sessionState(threadId)),
     stop: vi.fn(async ({ threadId }: { threadId: ThreadId }) => sessionState(threadId)),
     getState: vi.fn(async ({ threadId }: { threadId: ThreadId }) => sessionState(threadId)),
+    getInstallState: vi.fn(async (): Promise<BrowserInstallState> => ({
+      status: "not-installed",
+      variant: "headless-shell",
+    })),
+    install: vi.fn(
+      async (
+        _input: {
+          readonly threadId: ThreadId;
+          readonly variant: "headless-shell" | "chrome";
+        },
+        _onProgress: (progress: BrowserInstallProgress) => void,
+      ): Promise<void> => undefined,
+    ),
+    cancelInstall: vi.fn(async (): Promise<BrowserInstallState> => ({
+      status: "not-installed",
+      variant: "headless-shell",
+    })),
     setActiveTab: vi.fn(),
     openTab: vi.fn(),
     navigate: vi.fn(async ({ threadId }: { threadId: ThreadId }) => sessionState(threadId)),
     navigateHistory: vi.fn(async ({ threadId }: { threadId: ThreadId }) => sessionState(threadId)),
     closeTab: vi.fn(),
+    setViewportSize: vi.fn(async ({ threadId }: { threadId: ThreadId }) => sessionState(threadId)),
   };
-  return { browser };
+  return { browser, server: { updateSettings: vi.fn(async () => undefined) } };
+}
+
+function StatefulPanel(props: {
+  readonly initialState: ReturnType<typeof viewportState>;
+  readonly threadId: ThreadId;
+}) {
+  const [state, dispatch] = useReducer(reduceBrowserViewportState, props.initialState);
+  const streamLease = useMemo(
+    () =>
+      createBrowserSurfaceStreamLease({ environmentId: ENVIRONMENT_ID, threadId: props.threadId }),
+    [props.threadId],
+  );
+  useLayoutEffect(() => () => streamLease.dispose(), [streamLease]);
+  useLayoutEffect(() => {
+    streamLease.setSurface("panel");
+  }, [streamLease]);
+  return (
+    <BrowserPanel
+      environmentId={ENVIRONMENT_ID}
+      mode="sidebar"
+      onClose={vi.fn()}
+      onStateAction={dispatch}
+      state={state}
+      streamLease={streamLease}
+      threadId={props.threadId}
+      visible
+    />
+  );
 }
 
 function Panel(props: {
@@ -149,6 +202,7 @@ describe("BrowserPanel subscription visibility", () => {
           },
         ],
         executable: null,
+        viewport: { width: 800, height: 600 },
       },
     });
     const screen = await render(<Panel state={state} threadId={THREAD_A} visible />);
@@ -190,6 +244,148 @@ describe("BrowserPanel subscription visibility", () => {
     }
   });
 
+  it("offers a managed install, streams progress, and starts Chromium on completion", async () => {
+    let finishInstall: (() => void) | undefined;
+    const installGate = new Promise<void>((resolve) => {
+      finishInstall = resolve;
+    });
+    const client = createBrowserClient();
+    client.browser.install.mockImplementation(async (_input, onProgress) => {
+      onProgress({
+        phase: "downloading",
+        percent: 50,
+        downloadedBytes: 50,
+        totalBytes: 100,
+      });
+      await installGate;
+    });
+    client.browser.getInstallState.mockResolvedValue({
+      status: "installed",
+      variant: "headless-shell",
+      executablePath: "/salchi/browsers/chromium",
+      progress: {
+        phase: "complete",
+        percent: 100,
+        downloadedBytes: 100,
+        totalBytes: 100,
+      },
+    });
+    client.browser.start.mockImplementation(async ({ threadId }) => ({
+      ...sessionState(threadId),
+      status: "running" as const,
+      installState: { status: "installed" as const, variant: "headless-shell" as const },
+    }));
+    readEnvironmentConnectionMock.mockReturnValue({ client });
+    const initialState = reduceBrowserViewportState(initialBrowserViewportState(THREAD_A), {
+      type: "snapshot",
+      snapshot: {
+        ...sessionState(THREAD_A),
+        installState: { status: "not-installed", variant: "headless-shell" },
+        error: "No usable Chromium installation was found. Attempts: channel:chrome",
+      },
+    });
+    const screen = await render(<StatefulPanel initialState={initialState} threadId={THREAD_A} />);
+
+    try {
+      await expect
+        .element(
+          page.getByText(
+            "No browser found on the server. Choose a managed browser for Salchi to install.",
+          ),
+        )
+        .toBeVisible();
+      await page.getByRole("button", { name: "Install Chromium" }).click();
+      await expect.element(page.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "50");
+      finishInstall?.();
+      await vi.waitFor(() =>
+        expect(client.browser.start).toHaveBeenCalledWith({ threadId: THREAD_A }),
+      );
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("persists the Chrome choice and renders NeedsElevation as instructions", async () => {
+    const client = createBrowserClient();
+    client.browser.getInstallState.mockResolvedValue({
+      status: "needs-elevation",
+      variant: "chrome",
+      reason: "Google Chrome is installed as a system package on Linux.",
+      elevationCommand: "sudo -- '/usr/bin/node' '/opt/playwright/cli.js' install chrome",
+    });
+    readEnvironmentConnectionMock.mockReturnValue({ client });
+    const initialState = reduceBrowserViewportState(initialBrowserViewportState(THREAD_A), {
+      type: "snapshot",
+      snapshot: {
+        ...sessionState(THREAD_A),
+        installState: { status: "not-installed", variant: "headless-shell" },
+        error: "No usable Chromium installation was found. Attempts: channel:chrome",
+      },
+    });
+    const screen = await render(<StatefulPanel initialState={initialState} threadId={THREAD_A} />);
+
+    try {
+      await page.getByRole("radio", { name: /Google Chrome/ }).click();
+      await vi.waitFor(() =>
+        expect(client.server.updateSettings).toHaveBeenCalledWith({
+          browserManagedVariant: "chrome",
+        }),
+      );
+      await expect
+        .element(page.getByText("Google Chrome needs administrator installation"))
+        .toBeVisible();
+      await expect
+        .element(page.getByText("sudo -- '/usr/bin/node' '/opt/playwright/cli.js' install chrome"))
+        .toBeVisible();
+      expect(client.browser.install).not.toHaveBeenCalled();
+
+      await page.getByRole("button", { name: "Check again" }).click();
+      await vi.waitFor(() =>
+        expect(client.browser.cancelInstall).toHaveBeenCalledWith({ threadId: THREAD_A }),
+      );
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("starts an already-installed system Chrome without offering a redundant download", async () => {
+    const client = createBrowserClient();
+    client.browser.getInstallState.mockResolvedValue({
+      status: "installed",
+      variant: "chrome",
+      executablePath: "/opt/google/chrome/chrome",
+    });
+    client.browser.start.mockImplementation(async ({ threadId }) => ({
+      ...sessionState(threadId),
+      status: "running" as const,
+      installState: { status: "installed" as const, variant: "chrome" as const },
+    }));
+    readEnvironmentConnectionMock.mockReturnValue({ client });
+    const initialState = reduceBrowserViewportState(initialBrowserViewportState(THREAD_A), {
+      type: "snapshot",
+      snapshot: {
+        ...sessionState(THREAD_A),
+        installState: { status: "not-installed", variant: "headless-shell" },
+        error: "No usable Chromium installation was found. Attempts: channel:chrome",
+      },
+    });
+    const screen = await render(<StatefulPanel initialState={initialState} threadId={THREAD_A} />);
+
+    try {
+      await page.getByRole("radio", { name: /Google Chrome/ }).click();
+      await expect.element(page.getByText("Google Chrome is already installed")).toBeVisible();
+      expect(client.browser.install).not.toHaveBeenCalled();
+
+      await page.getByRole("button", { name: "Start Google Chrome" }).click();
+      await vi.waitFor(() =>
+        expect(client.browser.start).toHaveBeenCalledWith({ threadId: THREAD_A }),
+      );
+      expect(client.browser.install).not.toHaveBeenCalled();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("shows a running empty state when no tabs are open", async () => {
     const client = createBrowserClient();
     readEnvironmentConnectionMock.mockReturnValue({ client });
@@ -200,6 +396,7 @@ describe("BrowserPanel subscription visibility", () => {
         status: "running",
         tabs: [],
         executable: null,
+        viewport: { width: 800, height: 600 },
       },
     });
     const screen = await render(<Panel state={state} threadId={THREAD_A} visible />);
@@ -231,6 +428,7 @@ describe("BrowserPanel subscription visibility", () => {
           },
         ],
         executable: null,
+        viewport: { width: 800, height: 600 },
       },
     });
     const screen = await render(<Panel state={state} threadId={THREAD_A} visible />);
@@ -271,6 +469,7 @@ describe("BrowserPanel subscription visibility", () => {
         status: "running",
         tabs: [],
         executable: null,
+        viewport: { width: 800, height: 600 },
       },
     });
     const screen = await render(<Panel state={state} threadId={THREAD_A} visible={false} />);
@@ -304,6 +503,7 @@ describe("BrowserPanel subscription visibility", () => {
       status: "running",
       tabs: [],
       executable: null,
+      viewport: { width: 800, height: 600 },
     });
     readEnvironmentConnectionMock.mockReturnValue({ client });
     const state = reduceBrowserViewportState(initialBrowserViewportState(THREAD_A), {
@@ -320,6 +520,7 @@ describe("BrowserPanel subscription visibility", () => {
           },
         ],
         executable: null,
+        viewport: { width: 800, height: 600 },
       },
     });
     const screen = await render(
@@ -355,6 +556,7 @@ describe("BrowserPanel subscription visibility", () => {
           },
         ],
         executable: null,
+        viewport: { width: 800, height: 600 },
       },
     });
     const screen = await render(<Panel state={state} threadId={THREAD_A} visible />);
@@ -418,6 +620,7 @@ describe("BrowserPanel subscription visibility", () => {
           },
         ],
         executable: null,
+        viewport: { width: 800, height: 600 },
       },
     });
     const screen = await render(<Panel state={state} threadId={THREAD_A} visible />);
@@ -528,6 +731,49 @@ describe("BrowserPanel subscription visibility", () => {
     }
 
     expect(browserStreamConnections[2]?.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("reports only the visible full panel size and releases it on hide", async () => {
+    const client = createBrowserClient();
+    readEnvironmentConnectionMock.mockReturnValue({ client });
+    const state = reduceBrowserViewportState(initialBrowserViewportState(THREAD_A), {
+      type: "snapshot",
+      snapshot: {
+        ...sessionState(THREAD_A),
+        status: "running",
+        tabs: [
+          {
+            targetId: "target-a",
+            title: "Example",
+            url: "https://example.com/",
+            active: true,
+          },
+        ],
+      },
+    });
+    const renderPanel = (visible: boolean) => (
+      <div style={{ height: 760, width: 420 }}>
+        <Panel state={state} threadId={THREAD_A} visible={visible} />
+      </div>
+    );
+    const screen = await render(renderPanel(true));
+
+    try {
+      await vi.waitFor(() =>
+        expect(client.browser.setViewportSize).toHaveBeenCalledWith(
+          expect.objectContaining({ _tag: "Set", threadId: THREAD_A }),
+        ),
+      );
+      await screen.rerender(renderPanel(false));
+      await vi.waitFor(() =>
+        expect(client.browser.setViewportSize).toHaveBeenCalledWith({
+          _tag: "Release",
+          threadId: THREAD_A,
+        }),
+      );
+    } finally {
+      await screen.unmount();
+    }
   });
 
   it("unsubscribes as soon as a retained responsive sheet starts closing", async () => {

@@ -36,6 +36,8 @@ const STREAM_METHODS = new Set<string>([
   WS_METHODS.subscribeServerLifecycle,
   WS_METHODS.subscribeAuthAccess,
   WS_METHODS.browserSubscribeViewport,
+  WS_METHODS.browserSubscribeAgentActivity,
+  WS_METHODS.browserInstall,
 ]);
 
 const ALL_RPC_METHODS = Array.from(WsRpcGroup.requests.keys());

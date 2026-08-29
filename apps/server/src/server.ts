@@ -37,6 +37,7 @@ import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
 import { TerminalManagerLive } from "./terminal/Layers/Manager.ts";
 import { BrowserSessionManagerLive } from "./browser/Layers/BrowserSessionManager.ts";
+import { BrowserInstallerLive } from "./browser/Layers/BrowserInstaller.ts";
 import { browserStreamRouteLayer } from "./browser/Layers/BrowserStreamRoute.ts";
 import {
   BrowserAgentBrokerLive,
@@ -250,6 +251,7 @@ const CheckpointingLayerLive = Layer.empty.pipe(
 const TerminalLayerLive = TerminalManagerLive.pipe(Layer.provide(PtyAdapterLive));
 
 const BrowserSessionLayerLive = BrowserSessionManagerLive.pipe(
+  Layer.provideMerge(BrowserInstallerLive),
   Layer.provide(OrchestrationLayerLive),
 );
 const BrowserLayerLive = BrowserAgentBrokerLive.pipe(Layer.provideMerge(BrowserSessionLayerLive));

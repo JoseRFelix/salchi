@@ -39,6 +39,7 @@ function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
     navigateHistory: () => Effect.void,
     closeTab: () => Effect.void,
     dispatchInput: () => Effect.void,
+    setViewportSize: () => Effect.void,
     setScreencastEnabled: () => Effect.void,
     ...overrides,
   };
@@ -298,6 +299,115 @@ it.effect("dispatches input through the running browser runtime", () =>
   ),
 );
 
+it.effect("applies the largest live viewport request and releases owners", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const applied: Array<{ readonly width: number; readonly height: number }> = [];
+      const manager = yield* makeBrowserSessionManagerWithOptions(
+        managerOptions(() =>
+          Effect.succeed(
+            fakeRuntime({
+              setViewportSize: (size) =>
+                Effect.sync(() => {
+                  applied.push(size);
+                }),
+            }),
+          ),
+        ),
+      );
+      yield* manager.start(threadId);
+      applied.length = 0;
+
+      yield* manager.setViewportSize(threadId, 500, 900, "phone");
+      yield* manager.setViewportSize(threadId, 1_000, 600, "desktop-a");
+      yield* manager.setViewportSize(threadId, 1_200, 500, "desktop-b");
+      const released = yield* manager.releaseViewportSize(threadId, "desktop-b");
+
+      assert.deepEqual(applied, [
+        { width: 500, height: 900 },
+        { width: 1_000, height: 600 },
+        { width: 1_200, height: 500 },
+        { width: 1_000, height: 600 },
+      ]);
+      assert.deepEqual(released.viewport, { width: 1_000, height: 600 });
+
+      yield* manager.releaseViewportSizeOwner("desktop-a");
+      assert.deepEqual((yield* manager.getState(threadId)).viewport, {
+        width: 500,
+        height: 900,
+      });
+    }),
+  ),
+);
+
+it.effect("queues the latest viewport resize until agent activity becomes inactive", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const applied: Array<{ readonly width: number; readonly height: number }> = [];
+      const manager = yield* makeBrowserSessionManagerWithOptions(
+        managerOptions(() =>
+          Effect.succeed(
+            fakeRuntime({
+              setViewportSize: (size) =>
+                Effect.sync(() => {
+                  applied.push(size);
+                }),
+            }),
+          ),
+        ),
+      );
+      yield* manager.start(threadId);
+      applied.length = 0;
+      yield* manager.agentConnectionOpened(threadId, "agent-resize");
+      yield* manager.recordAgentCdpCommand(threadId, "agent-resize");
+
+      yield* manager.setViewportSize(threadId, 500, 900, "panel");
+      yield* manager.setViewportSize(threadId, 1_100, 700, "panel");
+      assert.deepEqual(applied, []);
+      assert.deepEqual((yield* manager.getState(threadId)).viewport, { width: 800, height: 600 });
+
+      yield* TestClock.adjust("6 seconds");
+      yield* Effect.yieldNow;
+
+      assert.deepEqual(applied, [{ width: 1_100, height: 700 }]);
+      assert.deepEqual((yield* manager.getState(threadId)).viewport, {
+        width: 1_100,
+        height: 700,
+      });
+    }),
+  ),
+);
+
+it.effect("reverts running sessions to 800x600 when viewport following is disabled", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const applied: Array<{ readonly width: number; readonly height: number }> = [];
+      const manager = yield* makeBrowserSessionManagerWithOptions(
+        managerOptions(() =>
+          Effect.succeed(
+            fakeRuntime({
+              setViewportSize: (size) =>
+                Effect.sync(() => {
+                  applied.push(size);
+                }),
+            }),
+          ),
+        ),
+      );
+      yield* manager.start(threadId);
+      applied.length = 0;
+      yield* manager.setViewportSize(threadId, 1_000, 700, "panel");
+      yield* manager.setViewportFollowingEnabled(false);
+
+      assert.deepEqual(applied, [
+        { width: 1_000, height: 700 },
+        { width: 800, height: 600 },
+      ]);
+      assert.deepEqual((yield* manager.getState(threadId)).viewport, { width: 800, height: 600 });
+    }),
+  ),
+);
+
 it.effect("dispatches input without waiting for the manager's per-thread operation lock", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -467,7 +577,11 @@ it.effect("publishes agent activity only for proxied CDP commands and resets it 
       yield* Effect.yieldNow;
       yield* manager.stop(threadId);
 
-      assert.deepEqual(Array.from(yield* Fiber.join(transitions)), [false, true, false]);
+      assert.deepEqual(Array.from(yield* Fiber.join(transitions)), [
+        { threadId, agentActive: false },
+        { threadId, agentActive: true },
+        { threadId, agentActive: false },
+      ]);
     }),
   ),
 );

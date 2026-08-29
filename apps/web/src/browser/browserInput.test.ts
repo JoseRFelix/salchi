@@ -74,6 +74,29 @@ describe("browser viewport input coordinates", () => {
     ).toEqual({ x: 800, y: 0 });
   });
 
+  it("maps a high-DPI portrait viewport after a server resize", () => {
+    expect(
+      mapCanvasPointToBrowserFrame({
+        bounds: { left: 10, top: 20, width: 390, height: 700 },
+        clientX: 205,
+        clientY: 370,
+        devicePixelRatio: 3,
+        frameWidth: 360,
+        frameHeight: 800,
+      }),
+    ).toEqual({ x: 180, y: 400 });
+    expect(
+      mapCanvasPointToBrowserFrame({
+        bounds: { left: 10, top: 20, width: 390, height: 700 },
+        clientX: 15,
+        clientY: 370,
+        devicePixelRatio: 3,
+        frameWidth: 360,
+        frameHeight: 800,
+      }),
+    ).toBeNull();
+  });
+
   it("encodes CDP modifier bits", () => {
     expect(
       browserKeyboardModifiers({ altKey: true, ctrlKey: true, metaKey: false, shiftKey: true }),

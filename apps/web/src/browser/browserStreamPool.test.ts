@@ -57,7 +57,7 @@ describe("browser stream pool", () => {
       return { dispose: vi.fn(), sendInput: () => true };
     });
     const first = pool.acquire({ environmentId, threadId });
-    options?.onEvent({ agentActive: true });
+    options?.onEvent({ threadId, agentActive: true });
     options?.onFrame({
       targetId: "tab-1",
       seq: 2,
@@ -76,7 +76,7 @@ describe("browser stream pool", () => {
       onFrame,
     });
 
-    expect(onEvent).toHaveBeenCalledWith({ agentActive: true });
+    expect(onEvent).toHaveBeenCalledWith({ threadId, agentActive: true });
     expect(onFrame).toHaveBeenCalledWith(expect.objectContaining({ seq: 2 }));
     first.dispose();
     second.dispose();

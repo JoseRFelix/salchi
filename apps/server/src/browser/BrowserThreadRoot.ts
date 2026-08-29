@@ -15,15 +15,16 @@ export interface BrowserThreadLookup<E> {
 }
 
 export function isBrowserRootThread(
-  thread: Pick<OrchestrationThreadShell, "createdByThreadId" | "parentThreadId">,
+  thread: Pick<OrchestrationThreadShell, "parentThreadId">,
 ): boolean {
-  return thread.parentThreadId === null && thread.createdByThreadId === null;
+  return thread.parentThreadId === null || thread.parentThreadId === undefined;
 }
 
 /**
- * Browser ownership follows both materialized-child (`parentThreadId`) and
- * provider-created virtual-session (`createdByThreadId`) relationships. The
- * first ancestor with neither relationship owns the browser session/profile.
+ * Browser ownership follows materialized-child (`parentThreadId`) relationships.
+ * `createdByThreadId` records who created an independent orchestration thread;
+ * it is provenance, not browser ownership. The first ancestor without a parent
+ * owns the browser session/profile.
  */
 export function resolveBrowserRootThreadId<E>(
   lookup: BrowserThreadLookup<E>,
@@ -59,7 +60,7 @@ export function resolveBrowserRootThreadId<E>(
         });
       }
 
-      const ownerThreadId = thread.value.parentThreadId ?? thread.value.createdByThreadId ?? null;
+      const ownerThreadId = thread.value.parentThreadId ?? null;
       if (ownerThreadId === null) return thread.value.id;
       currentThreadId = ownerThreadId;
     }

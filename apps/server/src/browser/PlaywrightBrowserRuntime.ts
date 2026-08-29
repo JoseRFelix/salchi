@@ -7,9 +7,11 @@ import {
   BrowserTabNotFound,
   type BrowserExecutableInfo,
   type BrowserInputEvent,
+  type BrowserManagedVariant,
   type BrowserOperationError as BrowserOperationErrorType,
   type BrowserTab,
   type BrowserTabNotFound as BrowserTabNotFoundType,
+  type BrowserViewportSize,
   type ThreadId,
 } from "@salchi/contracts";
 import * as Effect from "effect/Effect";
@@ -28,6 +30,7 @@ import {
 import {
   makeBrowserResolutionCandidates,
   resolveBrowserExecutable,
+  type BrowserResolutionCandidate,
 } from "./BrowserExecutableResolver.ts";
 import {
   BROWSER_INPUT_RATE_LIMIT,
@@ -46,11 +49,12 @@ import {
   makeBrowserScreencastFrameRateController,
 } from "./BrowserScreencastPolicy.ts";
 import { browserStealthUserAgent, BROWSER_STEALTH_WEBDRIVER_SCRIPT } from "./BrowserStealth.ts";
+import {
+  DEFAULT_BROWSER_VIEWPORT_SIZE,
+  normalizeBrowserViewportSize,
+} from "./BrowserViewportSize.ts";
 import { registerManagedChildProcess } from "../process/ManagedChildProcessRegistry.ts";
 import { terminateProcessTree } from "../process/ProcessTree.ts";
-
-const VIEWPORT_WIDTH = 800;
-const VIEWPORT_HEIGHT = 600;
 
 interface PageRuntime {
   readonly page: Page;
@@ -120,6 +124,9 @@ export interface BrowserRuntime {
   readonly setScreencastEnabled: (
     enabled: boolean,
   ) => Effect.Effect<void, BrowserOperationErrorType>;
+  readonly setViewportSize: (
+    size: BrowserViewportSize,
+  ) => Effect.Effect<void, BrowserOperationErrorType>;
 }
 
 export interface PlaywrightBrowserLaunchInput {
@@ -128,10 +135,15 @@ export interface PlaywrightBrowserLaunchInput {
   readonly processRegistryDirectory: string;
   readonly environmentExecutablePath?: string | undefined;
   readonly settingExecutablePath?: string | undefined;
+  readonly managedExecutablePath?: string | undefined;
+  readonly managedVariant?: BrowserManagedVariant | undefined;
+  /** Test-only override; production always uses the default system channel order. */
+  readonly resolutionChannels?: ReadonlyArray<string> | undefined;
   readonly noSandbox: boolean;
   readonly stealthMode: boolean;
   readonly screencastQuality: number;
   readonly screencastEveryNthFrame: number;
+  readonly viewportSize?: BrowserViewportSize | undefined;
   readonly serverHost?: string | undefined;
   readonly serverPort: number;
   readonly callbacks: BrowserRuntimeCallbacks;
@@ -139,6 +151,18 @@ export interface PlaywrightBrowserLaunchInput {
 
 function operationError(threadId: ThreadId, message: string, cause: unknown) {
   return new BrowserOperationError({ threadId, message, cause });
+}
+
+export function shouldUseManagedChromeNewHeadless(input: {
+  readonly candidate: BrowserResolutionCandidate;
+  readonly managedVariant?: BrowserManagedVariant | undefined;
+  readonly stealthMode: boolean;
+}): boolean {
+  if (!input.stealthMode || input.managedVariant !== "chrome") return false;
+  if ("channel" in input.candidate.launchOptions) {
+    return input.candidate.launchOptions.channel === "chrome";
+  }
+  return input.candidate.source === "managed";
 }
 
 function tryBrowserOperation<A>(
@@ -231,6 +255,9 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
   const streamDebug = browserStreamDebugEnabled();
   let closing = false;
   let processPid: number | undefined;
+  let viewportSize = normalizeBrowserViewportSize(
+    input.viewportSize ?? DEFAULT_BROWSER_VIEWPORT_SIZE,
+  );
 
   if (input.noSandbox) {
     yield* Effect.logWarning(
@@ -242,6 +269,8 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
   const candidates = makeBrowserResolutionCandidates({
     environmentPath: input.environmentExecutablePath,
     settingPath: input.settingExecutablePath,
+    managedPath: input.managedExecutablePath,
+    channels: input.resolutionChannels,
   });
   const launched = yield* Effect.acquireRelease(
     resolveBrowserExecutable({
@@ -268,12 +297,19 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
                   "--disable-dev-shm-usage",
                   "--remote-debugging-address=127.0.0.1",
                   `--remote-debugging-port=${remoteDebuggingPort}`,
+                  ...(shouldUseManagedChromeNewHeadless({
+                    candidate,
+                    managedVariant: input.managedVariant,
+                    stealthMode: input.stealthMode,
+                  })
+                    ? ["--headless=new"]
+                    : []),
                   ...(input.noSandbox ? ["--no-sandbox"] : []),
                 ],
                 chromiumSandbox: !input.noSandbox,
                 deviceScaleFactor: 1,
                 headless: true,
-                viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+                viewport: viewportSize,
               }),
             catch: (cause) =>
               operationError(
@@ -535,7 +571,8 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
         runtime.cdp.send("Page.startScreencast", {
           format: "jpeg",
           quality: input.screencastQuality,
-          maxWidth: VIEWPORT_WIDTH,
+          maxWidth: viewportSize.width,
+          maxHeight: viewportSize.height,
           everyNthFrame,
         }),
       ).pipe(
@@ -654,8 +691,8 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
         page,
         cdp,
         targetId: target.targetInfo.targetId,
-        frameHeight: VIEWPORT_HEIGHT,
-        frameWidth: VIEWPORT_WIDTH,
+        frameHeight: viewportSize.height,
+        frameWidth: viewportSize.width,
         initialScreencastFramePending: false,
         screencastGeneration: 0,
         screencasting: false,
@@ -724,6 +761,16 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
       };
       yield* tryBrowserOperation(input.threadId, "Failed to enable browser tab CDP events.", () =>
         cdp.send("Page.enable"),
+      );
+      yield* tryBrowserOperation(input.threadId, "Failed to size the browser tab viewport.", () =>
+        cdp.send("Emulation.setDeviceMetricsOverride", {
+          width: viewportSize.width,
+          height: viewportSize.height,
+          deviceScaleFactor: 1,
+          mobile: false,
+          screenWidth: viewportSize.width,
+          screenHeight: viewportSize.height,
+        }),
       );
       if (stealthUserAgent !== undefined) {
         yield* Effect.all([
@@ -828,6 +875,43 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
       );
       yield* startActiveScreencastUnlocked();
       yield* refreshTabsUnlocked;
+      input.callbacks.onCdpActivity();
+    });
+
+  const setViewportSizeUnlocked = (requestedSize: BrowserViewportSize) =>
+    Effect.gen(function* () {
+      const nextSize = normalizeBrowserViewportSize(requestedSize);
+      if (nextSize.width === viewportSize.width && nextSize.height === viewportSize.height) return;
+      const activeRuntime =
+        activeTargetId === undefined ? undefined : pageRuntimes.get(activeTargetId);
+      const restartScreencast = activeRuntime?.screencasting === true;
+      if (activeRuntime !== undefined && restartScreencast) {
+        yield* stopScreencastUnlocked(activeRuntime);
+      }
+      yield* Effect.forEach(
+        pageRuntimes.values(),
+        (runtime) =>
+          tryBrowserOperation(input.threadId, "Failed to resize a browser tab viewport.", () =>
+            runtime.cdp.send("Emulation.setDeviceMetricsOverride", {
+              width: nextSize.width,
+              height: nextSize.height,
+              deviceScaleFactor: 1,
+              mobile: false,
+              screenWidth: nextSize.width,
+              screenHeight: nextSize.height,
+            }),
+          ).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                runtime.frameWidth = nextSize.width;
+                runtime.frameHeight = nextSize.height;
+              }),
+            ),
+          ),
+        { discard: true },
+      );
+      viewportSize = nextSize;
+      if (restartScreencast) yield* startActiveScreencastUnlocked(false);
       input.callbacks.onCdpActivity();
     });
 
@@ -945,6 +1029,7 @@ export const launchPlaywrightBrowser = Effect.fn("browser.playwright.launch")(fu
         }),
       ),
     dispatchInput: dispatchInputDirect,
+    setViewportSize: (size) => serialized(setViewportSizeUnlocked(size)),
     setScreencastEnabled: (enabled) =>
       serialized(
         Effect.gen(function* () {

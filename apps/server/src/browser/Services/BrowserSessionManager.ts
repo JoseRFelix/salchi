@@ -1,4 +1,5 @@
 import type {
+  BrowserAgentActivity,
   BrowserHistoryAction,
   BrowserInputEvent,
   BrowserRpcError,
@@ -26,7 +27,15 @@ export interface BrowserSessionManagerShape {
     threadId: ThreadId,
     connectionId: string,
   ) => Effect.Effect<void>;
-  readonly recordAgentCdpCommand: (threadId: ThreadId, connectionId: string) => Effect.Effect<void>;
+  readonly recordAgentCdpCommand: (
+    threadId: ThreadId,
+    connectionId: string,
+    originThreadId?: ThreadId,
+  ) => Effect.Effect<void>;
+  readonly recordAgentBrowserRequest: (
+    threadId: ThreadId,
+    originThreadId?: ThreadId,
+  ) => Effect.Effect<void>;
   readonly agentConnectionClosed: (threadId: ThreadId, connectionId: string) => Effect.Effect<void>;
   readonly setActiveTab: (
     threadId: ThreadId,
@@ -55,6 +64,18 @@ export interface BrowserSessionManagerShape {
     targetId: string,
     event: BrowserInputEvent,
   ) => Effect.Effect<void, BrowserRpcError>;
+  readonly setViewportSize: (
+    threadId: ThreadId,
+    width: number,
+    height: number,
+    ownerId?: string,
+  ) => Effect.Effect<BrowserSessionState, BrowserRpcError>;
+  readonly releaseViewportSize: (
+    threadId: ThreadId,
+    ownerId?: string,
+  ) => Effect.Effect<BrowserSessionState, BrowserRpcError>;
+  readonly releaseViewportSizeOwner: (ownerId: string) => Effect.Effect<void>;
+  readonly setViewportFollowingEnabled: (enabled: boolean) => Effect.Effect<void>;
   readonly subscribeViewport: (
     threadId: ThreadId,
     leaseKind?: BrowserViewportLeaseKind,
@@ -63,7 +84,9 @@ export interface BrowserSessionManagerShape {
     threadId: ThreadId,
     leaseKind?: BrowserViewportLeaseKind,
   ) => Stream.Stream<BrowserBinaryViewportEvent, BrowserRpcError>;
-  readonly subscribeAgentActivity: (threadId: ThreadId) => Stream.Stream<boolean, BrowserRpcError>;
+  readonly subscribeAgentActivity: (
+    threadId: ThreadId,
+  ) => Stream.Stream<BrowserAgentActivity, BrowserRpcError>;
 }
 
 /** Every viewport subscription is an explicit visible-surface lease. */

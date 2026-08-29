@@ -14,6 +14,7 @@ import {
   AuthBrowserOperateScope,
   type AuthAccessStreamEvent,
   AuthSessionId,
+  BrowserOperationError,
   CommandId,
   EventId,
   type OrchestrationCommand,
@@ -86,6 +87,7 @@ import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import type { AuthenticatedSession } from "./auth/Services/ServerAuth.ts";
 import { requireAuthScope } from "./auth/scopes.ts";
 import { BrowserSessionManager } from "./browser/Services/BrowserSessionManager.ts";
+import { BrowserInstaller } from "./browser/Services/BrowserInstaller.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -277,6 +279,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager;
       const browserSessionManager = yield* BrowserSessionManager;
+      const browserInstaller = yield* BrowserInstaller;
       const providerRegistry = yield* ProviderRegistry;
       const providerService = yield* ProviderService;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
@@ -306,10 +309,28 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const webPush = yield* WebPushService;
+      const browserViewportOwnerId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+      yield* Effect.addFinalizer(() =>
+        browserSessionManager.releaseViewportSizeOwner(browserViewportOwnerId),
+      );
       const requireBrowserOperationScope = requireAuthScope(
         currentSession.scopes,
         AuthBrowserOperateScope,
       );
+      const browserInstallState = (threadId: ThreadId) =>
+        serverSettings.getSettings.pipe(
+          Effect.flatMap((settings) =>
+            browserInstaller.getInstallState(settings.browserManagedVariant),
+          ),
+          Effect.mapError(
+            (cause) =>
+              new BrowserOperationError({
+                threadId,
+                message: "Failed to load managed browser settings.",
+                cause,
+              }),
+          ),
+        );
       const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
         isOrchestrationDispatchCommandError(cause)
           ? cause
@@ -1194,7 +1215,16 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
         [WS_METHODS.serverUpdateSettings]: ({ patch }) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateSettings,
-            serverSettings.updateSettings(patch).pipe(Effect.map(redactServerSettingsForClient)),
+            serverSettings.updateSettings(patch).pipe(
+              Effect.tap((settings) =>
+                patch.browserViewportFollowsPanel === undefined
+                  ? Effect.void
+                  : browserSessionManager.setViewportFollowingEnabled(
+                      settings.browserViewportFollowsPanel,
+                    ),
+              ),
+              Effect.map(redactServerSettingsForClient),
+            ),
             {
               "rpc.aggregate": "server",
             },
@@ -1617,11 +1647,89 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
             ),
             { "rpc.aggregate": "browser" },
           ),
+        [WS_METHODS.browserGetInstallState]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserGetInstallState,
+            requireBrowserOperationScope.pipe(
+              Effect.andThen(browserSessionManager.getState(input.threadId)),
+              Effect.andThen(browserInstallState(input.threadId)),
+            ),
+            { "rpc.aggregate": "browser" },
+          ),
+        [WS_METHODS.browserInstall]: (input) =>
+          observeRpcStream(
+            WS_METHODS.browserInstall,
+            Stream.fromEffect(
+              requireBrowserOperationScope.pipe(
+                Effect.andThen(browserSessionManager.getState(input.threadId)),
+                Effect.andThen(
+                  serverSettings
+                    .updateSettings({
+                      browserManagedVariant: input.variant,
+                    })
+                    .pipe(
+                      Effect.mapError(
+                        (cause) =>
+                          new BrowserOperationError({
+                            threadId: input.threadId,
+                            message: "Failed to save the managed browser variant.",
+                            cause,
+                          }),
+                      ),
+                    ),
+                ),
+              ),
+            ).pipe(
+              Stream.flatMap(() =>
+                browserInstaller.install(input.variant).pipe(
+                  Stream.mapError(
+                    (cause) =>
+                      new BrowserOperationError({
+                        threadId: input.threadId,
+                        message: cause.message,
+                        cause,
+                      }),
+                  ),
+                ),
+              ),
+            ),
+            { "rpc.aggregate": "browser" },
+          ),
+        [WS_METHODS.browserCancelInstall]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserCancelInstall,
+            requireBrowserOperationScope.pipe(
+              Effect.andThen(browserSessionManager.getState(input.threadId)),
+              Effect.andThen(browserInstallState(input.threadId)),
+              Effect.flatMap((installState) => browserInstaller.cancel(installState.variant)),
+            ),
+            { "rpc.aggregate": "browser" },
+          ),
         [WS_METHODS.browserSetActiveTab]: (input) =>
           observeRpcEffect(
             WS_METHODS.browserSetActiveTab,
             requireBrowserOperationScope.pipe(
               Effect.andThen(browserSessionManager.setActiveTab(input.threadId, input.targetId)),
+            ),
+            { "rpc.aggregate": "browser" },
+          ),
+        [WS_METHODS.browserSetViewportSize]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserSetViewportSize,
+            requireBrowserOperationScope.pipe(
+              Effect.andThen(
+                input._tag === "Set"
+                  ? browserSessionManager.setViewportSize(
+                      input.threadId,
+                      input.width,
+                      input.height,
+                      browserViewportOwnerId,
+                    )
+                  : browserSessionManager.releaseViewportSize(
+                      input.threadId,
+                      browserViewportOwnerId,
+                    ),
+              ),
             ),
             { "rpc.aggregate": "browser" },
           ),

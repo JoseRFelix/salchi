@@ -24,6 +24,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   browserErrorMessage,
   browserTabLabel,
+  browserUnavailableDetails,
   isBrowserAuthorizationError,
   isBrowserAuthorizationErrorMessage,
   type BrowserViewportState,
@@ -37,10 +38,16 @@ import {
 } from "../browser/browserInput";
 import type { BrowserStreamViewportFrame } from "../browser/browserStreamConnection";
 import type { BrowserSurfaceStreamLease } from "../browser/browserSurfaceStreamLease";
+import { createBrowserViewportResizeController } from "../browser/browserViewportResize";
 import { useBrowserCanvasRenderer } from "../browser/useBrowserCanvasRenderer";
-import { readEnvironmentConnection } from "../environments/runtime";
+import { useManagedBrowserInstall } from "../browser/useManagedBrowserInstall";
+import {
+  readEnvironmentConnection,
+  subscribeEnvironmentConnections,
+} from "../environments/runtime";
 import type { WsRpcClient } from "../rpc/wsRpcClient";
 import { cn } from "../lib/utils";
+import { BrowserInstallOffer, BrowserManagedVariantPicker } from "./BrowserInstallOffer";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { useRightPanelSheetOpen } from "./RightPanelSheet";
 import { Button } from "./ui/button";
@@ -67,7 +74,6 @@ type PendingOperation =
   | "navigate-history"
   | "open-tab"
   | "set-active-tab"
-  | "start"
   | "stop";
 type BrowserPointerButton = Extract<BrowserInputEvent, { readonly _tag: "PointerDown" }>["button"];
 
@@ -122,6 +128,7 @@ function useDocumentVisible(): boolean {
 
 function BrowserEmptyState(props: {
   readonly actionLabel?: string;
+  readonly children?: React.ReactNode;
   readonly description: string;
   readonly icon: React.ReactNode;
   readonly loading?: boolean;
@@ -135,12 +142,15 @@ function BrowserEmptyState(props: {
         <EmptyTitle>{props.title}</EmptyTitle>
         <EmptyDescription>{props.description}</EmptyDescription>
       </EmptyHeader>
-      {props.actionLabel && props.onAction ? (
-        <EmptyContent>
-          <Button disabled={props.loading} onClick={props.onAction}>
-            {props.loading ? <Spinner className="size-4" /> : null}
-            {props.actionLabel}
-          </Button>
+      {(props.actionLabel && props.onAction) || props.children ? (
+        <EmptyContent className="w-full max-w-xl gap-3">
+          {props.actionLabel && props.onAction ? (
+            <Button disabled={props.loading} onClick={props.onAction}>
+              {props.loading ? <Spinner className="size-4" /> : null}
+              {props.actionLabel}
+            </Button>
+          ) : null}
+          {props.children}
         </EmptyContent>
       ) : null}
     </Empty>
@@ -194,6 +204,7 @@ export function BrowserPanel(props: {
     props.state.authorization !== "denied";
   const addressInputRef = useRef<HTMLInputElement | null>(null);
   const mobileKeyboardInputRef = useRef<HTMLInputElement | null>(null);
+  const viewportContainerRef = useRef<HTMLDivElement | null>(null);
   const lastFrameReceivedAtRef = useRef(0);
   const inputMeasurementRef = useRef<{
     readonly afterSeq: number;
@@ -222,6 +233,11 @@ export function BrowserPanel(props: {
   const [live, setLive] = useState(false);
   const [addressValue, setAddressValue] = useState(() => displayedActiveUrl);
   const [pendingOperation, setPendingOperation] = useState<PendingOperation | null>(null);
+  const shouldDriveViewportSize =
+    shouldSubscribe &&
+    props.state.status === "running" &&
+    displayedActiveTab !== null &&
+    hasWebsiteUrl;
 
   const updateInteractEnabled = useCallback((enabled: boolean) => {
     interactEnabledRef.current = enabled;
@@ -309,6 +325,69 @@ export function BrowserPanel(props: {
     });
   }, [acceptFrame, pauseFrame, props.onStateAction, props.streamLease, shouldSubscribe]);
 
+  useEffect(() => {
+    if (!shouldDriveViewportSize) return;
+    const element = viewportContainerRef.current;
+    if (element === null) return;
+    let disposed = false;
+
+    const setViewport = (size: { readonly width: number; readonly height: number }) => {
+      const client = readEnvironmentConnection(props.environmentId)?.client.browser;
+      if (!client) return;
+      void client
+        .setViewportSize({
+          _tag: "Set",
+          threadId: props.threadId,
+          width: size.width,
+          height: size.height,
+        })
+        .catch((error: unknown) => {
+          if (!disposed && isBrowserAuthorizationError(error)) {
+            props.onStateAction({ type: "authorizationDenied" });
+          }
+        });
+    };
+    const releaseViewport = () => {
+      const client = readEnvironmentConnection(props.environmentId)?.client.browser;
+      if (!client) return;
+      void client
+        .setViewportSize({ _tag: "Release", threadId: props.threadId })
+        .catch(() => undefined);
+    };
+    const controller = createBrowserViewportResizeController({
+      onSet: setViewport,
+      onRelease: releaseViewport,
+    });
+    const initialBounds = element.getBoundingClientRect();
+    let resizeControllerActive = initialBounds.width > 0 && initialBounds.height > 0;
+    if (resizeControllerActive) {
+      controller.activate({ width: initialBounds.width, height: initialBounds.height });
+    }
+    const resizeObserver = new ResizeObserver((entries) => {
+      const entry = entries.at(-1);
+      if (entry === undefined) return;
+      const size = {
+        width: entry.contentRect.width,
+        height: entry.contentRect.height,
+      };
+      if (!resizeControllerActive && size.width > 0 && size.height > 0) {
+        resizeControllerActive = true;
+        controller.activate(size);
+        return;
+      }
+      controller.resize(size);
+    });
+    resizeObserver.observe(element);
+    const unsubscribeConnections = subscribeEnvironmentConnections(() => controller.resend());
+
+    return () => {
+      disposed = true;
+      resizeObserver.disconnect();
+      unsubscribeConnections();
+      controller.dispose();
+    };
+  }, [props.environmentId, props.onStateAction, props.threadId, shouldDriveViewportSize]);
+
   useEffect(
     () => () => {
       operationGenerationRef.current += 1;
@@ -338,6 +417,18 @@ export function BrowserPanel(props: {
         if (isBrowserAuthorizationError(error)) {
           props.onStateAction({ type: "authorizationDenied" });
         } else {
+          const unavailable = browserUnavailableDetails(error);
+          if (unavailable !== null) {
+            props.onStateAction({
+              type: "browserUnavailable",
+              error: unavailable.message,
+              reason: unavailable.reason,
+              ...(unavailable.dependencyCommand === undefined
+                ? {}
+                : { dependencyCommand: unavailable.dependencyCommand }),
+            });
+            return;
+          }
           props.onStateAction({
             type: "operationFailed",
             error: browserErrorMessage(error, "The browser operation failed."),
@@ -746,14 +837,14 @@ export function BrowserPanel(props: {
     mobileKeyboardInputRef.current?.focus({ preventScroll: true });
   }, []);
 
-  const startBrowser = useCallback(() => {
-    props.onStateAction({ type: "startRequested" });
-    void runOperation(
-      "start",
-      (client) => client.start({ threadId: props.threadId }),
-      props.state.status === "crashed" ? "crashed" : "stopped",
-    );
-  }, [props.onStateAction, props.state.status, props.threadId, runOperation]);
+  const managedBrowser = useManagedBrowserInstall({
+    active: actuallyVisible,
+    environmentId: props.environmentId,
+    onStateAction: props.onStateAction,
+    state: props.state,
+    threadId: props.threadId,
+  });
+  const operationPending = pendingOperation !== null || managedBrowser.pendingOperation !== null;
   const stopBrowser = useCallback(() => {
     void runOperation("stop", (client) => client.stop({ threadId: props.threadId }));
   }, [props.threadId, runOperation]);
@@ -788,7 +879,7 @@ export function BrowserPanel(props: {
     }
     if (
       autoOpenCheckedRef.current ||
-      pendingOperation !== null ||
+      operationPending ||
       props.state.authorization !== "granted" ||
       props.state.status === null ||
       props.state.status === "starting"
@@ -801,7 +892,7 @@ export function BrowserPanel(props: {
   }, [
     documentVisible,
     openTab,
-    pendingOperation,
+    operationPending,
     props.state.authorization,
     props.state.status,
     props.state.tabs.length,
@@ -860,7 +951,25 @@ export function BrowserPanel(props: {
         title="Owner access required"
       />
     );
+  } else if (props.state.unavailableReason !== null) {
+    content = (
+      <BrowserInstallOffer
+        dependencyCommand={props.state.dependencyCommand}
+        installState={props.state.installState}
+        loading={managedBrowser.pendingOperation !== null}
+        onCancel={() => void managedBrowser.cancel()}
+        onCheckAgain={() => void managedBrowser.checkAgain()}
+        onInstall={() => void managedBrowser.install()}
+        onRetryStart={() => void managedBrowser.start()}
+        onVariantChange={(variant) => void managedBrowser.selectVariant(variant)}
+        reason={props.state.unavailableReason}
+        selectedVariant={managedBrowser.managedVariant}
+      />
+    );
   } else if (props.state.status === "stopped") {
+    const selectedBrowserName =
+      managedBrowser.managedVariant === "chrome" ? "Google Chrome" : "Chromium";
+    const selectedInstallState = props.state.installState;
     content = (
       <BrowserEmptyState
         actionLabel="Start"
@@ -868,10 +977,67 @@ export function BrowserPanel(props: {
           props.state.operationError ?? "Start a private Chromium session for this thread."
         }
         icon={<AppWindowIcon />}
-        loading={pendingOperation === "start"}
-        onAction={startBrowser}
+        loading={managedBrowser.pendingOperation === "start"}
+        onAction={() => void managedBrowser.start()}
         title="Browser is stopped"
-      />
+      >
+        <div className="w-full border-t border-border/60 pt-3">
+          <div className="mb-2 text-left text-xs font-medium text-muted-foreground">
+            Managed browser
+          </div>
+          <BrowserManagedVariantPicker
+            disabled={operationPending}
+            onChange={(variant) => void managedBrowser.selectVariant(variant)}
+            value={managedBrowser.managedVariant}
+          />
+          {selectedInstallState?.variant === managedBrowser.managedVariant &&
+          selectedInstallState.status === "installed" ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              {selectedBrowserName} is installed. The selection is used for the managed resolution
+              candidate.
+            </p>
+          ) : null}
+          {selectedInstallState?.variant === managedBrowser.managedVariant &&
+          selectedInstallState.status === "needs-elevation" ? (
+            <div className="mt-3 grid gap-2">
+              <p className="text-left text-xs text-muted-foreground">
+                {selectedInstallState.reason}
+              </p>
+              {selectedInstallState.elevationCommand ? (
+                <code className="block w-full select-all overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-left text-xs text-foreground">
+                  {selectedInstallState.elevationCommand}
+                </code>
+              ) : null}
+              <Button
+                disabled={operationPending}
+                onClick={() => void managedBrowser.checkAgain()}
+                size="sm"
+                variant="outline"
+              >
+                Check again
+              </Button>
+            </div>
+          ) : selectedInstallState?.variant === managedBrowser.managedVariant &&
+            (selectedInstallState.status === "not-installed" ||
+              selectedInstallState.status === "failed") ? (
+            <div className="mt-3 grid gap-2">
+              {selectedInstallState.reason ? (
+                <p className="text-left text-xs text-muted-foreground">
+                  {selectedInstallState.reason}
+                </p>
+              ) : null}
+              <Button
+                disabled={operationPending}
+                onClick={() => void managedBrowser.install()}
+                size="sm"
+                variant="outline"
+              >
+                Install {selectedBrowserName}
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      </BrowserEmptyState>
     );
   } else if (props.state.status === "starting") {
     content = (
@@ -889,8 +1055,8 @@ export function BrowserPanel(props: {
           props.state.operationError ?? props.state.sessionError ?? "Chromium exited unexpectedly."
         }
         icon={<RotateCcwIcon />}
-        loading={pendingOperation === "start"}
-        onAction={startBrowser}
+        loading={managedBrowser.pendingOperation === "start"}
+        onAction={() => void managedBrowser.start()}
         title="Browser crashed"
       />
     );
@@ -903,19 +1069,19 @@ export function BrowserPanel(props: {
         >
           <div className="flex shrink-0 items-center gap-0.5">
             <BrowserNavigationButton
-              disabled={pendingOperation !== null || !hasWebsiteUrl}
+              disabled={operationPending || !hasWebsiteUrl}
               icon={<ArrowLeftIcon className="size-3.5" />}
               label="Go back"
               onClick={() => navigateHistory("back")}
             />
             <BrowserNavigationButton
-              disabled={pendingOperation !== null || !hasWebsiteUrl}
+              disabled={operationPending || !hasWebsiteUrl}
               icon={<ArrowRightIcon className="size-3.5" />}
               label="Go forward"
               onClick={() => navigateHistory("forward")}
             />
             <BrowserNavigationButton
-              disabled={pendingOperation !== null || !hasWebsiteUrl}
+              disabled={operationPending || !hasWebsiteUrl}
               icon={<RefreshCwIcon className="size-3.5" />}
               label="Reload"
               onClick={() => navigateHistory("reload")}
@@ -926,7 +1092,7 @@ export function BrowserPanel(props: {
             autoCapitalize="none"
             autoComplete="off"
             className="h-7 min-w-0 flex-1 rounded-md border border-border/60 bg-background px-2 text-xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
-            disabled={pendingOperation !== null || displayedActiveTargetId === null}
+            disabled={operationPending || displayedActiveTargetId === null}
             onChange={(event) => setAddressValue(event.currentTarget.value)}
             onFocus={(event) => event.currentTarget.select()}
             placeholder="Search or enter address"
@@ -937,7 +1103,7 @@ export function BrowserPanel(props: {
           <Button
             aria-label="Navigate"
             disabled={
-              pendingOperation !== null ||
+              operationPending ||
               displayedActiveTargetId === null ||
               addressValue.trim().length === 0
             }
@@ -985,6 +1151,7 @@ export function BrowserPanel(props: {
             )}
             data-browser-interact={interactEnabled ? "true" : "false"}
             data-chat-keyboard-capture={interactEnabled ? "true" : undefined}
+            ref={viewportContainerRef}
           >
             <canvas
               aria-label={
@@ -1064,7 +1231,7 @@ export function BrowserPanel(props: {
                     <button
                       aria-pressed={active}
                       className="max-w-40 truncate py-0.5 pl-2 pr-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      disabled={pendingOperation !== null}
+                      disabled={operationPending}
                       onClick={() => setActiveTab(tab.targetId)}
                       title={tab.title || (tab.url === "about:blank" ? "New tab" : tab.url)}
                       type="button"
@@ -1074,7 +1241,7 @@ export function BrowserPanel(props: {
                     <button
                       aria-label={`Close ${label}`}
                       className="mr-0.5 inline-flex size-4 items-center justify-center rounded-sm text-muted-foreground/60 outline-none hover:bg-background/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                      disabled={pendingOperation !== null}
+                      disabled={operationPending}
                       onClick={() => closeTab(tab.targetId)}
                       type="button"
                     >
@@ -1091,7 +1258,7 @@ export function BrowserPanel(props: {
                   <Button
                     aria-label="Open new browser tab"
                     className="rounded-md"
-                    disabled={pendingOperation !== null}
+                    disabled={operationPending}
                     onClick={openTab}
                     size="icon-xs"
                     variant="ghost"
@@ -1133,7 +1300,7 @@ export function BrowserPanel(props: {
                   render={
                     <Button
                       aria-label="Stop browser"
-                      disabled={pendingOperation !== null}
+                      disabled={operationPending}
                       onClick={stopBrowser}
                       size="icon-xs"
                       variant="ghost"

@@ -57,11 +57,10 @@ function thread(
   };
 }
 
-it.effect("resolves materialized and virtual provider sessions to one root thread", () => {
+it.effect("resolves a materialized provider child to its orchestration root", () => {
   const root = thread("root");
-  const virtual = thread("codex-tool:exec-1", { createdByThreadId: "root" });
-  const child = thread("codex-child-1", { parentThreadId: "codex-tool:exec-1" });
-  const threads = new Map([root, virtual, child].map((value) => [value.id, value]));
+  const child = thread("codex-child-1", { parentThreadId: "root" });
+  const threads = new Map([root, child].map((value) => [value.id, value]));
 
   return Effect.gen(function* () {
     const resolved = yield* resolveBrowserRootThreadId(
@@ -74,14 +73,57 @@ it.effect("resolves materialized and virtual provider sessions to one root threa
 
     assert.equal(resolved, root.id);
     assert.isTrue(isBrowserRootThread(root));
-    assert.isFalse(isBrowserRootThread(virtual));
     assert.isFalse(isBrowserRootThread(child));
+  });
+});
+
+it.effect("treats a genuine independent thread as its own browser root", () => {
+  const creator = thread("creator");
+  const independent = thread("codex-tool:exec-1", { createdByThreadId: "creator" });
+  const threads = new Map([creator, independent].map((value) => [value.id, value]));
+
+  return Effect.gen(function* () {
+    const resolved = yield* resolveBrowserRootThreadId(
+      {
+        getThreadShellById: (threadId) =>
+          Effect.succeed(Option.fromNullishOr(threads.get(threadId))),
+      },
+      independent.id,
+    );
+
+    assert.equal(resolved, independent.id);
+    assert.isTrue(isBrowserRootThread(independent));
+  });
+});
+
+it.effect("resolves an independent thread's virtual child to the independent thread", () => {
+  const grandparent = thread("grandparent");
+  const independent = thread("codex-tool:exec-independent", {
+    createdByThreadId: "grandparent",
+  });
+  const virtualChild = thread("codex-child-independent", {
+    parentThreadId: "codex-tool:exec-independent",
+  });
+  const threads = new Map(
+    [grandparent, independent, virtualChild].map((value) => [value.id, value]),
+  );
+
+  return Effect.gen(function* () {
+    const resolved = yield* resolveBrowserRootThreadId(
+      {
+        getThreadShellById: (threadId) =>
+          Effect.succeed(Option.fromNullishOr(threads.get(threadId))),
+      },
+      virtualChild.id,
+    );
+
+    assert.equal(resolved, independent.id);
   });
 });
 
 it.effect("rejects missing and cyclic browser ancestry", () => {
   const first = thread("cycle-a", { parentThreadId: "cycle-b" });
-  const second = thread("cycle-b", { createdByThreadId: "cycle-a" });
+  const second = thread("cycle-b", { parentThreadId: "cycle-a" });
   const threads = new Map([first, second].map((value) => [value.id, value]));
   const lookup = {
     getThreadShellById: (threadId: ThreadId) =>

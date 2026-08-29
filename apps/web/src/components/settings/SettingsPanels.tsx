@@ -804,6 +804,34 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
+          title="Fit browser viewport to panel"
+          description="Resize the server browser to the visible Browser panel. Turn this off to keep the fixed 800×600 viewport."
+          resetAction={
+            settings.browserViewportFollowsPanel !==
+            DEFAULT_UNIFIED_SETTINGS.browserViewportFollowsPanel ? (
+              <SettingResetButton
+                label="browser viewport sizing"
+                onClick={() =>
+                  updateSettings({
+                    browserViewportFollowsPanel:
+                      DEFAULT_UNIFIED_SETTINGS.browserViewportFollowsPanel,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.browserViewportFollowsPanel}
+              onCheckedChange={(checked) =>
+                updateSettings({ browserViewportFollowsPanel: Boolean(checked) })
+              }
+              aria-label="Fit browser viewport to panel"
+            />
+          }
+        />
+
+        <SettingsRow
           title="Auto-open task panel"
           description="Open the right-side plan and task panel automatically when steps appear."
           resetAction={

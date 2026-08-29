@@ -59,10 +59,12 @@ describe("browser stream binary protocol", () => {
       event: tabs,
     });
     expect(
-      decodeBrowserStreamServerMessage(encodeBrowserStreamMeta({ agentActive: true })),
+      decodeBrowserStreamServerMessage(
+        encodeBrowserStreamMeta({ threadId: ThreadId.make("thread-1"), agentActive: true }),
+      ),
     ).toEqual({
       _tag: "Meta",
-      event: { agentActive: true },
+      event: { threadId: ThreadId.make("thread-1"), agentActive: true },
     });
   });
 

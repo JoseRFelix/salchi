@@ -5,6 +5,11 @@ import {
 } from "@salchi/contracts";
 import * as Effect from "effect/Effect";
 
+import {
+  browserErrorDiagnostic,
+  classifyBrowserDependencyFailure,
+} from "./BrowserDependencyError.ts";
+
 export const DEFAULT_BROWSER_CHANNELS = ["chrome", "chromium", "msedge"] as const;
 
 export interface BrowserResolutionCandidate {
@@ -16,11 +21,13 @@ export interface BrowserResolutionCandidate {
 export function makeBrowserResolutionCandidates(input: {
   readonly environmentPath?: string | undefined;
   readonly settingPath?: string | undefined;
+  readonly managedPath?: string | undefined;
   readonly channels?: ReadonlyArray<string> | undefined;
 }): ReadonlyArray<BrowserResolutionCandidate> {
   const candidates: BrowserResolutionCandidate[] = [];
   const environmentPath = input.environmentPath?.trim();
   const settingPath = input.settingPath?.trim();
+  const managedPath = input.managedPath?.trim();
 
   if (environmentPath) {
     candidates.push({
@@ -43,12 +50,18 @@ export function makeBrowserResolutionCandidates(input: {
       launchOptions: { channel },
     });
   }
+  if (managedPath) {
+    candidates.push({
+      source: "managed",
+      resolution: managedPath,
+      launchOptions: { executablePath: managedPath },
+    });
+  }
   return candidates;
 }
 
 function failureDetail(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
+  return browserErrorDiagnostic(error);
 }
 
 export function resolveBrowserExecutable<A, E>(input: {
@@ -59,6 +72,7 @@ export function resolveBrowserExecutable<A, E>(input: {
   BrowserUnavailable
 > {
   const failures: BrowserExecutableResolutionAttempt[] = [];
+  let dependencyFailure: ReturnType<typeof classifyBrowserDependencyFailure>;
 
   const loop = (
     index: number,
@@ -76,8 +90,20 @@ export function resolveBrowserExecutable<A, E>(input: {
               .join("; ");
       return Effect.fail(
         new BrowserUnavailable({
-          message: `Unable to launch Chromium. Attempts: ${summary}`,
+          message:
+            dependencyFailure === undefined
+              ? `No usable Chromium installation was found. Attempts: ${summary}`
+              : `Chromium is installed, but required system libraries are missing. Run: ${dependencyFailure.dependencyCommand}`,
           attempts: failures,
+          reason:
+            dependencyFailure !== undefined
+              ? "missing-libraries"
+              : failures.some((attempt) => attempt.source === "managed")
+                ? "launch-failed"
+                : "not-installed",
+          ...(dependencyFailure === undefined
+            ? {}
+            : { dependencyCommand: dependencyFailure.dependencyCommand }),
         }),
       );
     }
@@ -85,6 +111,7 @@ export function resolveBrowserExecutable<A, E>(input: {
     return input.launch(candidate).pipe(
       Effect.map((value) => ({ value, candidate })),
       Effect.catch((error) => {
+        dependencyFailure ??= classifyBrowserDependencyFailure(error);
         failures.push({
           source: candidate.source,
           resolution: candidate.resolution,

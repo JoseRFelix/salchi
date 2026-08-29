@@ -126,11 +126,24 @@ describe("wsRpcClient", () => {
       status: "stopped" as const,
       tabs: [],
       executable: null,
+      viewport: { width: 800, height: 600 },
     };
     const protocolStart = vi.fn(() => Effect.succeed(state));
     const protocolNavigate = vi.fn(() => Effect.succeed(state));
     const protocolNavigateHistory = vi.fn(() => Effect.succeed(state));
     const protocolDispatchInput = vi.fn(() => Effect.void);
+    const protocolSetViewportSize = vi.fn(() => Effect.succeed(state));
+    const installState = { status: "not-installed" as const, variant: "headless-shell" as const };
+    const protocolGetInstallState = vi.fn(() => Effect.succeed(installState));
+    const protocolCancelInstall = vi.fn(() => Effect.succeed(installState));
+    const protocolInstall = vi.fn(() =>
+      Stream.make({
+        phase: "complete" as const,
+        percent: 100,
+        downloadedBytes: 0,
+        totalBytes: 0,
+      }),
+    );
     const protocolSubscribe = vi.fn(() => Stream.empty);
     const protocolSubscribeAgentActivity = vi.fn(() => Stream.empty);
     const protocolClient = {
@@ -138,6 +151,10 @@ describe("wsRpcClient", () => {
       [WS_METHODS.browserNavigate]: protocolNavigate,
       [WS_METHODS.browserNavigateHistory]: protocolNavigateHistory,
       [WS_METHODS.browserDispatchInput]: protocolDispatchInput,
+      [WS_METHODS.browserSetViewportSize]: protocolSetViewportSize,
+      [WS_METHODS.browserGetInstallState]: protocolGetInstallState,
+      [WS_METHODS.browserCancelInstall]: protocolCancelInstall,
+      [WS_METHODS.browserInstall]: protocolInstall,
       [WS_METHODS.browserSubscribeViewport]: protocolSubscribe,
       [WS_METHODS.browserSubscribeAgentActivity]: protocolSubscribeAgentActivity,
     } as unknown as WsRpcProtocolClient;
@@ -149,12 +166,23 @@ describe("wsRpcClient", () => {
     const subscribe = vi.fn(
       (_connect: unknown, _listener: unknown, _options?: unknown) => () => undefined,
     );
+    const requestStream = vi.fn(
+      async <TValue>(
+        connect: (client: WsRpcProtocolClient) => Stream.Stream<TValue, Error, never>,
+        listener: (value: TValue) => void,
+      ) =>
+        Effect.runPromise(
+          connect(protocolClient).pipe(
+            Stream.runForEach((value) => Effect.sync(() => listener(value))),
+          ),
+        ),
+    );
     const transport = {
       dispose: vi.fn(async () => undefined),
       reconnect: vi.fn(async () => undefined),
       isHeartbeatFresh: vi.fn(() => true),
       request: request as WsTransport["request"],
-      requestStream: vi.fn(),
+      requestStream: requestStream as WsTransport["requestStream"],
       subscribe: subscribe as unknown as WsTransport["subscribe"],
     } satisfies Pick<
       WsTransport,
@@ -163,6 +191,12 @@ describe("wsRpcClient", () => {
     const client = createWsRpcClient(transport as unknown as WsTransport);
 
     await expect(client.browser.start({ threadId })).resolves.toEqual(state);
+    await expect(client.browser.getInstallState({ threadId })).resolves.toEqual(installState);
+    await expect(client.browser.cancelInstall({ threadId })).resolves.toEqual(installState);
+    const installProgress = vi.fn();
+    await expect(
+      client.browser.install({ threadId, variant: "headless-shell" }, installProgress),
+    ).resolves.toBeUndefined();
     await expect(
       client.browser.navigate({ threadId, targetId: "target-1", url: "https://example.com/" }),
     ).resolves.toEqual(state);
@@ -176,10 +210,27 @@ describe("wsRpcClient", () => {
         event: { _tag: "InsertText", text: "hello" },
       }),
     ).resolves.toBeUndefined();
+    await expect(
+      client.browser.setViewportSize({
+        _tag: "Set",
+        threadId,
+        width: 1_000,
+        height: 700,
+      }),
+    ).resolves.toEqual(state);
     client.browser.subscribeViewport({ threadId }, vi.fn());
     client.browser.subscribeAgentActivity({ threadId }, vi.fn());
 
     expect(protocolStart).toHaveBeenCalledWith({ threadId });
+    expect(protocolGetInstallState).toHaveBeenCalledWith({ threadId });
+    expect(protocolCancelInstall).toHaveBeenCalledWith({ threadId });
+    expect(protocolInstall).toHaveBeenCalledWith({ threadId, variant: "headless-shell" });
+    expect(installProgress).toHaveBeenCalledWith({
+      phase: "complete",
+      percent: 100,
+      downloadedBytes: 0,
+      totalBytes: 0,
+    });
     expect(protocolNavigate).toHaveBeenCalledWith({
       threadId,
       targetId: "target-1",
@@ -194,6 +245,12 @@ describe("wsRpcClient", () => {
       threadId,
       targetId: "target-1",
       event: { _tag: "InsertText", text: "hello" },
+    });
+    expect(protocolSetViewportSize).toHaveBeenCalledWith({
+      _tag: "Set",
+      threadId,
+      width: 1_000,
+      height: 700,
     });
     expect(subscribe).toHaveBeenCalledTimes(2);
     const connect = subscribe.mock.calls[0]?.[0] as unknown as (

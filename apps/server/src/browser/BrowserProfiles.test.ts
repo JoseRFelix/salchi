@@ -10,10 +10,29 @@ import {
   browserProfileDirectoryName,
   deleteBrowserProfileDirectory,
   deleteBrowserProfileForThread,
+  liveBrowserRootThreadIds,
   listOrphanedBrowserProfiles,
 } from "./BrowserProfiles.ts";
 
 describe("browser profile lifecycle", () => {
+  it("keeps independent-thread profiles and excludes materialized child profiles", () => {
+    const creatorThreadId = ThreadId.make("creator-thread");
+    const independentThreadId = ThreadId.make("independent-thread");
+    const materializedChildThreadId = ThreadId.make("materialized-child-thread");
+
+    expect(
+      liveBrowserRootThreadIds([
+        { id: creatorThreadId, parentThreadId: null, deletedAt: null },
+        { id: independentThreadId, parentThreadId: null, deletedAt: null },
+        {
+          id: materializedChildThreadId,
+          parentThreadId: independentThreadId,
+          deletedAt: null,
+        },
+      ]),
+    ).toEqual(new Set([creatorThreadId, independentThreadId]));
+  });
+
   it.effect(
     "lists only profile directories without a live root thread and deletes explicitly",
     () =>

@@ -31,7 +31,7 @@ export function browserProfileThreadIdFromDirectory(
 }
 
 export function liveBrowserRootThreadIds(
-  threads: ReadonlyArray<OrchestrationThread>,
+  threads: ReadonlyArray<Pick<OrchestrationThread, "deletedAt" | "id" | "parentThreadId">>,
 ): ReadonlySet<string> {
   return new Set(
     threads

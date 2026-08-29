@@ -131,14 +131,17 @@ describe("createBrowserStreamConnection", () => {
         ],
       }),
     );
-    socket.receive(encodeBrowserStreamMeta({ agentActive: true }));
+    socket.receive(encodeBrowserStreamMeta({ threadId, agentActive: true }));
     now = 55;
     const jpegBytes = Uint8Array.from([0xff, 0xd8, 1, 2, 0xff, 0xd9]);
     socket.receive(
       encodeBrowserStreamFrame({ seq: 7, width: 800, height: 600, tabIndexHint: 0, jpegBytes }),
     );
 
-    expect(events).toEqual([expect.objectContaining({ _tag: "Tabs" }), { agentActive: true }]);
+    expect(events).toEqual([
+      expect.objectContaining({ _tag: "Tabs" }),
+      { threadId, agentActive: true },
+    ]);
     expect(frames).toEqual([
       {
         targetId: "target-1",

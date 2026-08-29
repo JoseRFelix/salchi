@@ -3,7 +3,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as References from "effect/References";
-import { Command, Flag, GlobalFlag } from "effect/unstable/cli";
+import * as Stream from "effect/Stream";
+import { Command, Flag, GlobalFlag, Prompt } from "effect/unstable/cli";
 
 import {
   browserProfileRoot,
@@ -12,6 +13,8 @@ import {
   liveBrowserRootThreadIds,
   type BrowserProfileDirectory,
 } from "../browser/BrowserProfiles.ts";
+import { BrowserInstallerLive } from "../browser/Layers/BrowserInstaller.ts";
+import { BrowserInstaller } from "../browser/Services/BrowserInstaller.ts";
 import { ServerConfig } from "../config.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "../orchestration/Layers/ProjectionSnapshotQuery.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -84,7 +87,74 @@ const pruneProfilesCommand = Command.make("prune-profiles", {
   ),
 );
 
+function formatInstallProgress(input: {
+  readonly phase: string;
+  readonly percent: number;
+  readonly downloadedBytes: number;
+  readonly totalBytes: number;
+}): string {
+  const bytes =
+    input.totalBytes > 0
+      ? ` (${(input.downloadedBytes / (1024 * 1024)).toFixed(1)} / ${(input.totalBytes / (1024 * 1024)).toFixed(1)} MB)`
+      : "";
+  return `${input.phase}: ${String(Math.round(input.percent))}%${bytes}`;
+}
+
+const installCommand = Command.make("install", {
+  ...projectLocationFlags,
+  yes: Flag.boolean("yes").pipe(
+    Flag.withDescription("Install without an interactive confirmation."),
+    Flag.withDefault(false),
+  ),
+}).pipe(
+  Command.withDescription("Install Salchi's managed Chromium browser."),
+  Command.withHandler((flags) =>
+    Effect.gen(function* () {
+      const logLevel = yield* GlobalFlag.LogLevel;
+      const config = yield* resolveCliAuthConfig(flags, logLevel);
+      if (!flags.yes) {
+        const confirmed = yield* Prompt.confirm({
+          message: `Install Chromium into ${config.baseDir}/browsers?`,
+          initial: false,
+        });
+        if (!confirmed) {
+          yield* Console.log("Browser installation canceled.");
+          return;
+        }
+      }
+      yield* Effect.gen(function* () {
+        const installer = yield* BrowserInstaller;
+        const variant = "headless-shell" as const;
+        const existing = yield* installer.getInstallState(variant);
+        if (existing.status === "installed") {
+          yield* Console.log(
+            `Managed Chromium is already installed at ${existing.executablePath}.`,
+          );
+          return;
+        }
+        yield* Console.log("Installing managed Chromium…");
+        yield* installer
+          .install(variant)
+          .pipe(Stream.runForEach((progress) => Console.log(formatInstallProgress(progress))));
+        const installed = yield* installer.getInstallState(variant);
+        yield* Console.log(
+          installed.status === "installed"
+            ? `Managed Chromium installed at ${installed.executablePath}.`
+            : "Managed Chromium installation did not complete.",
+        );
+      }).pipe(
+        Effect.provide(
+          BrowserInstallerLive.pipe(
+            Layer.provide(Layer.succeed(ServerConfig, config)),
+            Layer.provide(Layer.succeed(References.MinimumLogLevel, config.logLevel)),
+          ),
+        ),
+      );
+    }),
+  ),
+);
+
 export const browserCommand = Command.make("browser").pipe(
   Command.withDescription("Manage server-owned browser data."),
-  Command.withSubcommands([pruneProfilesCommand]),
+  Command.withSubcommands([installCommand, pruneProfilesCommand]),
 );

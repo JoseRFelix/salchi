@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import { BrowserPanel } from "../components/BrowserPanel";
+import { BrowserInstallPictureInPicture } from "../components/BrowserInstallPictureInPicture";
 import { BrowserPictureInPicture } from "../components/BrowserPictureInPicture";
 import {
   readEnvironmentConnection,
@@ -79,6 +80,11 @@ export function useBrowserPanelController(input: {
     { enabled: input.enabled && input.showAgentPreview, threadId: input.threadId },
     initialBrowserPipState,
   );
+  const [agentInstallPrompt, setAgentInstallPrompt] = useState({
+    requested: false,
+    dismissed: false,
+  });
+  const agentActiveRef = useRef(false);
   const documentVisible = useDocumentVisible();
   const streamLease = useMemo(
     () =>
@@ -113,6 +119,8 @@ export function useBrowserPanelController(input: {
 
   useEffect(() => {
     dispatch({ type: "reset", threadId: input.threadId });
+    agentActiveRef.current = false;
+    setAgentInstallPrompt({ requested: false, dismissed: false });
     const memory = pipThreadMemoryRef.current.get(input.threadId);
     dispatchPip({
       type: "reset",
@@ -164,8 +172,12 @@ export function useBrowserPanelController(input: {
       if (currentClient === null) return;
       unsubscribeActivity = currentClient.subscribeAgentActivity(
         { threadId: input.threadId },
-        (agentActive) => {
-          dispatchPip({ type: "activity", active: agentActive });
+        (activity) => {
+          const agentActive = activity.threadId === input.threadId && activity.agentActive;
+          const nextBurst = agentActive && !agentActiveRef.current;
+          agentActiveRef.current = agentActive;
+          if (nextBurst) setAgentInstallPrompt({ requested: true, dismissed: false });
+          dispatchPip({ type: "activity", activity });
           if (!agentActive || currentClient === null) return;
           void currentClient.getState({ threadId: input.threadId }).then(
             (snapshot) => dispatch({ type: "snapshot", snapshot }),
@@ -180,7 +192,10 @@ export function useBrowserPanelController(input: {
               dispatchPip({ type: "status", status: "stopped" });
               return;
             }
-            dispatchPip({ type: "activity", active: false });
+            dispatchPip({
+              type: "activity",
+              activity: { threadId: input.threadId, agentActive: false },
+            });
           },
         },
       );
@@ -346,19 +361,35 @@ export function useBrowserPanelController(input: {
     if (open) markRightPanelUsed("browser");
   }, [open]);
 
-  const pictureInPicture =
-    pipState.threadId !== input.threadId || pipState.phase === "hidden" || open ? null : (
-      <BrowserPictureInPicture
-        onClose={() => dispatchPip({ type: "close" })}
-        onOpenPanel={() => {
-          dispatchPip({ type: "panelVisibility", open: true });
-          openRightPanel("browser");
-        }}
-        phase={pipState.phase}
-        resetKey={input.threadId}
-        streamLease={streamLease}
-      />
-    );
+  const showAgentInstallPrompt =
+    input.enabled &&
+    input.showAgentPreview &&
+    state.authorization === "granted" &&
+    state.unavailableReason !== null &&
+    agentInstallPrompt.requested &&
+    !agentInstallPrompt.dismissed &&
+    !open;
+  const pictureInPicture = showAgentInstallPrompt ? (
+    <BrowserInstallPictureInPicture
+      environmentId={input.environmentId}
+      onClose={() => setAgentInstallPrompt((current) => ({ ...current, dismissed: true }))}
+      onOpenPanel={() => openRightPanel("browser")}
+      onStateAction={onStateAction}
+      state={state}
+      threadId={input.threadId}
+    />
+  ) : pipState.threadId !== input.threadId || pipState.phase === "hidden" || open ? null : (
+    <BrowserPictureInPicture
+      onClose={() => dispatchPip({ type: "close" })}
+      onOpenPanel={() => {
+        dispatchPip({ type: "panelVisibility", open: true });
+        openRightPanel("browser");
+      }}
+      phase={pipState.phase}
+      resetKey={input.threadId}
+      streamLease={streamLease}
+    />
+  );
 
   return {
     close,

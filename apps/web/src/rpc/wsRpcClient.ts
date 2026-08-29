@@ -228,7 +228,14 @@ export interface WsRpcClient {
     readonly start: RpcUnaryMethod<typeof WS_METHODS.browserStart>;
     readonly stop: RpcUnaryMethod<typeof WS_METHODS.browserStop>;
     readonly getState: RpcUnaryMethod<typeof WS_METHODS.browserGetState>;
+    readonly getInstallState: RpcUnaryMethod<typeof WS_METHODS.browserGetInstallState>;
+    readonly install: (
+      input: RpcInput<typeof WS_METHODS.browserInstall>,
+      onProgress: (progress: import("@salchi/contracts").BrowserInstallProgress) => void,
+    ) => Promise<void>;
+    readonly cancelInstall: RpcUnaryMethod<typeof WS_METHODS.browserCancelInstall>;
     readonly setActiveTab: RpcUnaryMethod<typeof WS_METHODS.browserSetActiveTab>;
+    readonly setViewportSize: RpcUnaryMethod<typeof WS_METHODS.browserSetViewportSize>;
     readonly openTab: RpcUnaryMethod<typeof WS_METHODS.browserOpenTab>;
     readonly navigate: RpcUnaryMethod<typeof WS_METHODS.browserNavigate>;
     readonly navigateHistory: RpcUnaryMethod<typeof WS_METHODS.browserNavigateHistory>;
@@ -395,8 +402,16 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
       start: (input) => transport.request((client) => client[WS_METHODS.browserStart](input)),
       stop: (input) => transport.request((client) => client[WS_METHODS.browserStop](input)),
       getState: (input) => transport.request((client) => client[WS_METHODS.browserGetState](input)),
+      getInstallState: (input) =>
+        transport.request((client) => client[WS_METHODS.browserGetInstallState](input)),
+      install: (input, onProgress) =>
+        transport.requestStream((client) => client[WS_METHODS.browserInstall](input), onProgress),
+      cancelInstall: (input) =>
+        transport.request((client) => client[WS_METHODS.browserCancelInstall](input)),
       setActiveTab: (input) =>
         transport.request((client) => client[WS_METHODS.browserSetActiveTab](input)),
+      setViewportSize: (input) =>
+        transport.request((client) => client[WS_METHODS.browserSetViewportSize](input)),
       openTab: (input) => transport.request((client) => client[WS_METHODS.browserOpenTab](input)),
       navigate: (input) => transport.request((client) => client[WS_METHODS.browserNavigate](input)),
       navigateHistory: (input) =>

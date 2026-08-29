@@ -79,6 +79,24 @@ describe("browser CDP input translation", () => {
     });
   });
 
+  it("clamps pointer input against resized portrait frame dimensions", () => {
+    expect(
+      toBrowserCdpInputCommand(
+        {
+          _tag: "PointerDown",
+          x: 700,
+          y: 1_100,
+          button: "left",
+          clickCount: 1,
+        },
+        { width: 360, height: 800 },
+      ),
+    ).toMatchObject({
+      _tag: "Mouse",
+      params: { x: 360, y: 800 },
+    });
+  });
+
   it("maps keyboard and composed text events", () => {
     expect(
       toBrowserCdpInputCommand(

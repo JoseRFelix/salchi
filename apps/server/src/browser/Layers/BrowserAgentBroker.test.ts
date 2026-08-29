@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { createServer } from "node:http";
 
-import { ThreadId, type BrowserSessionState } from "@salchi/contracts";
+import { BrowserUnavailable, ThreadId, type BrowserSessionState } from "@salchi/contracts";
 import { it } from "@effect/vitest";
 import * as Data from "effect/Data";
 import * as Cause from "effect/Cause";
@@ -11,6 +11,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Logger from "effect/Logger";
 import * as References from "effect/References";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect } from "vitest";
@@ -26,6 +27,7 @@ import {
 } from "./BrowserAgentBroker.ts";
 
 const threadId = ThreadId.make("browser-agent-broker-test");
+const decodeUnknownJsonString = Schema.decodeUnknownEffect(Schema.UnknownFromJsonString);
 
 class BrowserAgentBrokerTestError extends Data.TaggedError("BrowserAgentBrokerTestError")<{
   readonly message: string;
@@ -162,6 +164,18 @@ function closeWebSocket(socket: WebSocket) {
   });
 }
 
+function awaitWebSocketClosed(socket: WebSocket) {
+  return Effect.callback<void>((resume) => {
+    if (socket.readyState === WebSocket.CLOSED) {
+      resume(Effect.void);
+      return;
+    }
+    const onClose = () => resume(Effect.void);
+    socket.once("close", onClose);
+    return Effect.sync(() => socket.off("close", onClose));
+  });
+}
+
 function withPath(url: string, thread: string, token: string): string {
   const parsed = new URL(url);
   parsed.pathname = `/internal/browser/cdp/${encodeURIComponent(thread)}/${token}`;
@@ -220,6 +234,7 @@ it.effect("never writes the capability token during a complete proxy connect cyc
               status: "running",
               tabs: [],
               executable: null,
+              viewport: { width: 800, height: 600 },
             }),
           getCdpWebSocketUrl: () => Effect.succeed(upstream.url),
           agentConnectionOpened: () => Effect.void,
@@ -306,6 +321,56 @@ it.effect("injects the root thread into provider browser environments", () =>
   ),
 );
 
+it.effect("preserves the provider thread as the origin after browser-root normalization", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const upstream = yield* makeEchoCdpServer();
+      const originThreadId = ThreadId.make("codex-child-browser-origin");
+      const rootThreadId = ThreadId.make("browser-origin-root");
+      const command = yield* Deferred.make<{
+        readonly browserThreadId: ThreadId;
+        readonly originThreadId: ThreadId | undefined;
+      }>();
+      const broker = yield* makeBrowserAgentBrokerWithOptions({
+        accessEnabled: Effect.succeed(true),
+        randomToken: nextTokenFactory(),
+        resolveRootThreadId: () => Effect.succeed(rootThreadId),
+        browserManager: {
+          start: () =>
+            Effect.succeed({
+              threadId: rootThreadId,
+              status: "running",
+              tabs: [],
+              executable: null,
+              viewport: { width: 800, height: 600 },
+            }),
+          getCdpWebSocketUrl: () => Effect.succeed(upstream.url),
+          agentConnectionOpened: () => Effect.void,
+          recordAgentCdpActivity: () => Effect.void,
+          recordAgentCdpCommand: (browserThreadId, _connectionId, activityOriginThreadId) =>
+            Deferred.succeed(command, {
+              browserThreadId,
+              originThreadId: activityOriginThreadId,
+            }).pipe(Effect.asVoid),
+          agentConnectionClosed: () => Effect.void,
+        },
+      });
+      const access = yield* broker.acquireSessionAccess(originThreadId);
+      const socket = yield* openWebSocket(access.environment[SALCHI_BROWSER_CDP_URL_ENV]!);
+      const response = nextMessage(socket);
+      socket.send('{"id":1,"method":"Browser.getVersion"}');
+      yield* response;
+
+      expect(yield* Deferred.await(command).pipe(Effect.timeout("1 second"))).toEqual({
+        browserThreadId: rootThreadId,
+        originThreadId,
+      });
+      yield* closeWebSocket(socket);
+      yield* access.release;
+    }),
+  ),
+);
+
 it.effect("validates stable URLs and relays concurrent CDP connections with heartbeats", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -321,6 +386,7 @@ it.effect("validates stable URLs and relays concurrent CDP connections with hear
         status: "running",
         tabs: [],
         executable: null,
+        viewport: { width: 800, height: 600 },
       };
       const broker = yield* makeBrowserAgentBrokerWithOptions({
         accessEnabled: Effect.succeed(true),
@@ -410,6 +476,88 @@ it.effect("validates stable URLs and relays concurrent CDP connections with hear
   ),
 );
 
+it.effect("reports a lazy agent connection as user-prompted when no browser is installed", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let prompted = 0;
+      const broker = yield* makeBrowserAgentBrokerWithOptions({
+        accessEnabled: Effect.succeed(true),
+        randomToken: nextTokenFactory(),
+        browserManager: {
+          start: () =>
+            Effect.fail(
+              new BrowserUnavailable({
+                message: "No usable Chromium installation was found.",
+                attempts: [],
+                reason: "not-installed",
+              }),
+            ),
+          getCdpWebSocketUrl: () => Effect.die("CDP must not be resolved after launch failure"),
+          agentConnectionOpened: () => Effect.void,
+          recordAgentCdpActivity: () => Effect.void,
+          recordAgentCdpCommand: () => Effect.void,
+          recordAgentBrowserRequest: () =>
+            Effect.sync(() => {
+              prompted += 1;
+            }),
+          agentConnectionClosed: () => Effect.void,
+        },
+      });
+      const access = yield* broker.acquireSessionAccess(threadId);
+      const stableUrl = access.environment[SALCHI_BROWSER_CDP_URL_ENV]!;
+      const socket = yield* openWebSocket(stableUrl);
+      const response = nextMessage(socket);
+      socket.send('{"id":7,"method":"Browser.getVersion"}');
+      expect(yield* decodeUnknownJsonString(yield* response)).toEqual({
+        id: 7,
+        error: {
+          code: -32_000,
+          message: "Browser not installed; the user has been prompted in Salchi.",
+        },
+      });
+      yield* Effect.yieldNow;
+      expect(prompted).toBe(1);
+      yield* closeWebSocket(socket);
+      yield* access.release;
+    }),
+  ),
+);
+
+it.effect(
+  "closes a waiting not-installed agent socket when its provider credential is released",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const broker = yield* makeBrowserAgentBrokerWithOptions({
+          accessEnabled: Effect.succeed(true),
+          randomToken: nextTokenFactory(),
+          browserManager: {
+            start: () =>
+              Effect.fail(
+                new BrowserUnavailable({
+                  message: "No usable Chromium installation was found.",
+                  attempts: [],
+                  reason: "not-installed",
+                }),
+              ),
+            getCdpWebSocketUrl: () => Effect.die("CDP must not be resolved after launch failure"),
+            agentConnectionOpened: () => Effect.void,
+            recordAgentCdpActivity: () => Effect.void,
+            recordAgentCdpCommand: () => Effect.void,
+            agentConnectionClosed: () => Effect.void,
+          },
+        });
+        const access = yield* broker.acquireSessionAccess(threadId);
+        const socket = yield* openWebSocket(access.environment[SALCHI_BROWSER_CDP_URL_ENV]!);
+        const closed = awaitWebSocketClosed(socket);
+
+        yield* access.release;
+        yield* closed;
+        expect(socket.readyState).toBe(WebSocket.CLOSED);
+      }),
+    ),
+);
+
 it.effect("closes stable proxy connections when its scope is interrupted", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -426,6 +574,7 @@ it.effect("closes stable proxy connections when its scope is interrupted", () =>
               status: "running",
               tabs: [],
               executable: null,
+              viewport: { width: 800, height: 600 },
             }),
           getCdpWebSocketUrl: () => Effect.succeed(upstream.url),
           agentConnectionOpened: () => Effect.void,
@@ -463,6 +612,7 @@ it.effect("releases the idle hold when credentials are revoked during proxy acqu
               status: "running",
               tabs: [],
               executable: null,
+              viewport: { width: 800, height: 600 },
             }),
           getCdpWebSocketUrl: () => Effect.succeed(upstream.url),
           agentConnectionOpened: () =>

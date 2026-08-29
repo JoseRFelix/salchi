@@ -13,11 +13,15 @@ function runningState() {
   });
 }
 
+function activity(threadId: ThreadId, agentActive: boolean) {
+  return { type: "activity" as const, activity: { threadId, agentActive } };
+}
+
 describe("browser PiP visibility", () => {
   it("appears on activity, lingers, and fades after activity ends", () => {
-    let state = reduceBrowserPipState(runningState(), { type: "activity", active: true });
+    let state = reduceBrowserPipState(runningState(), activity(THREAD_A, true));
     expect(state.phase).toBe("visible");
-    state = reduceBrowserPipState(state, { type: "activity", active: false });
+    state = reduceBrowserPipState(state, activity(THREAD_A, false));
     expect(state.phase).toBe("lingering");
     state = reduceBrowserPipState(state, { type: "lingerElapsed" });
     expect(state.phase).toBe("fading");
@@ -26,18 +30,18 @@ describe("browser PiP visibility", () => {
   });
 
   it("suppresses a closed preview until the next false-to-true transition", () => {
-    let state = reduceBrowserPipState(runningState(), { type: "activity", active: true });
+    let state = reduceBrowserPipState(runningState(), activity(THREAD_A, true));
     state = reduceBrowserPipState(state, { type: "close" });
-    state = reduceBrowserPipState(state, { type: "activity", active: true });
+    state = reduceBrowserPipState(state, activity(THREAD_A, true));
     expect(state.phase).toBe("hidden");
 
-    state = reduceBrowserPipState(state, { type: "activity", active: false });
-    state = reduceBrowserPipState(state, { type: "activity", active: true });
+    state = reduceBrowserPipState(state, activity(THREAD_A, false));
+    state = reduceBrowserPipState(state, activity(THREAD_A, true));
     expect(state.phase).toBe("visible");
   });
 
   it("hides for an open panel and does not reappear when that panel closes mid-burst", () => {
-    let state = reduceBrowserPipState(runningState(), { type: "activity", active: true });
+    let state = reduceBrowserPipState(runningState(), activity(THREAD_A, true));
     state = reduceBrowserPipState(state, { type: "panelVisibility", open: true });
     expect(state.phase).toBe("hidden");
     state = reduceBrowserPipState(state, { type: "panelVisibility", open: false });
@@ -49,13 +53,13 @@ describe("browser PiP visibility", () => {
       type: "panelVisibility",
       open: true,
     });
-    state = reduceBrowserPipState(state, { type: "activity", active: true });
+    state = reduceBrowserPipState(state, activity(THREAD_A, true));
     state = reduceBrowserPipState(state, { type: "panelVisibility", open: false });
     expect(state.phase).toBe("hidden");
   });
 
   it("hides immediately on thread switch, stop, or crash", () => {
-    let state = reduceBrowserPipState(runningState(), { type: "activity", active: true });
+    let state = reduceBrowserPipState(runningState(), activity(THREAD_A, true));
     state = reduceBrowserPipState(state, {
       type: "reset",
       enabled: true,
@@ -64,7 +68,7 @@ describe("browser PiP visibility", () => {
     expect(state).toMatchObject({ threadId: THREAD_B, phase: "hidden", agentActive: false });
 
     state = reduceBrowserPipState(state, { type: "status", status: "running" });
-    state = reduceBrowserPipState(state, { type: "activity", active: true });
+    state = reduceBrowserPipState(state, activity(THREAD_B, true));
     expect(reduceBrowserPipState(state, { type: "status", status: "stopped" }).phase).toBe(
       "hidden",
     );
@@ -74,8 +78,8 @@ describe("browser PiP visibility", () => {
   });
 
   it("hides immediately when its viewport socket drops during linger", () => {
-    let state = reduceBrowserPipState(runningState(), { type: "activity", active: true });
-    state = reduceBrowserPipState(state, { type: "activity", active: false });
+    let state = reduceBrowserPipState(runningState(), activity(THREAD_A, true));
+    state = reduceBrowserPipState(state, activity(THREAD_A, false));
     expect(state.phase).toBe("lingering");
     expect(reduceBrowserPipState(state, { type: "socketDrop" }).phase).toBe("hidden");
   });
@@ -88,19 +92,29 @@ describe("browser PiP visibility", () => {
       threadId: THREAD_A,
     });
     state = reduceBrowserPipState(state, { type: "status", status: "running" });
-    state = reduceBrowserPipState(state, { type: "activity", active: true });
+    state = reduceBrowserPipState(state, activity(THREAD_A, true));
     expect(state.phase).toBe("hidden");
 
-    state = reduceBrowserPipState(state, { type: "activity", active: false });
-    state = reduceBrowserPipState(state, { type: "activity", active: true });
+    state = reduceBrowserPipState(state, activity(THREAD_A, false));
+    state = reduceBrowserPipState(state, activity(THREAD_A, true));
     expect(state.phase).toBe("visible");
   });
 
   it("is order tolerant when activity arrives before running status", () => {
     let state = initialBrowserPipState({ enabled: true, threadId: THREAD_A });
-    state = reduceBrowserPipState(state, { type: "activity", active: true });
+    state = reduceBrowserPipState(state, activity(THREAD_A, true));
     expect(state.phase).toBe("hidden");
     state = reduceBrowserPipState(state, { type: "status", status: "running" });
     expect(state.phase).toBe("visible");
+  });
+
+  it("never surfaces activity from a different independent thread", () => {
+    let state = reduceBrowserPipState(runningState(), activity(THREAD_B, true));
+    expect(state).toMatchObject({ phase: "hidden", agentActive: false });
+
+    state = reduceBrowserPipState(state, activity(THREAD_A, true));
+    expect(state.phase).toBe("visible");
+    state = reduceBrowserPipState(state, activity(THREAD_B, true));
+    expect(state).toMatchObject({ phase: "hidden", agentActive: false });
   });
 });

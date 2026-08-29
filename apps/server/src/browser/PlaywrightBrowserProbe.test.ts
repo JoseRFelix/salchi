@@ -326,6 +326,12 @@ describe.runIf(process.env.SALCHI_BROWSER_INTEGRATION === "1")(
           });
         }
         const firstFrame = yield* Deferred.make<{
+          readonly height: number;
+          readonly targetId: string;
+          readonly width: number;
+        }>();
+        const resizedFrame = yield* Deferred.make<{
+          readonly height: number;
           readonly targetId: string;
           readonly width: number;
         }>();
@@ -337,8 +343,22 @@ describe.runIf(process.env.SALCHI_BROWSER_INTEGRATION === "1")(
               stressFrameCount += 1;
               Deferred.doneUnsafe(
                 firstFrame,
-                Effect.succeed({ targetId: event.targetId, width: event.width }),
+                Effect.succeed({
+                  height: event.height,
+                  targetId: event.targetId,
+                  width: event.width,
+                }),
               );
+              if (event.width === 480 && event.height === 800) {
+                Deferred.doneUnsafe(
+                  resizedFrame,
+                  Effect.succeed({
+                    height: event.height,
+                    targetId: event.targetId,
+                    width: event.width,
+                  }),
+                );
+              }
             }),
           ),
           Effect.forkScoped,
@@ -357,6 +377,41 @@ describe.runIf(process.env.SALCHI_BROWSER_INTEGRATION === "1")(
         expect(initialFrame.targetId).toBe(externalTab.targetId);
         expect(initialFrame.width).toBeGreaterThan(0);
         expect(initialFrame.width).toBeLessThanOrEqual(800);
+
+        const resizeRequestState = yield* manager.setViewportSize(
+          integrationThreadId,
+          480,
+          800,
+          "integration-probe-panel",
+        );
+        // The external client has just issued agent-originated CDP commands,
+        // so the manager may freeze this request until agentActive decays.
+        const resizedState =
+          resizeRequestState.viewport.width === 480 && resizeRequestState.viewport.height === 800
+            ? resizeRequestState
+            : yield* waitForBrowserState(
+                manager,
+                (state) => state.viewport.width === 480 && state.viewport.height === 800,
+                400,
+              );
+        expect(resizedState.viewport).toEqual({ width: 480, height: 800 });
+        // Generate a compositor update after the CDP metrics override. The
+        // next self-described JPEG must use the portrait viewport.
+        yield* manager.dispatchInput(integrationThreadId, externalTab.targetId, {
+          _tag: "PointerMove",
+          x: 1,
+          y: 1,
+          button: "none",
+          clickCount: 0,
+        });
+        const portraitFrame = yield* Deferred.await(resizedFrame).pipe(
+          Effect.timeout("10 seconds"),
+        );
+        expect(portraitFrame).toEqual({
+          height: 800,
+          targetId: externalTab.targetId,
+          width: 480,
+        });
 
         yield* manager.dispatchInput(integrationThreadId, externalTab.targetId, {
           _tag: "PointerDown",

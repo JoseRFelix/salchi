@@ -1,8 +1,10 @@
 import {
+  BrowserAgentActivity,
   BrowserInputEvent,
   BrowserViewportStatus,
   BrowserViewportTabs,
   type BrowserInputEvent as BrowserInputEventType,
+  type BrowserAgentActivity as BrowserAgentActivityType,
   type BrowserViewportStatus as BrowserViewportStatusType,
   type BrowserViewportTabs as BrowserViewportTabsType,
 } from "@salchi/contracts";
@@ -29,9 +31,7 @@ export interface BrowserStreamFrameMessage {
   readonly jpegBytes: Uint8Array;
 }
 
-export interface BrowserStreamActivityMeta {
-  readonly agentActive: boolean;
-}
+export type BrowserStreamActivityMeta = BrowserAgentActivityType;
 
 export type BrowserStreamMetaMessage =
   | BrowserViewportStatusType
@@ -47,7 +47,7 @@ export type BrowserStreamServerMessage =
   | { readonly _tag: "Frame"; readonly frame: BrowserStreamFrameMessage }
   | { readonly _tag: "Meta"; readonly event: BrowserStreamMetaMessage };
 
-const BrowserStreamActivityMetaSchema = Schema.Struct({ agentActive: Schema.Boolean });
+const BrowserStreamActivityMetaSchema = BrowserAgentActivity;
 const BrowserStreamMetaSchema = Schema.Union([
   BrowserViewportTabs,
   BrowserViewportStatus,

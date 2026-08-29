@@ -1,4 +1,4 @@
-import type { BrowserSessionStatus, ThreadId } from "@salchi/contracts";
+import type { BrowserAgentActivity, BrowserSessionStatus, ThreadId } from "@salchi/contracts";
 
 export const BROWSER_PIP_LINGER_MILLIS = 3_000;
 export const BROWSER_PIP_FADE_MILLIS = 200;
@@ -16,7 +16,7 @@ export interface BrowserPipState {
 }
 
 export type BrowserPipAction =
-  | { readonly type: "activity"; readonly active: boolean }
+  | { readonly type: "activity"; readonly activity: BrowserAgentActivity }
   | { readonly type: "close" }
   | { readonly type: "enabled"; readonly enabled: boolean }
   | { readonly type: "fadeElapsed" }
@@ -85,7 +85,10 @@ export function reduceBrowserPipState(
       return { ...next, phase: canShow(next) ? "visible" : "hidden" };
     }
     case "activity": {
-      if (action.active) {
+      if (action.activity.threadId !== state.threadId) {
+        return { ...state, agentActive: false, phase: "hidden" };
+      }
+      if (action.activity.agentActive) {
         const nextBurst = !state.agentActive;
         const next = {
           ...state,

@@ -138,14 +138,11 @@ export function runBrowserStreamConnection(input: {
         .pipe(Stream.map((event) => ({ _tag: "Viewport" as const, event })));
       const agentActivityEvents = input.browserManager
         .subscribeAgentActivity(input.threadId)
-        .pipe(Stream.map((agentActive) => ({ _tag: "AgentActivity" as const, agentActive })));
+        .pipe(Stream.map((activity) => ({ _tag: "AgentActivity" as const, activity })));
       const outbound = Stream.merge(viewportEvents, agentActivityEvents).pipe(
         Stream.runForEach((outboundEvent) => {
           if (outboundEvent._tag === "AgentActivity") {
-            return outbox.offerMeta(
-              "activity",
-              encodeBrowserStreamMeta({ agentActive: outboundEvent.agentActive }),
-            );
+            return outbox.offerMeta("activity", encodeBrowserStreamMeta(outboundEvent.activity));
           }
           const event = outboundEvent.event;
           if (event._tag === "Tabs") {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { browserStealthUserAgent, BROWSER_STEALTH_WEBDRIVER_SCRIPT } from "./BrowserStealth.ts";
+import { shouldUseManagedChromeNewHeadless } from "./PlaywrightBrowserRuntime.ts";
 
 describe("browser stealth overrides", () => {
   it("retains the launched Chrome version while removing the headless marker", () => {
@@ -24,5 +25,38 @@ describe("browser stealth overrides", () => {
     expect(BROWSER_STEALTH_WEBDRIVER_SCRIPT).toContain("Navigator.prototype");
     expect(BROWSER_STEALTH_WEBDRIVER_SCRIPT).toContain('"webdriver"');
     expect(BROWSER_STEALTH_WEBDRIVER_SCRIPT).toContain("undefined");
+  });
+
+  it("selects explicit new-headless only for the preferred branded Chrome in stealth mode", () => {
+    const chromeChannel = {
+      source: "channel" as const,
+      resolution: "chrome",
+      launchOptions: { channel: "chrome" },
+    };
+    expect(
+      shouldUseManagedChromeNewHeadless({
+        candidate: chromeChannel,
+        managedVariant: "chrome",
+        stealthMode: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldUseManagedChromeNewHeadless({
+        candidate: chromeChannel,
+        managedVariant: "headless-shell",
+        stealthMode: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldUseManagedChromeNewHeadless({
+        candidate: {
+          source: "channel",
+          resolution: "chromium",
+          launchOptions: { channel: "chromium" },
+        },
+        managedVariant: "chrome",
+        stealthMode: true,
+      }),
+    ).toBe(false);
   });
 });

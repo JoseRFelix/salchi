@@ -13,7 +13,12 @@ export const BrowserTab = Schema.Struct({
 });
 export type BrowserTab = typeof BrowserTab.Type;
 
-export const BrowserExecutableSource = Schema.Literals(["environment", "setting", "channel"]);
+export const BrowserExecutableSource = Schema.Literals([
+  "environment",
+  "setting",
+  "channel",
+  "managed",
+]);
 export type BrowserExecutableSource = typeof BrowserExecutableSource.Type;
 
 export const BrowserExecutableInfo = Schema.Struct({
@@ -30,11 +35,59 @@ export const BrowserExecutableResolutionAttempt = Schema.Struct({
 });
 export type BrowserExecutableResolutionAttempt = typeof BrowserExecutableResolutionAttempt.Type;
 
+export const BrowserManagedVariant = Schema.Literals(["headless-shell", "chrome"]);
+export type BrowserManagedVariant = typeof BrowserManagedVariant.Type;
+
+export const BrowserViewportSize = Schema.Struct({
+  width: Schema.Int,
+  height: Schema.Int,
+});
+export type BrowserViewportSize = typeof BrowserViewportSize.Type;
+
+export const BrowserInstallStatus = Schema.Literals([
+  "not-installed",
+  "installing",
+  "installed",
+  "needs-elevation",
+  "failed",
+]);
+export type BrowserInstallStatus = typeof BrowserInstallStatus.Type;
+
+export const BrowserInstallPhase = Schema.Literals([
+  "preparing",
+  "downloading",
+  "extracting",
+  "finalizing",
+  "complete",
+]);
+export type BrowserInstallPhase = typeof BrowserInstallPhase.Type;
+
+export const BrowserInstallProgress = Schema.Struct({
+  phase: BrowserInstallPhase,
+  percent: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
+  downloadedBytes: NonNegativeInt,
+  totalBytes: NonNegativeInt,
+});
+export type BrowserInstallProgress = typeof BrowserInstallProgress.Type;
+
+export const BrowserInstallState = Schema.Struct({
+  status: BrowserInstallStatus,
+  variant: BrowserManagedVariant,
+  progress: Schema.optionalKey(BrowserInstallProgress),
+  executablePath: Schema.optionalKey(TrimmedNonEmptyString),
+  reason: Schema.optionalKey(Schema.String),
+  dependencyCommand: Schema.optionalKey(TrimmedNonEmptyString),
+  elevationCommand: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type BrowserInstallState = typeof BrowserInstallState.Type;
+
 export const BrowserSessionState = Schema.Struct({
   threadId: ThreadId,
   status: BrowserSessionStatus,
   tabs: Schema.Array(BrowserTab),
   executable: Schema.NullOr(BrowserExecutableInfo),
+  viewport: BrowserViewportSize,
+  installState: Schema.optionalKey(BrowserInstallState),
   cdpWebSocketUrl: Schema.optionalKey(TrimmedNonEmptyString),
   error: Schema.optionalKey(Schema.String),
 });
@@ -43,11 +96,27 @@ export type BrowserSessionState = typeof BrowserSessionState.Type;
 export const BrowserThreadInput = Schema.Struct({ threadId: ThreadId });
 export type BrowserThreadInput = typeof BrowserThreadInput.Type;
 
+export const BrowserInstallInput = Schema.Struct({
+  threadId: ThreadId,
+  variant: BrowserManagedVariant,
+});
+export type BrowserInstallInput = typeof BrowserInstallInput.Type;
+
 export const BrowserSetActiveTabInput = Schema.Struct({
   threadId: ThreadId,
   targetId: TrimmedNonEmptyString,
 });
 export type BrowserSetActiveTabInput = typeof BrowserSetActiveTabInput.Type;
+
+export const BrowserSetViewportSizeInput = Schema.Union([
+  Schema.TaggedStruct("Set", {
+    threadId: ThreadId,
+    width: Schema.Number,
+    height: Schema.Number,
+  }),
+  Schema.TaggedStruct("Release", { threadId: ThreadId }),
+]);
+export type BrowserSetViewportSizeInput = typeof BrowserSetViewportSizeInput.Type;
 
 export const BrowserOpenTabInput = Schema.Struct({
   threadId: ThreadId,
@@ -179,6 +248,12 @@ export const BrowserViewportStatus = Schema.TaggedStruct("Status", {
 });
 export type BrowserViewportStatus = typeof BrowserViewportStatus.Type;
 
+export const BrowserAgentActivity = Schema.Struct({
+  threadId: ThreadId,
+  agentActive: Schema.Boolean,
+});
+export type BrowserAgentActivity = typeof BrowserAgentActivity.Type;
+
 export const BrowserViewportEvent = Schema.Union([
   BrowserViewportFrame,
   BrowserViewportTabs,
@@ -191,6 +266,10 @@ export class BrowserUnavailable extends Schema.TaggedErrorClass<BrowserUnavailab
   {
     message: Schema.String,
     attempts: Schema.Array(BrowserExecutableResolutionAttempt),
+    reason: Schema.optionalKey(
+      Schema.Literals(["not-installed", "missing-libraries", "launch-failed"]),
+    ),
+    dependencyCommand: Schema.optionalKey(TrimmedNonEmptyString),
   },
 ) {}
 

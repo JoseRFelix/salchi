@@ -130,6 +130,10 @@ import {
   BrowserSessionManager,
   type BrowserSessionManagerShape,
 } from "./browser/Services/BrowserSessionManager.ts";
+import {
+  BrowserInstaller,
+  type BrowserInstallerShape,
+} from "./browser/Services/BrowserInstaller.ts";
 import { makeBrowserSessionManagerWithOptions } from "./browser/Layers/BrowserSessionManager.ts";
 import { launchPlaywrightBrowser } from "./browser/PlaywrightBrowserRuntime.ts";
 import {
@@ -383,6 +387,7 @@ const buildAppUnderTest = (options?: {
     projectSetupScriptRunner?: Partial<ProjectSetupScriptRunnerShape>;
     terminalManager?: Partial<TerminalManagerShape>;
     browserSessionManager?: Partial<BrowserSessionManagerShape>;
+    browserInstaller?: Partial<BrowserInstallerShape>;
     orchestrationEngine?: Partial<OrchestrationEngineShape>;
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQueryShape>;
     checkpointDiffQuery?: Partial<CheckpointDiffQueryShape>;
@@ -580,7 +585,13 @@ const buildAppUnderTest = (options?: {
     const browserState = (
       threadId: BrowserSessionState["threadId"],
       status: BrowserSessionState["status"],
-    ): BrowserSessionState => ({ threadId, status, tabs: [], executable: null });
+    ): BrowserSessionState => ({
+      threadId,
+      status,
+      tabs: [],
+      executable: null,
+      viewport: { width: 800, height: 600 },
+    });
     const browserSessionManagerLayer = Layer.mock(BrowserSessionManager)({
       start: (threadId) => Effect.succeed(browserState(threadId, "running")),
       stop: (threadId) => Effect.succeed(browserState(threadId, "stopped")),
@@ -591,15 +602,34 @@ const buildAppUnderTest = (options?: {
       navigateHistory: (threadId) => Effect.succeed(browserState(threadId, "running")),
       closeTab: (threadId) => Effect.succeed(browserState(threadId, "running")),
       dispatchInput: () => Effect.void,
+      setViewportSize: (threadId) => Effect.succeed(browserState(threadId, "running")),
+      releaseViewportSize: (threadId) => Effect.succeed(browserState(threadId, "running")),
+      releaseViewportSizeOwner: () => Effect.void,
+      setViewportFollowingEnabled: () => Effect.void,
       recordAgentCdpActivity: () => Effect.void,
       recordAgentCdpCommand: () => Effect.void,
+      recordAgentBrowserRequest: () => Effect.void,
       agentConnectionOpened: () => Effect.void,
       agentConnectionClosed: () => Effect.void,
       getCdpWebSocketUrl: () => Effect.die("No browser CDP endpoint configured for this test"),
       subscribeViewport: () => Stream.empty,
       subscribeViewportBinary: () => Stream.empty,
-      subscribeAgentActivity: () => Stream.make(false).pipe(Stream.concat(Stream.never)),
+      subscribeAgentActivity: (threadId) =>
+        Stream.make({ threadId, agentActive: false }).pipe(Stream.concat(Stream.never)),
       ...options?.layers?.browserSessionManager,
+    });
+    const browserInstallerLayer = Layer.mock(BrowserInstaller)({
+      install: () =>
+        Stream.make({
+          phase: "complete" as const,
+          percent: 100,
+          downloadedBytes: 0,
+          totalBytes: 0,
+        }),
+      getInstallState: (variant) => Effect.succeed({ status: "not-installed" as const, variant }),
+      getManagedExecutablePath: () => Effect.succeed(undefined),
+      cancel: (variant) => Effect.succeed({ status: "not-installed" as const, variant }),
+      ...options?.layers?.browserInstaller,
     });
 
     const servedRoutesLayer = HttpRouter.serve(makeRoutesLayer, {
@@ -808,6 +838,7 @@ const buildAppUnderTest = (options?: {
     );
     const browserServedRoutesLayer = servedRoutesLayer.pipe(
       Layer.provide(browserSessionManagerLayer),
+      Layer.provide(browserInstallerLayer),
     );
 
     const appLayer = browserServedRoutesLayer.pipe(
@@ -2075,12 +2106,32 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("enforces browser:operate on browser websocket RPCs", () =>
     Effect.gen(function* () {
       let dispatchInputCalled = false;
+      let getInstallStateCalled = false;
+      let setViewportSizeCalled = false;
       yield* buildAppUnderTest({
         layers: {
           browserSessionManager: {
             dispatchInput: () =>
               Effect.sync(() => {
                 dispatchInputCalled = true;
+              }),
+            setViewportSize: (threadId) =>
+              Effect.sync(() => {
+                setViewportSizeCalled = true;
+                return {
+                  threadId,
+                  status: "running" as const,
+                  tabs: [],
+                  executable: null,
+                  viewport: { width: 800, height: 600 },
+                };
+              }),
+          },
+          browserInstaller: {
+            getInstallState: (variant) =>
+              Effect.sync(() => {
+                getInstallStateCalled = true;
+                return { status: "not-installed" as const, variant };
               }),
           },
         },
@@ -2122,6 +2173,91 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(error.requiredScope, "browser:operate");
       }
       assert.isFalse(dispatchInputCalled);
+
+      const secondTicketResponse = yield* HttpClient.post("/api/auth/websocket-ticket", {
+        headers: { authorization: `Bearer ${tokenBody.access_token}` },
+      });
+      const secondTicketBody = (yield* secondTicketResponse.json) as {
+        readonly ticket: string;
+      };
+      const secondWsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?ticket=${encodeURIComponent(secondTicketBody.ticket)}`;
+      const viewportError = yield* Effect.flip(
+        Effect.scoped(
+          withWsRpcClient(secondWsUrl, (client) =>
+            client[WS_METHODS.browserSetViewportSize]({
+              _tag: "Set",
+              threadId: defaultThreadId,
+              width: 900,
+              height: 700,
+            }),
+          ),
+        ),
+      );
+      assert.equal(viewportError._tag, "EnvironmentAuthorizationError");
+      assert.isFalse(setViewportSizeCalled);
+
+      const thirdTicketResponse = yield* HttpClient.post("/api/auth/websocket-ticket", {
+        headers: { authorization: `Bearer ${tokenBody.access_token}` },
+      });
+      const thirdTicketBody = (yield* thirdTicketResponse.json) as {
+        readonly ticket: string;
+      };
+      const thirdWsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?ticket=${encodeURIComponent(thirdTicketBody.ticket)}`;
+      const installError = yield* Effect.flip(
+        Effect.scoped(
+          withWsRpcClient(thirdWsUrl, (client) =>
+            client[WS_METHODS.browserGetInstallState]({ threadId: defaultThreadId }),
+          ),
+        ),
+      );
+      assert.equal(installError._tag, "EnvironmentAuthorizationError");
+      assert.isFalse(getInstallStateCalled);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("releases viewport ownership when an RPC websocket is interrupted", () =>
+    Effect.gen(function* () {
+      const assignedOwner = yield* Deferred.make<string>();
+      const releasedOwner = yield* Deferred.make<string>();
+      yield* buildAppUnderTest({
+        layers: {
+          browserSessionManager: {
+            setViewportSize: (threadId, _width, _height, ownerId) =>
+              Deferred.succeed(assignedOwner, ownerId ?? "missing-owner").pipe(
+                Effect.as({
+                  threadId,
+                  status: "running" as const,
+                  tabs: [],
+                  executable: null,
+                  viewport: { width: 800, height: 600 },
+                }),
+              ),
+            releaseViewportSizeOwner: (ownerId) =>
+              Deferred.succeed(releasedOwner, ownerId).pipe(Effect.asVoid),
+          },
+        },
+      });
+
+      const { cookie } = yield* bootstrapBrowserSession();
+      assert.isDefined(cookie);
+      const wsUrl = appendSessionCookieToWsUrl(
+        yield* getWsServerUrl("/ws", { authenticated: false }),
+        cookie?.split(";")[0] ?? "",
+      );
+      const clientFiber = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.browserSetViewportSize]({
+            _tag: "Set",
+            threadId: defaultThreadId,
+            width: 900,
+            height: 700,
+          }).pipe(Effect.andThen(Effect.never)),
+        ),
+      ).pipe(Effect.forkScoped);
+
+      const ownerId = yield* Deferred.await(assignedOwner).pipe(Effect.timeout("1 second"));
+      yield* Fiber.interrupt(clientFiber);
+      assert.equal(yield* Deferred.await(releasedOwner).pipe(Effect.timeout("1 second")), ownerId);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -2139,6 +2275,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   status: "stopped" as const,
                   tabs: [],
                   executable: null,
+                  viewport: { width: 800, height: 600 },
                 };
               }),
           },
@@ -2182,6 +2319,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 status: "stopped",
                 tabs: [],
                 executable: null,
+                viewport: { width: 800, height: 600 },
               }),
             dispatchInput: (threadId, targetId, event) =>
               Deferred.succeed(inputReceived, {

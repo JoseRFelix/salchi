@@ -3,7 +3,12 @@ import { randomBytes } from "node:crypto";
 import * as NodeHttp from "node:http";
 import type { Duplex } from "node:stream";
 
-import { ThreadId, ThreadNotFound, type BrowserRpcError } from "@salchi/contracts";
+import {
+  BrowserUnavailable,
+  ThreadId,
+  ThreadNotFound,
+  type BrowserRpcError,
+} from "@salchi/contracts";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
@@ -43,6 +48,7 @@ interface ActiveProxyConnection {
 
 interface ProviderCredential {
   readonly token: string;
+  readonly originThreadId: ThreadId;
   readonly threadId: ThreadId;
   readonly connections: Set<ActiveProxyConnection>;
   readonly pendingClientSockets: Set<Duplex>;
@@ -72,7 +78,8 @@ export interface BrowserAgentBrokerOptions {
     | "recordAgentCdpActivity"
     | "recordAgentCdpCommand"
     | "agentConnectionClosed"
-  >;
+  > &
+    Partial<Pick<BrowserSessionManager["Service"], "recordAgentBrowserRequest">>;
   readonly accessEnabled: Effect.Effect<boolean>;
   readonly resolveRootThreadId?: (threadId: ThreadId) => Effect.Effect<ThreadId, BrowserRpcError>;
   readonly randomToken?: (() => string) | undefined;
@@ -80,6 +87,7 @@ export interface BrowserAgentBrokerOptions {
 }
 
 const isThreadNotFound = Schema.is(ThreadNotFound);
+const isBrowserUnavailable = Schema.is(BrowserUnavailable);
 
 export function isLoopbackAddress(address: string | undefined): boolean {
   return address === BROKER_HOST || address === "::1" || address === "::ffff:127.0.0.1";
@@ -123,6 +131,58 @@ function rejectUpgrade(socket: Duplex, status: number, reason: string): void {
 
 function browserFailureStatus(error: BrowserRpcError): number {
   return isThreadNotFound(error) ? 404 : 503;
+}
+
+function browserFailureReason(error: BrowserRpcError): string {
+  return isBrowserUnavailable(error) && error.reason === "not-installed"
+    ? "Browser Not Installed - User Prompted"
+    : "Browser Unavailable";
+}
+
+function isBrowserNotInstalled(error: BrowserRpcError): boolean {
+  return isBrowserUnavailable(error) && error.reason === "not-installed";
+}
+
+function serveBrowserNotInstalled(socket: WebSocket, onCommand: () => void): Effect.Effect<void> {
+  return Effect.callback<void>((resume) => {
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      resume(Effect.void);
+    };
+    const onMessage = (data: RawData) => {
+      onCommand();
+      let id: unknown = null;
+      try {
+        const request: unknown = JSON.parse(data.toString());
+        if (typeof request === "object" && request !== null && "id" in request) id = request.id;
+      } catch {
+        // A malformed first command still receives the same non-secret setup error.
+      }
+      socket.send(
+        JSON.stringify({
+          id,
+          error: {
+            code: -32_000,
+            message: "Browser not installed; the user has been prompted in Salchi.",
+          },
+        }),
+        () => {
+          socket.close(1011, "Browser not installed; user prompted");
+          settle();
+        },
+      );
+    };
+    socket.once("message", onMessage);
+    socket.once("close", settle);
+    socket.once("error", settle);
+    return Effect.sync(() => {
+      socket.off("message", onMessage);
+      socket.off("close", settle);
+      socket.off("error", settle);
+    });
+  });
 }
 
 function listenLoopback(server: NodeHttp.Server): Effect.Effect<number> {
@@ -329,7 +389,21 @@ export const makeBrowserAgentBrokerWithOptions = Effect.fn("browserAgentBroker.m
         const started = yield* Effect.exit(options.browserManager.start(credential.threadId));
         if (started._tag === "Failure") {
           const error = yield* Effect.flip(Effect.failCause(started.cause));
-          rejectUpgrade(socket, browserFailureStatus(error), "Browser Unavailable");
+          if (isBrowserNotInstalled(error)) {
+            downstream = yield* acceptDownstream(websocketServer, request, socket, head);
+            yield* serveBrowserNotInstalled(downstream, () =>
+              schedule(
+                options.browserManager.recordAgentBrowserRequest?.(
+                  credential.threadId,
+                  credential.originThreadId,
+                ) ?? Effect.void,
+              ),
+            );
+            pendingClientSockets.delete(socket);
+            credential.pendingClientSockets.delete(socket);
+            return;
+          }
+          rejectUpgrade(socket, browserFailureStatus(error), browserFailureReason(error));
           return;
         }
         const endpoint = yield* Effect.exit(
@@ -337,7 +411,7 @@ export const makeBrowserAgentBrokerWithOptions = Effect.fn("browserAgentBroker.m
         );
         if (endpoint._tag === "Failure") {
           const error = yield* Effect.flip(Effect.failCause(endpoint.cause));
-          rejectUpgrade(socket, browserFailureStatus(error), "Browser Unavailable");
+          rejectUpgrade(socket, browserFailureStatus(error), browserFailureReason(error));
           return;
         }
         if (!credential.active || credentials.get(credential.token) !== credential) {
@@ -384,7 +458,11 @@ export const makeBrowserAgentBrokerWithOptions = Effect.fn("browserAgentBroker.m
           );
         const recordCommand = () =>
           schedule(
-            options.browserManager.recordAgentCdpCommand(credential.threadId, connection.id),
+            options.browserManager.recordAgentCdpCommand(
+              credential.threadId,
+              connection.id,
+              credential.originThreadId,
+            ),
           );
         const heartbeat = Effect.sleep(Duration.millis(heartbeatIntervalMillis)).pipe(
           Effect.andThen(
@@ -485,6 +563,7 @@ export const makeBrowserAgentBrokerWithOptions = Effect.fn("browserAgentBroker.m
         }
         const credential: ProviderCredential = {
           token,
+          originThreadId: threadId,
           threadId: rootThreadId,
           connections: new Set(),
           pendingClientSockets: new Set(),

@@ -7,20 +7,20 @@ profile at `~/.salchi/userdata/browser-profiles/<rootThreadId>/`, so cookies and
 and server restarts. Live processes, tabs, and CDP URLs are not reconstructed after a server restart.
 
 ```text
-                                         server process
-  web app                                +----------------------------------------------+
-  +----------------------+               | Effect RPC (owner-only browser.* controls)   |
-  | Browser panel        |---- unary ----+------------------+                           |
-  | agent-activity PiP   |               |                  v                           |
-  | shared stream pool   |---- ticketed raw WS ----> BrowserSessionManager              |
-  +----------------------+       /browser-stream/:id    | one scoped session/root       |
-                                                         |                               |
-  provider process                                       | Playwright control CDP        |
-  +----------------------+                               v                               |
-  | injected MCP config  |  dedicated 127.0.0.1 WS   Chromium + persistent context     |
-  | @playwright/mcp      |-- stable token URL ------>  ^    |                           |
-  | custom CDP clients   |  BrowserAgentBroker         |    +-- tab CDP sessions        |
-  +----------------------+                    proxied browser CDP                        |
+  web app / CLI                          server process
+  +----------------------+               +----------------------------------------------+
+  | Browser panel + PiP  |---- RPC/WS -->| BrowserSessionManager                        |
+  | guided install card  |---- RPC ----->| BrowserInstaller -- scoped worker --------+  |
+  | salchi browser install|--- direct --->|                                      |       |
+  +----------------------+               |                                      v       |
+                                         |                    managed variant resolver  |
+  provider process                       |              (SALCHI_HOME shell / OS Chrome) |
+  +----------------------+               |                                      |       |
+  | salchi-browser MCP   |-- loopback -->| BrowserAgentBroker                    |       |
+  | custom CDP clients   |   token WS    |             |                        |       |
+  +----------------------+               |             v                        v       |
+                                         |        Chromium + persistent context          |
+                                         |             +-- per-tab CDP sessions           |
                                          +----------------------------------------------+
 ```
 
@@ -30,36 +30,91 @@ released with its provider session.
 
 ## Ownership and root-thread normalization
 
-Browser state is keyed only by a thread with neither `parentThreadId` nor `createdByThreadId`.
-`resolveBrowserRootThreadId` follows both relationships, detects cycles, and fails when any thread in
-the chain is missing. Every manager operation normalizes its requested id before accessing the
-session map. This includes unary RPC operations, viewport/activity subscriptions, input dispatch,
-and agent-connection accounting. Returned snapshots and viewport metadata retain the caller's
-requested id so a child-thread UI can still reject stale events without creating another browser.
+Browser state is keyed by the first orchestration thread without a `parentThreadId`.
+`parentThreadId` is the ownership edge for materialized provider children;
+`createdByThreadId` is provenance for a genuine independent thread and is deliberately not followed.
+Consequently, an independent thread owns its own browser process, profile, idle lifecycle, and agent
+credential even when another thread created it. A materialized child beneath that independent thread
+resolves to the independent thread, not to its creator's parent. Resolution detects parent cycles and
+fails when a required thread is missing. Every manager operation normalizes its requested id before
+accessing the session map, including unary RPC operations, viewport/activity subscriptions, input
+dispatch, and agent-connection accounting.
 
 The public stream route passes its requested id through the same manager boundary. Agent access is
 normalized before the credential and stable proxy URL are created, so every provider seam receives
-the root id in `SALCHI_BROWSER_CDP_URL`. The live `threadExists` predicate accepts only a real root
-orchestration thread. On startup Salchi warns—but never automatically prunes—profile directories
-that do not correspond to a current root thread. `salchi browser prune-profiles` lists those
-directories and deletes them only when passed `--confirm`. Deleting a root thread stops its browser
-and removes that thread's profile; deleting a child thread cannot remove its root owner's profile.
+its browser-root id in `SALCHI_BROWSER_CDP_URL`; for an independent provider session, that is the
+independent thread's own id. The credential separately retains the provider session's originating
+thread id for activity scoping. The live `threadExists` predicate accepts every real orchestration
+root, including independent threads, and rejects materialized children. On startup Salchi warns—but
+never automatically prunes—profile directories that do not correspond to a current root thread.
+`salchi browser prune-profiles` lists those directories and deletes them only when passed
+`--confirm`. Deleting any root thread stops its browser and removes that thread's profile; deleting a
+materialized child cannot remove its root owner's profile. Profiles formerly shared because of the
+old `createdByThreadId` traversal are not copied into the newly independent profile.
 
 ## Browser runtime
 
-### Executable acquisition and process isolation
+### Executable acquisition, guided installation, and process isolation
 
-Salchi uses `playwright-core`, which does not download browsers. Resolution order is:
+Browser start resolution order is:
 
 1. `SALCHI_BROWSER_PATH`;
 2. the `browserExecutablePath` server setting;
-3. Playwright's installed system Chrome/Chromium channels.
+3. Playwright's installed system Chrome/Chromium/Edge channels; and
+4. Salchi's managed executable under `$SALCHI_HOME/browsers`.
 
-Failure reports every attempted path/channel as a typed `BrowserUnavailable` error. Chromium uses a
-fixed 800×600 viewport with device scale factor 1. Its sandbox remains enabled unless
-`SALCHI_BROWSER_NO_SANDBOX=1`; that opt-out emits a prominent warning. The process always receives
-`--disable-dev-shm-usage`, a dynamically allocated remote-debugging port, and
-`--remote-debugging-address=127.0.0.1`.
+When no earlier candidate works and the managed browser is absent, `BrowserUnavailable` carries
+`reason: "not-installed"`. The owner UI offers a one-click install, streams progress through
+`browser.install`, and starts the thread session automatically on completion. The equivalent
+headless flow is `salchi browser install [--yes]`. `browser.getInstallState` replays one of
+`not-installed`, `installing`, `installed`, `needs-elevation`, or `failed`, tagged with the selected
+variant; concurrent streams for that variant join the same in-flight fiber. `browser.cancelInstall`
+is the only caller action that interrupts that shared installation. Disconnecting one progress
+consumer does not cancel it, while server-scope shutdown does.
+
+`browserManagedVariant` records which managed candidate is preferred when both are present. It does
+not alter the fixed environment → setting → system-channel → managed resolution order.
+
+| Variant                    | Approx. disk use | Fingerprinting / compatibility                                       | Installation location and elevation                                                                                                   |
+| -------------------------- | ---------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `headless-shell` (default) | ~180 MB          | Lightweight and the most detectable                                  | Hermetic under `$SALCHI_HOME/browsers`; no elevation                                                                                  |
+| `chrome`                   | ~350 MB          | Branded binary; better compatibility with automation-sensitive sites | Playwright's normal OS application location; Linux x64 requires an administrator command, and Playwright does not support Linux Arm64 |
+
+The headless-shell Playwright revision was verified with a persistent context, loopback external
+CDP, multiple clients, and `Page.startScreencast`; those are the runtime capabilities Salchi needs.
+Playwright fixes `PLAYWRIGHT_BROWSERS_PATH` when its registry module loads, so Salchi runs the
+registry installer in a scoped child worker with that variable set before `coreBundle` is required.
+For the hermetic variant, `TMPDIR`, `TMP`, and `TEMP` also point below
+`$SALCHI_HOME/browsers/tmp`; the download, extraction, manifest, and lock files therefore never
+leave `SALCHI_HOME`. The worker and downloader process tree are registered and terminated on cancel
+or scope shutdown. The install directory is mode `0700` and its manifest is mode `0600`.
+
+Salchi never invokes `sudo`. On supported Linux x64 distributions Playwright's `chrome` target is an
+OS package install, so the installer detects that before spawning a worker and publishes a distinct
+`needs-elevation` state with an exact Playwright CLI or distro package command. The UI renders it as
+instructions and re-probes the system Chrome channel when the owner chooses **Check again**. On
+macOS and Windows the Playwright channel installer runs normally. If Playwright/Chromium reports a
+missing shared-library signature, the typed `BrowserUnavailable` instead carries
+`reason: "missing-libraries"` and one copy-paste dependency command. Playwright's exact apt package
+command is preserved on Debian-family hosts; RPM-family loader errors are expressed as a `dnf`
+provider lookup for the missing `.so` files. The UI displays that command prominently.
+
+Failure reports every attempted path/channel as a typed `BrowserUnavailable` error. Chromium starts
+with an 800×600 viewport and device scale factor 1. With `browserViewportFollowsPanel` enabled, each
+visible full Browser panel registers its content size under that RPC WebSocket's scoped owner id.
+The server selects the request with the largest area; the latest writer wins an equal-area tie.
+Requests are clamped to 320–1280 pixels wide and 480–1024 pixels high, then snapped to even values.
+Closing or switching the panel sends an explicit release, and the WebSocket scope finalizer releases
+all requests from an abruptly disconnected owner. The PiP never registers a size request.
+
+While `agentActive` is true, the policy retains only the latest winning size without changing CDP
+metrics. The pending size applies on the active-to-inactive transition. Disabling panel following
+uses 800×600 regardless of retained panel requests; re-enabling selects the current winner. Runtime
+changes use `Emulation.setDeviceMetricsOverride` on every configured page with device scale factor 1
+and restart only the active page's screencast within the existing serialized operation ordering.
+Chromium's sandbox remains enabled unless `SALCHI_BROWSER_NO_SANDBOX=1`; that opt-out emits a
+prominent warning. The process always receives `--disable-dev-shm-usage`, a dynamically allocated
+remote-debugging port, and `--remote-debugging-address=127.0.0.1`.
 
 The session scope owns the persistent Playwright context, page CDP sessions, idle monitor, and
 launch fiber. Its finalizer first attempts a bounded graceful Playwright close, then terminates the
@@ -71,7 +126,10 @@ Optional `browserStealthMode` removes Playwright's `--enable-automation` default
 a `Page.addScriptToEvaluateOnNewDocument` override that suppresses `navigator.webdriver`, and uses
 the launched browser's own current user agent after replacing its `HeadlessChrome` product marker
 with `Chrome`. This is best-effort fingerprint reduction only: it does not make automation
-undetectable or guarantee that a captcha provider will accept a session.
+undetectable or guarantee that a captcha provider will accept a session. When the selected managed
+variant is branded Chrome, stealth launches that binary with explicit new-headless mode. The
+recommended best-effort combination for difficult sites is `chrome` plus stealth mode;
+headless-shell remains the lightweight and most detectable default.
 
 ### Tabs, interception, and input
 
@@ -108,13 +166,13 @@ active tab is changed or removed. Input never refreshes tab metadata or waits be
 ## Viewport data path
 
 While at least one viewport subscriber exists, the active tab runs `Page.startScreencast` with JPEG
-quality 45 by default, maximum width 800, and device scale factor 1. The idle cadence emits every
-second compositor frame by default. A new screencast is primed at every frame until its first JPEG
-arrives, preventing an already-painted static page from being skipped, and then returns to its
-configured cadence. Input temporarily boosts the active screencast to every frame; two seconds after
-the most recent input, it returns to the configured cadence. CDP stop/start for a cadence change is
-serialized with existing page operations while the mailbox, transport, and last frame remain live.
-The runtime acknowledges each
+quality 45 by default, maximum width and height equal to the current viewport, and device scale
+factor 1. The idle cadence emits every second compositor frame by default. A new screencast is primed
+at every frame until its first JPEG arrives, preventing an already-painted static page from being
+skipped, and then returns to its configured cadence. Input temporarily boosts the active screencast
+to every frame; two seconds after the most recent input, it returns to the configured cadence. CDP
+stop/start for a cadence or viewport change is serialized with existing page operations while the
+mailbox, transport, and last frame remain live. The runtime acknowledges each
 `Page.screencastFrame` immediately, then publishes it to a capacity-one mailbox. Publishing replaces
 the previous value: the newest frame wins and no frame queue exists in the browser manager.
 
@@ -151,21 +209,21 @@ proxy, this route is intentionally available through the same external/Tailscale
 
 Each connection acquires one normal manager viewport subscription and releases it when its Effect
 connection scope completes, including abrupt socket loss. Multiple clients are supported. The web
-side adds a ref-counted pool keyed by environment and thread: the Browser panel, PiP, and hidden
-agent-activity listener are logical consumers of one physical ticketed socket, and thus one server
-subscriber. The retained RPC stream independently counts as a subscriber when a programmatic client
-uses it.
+side adds a ref-counted pool keyed by environment and thread: the Browser panel and PiP are logical
+consumers of one physical ticketed socket, and thus one server subscriber. The hidden PiP trigger
+uses the activity-only RPC stream and owns no viewport subscription. The retained viewport RPC stream
+independently counts as a subscriber when a programmatic client uses it.
 
 ### Version 1 wire protocol
 
 Every binary websocket message starts with a one-byte version (`0x01`) and one-byte type.
 Multi-byte integer fields use network byte order.
 
-| Direction       | Type             | Body                                                                    |
-| --------------- | ---------------- | ----------------------------------------------------------------------- |
-| server → client | `FRAME` (`0x01`) | `u32 seq`, `u16 width`, `u16 height`, `u8 tabIndexHint`, raw JPEG bytes |
-| server → client | `META` (`0x02`)  | UTF-8 JSON: viewport `Status`, viewport `Tabs`, or `{agentActive}`      |
-| client → server | `INPUT` (`0x03`) | UTF-8 JSON: `{targetId, event}` using the browser input tagged union    |
+| Direction       | Type             | Body                                                                         |
+| --------------- | ---------------- | ---------------------------------------------------------------------------- |
+| server → client | `FRAME` (`0x01`) | `u32 seq`, `u16 width`, `u16 height`, `u8 tabIndexHint`, raw JPEG bytes      |
+| server → client | `META` (`0x02`)  | UTF-8 JSON: viewport `Status`, viewport `Tabs`, or `{threadId, agentActive}` |
+| client → server | `INPUT` (`0x03`) | UTF-8 JSON: `{targetId, event}` using the browser input tagged union         |
 
 There is no application-level frame ACK. CDP frames are acknowledged on receipt, and input is read
 and dispatched by a fiber independent of the frame writer. Effect's socket writer does not expose a
@@ -186,6 +244,11 @@ device pixel ratio, and letterboxes within the panel.
 The Browser view is part of the existing resizable right-panel registry and responsive sheet. Its
 address bar provides back, forward, reload, and navigation; its tab strip supports selection, open,
 and close. Stopped, starting, running, crashed, and authorization states are order-tolerant. The
+visible full panel reports its canvas content size immediately on open and after a 500 ms settled
+resize; a portrait mobile panel therefore produces a portrait page viewport. Multiple owner
+surfaces are reconciled by the server rather than by clients. Input mapping continues to invert the
+frame's self-described aspect-fit/letterbox transform, and the server clamps against the active
+page's latest frame dimensions rather than an 800×600 constant. The
 first valid viewport click/tap enables interaction and forwards that same gesture—there is no header
 toggle. Hiding the panel, changing view/thread, closing the sheet, stopping/crashing, or losing
 authorization disables it. A quick touch taps, a moving single finger scrolls, and a 450 ms hold
@@ -193,10 +256,13 @@ before movement begins click-drag. Desktop keyboard input targets the focused ca
 hidden input for text, Enter, and Backspace.
 
 The stream's agent-activity metadata drives a view-only PiP. An authenticated proxy's first CDP
-command publishes `agentActive: true` immediately. Further commands extend a four-second active
-window; the transition to false waits another two seconds to avoid flapping. Proxy open/close,
+command publishes `{threadId: <originating provider thread>, agentActive: true}` immediately.
+Further commands from that origin extend a four-second active window; the transition to false waits
+another two seconds to avoid flapping. If traffic switches origins within a deliberately shared
+session, a new active event identifies the new origin. The client treats a nonmatching origin as
+inactive, so activity can never surface a PiP on another independent thread. Proxy open/close,
 heartbeat, Chromium responses, viewport traffic, and user input affect idle activity but do not mark
-the agent active. Stop and crash reset the signal immediately.
+the agent active. Stop and crash reset the signal immediately with the last origin id.
 
 With the client setting **Show browser preview while agent browses** enabled, activity starts a PiP
 when the full panel is closed. It lingers for three seconds after inactivity, suppresses itself for
@@ -279,25 +345,33 @@ activity for the configured timeout (15 minutes by default).
 | Chromium crash  | publishes `crashed`, resets agent activity, closes the failed session scope; no automatic restart         | Chromium side drops; reconnect through a valid credential explicitly/lazily restarts       | connection stays subscribed to manager metadata and can observe crash/restart             |
 | server shutdown | manager scope closes all session scopes/fibers; runtime/process-registry finalizers reap Chromium         | broker scope terminates pending/active pipes, revokes credentials, closes WS/HTTP listener | public HTTP/WS scope interrupts routes; RPC/raw subscription scopes release               |
 
+An in-progress managed-browser installation is owned by the server layer rather than a thread. On
+server shutdown its fiber is interrupted and its worker/downloader tree is terminated. A later
+install request validates the managed manifest and safely resumes/retries through Playwright's own
+registry lock. Browser stop, thread deletion, crash, and idle timeout do not remove the shared
+managed installation. `prune-profiles` only touches per-thread profile directories.
+
 The manager transfers already-held subscriber and agent-connection counts into a newly launched
 session, so an explicit restart restores screencasting when appropriate. Unexpected exit is never
 restarted in the background.
 
 ## Settings and diagnostics
 
-| Name                                    | Default    | Purpose                                                          |
-| --------------------------------------- | ---------- | ---------------------------------------------------------------- |
-| server `browserExecutablePath`          | empty      | explicit executable after `SALCHI_BROWSER_PATH`                  |
-| server `browserIdleTimeout`             | 15 minutes | inactivity deadline after the final subscriber/agent connection  |
-| server `browserAgentAccessEnabled`      | `true`     | proxy credentials, MCP registration, and browser-use instruction |
-| server `browserKillRogueBrowsers`       | `false`    | terminate provider-descended external Chromium trees             |
-| server `browserScreencastQuality`       | `45`       | CDP JPEG screencast quality, from 0 through 100                  |
-| server `browserScreencastEveryNthFrame` | `2`        | idle compositor-frame sampling cadence, from 1 through 60        |
-| server `browserStealthMode`             | `false`    | best-effort automation fingerprint reduction                     |
-| client `showBrowserAgentPreview`        | `true`     | automatic activity listener and PiP                              |
-| `SALCHI_BROWSER_PATH`                   | unset      | highest-priority Chromium executable                             |
-| `SALCHI_BROWSER_NO_SANDBOX`             | unset      | `1` is the explicit sandbox opt-out                              |
-| `SALCHI_BROWSER_STREAM_DEBUG`           | unset      | `1` enables browser hot-path debug instrumentation               |
+| Name                                    | Default          | Purpose                                                          |
+| --------------------------------------- | ---------------- | ---------------------------------------------------------------- |
+| server `browserExecutablePath`          | empty            | explicit executable after `SALCHI_BROWSER_PATH`                  |
+| server `browserIdleTimeout`             | 15 minutes       | inactivity deadline after the final subscriber/agent connection  |
+| server `browserAgentAccessEnabled`      | `true`           | proxy credentials, MCP registration, and browser-use instruction |
+| server `browserKillRogueBrowsers`       | `false`          | terminate provider-descended external Chromium trees             |
+| server `browserManagedVariant`          | `headless-shell` | selected managed install/resolution candidate                    |
+| server `browserScreencastQuality`       | `45`             | CDP JPEG screencast quality, from 0 through 100                  |
+| server `browserScreencastEveryNthFrame` | `2`              | idle compositor-frame sampling cadence, from 1 through 60        |
+| server `browserViewportFollowsPanel`    | `true`           | largest visible full panel controls the clamped viewport         |
+| server `browserStealthMode`             | `false`          | best-effort automation fingerprint reduction                     |
+| client `showBrowserAgentPreview`        | `true`           | automatic activity listener and PiP                              |
+| `SALCHI_BROWSER_PATH`                   | unset            | highest-priority Chromium executable                             |
+| `SALCHI_BROWSER_NO_SANDBOX`             | unset            | `1` is the explicit sandbox opt-out                              |
+| `SALCHI_BROWSER_STREAM_DEBUG`           | unset            | `1` enables browser hot-path debug instrumentation               |
 
 Debug mode reports event-loop lag p50/p99 every five seconds, input receive-to-CDP completion,
 CDP-frame receive/mailbox/socket-write timing, page CDP attach/detach counts, backpressure skips, and
@@ -325,3 +399,8 @@ Methodology, stage timings, and the legacy comparison are recorded in [BENCHMARK
   the proxy security model above.
 - Automatic MCP registration is unavailable for remotely managed OpenCode servers; this is shown
   in the Browser panel and logged at remote session start when browser agent access is enabled.
+- The managed browser download cannot install kernel features or OS shared libraries. Salchi can
+  classify that failure and show the dependency command, but the administrator must run it.
+- Switching managed variants does not remove the unselected artifact; cleanup is manual. Branded
+  Chrome is an OS-level Playwright channel install rather than a hermetic Salchi download on
+  platforms where that channel installer is available.

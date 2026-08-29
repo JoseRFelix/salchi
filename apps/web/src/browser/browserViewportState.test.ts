@@ -2,6 +2,7 @@ import { ThreadId, type BrowserViewportEvent } from "@salchi/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  browserUnavailableDetails,
   browserTabLabel,
   initialBrowserViewportState,
   reduceBrowserViewportState,
@@ -83,6 +84,78 @@ describe("reduceBrowserViewportState", () => {
     const state = initialBrowserViewportState(currentThreadId);
 
     expect(reduceBrowserViewportState(state, { type: "event", event: runningEvent })).toBe(state);
+  });
+
+  it("recognizes an agent-triggered missing-browser snapshot without offering too early", () => {
+    const stopped = reduceBrowserViewportState(initialBrowserViewportState(THREAD_ID), {
+      type: "snapshot",
+      snapshot: {
+        threadId: THREAD_ID,
+        status: "stopped",
+        tabs: [],
+        executable: null,
+        viewport: { width: 800, height: 600 },
+        installState: { status: "not-installed", variant: "headless-shell" },
+      },
+    });
+    expect(stopped.unavailableReason).toBeNull();
+
+    const unavailable = reduceBrowserViewportState(stopped, {
+      type: "snapshot",
+      snapshot: {
+        threadId: THREAD_ID,
+        status: "stopped",
+        tabs: [],
+        executable: null,
+        viewport: { width: 800, height: 600 },
+        installState: { status: "not-installed", variant: "headless-shell" },
+        error: "No usable Chromium installation was found. Attempts: channel:chrome",
+      },
+    });
+    expect(unavailable.unavailableReason).toBe("not-installed");
+  });
+
+  it("tracks streamed install progress without placing viewport frames in state", () => {
+    const state = reduceBrowserViewportState(initialBrowserViewportState(THREAD_ID), {
+      type: "installProgress",
+      variant: "headless-shell",
+      progress: {
+        phase: "downloading",
+        percent: 42,
+        downloadedBytes: 42,
+        totalBytes: 100,
+      },
+    });
+    expect(state.installState).toEqual({
+      status: "installing",
+      variant: "headless-shell",
+      progress: {
+        phase: "downloading",
+        percent: 42,
+        downloadedBytes: 42,
+        totalBytes: 100,
+      },
+    });
+    expect(state).not.toHaveProperty("frame");
+  });
+});
+
+describe("browserUnavailableDetails", () => {
+  it("finds typed dependency failures through RPC wrapper causes", () => {
+    expect(
+      browserUnavailableDetails({
+        cause: {
+          _tag: "BrowserUnavailable",
+          reason: "missing-libraries",
+          message: "Chromium needs dependencies",
+          dependencyCommand: "sudo apt-get install libcups2",
+        },
+      }),
+    ).toEqual({
+      reason: "missing-libraries",
+      message: "Chromium needs dependencies",
+      dependencyCommand: "sudo apt-get install libcups2",
+    });
   });
 });
 
