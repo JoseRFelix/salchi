@@ -3,7 +3,9 @@ import {
   AlarmClockOffIcon,
   ArchiveIcon,
   CheckIcon,
+  ChevronDownIcon,
   ChevronRightIcon,
+  FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
   MoreHorizontalIcon,
@@ -13,6 +15,7 @@ import {
   Trash2Icon,
   Undo2Icon,
 } from "lucide-react";
+import * as Schema from "effect/Schema";
 import {
   scopedProjectKey,
   scopedThreadKey,
@@ -31,6 +34,7 @@ import {
   useSavedEnvironmentRuntimeStore,
 } from "../environments/runtime";
 import { useSettings } from "../hooks/useSettings";
+import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useSidebarThreadPresentation } from "../hooks/useSidebarThreadPresentation";
 import { useSidebarLocalDispatchReconciliation } from "../hooks/useSidebarLocalDispatchReconciliation";
 import { useThreadActions } from "../hooks/useThreadActions";
@@ -46,6 +50,15 @@ import {
   type InboxSnoozePreset,
   useInboxLifecycleStore,
 } from "../inboxLifecycle";
+import {
+  INBOX_SETTLED_SHELF_DEFAULT_EXPANDED,
+  INBOX_SETTLED_SHELF_EXPANDED_KEY,
+  INBOX_SNOOZED_SHELF_DEFAULT_EXPANDED,
+  INBOX_SNOOZED_SHELF_EXPANDED_KEY,
+  inboxShelfLabel,
+  resolveInboxRowVariant,
+  resolveInboxShelfItems,
+} from "../inboxSidebarPresentation";
 import {
   resolveShortcutCommand,
   threadJumpIndexFromCommand,
@@ -282,10 +295,18 @@ const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRowProps) 
   const displayTitle = resolveSidebarThreadDisplayTitle(thread);
   const lifecycleLabel =
     props.section === "snoozed" && lifecycle?.snoozedUntil
-      ? `Wakes ${formatRelativeTimeLabel(lifecycle.snoozedUntil)}`
+      ? formatRelativeTimeLabel(lifecycle.snoozedUntil)
       : props.section === "settled" && lifecycle?.settledAt
-        ? `Settled ${formatRelativeTimeLabel(lifecycle.settledAt)}`
+        ? formatRelativeTimeLabel(lifecycle.settledAt)
         : null;
+  const lifecycleTitle =
+    props.section === "snoozed" && lifecycleLabel
+      ? `Wakes ${lifecycleLabel}`
+      : props.section === "settled" && lifecycleLabel
+        ? `Settled ${lifecycleLabel}`
+        : undefined;
+  const rowVariant = resolveInboxRowVariant(props.section);
+  const projectName = props.projectIdentity?.displayName ?? "Unknown project";
 
   const handleActivate = useCallback(
     (_event: React.MouseEvent) => {
@@ -350,10 +371,71 @@ const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRowProps) 
     event.stopPropagation();
     props.onToggleExpanded(threadKey);
   };
+  const expandControl =
+    childCount > 0 ? (
+      <button
+        type="button"
+        data-thread-selection-safe
+        aria-label={props.isThreadExpanded ? `Collapse ${displayTitle}` : `Expand ${displayTitle}`}
+        aria-expanded={props.isThreadExpanded}
+        className="-ml-1 inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+        onPointerDown={stopPropagation}
+        onClick={toggleExpanded}
+      >
+        <ChevronRightIcon
+          className={cn(
+            "size-3.5 transition-transform duration-150",
+            props.isThreadExpanded && "rotate-90",
+          )}
+        />
+      </button>
+    ) : null;
+  const actionsSlot = (
+    <div className="flex shrink-0 items-center gap-1 self-center">
+      <span className="flex items-center gap-1 group-hover/inbox-row:hidden group-focus-within/inbox-row:hidden max-sm:hidden">
+        {isPinned ? <PinIcon aria-label="Pinned" className="size-3 text-amber-600" /> : null}
+        <ThreadRowTrailingStatus thread={thread} />
+      </span>
+      <span className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover/inbox-row:opacity-100 group-focus-within/inbox-row:opacity-100 max-sm:opacity-100">
+        {isPinned ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  data-thread-selection-safe
+                  aria-label={`Unpin ${displayTitle}`}
+                  className="inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-amber-600 hover:bg-accent focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                  onPointerDown={stopPropagation}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    props.onAction("toggle-pin", thread, props.lifecycleThreadKey);
+                  }}
+                />
+              }
+            >
+              <PinIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Unpin</TooltipPopup>
+          </Tooltip>
+        ) : null}
+        <InboxThreadActionsMenu
+          thread={thread}
+          lifecycleThreadKey={props.lifecycleThreadKey}
+          isBusy={isBusy}
+          isDraft={props.isDraft}
+          isPending={props.isPending}
+          isPinned={isPinned}
+          section={props.section}
+          onAction={props.onAction}
+        />
+      </span>
+    </div>
+  );
 
   return (
     <SidebarMenuItem
-      className="group/inbox-row rounded-md"
+      className="group/inbox-row list-none rounded-md py-0.5"
       data-thread-item
       data-testid={`inbox-thread-row-${thread.id}`}
     >
@@ -366,7 +448,9 @@ const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRowProps) 
             isSelected: false,
             isDraft: props.isDraft,
           }),
-          "h-auto min-h-12 items-stretch gap-1.5 rounded-md py-1.5 pr-1.5",
+          rowVariant === "card"
+            ? "h-auto min-h-[4.875rem] items-stretch rounded-md px-2.5 py-2"
+            : "h-9 items-center gap-2 rounded-md px-2.5 py-1",
           props.section === "settled" && !props.isActive && "opacity-65",
         )}
         onClick={handleActivate}
@@ -379,30 +463,60 @@ const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRowProps) 
         onPointerMoveCapture={onPointerMoveCapture}
         onPointerUpCapture={onPointerUpCapture}
       >
-        <div
-          className={cn("flex min-w-0 flex-1 flex-col justify-center gap-0.5", depth > 0 && "pl-3")}
-        >
-          <div className="flex min-w-0 items-center gap-1.5">
-            {childCount > 0 ? (
-              <button
-                type="button"
-                data-thread-selection-safe
-                aria-label={
-                  props.isThreadExpanded ? `Collapse ${displayTitle}` : `Expand ${displayTitle}`
-                }
-                aria-expanded={props.isThreadExpanded}
-                className="-ml-1 inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-                onPointerDown={stopPropagation}
-                onClick={toggleExpanded}
-              >
-                <ChevronRightIcon
-                  className={cn(
-                    "size-3.5 transition-transform duration-150",
-                    props.isThreadExpanded && "rotate-90",
-                  )}
+        {rowVariant === "card" ? (
+          <div className={cn("flex min-w-0 flex-1 flex-col justify-center", depth > 0 && "pl-3")}>
+            <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground/65">
+              <ProjectFavicon
+                environmentId={thread.environmentId}
+                cwd={props.projectIdentity?.cwd ?? ""}
+                className="size-4"
+              />
+              <span className="min-w-0 truncate">{projectName}</span>
+              {props.projectIdentity?.environmentLabel ? (
+                <span className="min-w-0 truncate">· {props.projectIdentity.environmentLabel}</span>
+              ) : null}
+              <div className="ml-auto">{actionsSlot}</div>
+            </div>
+            <div className="mt-1 flex min-w-0 items-center gap-1.5">
+              {expandControl}
+              {depth > 0 ? (
+                <GitBranchIcon
+                  aria-label="Subagent"
+                  className="size-3 shrink-0 text-muted-foreground/55"
                 />
-              </button>
-            ) : null}
+              ) : null}
+              <ThreadRowLeadingStatus thread={thread} />
+              <span
+                className="min-w-0 flex-1 truncate text-[13px] font-medium"
+                title={displayTitle}
+              >
+                {displayTitle}
+              </span>
+              {props.isDraft ? (
+                <span className="shrink-0 rounded-full border border-muted-foreground/25 px-1.5 text-[9px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                  Draft
+                </span>
+              ) : null}
+            </div>
+            <div className="mt-0.5 flex min-h-4 min-w-0 items-center gap-1.5 pl-0.5 text-[10px] text-muted-foreground/55">
+              {thread.branch ? (
+                <>
+                  <GitBranchIcon className="size-3 shrink-0" />
+                  <span className="truncate">{thread.branch}</span>
+                </>
+              ) : props.isDraft ? (
+                <span>Unsent draft</span>
+              ) : null}
+            </div>
+          </div>
+        ) : (
+          <>
+            <ProjectFavicon
+              environmentId={thread.environmentId}
+              cwd={props.projectIdentity?.cwd ?? ""}
+              className="size-4"
+            />
+            {expandControl}
             {depth > 0 ? (
               <GitBranchIcon
                 aria-label="Subagent"
@@ -410,103 +524,74 @@ const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRowProps) 
               />
             ) : null}
             <ThreadRowLeadingStatus thread={thread} />
-            <span className="min-w-0 flex-1 truncate text-[13px]" title={displayTitle}>
+            <span className="min-w-8 flex-1 truncate text-[13px]" title={displayTitle}>
               {displayTitle}
             </span>
-            {props.isDraft ? (
-              <span className="shrink-0 rounded-full border border-muted-foreground/25 px-1.5 text-[9px] font-medium uppercase tracking-wide text-muted-foreground/70">
-                Draft
+            <span
+              className="max-w-16 shrink truncate text-[10px] text-muted-foreground/55"
+              title={projectName}
+            >
+              {projectName}
+            </span>
+            {lifecycleLabel ? (
+              <span
+                className="shrink-0 text-[10px] text-muted-foreground/55"
+                title={lifecycleTitle}
+              >
+                {lifecycleLabel}
               </span>
             ) : null}
-          </div>
-          <div className="flex min-w-0 items-center gap-1.5 pl-0.5 text-[10px] text-muted-foreground/65">
-            <ProjectFavicon
-              environmentId={thread.environmentId}
-              cwd={props.projectIdentity?.cwd ?? ""}
-              className="size-3"
-            />
-            <span className="min-w-0 truncate">
-              {props.projectIdentity?.displayName ?? "Unknown project"}
-            </span>
-            {props.projectIdentity?.environmentLabel ? (
-              <span className="min-w-0 truncate">· {props.projectIdentity.environmentLabel}</span>
-            ) : null}
-            {lifecycleLabel ? <span className="ml-auto shrink-0">{lifecycleLabel}</span> : null}
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-1 self-center">
-          <span className="flex items-center gap-1 group-hover/inbox-row:hidden group-focus-within/inbox-row:hidden max-sm:hidden">
-            {isPinned ? <PinIcon aria-label="Pinned" className="size-3 text-amber-600" /> : null}
-            <ThreadRowTrailingStatus thread={thread} />
-          </span>
-          <span className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover/inbox-row:opacity-100 group-focus-within/inbox-row:opacity-100 max-sm:opacity-100">
-            {isPinned ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      data-thread-selection-safe
-                      aria-label={`Unpin ${displayTitle}`}
-                      className="inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-amber-600 hover:bg-accent focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-                      onPointerDown={stopPropagation}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        props.onAction("toggle-pin", thread, props.lifecycleThreadKey);
-                      }}
-                    />
-                  }
-                >
-                  <PinIcon className="size-3.5" />
-                </TooltipTrigger>
-                <TooltipPopup side="top">Unpin</TooltipPopup>
-              </Tooltip>
-            ) : null}
-            <InboxThreadActionsMenu
-              thread={thread}
-              lifecycleThreadKey={props.lifecycleThreadKey}
-              isBusy={isBusy}
-              isDraft={props.isDraft}
-              isPending={props.isPending}
-              isPinned={isPinned}
-              section={props.section}
-              onAction={props.onAction}
-            />
-          </span>
-        </div>
+            {actionsSlot}
+          </>
+        )}
       </SidebarMenuButton>
     </SidebarMenuItem>
   );
 });
 
-function InboxSection(props: {
-  readonly id: string;
+function InboxShelf(props: {
   readonly title: string;
-  readonly tone?: "default" | "snoozed" | "settled";
-  readonly children: React.ReactNode;
   readonly count: number;
+  readonly expanded: boolean;
+  readonly tone: "snoozed" | "settled";
+  readonly onToggle: () => void;
 }) {
   if (props.count === 0) {
     return null;
   }
   return (
-    <section aria-labelledby={props.id} className="mt-2 first:mt-0">
-      <div className="mb-1 flex items-center gap-2 px-2">
+    <SidebarMenuItem className="list-none py-1.5">
+      <button
+        type="button"
+        aria-expanded={props.expanded}
+        data-testid={`inbox-${props.tone}-shelf-toggle`}
+        className="flex w-full cursor-pointer items-center gap-2 px-2 text-left focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+        onClick={props.onToggle}
+      >
         <span
-          id={props.id}
           className={cn(
-            "text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60",
+            "shrink-0 text-[10px] font-medium uppercase tracking-wider",
             props.tone === "snoozed" && "text-blue-600 dark:text-blue-400",
-            props.tone === "settled" && "text-muted-foreground/45",
+            props.tone === "settled" && "text-muted-foreground/55",
           )}
         >
-          {props.title}
+          {inboxShelfLabel(props.title, props.count, props.expanded)}
         </span>
-        <span className="text-[9px] tabular-nums text-muted-foreground/45">{props.count}</span>
-        <span className="h-px flex-1 bg-sidebar-border/60" />
-      </div>
-      <SidebarMenu className="gap-0.5">{props.children}</SidebarMenu>
-    </section>
+        <span
+          className={cn(
+            "h-px flex-1",
+            props.tone === "snoozed" ? "bg-blue-500/35" : "bg-sidebar-border/70",
+          )}
+        />
+        <ChevronDownIcon
+          aria-hidden="true"
+          className={cn(
+            "size-3.5 shrink-0 text-muted-foreground/50 transition-transform duration-150",
+            props.expanded && "rotate-180",
+          )}
+        />
+      </button>
+    </SidebarMenuItem>
   );
 }
 
@@ -558,6 +643,16 @@ export default function InboxSidebar() {
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
   const [projectScopeKey, setProjectScopeKey] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date().toISOString());
+  const [snoozedShelfExpanded, setSnoozedShelfExpanded] = useLocalStorage(
+    INBOX_SNOOZED_SHELF_EXPANDED_KEY,
+    INBOX_SNOOZED_SHELF_DEFAULT_EXPANDED,
+    Schema.Boolean,
+  );
+  const [settledShelfExpanded, setSettledShelfExpanded] = useLocalStorage(
+    INBOX_SETTLED_SHELF_EXPANDED_KEY,
+    INBOX_SETTLED_SHELF_DEFAULT_EXPANDED,
+    Schema.Boolean,
+  );
 
   const projectGroups = useMemo(
     () =>
@@ -647,15 +742,43 @@ export default function InboxSidebar() {
       settled: flatten(partitions.settled),
     };
   }, [partitions, threadExpandedById]);
+  const visibleSnoozedItems = useMemo(
+    () =>
+      resolveInboxShelfItems({
+        items: sectionItems.snoozed,
+        expanded: snoozedShelfExpanded,
+        activeKey: routeThreadKey,
+        getKey: (item) =>
+          scopedThreadKey(scopeThreadRef(item.thread.environmentId, item.thread.id)),
+      }),
+    [routeThreadKey, sectionItems.snoozed, snoozedShelfExpanded],
+  );
+  const visibleSettledItems = useMemo(
+    () =>
+      resolveInboxShelfItems({
+        items: sectionItems.settled,
+        expanded: settledShelfExpanded,
+        activeKey: routeThreadKey,
+        getKey: (item) =>
+          scopedThreadKey(scopeThreadRef(item.thread.environmentId, item.thread.id)),
+      }),
+    [routeThreadKey, sectionItems.settled, settledShelfExpanded],
+  );
   const orderedItems = useMemo(
     () => [
       ...sectionItems.drafts,
       ...sectionItems.pinned,
       ...sectionItems.active,
-      ...sectionItems.snoozed,
-      ...sectionItems.settled,
+      ...visibleSnoozedItems,
+      ...visibleSettledItems,
     ],
-    [sectionItems],
+    [
+      sectionItems.active,
+      sectionItems.drafts,
+      sectionItems.pinned,
+      visibleSettledItems,
+      visibleSnoozedItems,
+    ],
   );
   const orderedThreadKeys = useMemo(
     () =>
@@ -937,7 +1060,12 @@ export default function InboxSidebar() {
       );
     });
 
-  const totalVisibleThreads = orderedItems.length;
+  const totalScopedThreads =
+    sectionItems.drafts.length +
+    sectionItems.pinned.length +
+    sectionItems.active.length +
+    sectionItems.snoozed.length +
+    sectionItems.settled.length;
 
   return (
     <>
@@ -978,28 +1106,47 @@ export default function InboxSidebar() {
         </SidebarGroup>
 
         <SidebarGroup className="px-2 pt-1 pb-2">
-          <div className="mb-1.5 flex items-center justify-between px-2">
-            <div className="flex items-center gap-1.5">
-              <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/60">
-                Inbox
-              </span>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <span
-                      tabIndex={0}
-                      aria-label="Inbox lifecycle prototype information"
-                      className="rounded-full border border-border/70 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-wide text-muted-foreground/55 outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+          <div className="flex items-center gap-1">
+            <Select
+              value={projectScopeKey ?? ALL_PROJECTS_SCOPE}
+              onValueChange={(value) =>
+                setProjectScopeKey(value === ALL_PROJECTS_SCOPE ? null : value)
+              }
+            >
+              <SelectTrigger
+                variant="ghost"
+                size="sm"
+                className="min-w-0 flex-1 justify-start px-2"
+                aria-label="Inbox project scope"
+              >
+                {scopedProject ? (
+                  <ProjectFavicon
+                    environmentId={scopedProject.environmentId}
+                    cwd={scopedProject.cwd}
+                    className="size-4"
+                  />
+                ) : (
+                  <FolderIcon className="size-4" />
+                )}
+                <SelectValue>{scopedProject?.displayName ?? "All projects"}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="start" alignItemWithTrigger={false} className="max-w-72">
+                <SelectItem hideIndicator value={ALL_PROJECTS_SCOPE}>
+                  <FolderIcon className="size-4 text-muted-foreground" />
+                  All projects
+                </SelectItem>
+                {projectGroups.map((project) => (
+                  <SelectItem key={project.projectKey} hideIndicator value={project.projectKey}>
+                    <ProjectFavicon
+                      environmentId={project.environmentId}
+                      cwd={project.cwd}
+                      className="size-4"
                     />
-                  }
-                >
-                  Prototype
-                </TooltipTrigger>
-                <TooltipPopup side="top" className="max-w-64 whitespace-normal">
-                  Pin, snooze, and settle state is stored only on this device in the prototype.
-                </TooltipPopup>
-              </Tooltip>
-            </div>
+                    {project.displayName}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1016,56 +1163,46 @@ export default function InboxSidebar() {
               <TooltipPopup side="right">Add project</TooltipPopup>
             </Tooltip>
           </div>
-          <Select
-            value={projectScopeKey ?? ALL_PROJECTS_SCOPE}
-            onValueChange={(value) =>
-              setProjectScopeKey(value === ALL_PROJECTS_SCOPE ? null : value)
-            }
-          >
-            <SelectTrigger className="w-full" aria-label="Inbox project scope">
-              <SelectValue>{scopedProject?.displayName ?? "All projects"}</SelectValue>
-            </SelectTrigger>
-            <SelectPopup align="start" alignItemWithTrigger={false} className="max-w-72">
-              <SelectItem hideIndicator value={ALL_PROJECTS_SCOPE}>
-                All projects
-              </SelectItem>
-              {projectGroups.map((project) => (
-                <SelectItem key={project.projectKey} hideIndicator value={project.projectKey}>
-                  {project.displayName}
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
         </SidebarGroup>
 
         <SidebarGroup className="px-2 pt-0 pb-3" data-testid="inbox-thread-list">
-          <InboxSection id="inbox-drafts" title="Drafts" count={sectionItems.drafts.length}>
+          <SidebarMenu className="gap-0">
             {renderRows(sectionItems.drafts, "drafts")}
-          </InboxSection>
-          <InboxSection id="inbox-pinned" title="Pinned" count={sectionItems.pinned.length}>
+            {sectionItems.drafts.length > 0 ? (
+              <SidebarMenuItem
+                aria-hidden="true"
+                className="mx-2 my-1.5 h-px list-none bg-sidebar-border/70"
+                data-testid="inbox-draft-divider"
+              />
+            ) : null}
             {renderRows(sectionItems.pinned, "pinned")}
-          </InboxSection>
-          <InboxSection id="inbox-active" title="Active" count={sectionItems.active.length}>
+            {sectionItems.pinned.length > 0 ? (
+              <SidebarMenuItem
+                aria-hidden="true"
+                className="mx-2 my-1.5 h-px list-none bg-sidebar-border/70"
+                data-testid="inbox-pinned-divider"
+              />
+            ) : null}
             {renderRows(sectionItems.active, "active")}
-          </InboxSection>
-          <InboxSection
-            id="inbox-snoozed"
-            title="Snoozed"
-            tone="snoozed"
-            count={sectionItems.snoozed.length}
-          >
-            {renderRows(sectionItems.snoozed, "snoozed")}
-          </InboxSection>
-          <InboxSection
-            id="inbox-history"
-            title="Settled / history"
-            tone="settled"
-            count={sectionItems.settled.length}
-          >
-            {renderRows(sectionItems.settled, "settled")}
-          </InboxSection>
+            <InboxShelf
+              title="Snoozed"
+              count={sectionItems.snoozed.length}
+              expanded={snoozedShelfExpanded}
+              tone="snoozed"
+              onToggle={() => setSnoozedShelfExpanded((expanded) => !expanded)}
+            />
+            {renderRows(visibleSnoozedItems, "snoozed")}
+            <InboxShelf
+              title="Settled"
+              count={sectionItems.settled.length}
+              expanded={settledShelfExpanded}
+              tone="settled"
+              onToggle={() => setSettledShelfExpanded((expanded) => !expanded)}
+            />
+            {renderRows(visibleSettledItems, "settled")}
+          </SidebarMenu>
 
-          {totalVisibleThreads === 0 ? (
+          {totalScopedThreads === 0 ? (
             <div className="flex flex-col items-center gap-2 px-2 py-8 text-center text-xs text-muted-foreground/60">
               {projects.length === 0
                 ? "No projects yet"

@@ -619,7 +619,7 @@ export function GeneralSettingsPanel() {
 
         <SettingsRow
           title="Sidebar mode"
-          description="Project mode keeps projects first. Inbox mode shows one project filter above a global lifecycle inbox."
+          description="Project mode keeps projects first and remains the default. Inbox mode shows one project filter above a global lifecycle inbox; its pin, snooze, and settle state is stored only on this device while the mode is a prototype."
           resetAction={
             settings.sidebarNavigationMode !== DEFAULT_UNIFIED_SETTINGS.sidebarNavigationMode ? (
               <SettingResetButton
@@ -635,7 +635,9 @@ export function GeneralSettingsPanel() {
           control={
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted-foreground">
-                {settings.sidebarNavigationMode === "inbox" ? "Inbox mode" : "Project mode"}
+                {settings.sidebarNavigationMode === "inbox"
+                  ? "Inbox mode (prototype)"
+                  : "Project mode"}
               </span>
               <Switch
                 checked={settings.sidebarNavigationMode === "inbox"}
