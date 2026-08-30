@@ -1,7 +1,9 @@
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { useCommandPaletteStore } from "../commandPaletteStore";
+import { usePrimaryEnvironmentId } from "../environments/primary";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
   startNewLocalThreadFromContext,
@@ -11,9 +13,15 @@ import { isTerminalFocused } from "../lib/terminalFocus";
 import { resolveShortcutCommand } from "../keybindings";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
-import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
+import {
+  resolveSidebarNewThreadEnvMode,
+  shouldCreateNewThreadInCurrentProject,
+} from "~/components/Sidebar.logic";
 import { useSettings } from "~/hooks/useSettings";
+import { selectProjectGroupingSettings } from "~/logicalProject";
 import { useServerKeybindings } from "~/rpc/serverState";
+import { buildSidebarProjectSnapshots } from "~/sidebarProjectGrouping";
+import { selectProjectsAcrossEnvironments, useStore } from "~/store";
 
 function ChatRouteGlobalShortcuts() {
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -26,7 +34,21 @@ function ChatRouteGlobalShortcuts() {
       ? selectThreadTerminalState(state.terminalStateByThreadKey, routeThreadRef).terminalOpen
       : false,
   );
-  const appSettings = useSettings();
+  const defaultThreadEnvMode = useSettings((settings) => settings.defaultThreadEnvMode);
+  const sidebarNavigationMode = useSettings((settings) => settings.sidebarNavigationMode);
+  const projectGroupingSettings = useSettings(selectProjectGroupingSettings);
+  const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const projectGroupCount = useMemo(
+    () =>
+      buildSidebarProjectSnapshots({
+        projects,
+        settings: projectGroupingSettings,
+        primaryEnvironmentId,
+        resolveEnvironmentLabel: () => null,
+      }).length,
+    [primaryEnvironmentId, projectGroupingSettings, projects],
+  );
 
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
@@ -56,7 +78,7 @@ function ChatRouteGlobalShortcuts() {
           activeThread,
           defaultProjectRef,
           defaultThreadEnvMode: resolveSidebarNewThreadEnvMode({
-            defaultEnvMode: appSettings.defaultThreadEnvMode,
+            defaultEnvMode: defaultThreadEnvMode,
           }),
           handleNewThread,
         });
@@ -66,12 +88,19 @@ function ChatRouteGlobalShortcuts() {
       if (command === "chat.new") {
         event.preventDefault();
         event.stopPropagation();
+        if (
+          sidebarNavigationMode === "inbox" &&
+          !shouldCreateNewThreadInCurrentProject(false, projectGroupCount)
+        ) {
+          useCommandPaletteStore.getState().openNewThreadIn();
+          return;
+        }
         void startNewThreadFromContext({
           activeDraftThread,
           activeThread,
           defaultProjectRef,
           defaultThreadEnvMode: resolveSidebarNewThreadEnvMode({
-            defaultEnvMode: appSettings.defaultThreadEnvMode,
+            defaultEnvMode: defaultThreadEnvMode,
           }),
           handleNewThread,
         });
@@ -91,7 +120,9 @@ function ChatRouteGlobalShortcuts() {
     defaultProjectRef,
     selectedThreadKeysSize,
     terminalOpen,
-    appSettings.defaultThreadEnvMode,
+    defaultThreadEnvMode,
+    projectGroupCount,
+    sidebarNavigationMode,
   ]);
 
   return null;

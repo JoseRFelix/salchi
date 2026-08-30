@@ -166,6 +166,13 @@ export function shouldClearThreadSelectionOnMouseDown(target: HTMLElement | null
   return !target.closest(THREAD_SELECTION_SAFE_SELECTOR);
 }
 
+export function shouldCreateNewThreadInCurrentProject(
+  shiftKey: boolean,
+  projectGroupCount: number,
+): boolean {
+  return shiftKey || projectGroupCount <= 1;
+}
+
 export function resolveSidebarNewThreadEnvMode(input: {
   requestedEnvMode?: SidebarNewThreadEnvMode;
   defaultEnvMode: SidebarNewThreadEnvMode;

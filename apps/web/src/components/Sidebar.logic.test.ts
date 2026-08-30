@@ -21,8 +21,9 @@ import {
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
-  shouldEnableSidebarListAnimations,
   shouldClearThreadSelectionOnMouseDown,
+  shouldCreateNewThreadInCurrentProject,
+  shouldEnableSidebarListAnimations,
   shouldShowProjectDraftBadge,
   sortProjectsForSidebar,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
@@ -216,6 +217,21 @@ describe("resolveSidebarNewThreadEnvMode", () => {
         defaultEnvMode: "worktree",
       }),
     ).toBe("local");
+  });
+});
+
+describe("shouldCreateNewThreadInCurrentProject", () => {
+  it("creates immediately when there is no project choice", () => {
+    expect(shouldCreateNewThreadInCurrentProject(false, 0)).toBe(true);
+    expect(shouldCreateNewThreadInCurrentProject(false, 1)).toBe(true);
+  });
+
+  it("opens the project picker for a plain click with multiple projects", () => {
+    expect(shouldCreateNewThreadInCurrentProject(false, 2)).toBe(false);
+  });
+
+  it("lets shift-click bypass the project picker", () => {
+    expect(shouldCreateNewThreadInCurrentProject(true, 2)).toBe(true);
   });
 });
 

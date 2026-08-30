@@ -34,6 +34,12 @@ export function CommandPaletteBoundary({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
+    return () => {
+      setOpen(false);
+    };
+  }, [setOpen]);
+
+  useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented) return;
       const command = resolveShortcutCommand(event, keybindings, {

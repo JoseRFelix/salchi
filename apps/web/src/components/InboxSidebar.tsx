@@ -38,7 +38,7 @@ import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useSidebarThreadPresentation } from "../hooks/useSidebarThreadPresentation";
 import { useSidebarLocalDispatchReconciliation } from "../hooks/useSidebarLocalDispatchReconciliation";
 import { useThreadActions } from "../hooks/useThreadActions";
-import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useLongPressContextMenu } from "../hooks/useLongPressContextMenu";
 import { useComposerDraftStore } from "../composerDraftStore";
 import {
@@ -61,9 +61,11 @@ import {
 } from "../inboxSidebarPresentation";
 import {
   resolveShortcutCommand,
+  shortcutLabelForCommand,
   threadJumpIndexFromCommand,
   threadTraversalDirectionFromCommand,
 } from "../keybindings";
+import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { cn } from "../lib/utils";
 import { selectProjectGroupingSettings } from "../logicalProject";
@@ -88,6 +90,7 @@ import {
   resolveAdjacentThreadId,
   resolveSidebarThreadDisplayTitle,
   resolveThreadRowClassName,
+  shouldCreateNewThreadInCurrentProject,
   type SidebarThreadTreeItem,
 } from "./Sidebar.logic";
 import { ProjectFavicon } from "./ProjectFavicon";
@@ -601,6 +604,7 @@ export default function InboxSidebar() {
   const projectGroupingSettings = useSettings(selectProjectGroupingSettings);
   const confirmThreadArchive = useSettings((settings) => settings.confirmThreadArchive);
   const confirmThreadDelete = useSettings((settings) => settings.confirmThreadDelete);
+  const defaultThreadEnvMode = useSettings((settings) => settings.defaultThreadEnvMode);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const savedEnvironmentRegistry = useSavedEnvironmentRegistryStore((state) => state.byId);
   const savedEnvironmentRuntimeById = useSavedEnvironmentRuntimeStore((state) => state.byId);
@@ -613,7 +617,8 @@ export default function InboxSidebar() {
   const threadExpandedById = useUiStateStore((state) => state.threadExpandedById);
   const openCommandPalette = useCommandPaletteStore((state) => state.setOpen);
   const openAddProject = useCommandPaletteStore((state) => state.openAddProject);
-  const { handleNewThread } = useNewThreadHandler();
+  const openNewThreadIn = useCommandPaletteStore((state) => state.openNewThreadIn);
+  const newThreadContext = useHandleNewThread();
   const keybindings = useServerKeybindings();
   const modelPickerOpen = useModelPickerOpen();
   const routeTarget = useParams({
@@ -830,18 +835,37 @@ export default function InboxSidebar() {
     },
     [clearSelection, draftIdByThreadKey, isMobile, navigate, setOpenMobile, setSelectionAnchor],
   );
-  const createThread = useCallback(() => {
-    const projectRef =
-      scopedProject?.memberProjectRefs.length === 1 ? scopedProject.memberProjectRefs[0] : null;
-    if (!projectRef) {
-      openCommandPalette(true);
-      return;
-    }
-    if (isMobile) {
-      setOpenMobile(false);
-    }
-    void handleNewThread(projectRef);
-  }, [handleNewThread, isMobile, openCommandPalette, scopedProject, setOpenMobile]);
+  const createThread = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (isMobile) {
+        setOpenMobile(false);
+      }
+      if (!shouldCreateNewThreadInCurrentProject(event.shiftKey, projectGroups.length)) {
+        openNewThreadIn();
+        return;
+      }
+      void startNewThreadFromContext({
+        activeDraftThread: newThreadContext.activeDraftThread,
+        activeThread: newThreadContext.activeThread,
+        defaultProjectRef: newThreadContext.defaultProjectRef,
+        defaultThreadEnvMode,
+        handleNewThread: newThreadContext.handleNewThread,
+      });
+    },
+    [
+      defaultThreadEnvMode,
+      isMobile,
+      newThreadContext,
+      openNewThreadIn,
+      projectGroups.length,
+      setOpenMobile,
+    ],
+  );
+
+  const newThreadShortcutLabel =
+    shortcutLabelForCommand(keybindings, "chat.new") ??
+    (projectGroups.length <= 1 ? shortcutLabelForCommand(keybindings, "chat.newLocal") : null);
+  const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -1088,14 +1112,35 @@ export default function InboxSidebar() {
                   <button
                     type="button"
                     aria-label="New thread"
-                    className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                    disabled={projects.length === 0}
+                    className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={createThread}
                   />
                 }
               >
                 <SquarePenIcon className="size-3.5" />
               </TooltipTrigger>
-              <TooltipPopup side="bottom">New thread</TooltipPopup>
+              <TooltipPopup side="right">
+                {projectGroups.length > 1 ? (
+                  <span className="flex flex-col gap-0.5">
+                    <span>
+                      {newThreadShortcutLabel
+                        ? `New thread (${newThreadShortcutLabel})`
+                        : "New thread"}
+                    </span>
+                    <span className="text-muted-foreground">
+                      New thread in current project: Shift+click
+                      {newThreadInProjectShortcutLabel
+                        ? ` (${newThreadInProjectShortcutLabel})`
+                        : ""}
+                    </span>
+                  </span>
+                ) : newThreadShortcutLabel ? (
+                  `New thread (${newThreadShortcutLabel})`
+                ) : (
+                  "New thread"
+                )}
+              </TooltipPopup>
             </Tooltip>
           </div>
         </SidebarGroup>
@@ -1127,17 +1172,21 @@ export default function InboxSidebar() {
               </SelectTrigger>
               <SelectPopup align="start" alignItemWithTrigger={false} className="max-w-72">
                 <SelectItem hideIndicator value={ALL_PROJECTS_SCOPE}>
-                  <FolderIcon className="size-4 text-muted-foreground" />
-                  All projects
+                  <span className="flex min-w-0 items-center gap-2">
+                    <FolderIcon className="size-4 text-muted-foreground" />
+                    <span className="min-w-0 truncate">All projects</span>
+                  </span>
                 </SelectItem>
                 {projectGroups.map((project) => (
                   <SelectItem key={project.projectKey} hideIndicator value={project.projectKey}>
-                    <ProjectFavicon
-                      environmentId={project.environmentId}
-                      cwd={project.cwd}
-                      className="size-4"
-                    />
-                    {project.displayName}
+                    <span className="flex min-w-0 items-center gap-2">
+                      <ProjectFavicon
+                        environmentId={project.environmentId}
+                        cwd={project.cwd}
+                        className="size-4"
+                      />
+                      <span className="min-w-0 truncate">{project.displayName}</span>
+                    </span>
                   </SelectItem>
                 ))}
               </SelectPopup>
