@@ -492,11 +492,6 @@ const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRowProps) 
               >
                 {displayTitle}
               </span>
-              {props.isDraft ? (
-                <span className="shrink-0 rounded-full border border-muted-foreground/25 px-1.5 text-[9px] font-medium uppercase tracking-wide text-muted-foreground/70">
-                  Draft
-                </span>
-              ) : null}
             </div>
             <div className="mt-0.5 flex min-h-4 min-w-0 items-center gap-1.5 pl-0.5 text-[10px] text-muted-foreground/55">
               {thread.branch ? (
