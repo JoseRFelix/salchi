@@ -10,7 +10,8 @@ import {
 import { useSidebarNavigationMode } from "../hooks/useSettings";
 import { resolveRenderedSidebarMode } from "../sidebarNavigationMode";
 
-const InboxSidebar = lazy(() => import("./InboxSidebar"));
+const loadInboxSidebar = () => import("./InboxSidebar");
+const InboxSidebar = lazy(loadInboxSidebar);
 
 const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
 const THREAD_SIDEBAR_MIN_WIDTH = 13 * 16;
@@ -23,6 +24,12 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
     configuredMode: sidebarNavigationMode,
     pathname,
   });
+
+  useEffect(() => {
+    if (renderedSidebarMode === "inbox") {
+      void loadInboxSidebar();
+    }
+  }, [renderedSidebarMode]);
 
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {

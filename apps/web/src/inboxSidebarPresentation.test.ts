@@ -9,11 +9,14 @@ import {
 import {
   INBOX_SETTLED_SHELF_DEFAULT_EXPANDED,
   INBOX_SETTLED_SHELF_EXPANDED_KEY,
+  INBOX_SETTLED_INITIAL_COUNT,
   INBOX_SNOOZED_SHELF_DEFAULT_EXPANDED,
   INBOX_SNOOZED_SHELF_EXPANDED_KEY,
   inboxShelfLabel,
+  resolvePaginatedInboxShelfItems,
   resolveInboxRowVariant,
   resolveInboxShelfItems,
+  shouldVirtualizeInboxActiveThreads,
 } from "./inboxSidebarPresentation";
 
 afterEach(() => {
@@ -49,6 +52,42 @@ describe("resolveInboxShelfItems", () => {
     expect(resolveInboxShelfItems({ items, expanded: false, activeKey: "two", getKey })).toEqual([
       { key: "two" },
     ]);
+  });
+});
+
+describe("resolvePaginatedInboxShelfItems", () => {
+  const items = Array.from({ length: 40 }, (_, index) => ({ key: `thread-${index}` }));
+  const getKey = (item: { readonly key: string }) => item.key;
+
+  it("renders only the first settled page and preserves a deep routed row", () => {
+    const visible = resolvePaginatedInboxShelfItems({
+      items,
+      expanded: true,
+      activeKey: "thread-35",
+      visibleCount: INBOX_SETTLED_INITIAL_COUNT,
+      getKey,
+    });
+    expect(visible).toHaveLength(INBOX_SETTLED_INITIAL_COUNT + 1);
+    expect(visible.at(-1)).toEqual({ key: "thread-35" });
+  });
+
+  it("keeps a collapsed routed row visible without exposing the page", () => {
+    expect(
+      resolvePaginatedInboxShelfItems({
+        items,
+        expanded: false,
+        activeKey: "thread-35",
+        visibleCount: INBOX_SETTLED_INITIAL_COUNT,
+        getKey,
+      }),
+    ).toEqual([{ key: "thread-35" }]);
+  });
+});
+
+describe("shouldVirtualizeInboxActiveThreads", () => {
+  it("bounds mounted card rows once the active list becomes large", () => {
+    expect(shouldVirtualizeInboxActiveThreads(24)).toBe(false);
+    expect(shouldVirtualizeInboxActiveThreads(25)).toBe(true);
   });
 });
 

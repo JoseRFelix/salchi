@@ -5,8 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { useLocalDispatchStore } from "../localDispatchStore";
-import { getThreadFromEnvironmentState } from "../threadDerivation";
-import { useStore } from "../store";
+import { selectThreadByRef, useStore } from "../store";
 import { buildSidebarThreadPresentation } from "../sidebarThreadPresentation";
 import type { SidebarThreadSummary, Thread } from "../types";
 
@@ -42,30 +41,49 @@ export function useSidebarThreadPresentation(
       })),
     [composerDrafts, draftThreadEntries],
   );
+  const draftServerLookupRefs = useMemo(() => {
+    const refsByKey = new Map<string, ReturnType<typeof scopeThreadRef>>();
+    for (const [, thread] of draftThreadEntries) {
+      const draftRef = scopeThreadRef(thread.environmentId, thread.threadId);
+      const rowRef = thread.promotedTo ?? draftRef;
+      refsByKey.set(scopedThreadKey(rowRef), rowRef);
+      refsByKey.set(scopedThreadKey(draftRef), draftRef);
+    }
+    return [...refsByKey.values()];
+  }, [draftThreadEntries]);
   const localDispatchByThreadKey = useLocalDispatchStore((store) => store.localDispatchByThreadKey);
-  const environmentStateById = useStore((state) => state.environmentStateById);
+  const draftServerThreads = useStore(
+    useShallow((state) =>
+      draftServerLookupRefs.map((threadRef) => selectThreadByRef(state, threadRef) ?? null),
+    ),
+  );
   const serverThreadByKey = useMemo(() => {
     const threadByKey = new Map<string, Thread>();
-    for (const environmentState of Object.values(environmentStateById)) {
-      for (const threadId of environmentState.threadIds) {
-        const thread = getThreadFromEnvironmentState(environmentState, threadId);
-        if (thread) {
-          threadByKey.set(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread);
-        }
+    draftServerLookupRefs.forEach((threadRef, index) => {
+      const thread = draftServerThreads[index];
+      if (thread) {
+        threadByKey.set(scopedThreadKey(threadRef), thread);
+        threadByKey.set(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread);
       }
-    }
+    });
     return threadByKey;
-  }, [environmentStateById]);
+  }, [draftServerLookupRefs, draftServerThreads]);
 
-  return useMemo(
-    () =>
-      buildSidebarThreadPresentation({
-        serverThreads,
-        draftThreads,
-        localDispatchByThreadKey,
-        serverThreadByKey,
-        ...(projectRefs !== undefined ? { projectRefs } : {}),
-      }),
-    [draftThreads, localDispatchByThreadKey, projectRefs, serverThreadByKey, serverThreads],
-  );
+  return useMemo(() => {
+    const presentation = buildSidebarThreadPresentation({
+      serverThreads,
+      draftThreads,
+      localDispatchByThreadKey,
+      serverThreadByKey,
+      ...(projectRefs !== undefined ? { projectRefs } : {}),
+    });
+    return {
+      ...presentation,
+      activeLocalDispatchThreadKeys: new Set(
+        Object.entries(localDispatchByThreadKey).flatMap(([threadKey, dispatch]) =>
+          dispatch === undefined ? [] : [threadKey],
+        ),
+      ),
+    };
+  }, [draftThreads, localDispatchByThreadKey, projectRefs, serverThreadByKey, serverThreads]);
 }

@@ -4,12 +4,14 @@ import { create } from "zustand";
 import type { SidebarThreadSummary } from "./types";
 
 export const INBOX_LIFECYCLE_STORAGE_KEY = "salchi:sidebar-inbox-prototype:lifecycle:v1";
-const INBOX_LIFECYCLE_VERSION = 1;
+const INBOX_LIFECYCLE_VERSION = 2;
 
 export interface InboxThreadLifecycle {
   readonly pinnedAt: string | null;
   readonly snoozedUntil: string | null;
   readonly settledAt: string | null;
+  readonly reactivatedAt: string | null;
+  readonly wokeAt: string | null;
 }
 
 export type InboxLifecycleByThreadKey = Readonly<Record<string, InboxThreadLifecycle>>;
@@ -33,17 +35,20 @@ export type InboxSnoozePreset = "one-hour" | "tomorrow" | "one-week";
 
 export type InboxLifecycleAction =
   | { readonly type: "pin"; readonly threadKey: string; readonly at: string }
-  | { readonly type: "unpin"; readonly threadKey: string }
+  | { readonly type: "unpin"; readonly threadKey: string; readonly at: string }
   | { readonly type: "snooze"; readonly threadKey: string; readonly until: string }
-  | { readonly type: "unsnooze"; readonly threadKey: string }
+  | { readonly type: "unsnooze"; readonly threadKey: string; readonly at: string }
   | { readonly type: "settle"; readonly threadKey: string; readonly at: string }
-  | { readonly type: "unsettle"; readonly threadKey: string }
+  | { readonly type: "unsettle"; readonly threadKey: string; readonly at: string }
+  | { readonly type: "acknowledge-wake"; readonly threadKey: string; readonly at: string }
   | { readonly type: "remove"; readonly threadKey: string };
 
 const EMPTY_THREAD_LIFECYCLE: InboxThreadLifecycle = {
   pinnedAt: null,
   snoozedUntil: null,
   settledAt: null,
+  reactivatedAt: null,
+  wokeAt: null,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -62,8 +67,16 @@ function sanitizeLifecycleEntry(value: unknown): InboxThreadLifecycle | null {
     pinnedAt: sanitizeTimestamp(value.pinnedAt),
     snoozedUntil: sanitizeTimestamp(value.snoozedUntil),
     settledAt: sanitizeTimestamp(value.settledAt),
+    reactivatedAt: sanitizeTimestamp(value.reactivatedAt),
+    wokeAt: sanitizeTimestamp(value.wokeAt),
   } satisfies InboxThreadLifecycle;
-  return entry.pinnedAt || entry.snoozedUntil || entry.settledAt ? entry : null;
+  return entry.pinnedAt ||
+    entry.snoozedUntil ||
+    entry.settledAt ||
+    entry.reactivatedAt ||
+    entry.wokeAt
+    ? entry
+    : null;
 }
 
 export function parseInboxLifecycleDocument(raw: string | null): InboxLifecycleByThreadKey {
@@ -74,7 +87,7 @@ export function parseInboxLifecycleDocument(raw: string | null): InboxLifecycleB
     const document = JSON.parse(raw) as unknown;
     if (
       !isRecord(document) ||
-      document.version !== INBOX_LIFECYCLE_VERSION ||
+      (document.version !== 1 && document.version !== INBOX_LIFECYCLE_VERSION) ||
       !isRecord(document.threads)
     ) {
       return {};
@@ -134,7 +147,13 @@ function setThreadLifecycle(
   threadKey: string,
   lifecycle: InboxThreadLifecycle,
 ): InboxLifecycleByThreadKey {
-  if (!lifecycle.pinnedAt && !lifecycle.snoozedUntil && !lifecycle.settledAt) {
+  if (
+    !lifecycle.pinnedAt &&
+    !lifecycle.snoozedUntil &&
+    !lifecycle.settledAt &&
+    !lifecycle.reactivatedAt &&
+    !lifecycle.wokeAt
+  ) {
     if (!state[threadKey]) {
       return state;
     }
@@ -175,27 +194,40 @@ export function applyInboxLifecycleAction(
       return setThreadLifecycle(state, action.threadKey, {
         ...current,
         pinnedAt: null,
+        reactivatedAt: action.at,
       });
     case "snooze":
       return setThreadLifecycle(state, action.threadKey, {
         ...current,
         snoozedUntil: action.until,
+        wokeAt: null,
       });
     case "unsnooze":
       return setThreadLifecycle(state, action.threadKey, {
         ...current,
         snoozedUntil: null,
+        reactivatedAt: action.at,
+        wokeAt: action.at,
       });
     case "settle":
       return setThreadLifecycle(state, action.threadKey, {
         ...current,
         settledAt: action.at,
         snoozedUntil: null,
+        wokeAt: null,
       });
     case "unsettle":
       return setThreadLifecycle(state, action.threadKey, {
         ...current,
         settledAt: null,
+        reactivatedAt: action.at,
+      });
+    case "acknowledge-wake":
+      return setThreadLifecycle(state, action.threadKey, {
+        ...current,
+        snoozedUntil: null,
+        reactivatedAt: action.at,
+        wokeAt: null,
       });
   }
 }
@@ -270,6 +302,53 @@ function compareCreatedNewestFirst<
   );
 }
 
+export function resolveInboxThreadActivityAt(
+  thread: Pick<
+    SidebarThreadSummary,
+    "createdAt" | "latestTurn" | "latestUserMessageAt" | "session"
+  >,
+  lifecycle: InboxThreadLifecycle | undefined,
+): string {
+  const activeSessionAt =
+    thread.session?.status === "connecting" || thread.session?.status === "running"
+      ? thread.session.updatedAt
+      : null;
+  const candidates = [
+    thread.createdAt,
+    thread.latestUserMessageAt,
+    thread.latestTurn?.requestedAt,
+    activeSessionAt,
+    lifecycle?.reactivatedAt,
+    lifecycle?.snoozedUntil,
+  ];
+  let latest = thread.createdAt;
+  let latestMs = validTimestampMs(thread.createdAt);
+  for (const candidate of candidates) {
+    const candidateMs = validTimestampMs(candidate);
+    if (candidate && candidateMs > latestMs) {
+      latest = candidate;
+      latestMs = candidateMs;
+    }
+  }
+  return latest;
+}
+
+export function resolveInboxWokeAt(
+  lifecycle: InboxThreadLifecycle | undefined,
+  now: string,
+): string | null {
+  if (lifecycle?.wokeAt) {
+    return lifecycle.wokeAt;
+  }
+  if (
+    lifecycle?.snoozedUntil &&
+    validTimestampMs(lifecycle.snoozedUntil) <= validTimestampMs(now)
+  ) {
+    return lifecycle.snoozedUntil;
+  }
+  return null;
+}
+
 export function resolveInboxLifecycleSection(
   threadKey: string,
   lifecycleByThreadKey: InboxLifecycleByThreadKey,
@@ -310,6 +389,18 @@ export function partitionInboxThreads<TThread extends SidebarThreadSummary>(inpu
     (thread) => thread.archivedAt === null && thread.hiddenFromThreadList !== true,
   );
   const lifecycleKeyByThreadKey = buildInboxLifecycleThreadKeyByThreadKey(visibleThreads);
+  const activityAtByLifecycleKey = new Map<string, number>();
+  for (const thread of visibleThreads) {
+    const threadKey = inboxThreadKey(thread);
+    const lifecycleThreadKey = lifecycleKeyByThreadKey.get(threadKey) ?? threadKey;
+    const activityAt = validTimestampMs(
+      resolveInboxThreadActivityAt(thread, input.lifecycleByThreadKey[lifecycleThreadKey]),
+    );
+    activityAtByLifecycleKey.set(
+      lifecycleThreadKey,
+      Math.max(activityAtByLifecycleKey.get(lifecycleThreadKey) ?? 0, activityAt),
+    );
+  }
   for (const thread of visibleThreads) {
     const threadKey = inboxThreadKey(thread);
     const lifecycleThreadKey = lifecycleKeyByThreadKey.get(threadKey) ?? threadKey;
@@ -324,7 +415,14 @@ export function partitionInboxThreads<TThread extends SidebarThreadSummary>(inpu
   }
 
   partitions.drafts.sort(compareCreatedNewestFirst);
-  partitions.active.sort(compareCreatedNewestFirst);
+  partitions.active.sort((left, right) => {
+    const leftKey = lifecycleKeyByThreadKey.get(inboxThreadKey(left)) ?? inboxThreadKey(left);
+    const rightKey = lifecycleKeyByThreadKey.get(inboxThreadKey(right)) ?? inboxThreadKey(right);
+    return (
+      (activityAtByLifecycleKey.get(rightKey) ?? 0) -
+        (activityAtByLifecycleKey.get(leftKey) ?? 0) || compareCreatedNewestFirst(left, right)
+    );
+  });
   partitions.pinned.sort((left, right) => {
     const leftKey = lifecycleKeyByThreadKey.get(inboxThreadKey(left)) ?? inboxThreadKey(left);
     const rightKey = lifecycleKeyByThreadKey.get(inboxThreadKey(right)) ?? inboxThreadKey(right);

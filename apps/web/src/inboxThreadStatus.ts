@@ -1,0 +1,84 @@
+import { hasUnseenCompletion } from "./threadCompletion";
+import type { SidebarThreadSummary } from "./types";
+
+export type InboxThreadStatus =
+  | "working"
+  | "approval"
+  | "input"
+  | "failed"
+  | "woke"
+  | "done"
+  | "ready";
+
+function firstValidTimestamp(
+  ...candidates: ReadonlyArray<string | null | undefined>
+): string | null {
+  for (const candidate of candidates) {
+    if (candidate !== null && candidate !== undefined && !Number.isNaN(Date.parse(candidate))) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+export function resolveInboxWorkingStartedAt(
+  thread: Pick<SidebarThreadSummary, "latestTurn" | "session">,
+): string | null {
+  const turn = thread.latestTurn;
+  if (turn?.completedAt === null) {
+    return firstValidTimestamp(turn.startedAt, turn.requestedAt, thread.session?.updatedAt);
+  }
+  return firstValidTimestamp(thread.session?.updatedAt);
+}
+
+export function formatInboxWorkingDurationLabel(elapsedMs: number): string {
+  const seconds = Number.isFinite(elapsedMs) ? Math.max(0, Math.floor(elapsedMs / 1_000)) : 0;
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+export function resolveInboxThreadStatus(input: {
+  readonly thread: Pick<
+    SidebarThreadSummary,
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "latestTurn"
+    | "seenCompletionTurnId"
+    | "session"
+  >;
+  readonly hasActiveLocalDispatch: boolean;
+  readonly isActive: boolean;
+  readonly isWoke: boolean;
+}): InboxThreadStatus {
+  const { thread } = input;
+  if (thread.hasPendingApprovals) {
+    return "approval";
+  }
+  if (thread.hasPendingUserInput) {
+    return "input";
+  }
+  if (
+    input.hasActiveLocalDispatch ||
+    thread.session?.status === "connecting" ||
+    thread.session?.status === "running" ||
+    thread.latestTurn?.state === "running"
+  ) {
+    return "working";
+  }
+  if (thread.session?.status === "error" || thread.latestTurn?.state === "error") {
+    return "failed";
+  }
+  if (input.isWoke) {
+    return "woke";
+  }
+  if (!input.isActive && hasUnseenCompletion(thread)) {
+    return "done";
+  }
+  return "ready";
+}

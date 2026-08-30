@@ -24,7 +24,7 @@ import {
 } from "@salchi/client-runtime";
 import type { ContextMenuItem, ScopedThreadRef } from "@salchi/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { isElectron } from "../env";
@@ -46,6 +46,8 @@ import {
   getNextInboxWakeAtMs,
   partitionInboxThreads,
   resolveInboxSnoozeUntil,
+  resolveInboxThreadActivityAt,
+  resolveInboxWokeAt,
   type InboxLifecycleSection,
   type InboxSnoozePreset,
   useInboxLifecycleStore,
@@ -53,11 +55,15 @@ import {
 import {
   INBOX_SETTLED_SHELF_DEFAULT_EXPANDED,
   INBOX_SETTLED_SHELF_EXPANDED_KEY,
+  INBOX_SETTLED_INITIAL_COUNT,
+  INBOX_SETTLED_PAGE_COUNT,
   INBOX_SNOOZED_SHELF_DEFAULT_EXPANDED,
   INBOX_SNOOZED_SHELF_EXPANDED_KEY,
   inboxShelfLabel,
+  resolvePaginatedInboxShelfItems,
   resolveInboxRowVariant,
   resolveInboxShelfItems,
+  shouldVirtualizeInboxActiveThreads,
 } from "../inboxSidebarPresentation";
 import {
   resolveShortcutCommand,
@@ -94,7 +100,12 @@ import {
   type SidebarThreadTreeItem,
 } from "./Sidebar.logic";
 import { ProjectFavicon } from "./ProjectFavicon";
-import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
+import { InboxThreadStatus } from "./InboxThreadStatus";
+import {
+  ThreadRowChangeRequestStatus,
+  ThreadRowRemoteStatus,
+  ThreadRowTerminalStatus,
+} from "./ThreadStatusIndicators";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarUsageBackgroundRefresh } from "./sidebar/SidebarUsageIndicator";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "./ui/menu";
@@ -111,9 +122,20 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { useServerKeybindings } from "../rpc/serverState";
+import {
+  getFixedVirtualItemStyle,
+  useFixedSharedScrollVirtualizer,
+} from "./virtualization/useSharedScrollVirtualizer";
 
 const ALL_PROJECTS_SCOPE = "__salchi_inbox_all_projects__";
 const MAX_WAKE_TIMEOUT_MS = 2_147_483_647;
+const INBOX_CARD_ROW_STRIDE = 82;
+const INBOX_SLIM_ROW_STRIDE = 40;
+const INBOX_ACTIVE_VIRTUALIZATION_MOBILE_INITIAL_COUNT = 8;
+const INBOX_ACTIVE_VIRTUALIZATION_DESKTOP_INITIAL_COUNT = 12;
+const INBOX_ACTIVE_VIRTUALIZATION_MOBILE_OVERSCAN = INBOX_CARD_ROW_STRIDE * 3;
+const INBOX_ACTIVE_VIRTUALIZATION_DESKTOP_OVERSCAN = INBOX_CARD_ROW_STRIDE * 6;
+const INBOX_SETTLED_VIRTUALIZATION_OVERSCAN = INBOX_SLIM_ROW_STRIDE * 4;
 
 type InboxThreadAction =
   | "toggle-pin"
@@ -141,8 +163,13 @@ interface InboxThreadRowProps {
   readonly lifecycleThreadKey: string;
   readonly isActive: boolean;
   readonly isDraft: boolean;
+  readonly hasActiveLocalDispatch: boolean;
   readonly isPending: boolean;
   readonly isThreadExpanded: boolean;
+  readonly now: string;
+  readonly virtualIndex?: number;
+  readonly virtualSetSize?: number;
+  readonly virtualStride?: number;
   readonly onNavigate: (threadRef: ScopedThreadRef) => void;
   readonly onAction: (
     action: InboxThreadAction,
@@ -291,6 +318,8 @@ const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRowProps) 
   const lifecycle = useInboxLifecycleStore(
     (state) => state.lifecycleByThreadKey[props.lifecycleThreadKey],
   );
+  const activityAt = resolveInboxThreadActivityAt(thread, lifecycle);
+  const isWoke = resolveInboxWokeAt(lifecycle, props.now) !== null;
   const isPinned = lifecycle?.pinnedAt !== null && lifecycle?.pinnedAt !== undefined;
   const isBusy =
     props.isPending ||
@@ -394,10 +423,24 @@ const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRowProps) 
       </button>
     ) : null;
   const actionsSlot = (
-    <div className="flex shrink-0 items-center gap-1 self-center">
-      <span className="flex items-center gap-1 group-hover/inbox-row:hidden group-focus-within/inbox-row:hidden max-sm:hidden">
-        {isPinned ? <PinIcon aria-label="Pinned" className="size-3 text-amber-600" /> : null}
-        <ThreadRowTrailingStatus thread={thread} />
+    <div className="flex min-w-0 shrink-0 items-center gap-1 self-center">
+      <span className="flex min-w-0 items-center gap-1 md:group-hover/inbox-row:hidden md:group-focus-within/inbox-row:hidden">
+        {isPinned ? (
+          <PinIcon aria-label="Pinned" className="size-3 text-muted-foreground/65" />
+        ) : null}
+        {rowVariant === "card" ? (
+          <InboxThreadStatus
+            activityAt={activityAt}
+            hasActiveLocalDispatch={props.hasActiveLocalDispatch}
+            isActive={props.isActive}
+            isWoke={isWoke}
+            thread={thread}
+          />
+        ) : null}
+        <ThreadRowTerminalStatus thread={thread} />
+        {props.projectIdentity?.environmentLabel ? (
+          <ThreadRowRemoteStatus environmentLabel={props.projectIdentity.environmentLabel} />
+        ) : null}
       </span>
       <span className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover/inbox-row:opacity-100 group-focus-within/inbox-row:opacity-100 max-sm:opacity-100">
         {isPinned ? (
@@ -408,7 +451,7 @@ const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRowProps) 
                   type="button"
                   data-thread-selection-safe
                   aria-label={`Unpin ${displayTitle}`}
-                  className="inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-amber-600 hover:bg-accent focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                  className="inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-muted-foreground/65 hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring max-sm:hidden"
                   onPointerDown={stopPropagation}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -438,9 +481,22 @@ const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRowProps) 
 
   return (
     <SidebarMenuItem
-      className="group/inbox-row list-none rounded-md py-0.5"
+      className={cn(
+        "group/inbox-row list-none rounded-md py-0.5 [content-visibility:auto]",
+        rowVariant === "card"
+          ? "[contain-intrinsic-size:auto_82px]"
+          : "[contain-intrinsic-size:auto_40px]",
+      )}
       data-thread-item
+      data-virtual-index={props.virtualIndex}
       data-testid={`inbox-thread-row-${thread.id}`}
+      aria-posinset={props.virtualIndex === undefined ? undefined : props.virtualIndex + 1}
+      aria-setsize={props.virtualSetSize}
+      style={
+        props.virtualIndex === undefined || props.virtualStride === undefined
+          ? undefined
+          : getFixedVirtualItemStyle(props.virtualIndex, props.virtualStride)
+      }
     >
       <SidebarMenuButton
         render={<div role="button" tabIndex={0} />}
@@ -452,7 +508,7 @@ const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRowProps) 
             isDraft: props.isDraft,
           }),
           rowVariant === "card"
-            ? "h-auto min-h-[4.875rem] items-stretch rounded-md px-2.5 py-2"
+            ? "h-[4.875rem] items-stretch rounded-md px-2.5 py-2"
             : "h-9 items-center gap-2 rounded-md px-2.5 py-1",
           props.section === "settled" && !props.isActive && "opacity-65",
         )}
@@ -488,7 +544,7 @@ const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRowProps) 
                   className="size-3 shrink-0 text-muted-foreground/55"
                 />
               ) : null}
-              <ThreadRowLeadingStatus thread={thread} />
+              {thread.branch !== null ? <ThreadRowChangeRequestStatus thread={thread} /> : null}
               <span
                 className="min-w-0 flex-1 truncate text-[13px] font-medium"
                 title={displayTitle}
@@ -521,7 +577,7 @@ const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRowProps) 
                 className="size-3 shrink-0 text-muted-foreground/55"
               />
             ) : null}
-            <ThreadRowLeadingStatus thread={thread} />
+            {thread.branch !== null ? <ThreadRowChangeRequestStatus thread={thread} /> : null}
             <span className="min-w-8 flex-1 truncate text-[13px]" title={displayTitle}>
               {displayTitle}
             </span>
@@ -596,8 +652,13 @@ function InboxShelf(props: {
 export default function InboxSidebar() {
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const serverThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
-  const { threads, pendingThreadKeys, draftThreadKeys, draftIdByThreadKey } =
-    useSidebarThreadPresentation(serverThreads);
+  const {
+    threads,
+    pendingThreadKeys,
+    draftThreadKeys,
+    draftIdByThreadKey,
+    activeLocalDispatchThreadKeys,
+  } = useSidebarThreadPresentation(serverThreads);
   useSidebarLocalDispatchReconciliation(threads);
   const lifecycleByThreadKey = useInboxLifecycleStore((state) => state.lifecycleByThreadKey);
   const dispatchLifecycle = useInboxLifecycleStore((state) => state.dispatch);
@@ -653,6 +714,18 @@ export default function InboxSidebar() {
     INBOX_SETTLED_SHELF_DEFAULT_EXPANDED,
     Schema.Boolean,
   );
+  const settledPagingScopeKey = projectScopeKey ?? ALL_PROJECTS_SCOPE;
+  const [settledPaging, setSettledPaging] = useState({
+    scopeKey: settledPagingScopeKey,
+    visibleCount: INBOX_SETTLED_INITIAL_COUNT,
+  });
+  const settledVisibleCount =
+    settledPaging.scopeKey === settledPagingScopeKey
+      ? settledPaging.visibleCount
+      : INBOX_SETTLED_INITIAL_COUNT;
+  const scrollViewportRef = useRef<HTMLDivElement | null>(null);
+  const activeListRef = useRef<HTMLUListElement | null>(null);
+  const settledListRef = useRef<HTMLUListElement | null>(null);
 
   const projectGroups = useMemo(
     () =>
@@ -742,6 +815,24 @@ export default function InboxSidebar() {
       settled: flatten(partitions.settled),
     };
   }, [partitions, threadExpandedById]);
+  const shouldVirtualizeActive = shouldVirtualizeInboxActiveThreads(sectionItems.active.length);
+  const activeVirtualRange = useFixedSharedScrollVirtualizer({
+    enabled: shouldVirtualizeActive,
+    itemCount: sectionItems.active.length,
+    itemStride: INBOX_CARD_ROW_STRIDE,
+    overscan: isMobile
+      ? INBOX_ACTIVE_VIRTUALIZATION_MOBILE_OVERSCAN
+      : INBOX_ACTIVE_VIRTUALIZATION_DESKTOP_OVERSCAN,
+    initialRenderCount: isMobile
+      ? INBOX_ACTIVE_VIRTUALIZATION_MOBILE_INITIAL_COUNT
+      : INBOX_ACTIVE_VIRTUALIZATION_DESKTOP_INITIAL_COUNT,
+    listRef: activeListRef,
+    scrollViewportRef,
+  });
+  const visibleActiveItems = shouldVirtualizeActive
+    ? sectionItems.active.slice(activeVirtualRange.startIndex, activeVirtualRange.endIndex)
+    : sectionItems.active;
+  const activeListHeight = sectionItems.active.length * INBOX_CARD_ROW_STRIDE;
   const visibleSnoozedItems = useMemo(
     () =>
       resolveInboxShelfItems({
@@ -755,15 +846,39 @@ export default function InboxSidebar() {
   );
   const visibleSettledItems = useMemo(
     () =>
-      resolveInboxShelfItems({
+      resolvePaginatedInboxShelfItems({
         items: sectionItems.settled,
         expanded: settledShelfExpanded,
         activeKey: routeThreadKey,
+        visibleCount: settledVisibleCount,
         getKey: (item) =>
           scopedThreadKey(scopeThreadRef(item.thread.environmentId, item.thread.id)),
       }),
-    [routeThreadKey, sectionItems.settled, settledShelfExpanded],
+    [routeThreadKey, sectionItems.settled, settledShelfExpanded, settledVisibleCount],
   );
+  const hiddenSettledCount = Math.max(0, sectionItems.settled.length - visibleSettledItems.length);
+  const hasRoutedSettledItem =
+    routeThreadKey !== null &&
+    visibleSettledItems.some(
+      (item) =>
+        scopedThreadKey(scopeThreadRef(item.thread.environmentId, item.thread.id)) ===
+        routeThreadKey,
+    );
+  const shouldVirtualizeSettled =
+    isMobile && settledShelfExpanded && visibleSettledItems.length > 0 && !hasRoutedSettledItem;
+  const settledVirtualRange = useFixedSharedScrollVirtualizer({
+    enabled: shouldVirtualizeSettled,
+    itemCount: visibleSettledItems.length,
+    itemStride: INBOX_SLIM_ROW_STRIDE,
+    overscan: INBOX_SETTLED_VIRTUALIZATION_OVERSCAN,
+    initialRenderCount: 0,
+    listRef: settledListRef,
+    scrollViewportRef,
+  });
+  const renderedSettledItems = shouldVirtualizeSettled
+    ? visibleSettledItems.slice(settledVirtualRange.startIndex, settledVirtualRange.endIndex)
+    : visibleSettledItems;
+  const settledListHeight = visibleSettledItems.length * INBOX_SLIM_ROW_STRIDE;
   const orderedItems = useMemo(
     () => [
       ...sectionItems.drafts,
@@ -818,6 +933,16 @@ export default function InboxSidebar() {
   const navigateToThread = useCallback(
     (threadRef: ScopedThreadRef) => {
       const threadKey = scopedThreadKey(threadRef);
+      const lifecycleThreadKey = lifecycleThreadKeyByThreadKey.get(threadKey) ?? threadKey;
+      const lifecycle = useInboxLifecycleStore.getState().lifecycleByThreadKey[lifecycleThreadKey];
+      const wokeAt = resolveInboxWokeAt(lifecycle, new Date().toISOString());
+      if (wokeAt) {
+        dispatchLifecycle({
+          type: "acknowledge-wake",
+          threadKey: lifecycleThreadKey,
+          at: wokeAt,
+        });
+      }
       clearSelection();
       setSelectionAnchor(threadKey);
       if (isMobile) {
@@ -833,7 +958,16 @@ export default function InboxSidebar() {
         params: buildThreadRouteParams(threadRef),
       });
     },
-    [clearSelection, draftIdByThreadKey, isMobile, navigate, setOpenMobile, setSelectionAnchor],
+    [
+      clearSelection,
+      dispatchLifecycle,
+      draftIdByThreadKey,
+      isMobile,
+      lifecycleThreadKeyByThreadKey,
+      navigate,
+      setOpenMobile,
+      setSelectionAnchor,
+    ],
   );
   const createThread = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -936,7 +1070,7 @@ export default function InboxSidebar() {
         case "toggle-pin":
           dispatchLifecycle(
             currentLifecycle?.pinnedAt
-              ? { type: "unpin", threadKey: lifecycleThreadKey }
+              ? { type: "unpin", threadKey: lifecycleThreadKey, at: actionNow }
               : { type: "pin", threadKey: lifecycleThreadKey, at: actionNow },
           );
           return;
@@ -950,13 +1084,13 @@ export default function InboxSidebar() {
           snooze("one-week");
           return;
         case "unsnooze":
-          dispatchLifecycle({ type: "unsnooze", threadKey: lifecycleThreadKey });
+          dispatchLifecycle({ type: "unsnooze", threadKey: lifecycleThreadKey, at: actionNow });
           setNow(actionNow);
           return;
         case "toggle-settled":
           dispatchLifecycle(
             currentLifecycle?.settledAt
-              ? { type: "unsettle", threadKey: lifecycleThreadKey }
+              ? { type: "unsettle", threadKey: lifecycleThreadKey, at: actionNow }
               : { type: "settle", threadKey: lifecycleThreadKey, at: actionNow },
           );
           return;
@@ -1050,12 +1184,26 @@ export default function InboxSidebar() {
     },
     [handleAction],
   );
+  const showMoreSettled = useCallback(() => {
+    setSettledPaging((current) => ({
+      scopeKey: settledPagingScopeKey,
+      visibleCount:
+        (current.scopeKey === settledPagingScopeKey
+          ? current.visibleCount
+          : INBOX_SETTLED_INITIAL_COUNT) + INBOX_SETTLED_PAGE_COUNT,
+    }));
+  }, [settledPagingScopeKey]);
 
   const renderRows = (
     items: readonly SidebarThreadTreeItem<SidebarThreadSummary>[],
     section: InboxLifecycleSection,
+    virtualRange?: {
+      readonly startIndex: number;
+      readonly setSize: number;
+      readonly stride: number;
+    },
   ) =>
-    items.map((item) => {
+    items.map((item, itemIndex) => {
       const thread = item.thread;
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
       const projectKey = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
@@ -1070,11 +1218,20 @@ export default function InboxSidebar() {
           lifecycleThreadKey={lifecycleThreadKeyByThreadKey.get(threadKey) ?? threadKey}
           isActive={routeThreadKey === threadKey}
           isDraft={draftThreadKeys.has(threadKey)}
+          hasActiveLocalDispatch={activeLocalDispatchThreadKeys.has(threadKey)}
           isPending={pendingThreadKeys.has(threadKey)}
           isThreadExpanded={threadExpandedById[threadKey] ?? true}
+          now={now}
           onNavigate={navigateToThread}
           onAction={runAction}
           onToggleExpanded={toggleThreadExpanded}
+          {...(virtualRange
+            ? {
+                virtualIndex: virtualRange.startIndex + itemIndex,
+                virtualSetSize: virtualRange.setSize,
+                virtualStride: virtualRange.stride,
+              }
+            : {})}
         />
       );
     });
@@ -1090,7 +1247,7 @@ export default function InboxSidebar() {
     <>
       <SidebarUsageBackgroundRefresh />
       <SidebarChromeHeader isElectron={isElectron} />
-      <SidebarContent className="gap-0">
+      <SidebarContent className="gap-0" scrollViewportRef={scrollViewportRef}>
         <SidebarGroup className="px-2 pt-2 pb-1">
           <div className="flex items-center gap-1">
             <SidebarMenu className="flex-1">
@@ -1227,7 +1384,29 @@ export default function InboxSidebar() {
                 data-testid="inbox-pinned-divider"
               />
             ) : null}
-            {renderRows(sectionItems.active, "active")}
+            {sectionItems.active.length > 0 ? (
+              <SidebarMenuItem className="list-none">
+                <SidebarMenu
+                  ref={activeListRef}
+                  aria-label="Active threads"
+                  className={cn("gap-0", shouldVirtualizeActive && "relative block")}
+                  data-inbox-active-list-virtualized={shouldVirtualizeActive ? "true" : "false"}
+                  style={shouldVirtualizeActive ? { height: activeListHeight } : undefined}
+                >
+                  {renderRows(
+                    visibleActiveItems,
+                    "active",
+                    shouldVirtualizeActive
+                      ? {
+                          startIndex: activeVirtualRange.startIndex,
+                          setSize: sectionItems.active.length,
+                          stride: INBOX_CARD_ROW_STRIDE,
+                        }
+                      : undefined,
+                  )}
+                </SidebarMenu>
+              </SidebarMenuItem>
+            ) : null}
             <InboxShelf
               title="Snoozed"
               count={sectionItems.snoozed.length}
@@ -1243,7 +1422,41 @@ export default function InboxSidebar() {
               tone="settled"
               onToggle={() => setSettledShelfExpanded((expanded) => !expanded)}
             />
-            {renderRows(visibleSettledItems, "settled")}
+            {visibleSettledItems.length > 0 ? (
+              <SidebarMenuItem className="list-none">
+                <SidebarMenu
+                  ref={settledListRef}
+                  aria-label="Settled threads"
+                  className={cn("gap-0", shouldVirtualizeSettled && "relative block")}
+                  data-inbox-settled-list-virtualized={shouldVirtualizeSettled ? "true" : "false"}
+                  style={shouldVirtualizeSettled ? { height: settledListHeight } : undefined}
+                >
+                  {renderRows(
+                    renderedSettledItems,
+                    "settled",
+                    shouldVirtualizeSettled
+                      ? {
+                          startIndex: settledVirtualRange.startIndex,
+                          setSize: visibleSettledItems.length,
+                          stride: INBOX_SLIM_ROW_STRIDE,
+                        }
+                      : undefined,
+                  )}
+                </SidebarMenu>
+              </SidebarMenuItem>
+            ) : null}
+            {settledShelfExpanded && hiddenSettledCount > 0 ? (
+              <SidebarMenuItem className="list-none px-2 py-1">
+                <button
+                  type="button"
+                  className="flex h-7 w-full cursor-pointer items-center rounded-md px-2 text-left text-xs text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                  data-testid="inbox-settled-show-more"
+                  onClick={showMoreSettled}
+                >
+                  Show {Math.min(INBOX_SETTLED_PAGE_COUNT, hiddenSettledCount)} more
+                </button>
+              </SidebarMenuItem>
+            ) : null}
           </SidebarMenu>
 
           {totalScopedThreads === 0 ? (

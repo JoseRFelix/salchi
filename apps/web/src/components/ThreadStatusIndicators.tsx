@@ -145,16 +145,10 @@ export function ThreadStatusLabel({
 }
 
 /**
- * Non-interactive leading status icons for a thread row in compact contexts
- * like the command palette. Shows the change request state icon (if present) and the
- * thread status dot, matching the sidebar's leading indicators.
+ * Change request state without the compact thread-status dot. Full inbox cards
+ * use this alongside their t3code-style status slot.
  */
-export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummary }) {
-  const threadRef = scopeThreadRef(thread.environmentId, thread.id);
-  const threadKey = scopedThreadKey(threadRef);
-  const hasActiveLocalDispatch = useLocalDispatchStore(
-    (state) => state.localDispatchByThreadKey[threadKey] !== undefined,
-  );
+function useThreadChangeRequestStatus(thread: SidebarThreadSummary): PrStatusIndicator | null {
   const threadProjectCwd = useStore(
     useMemo(
       () => (state: AppState) =>
@@ -169,7 +163,92 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
     cwd: thread.branch != null ? gitCwd : null,
   });
   const pr = resolveThreadPr(thread.branch, gitStatus.data);
-  const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
+  return prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
+}
+
+function ThreadChangeRequestStatusView({ status }: { status: PrStatusIndicator }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            aria-label={status.tooltip}
+            className={`inline-flex items-center justify-center ${status.colorClass}`}
+          />
+        }
+      >
+        <ChangeRequestStatusIcon className="size-3" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">{status.tooltip}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+export function ThreadRowChangeRequestStatus({ thread }: { thread: SidebarThreadSummary }) {
+  const prStatus = useThreadChangeRequestStatus(thread);
+  return prStatus ? <ThreadChangeRequestStatusView status={prStatus} /> : null;
+}
+
+function useThreadTerminalStatus(thread: SidebarThreadSummary): TerminalStatusIndicator | null {
+  const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+  const runningTerminalIds = useTerminalStateStore(
+    (state) =>
+      selectThreadTerminalState(state.terminalStateByThreadKey, threadRef).runningTerminalIds,
+  );
+  return terminalStatusFromRunningIds(runningTerminalIds);
+}
+
+function ThreadTerminalStatusView({ status }: { status: TerminalStatusIndicator }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            role="img"
+            aria-label={status.label}
+            className={`inline-flex items-center justify-center ${status.colorClass}`}
+          />
+        }
+      >
+        <TerminalIcon className={`size-3 ${status.pulse ? "animate-pulse" : ""}`} />
+      </TooltipTrigger>
+      <TooltipPopup side="top">{status.label}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+export function ThreadRowTerminalStatus({ thread }: { thread: SidebarThreadSummary }) {
+  const status = useThreadTerminalStatus(thread);
+  return status ? <ThreadTerminalStatusView status={status} /> : null;
+}
+
+export function ThreadRowRemoteStatus({ environmentLabel }: { environmentLabel: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span aria-label={environmentLabel} className="inline-flex items-center justify-center" />
+        }
+      >
+        <CloudIcon className="size-3 text-muted-foreground/60" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">{environmentLabel}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+/**
+ * Non-interactive leading status icons for a thread row in compact contexts
+ * like the command palette. Shows the change request state icon (if present) and the
+ * thread status dot, matching the sidebar's leading indicators.
+ */
+export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummary }) {
+  const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+  const threadKey = scopedThreadKey(threadRef);
+  const hasActiveLocalDispatch = useLocalDispatchStore(
+    (state) => state.localDispatchByThreadKey[threadKey] !== undefined,
+  );
+  const prStatus = useThreadChangeRequestStatus(thread);
   const threadStatus = resolveThreadStatusPill({
     thread: {
       ...thread,
@@ -183,21 +262,7 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
 
   return (
     <span className="inline-flex shrink-0 items-center gap-1.5">
-      {prStatus ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span
-                aria-label={prStatus.tooltip}
-                className={`inline-flex items-center justify-center ${prStatus.colorClass}`}
-              />
-            }
-          >
-            <ChangeRequestStatusIcon className="size-3" />
-          </TooltipTrigger>
-          <TooltipPopup side="top">{prStatus.tooltip}</TooltipPopup>
-        </Tooltip>
-      ) : null}
+      {prStatus ? <ThreadChangeRequestStatusView status={prStatus} /> : null}
       {threadStatus ? <ThreadStatusLabel status={threadStatus} /> : null}
     </span>
   );
@@ -209,11 +274,7 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
  * environment indicator, matching the sidebar's trailing indicators.
  */
 export function ThreadRowTrailingStatus({ thread }: { thread: SidebarThreadSummary }) {
-  const threadRef = scopeThreadRef(thread.environmentId, thread.id);
-  const runningTerminalIds = useTerminalStateStore(
-    (state) =>
-      selectThreadTerminalState(state.terminalStateByThreadKey, threadRef).runningTerminalIds,
-  );
+  const terminalStatus = useThreadTerminalStatus(thread);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const isRemoteThread =
     primaryEnvironmentId !== null && thread.environmentId !== primaryEnvironmentId;
@@ -226,44 +287,15 @@ export function ThreadRowTrailingStatus({ thread }: { thread: SidebarThreadSumma
   const threadEnvironmentLabel = isRemoteThread
     ? (remoteEnvLabel ?? remoteEnvSavedLabel ?? "Remote")
     : null;
-  const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
-
   if (!terminalStatus && !isRemoteThread) {
     return null;
   }
 
   return (
     <span className="inline-flex shrink-0 items-center gap-1.5">
-      {terminalStatus ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span
-                role="img"
-                aria-label={terminalStatus.label}
-                className={`inline-flex items-center justify-center ${terminalStatus.colorClass}`}
-              />
-            }
-          >
-            <TerminalIcon className={`size-3 ${terminalStatus.pulse ? "animate-pulse" : ""}`} />
-          </TooltipTrigger>
-          <TooltipPopup side="top">{terminalStatus.label}</TooltipPopup>
-        </Tooltip>
-      ) : null}
+      {terminalStatus ? <ThreadTerminalStatusView status={terminalStatus} /> : null}
       {isRemoteThread ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span
-                aria-label={threadEnvironmentLabel ?? "Remote"}
-                className="inline-flex items-center justify-center"
-              />
-            }
-          >
-            <CloudIcon className="size-3 text-muted-foreground/60" />
-          </TooltipTrigger>
-          <TooltipPopup side="top">{threadEnvironmentLabel}</TooltipPopup>
-        </Tooltip>
+        <ThreadRowRemoteStatus environmentLabel={threadEnvironmentLabel ?? "Remote"} />
       ) : null}
     </span>
   );
