@@ -19,6 +19,7 @@ export function useRightPanelSheetOpen(): boolean {
 
 export function RightPanelSheet(props: {
   children: ReactNode;
+  closedChildren?: ReactNode;
   open: boolean;
   onClose: () => void;
 }) {
@@ -39,7 +40,7 @@ export function RightPanelSheet(props: {
   const renderedChildren = props.open
     ? props.children
     : closeAnimationComplete
-      ? null
+      ? (props.closedChildren ?? null)
       : retainedOpenChildrenRef.current;
 
   return (
