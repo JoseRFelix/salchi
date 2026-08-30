@@ -11,14 +11,20 @@ import {
   useRegisterBrowserRightPanelContent,
   useRegisterPlanRightPanelContent,
 } from "../../rightPanelContentRegistry";
-import { ChatRightPanels } from "./ChatRightPanels";
+import { ChatRightPanels, MOBILE_WORKER_POOL_IDLE_GRACE_MS } from "./ChatRightPanels";
 
 vi.mock("../DiffPanel", () => ({
   default: () => <div>Diff panel content</div>,
 }));
 
 vi.mock("../DiffWorkerPoolProvider", () => ({
-  DiffWorkerPoolProvider: ({ children }: { children?: React.ReactNode }) => children,
+  DiffWorkerPoolProvider: ({
+    children,
+    profile = "standard",
+  }: {
+    children?: React.ReactNode;
+    profile?: "memory-constrained" | "standard";
+  }) => <div data-diff-worker-pool-profile={profile}>{children}</div>,
 }));
 
 vi.mock("../WorkspaceFilesPanel", () => ({
@@ -35,6 +41,8 @@ describe("ChatRightPanels", () => {
     activeView: "diff" | "files" | null;
     browserOpen?: boolean;
     planOpen?: boolean;
+    renderDiffContent?: boolean;
+    renderFileContent?: boolean;
     useSheet: boolean;
   }) {
     const planRegistration = useMemo(
@@ -61,8 +69,8 @@ describe("ChatRightPanels", () => {
         onClose={vi.fn()}
         onOpen={vi.fn()}
         onReturnFromFileToDiff={vi.fn()}
-        renderDiffContent
-        renderFileContent
+        renderDiffContent={props.renderDiffContent ?? true}
+        renderFileContent={props.renderFileContent ?? true}
         useSheet={props.useSheet}
       />
     );
@@ -73,11 +81,14 @@ describe("ChatRightPanels", () => {
     useSheet: boolean,
     planOpen = false,
     browserOpen = false,
+    renderContent: { diff: boolean; files: boolean } = { diff: true, files: true },
   ) => (
     <PanelHarness
       activeView={activeView}
       browserOpen={browserOpen}
       planOpen={planOpen}
+      renderDiffContent={renderContent.diff}
+      renderFileContent={renderContent.files}
       useSheet={useSheet}
     />
   );
@@ -161,6 +172,93 @@ describe("ChatRightPanels", () => {
       await screen.rerender(renderPanels("files", true));
       await expect.element(page.getByText("Source control panel content")).toBeVisible();
       expect(document.querySelector('[data-right-panel-sheet="true"]')).toBe(sheet);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("reuses one memory-constrained worker pool while mobile diff content is reopened", async () => {
+    await page.viewport(390, 844);
+    const screen = await render(
+      renderPanels("diff", true, false, false, { diff: true, files: false }),
+    );
+
+    try {
+      await expect.element(page.getByText("Diff panel content")).toBeVisible();
+      const workerPool = document.querySelector<HTMLElement>("[data-diff-worker-pool-profile]");
+      expect(workerPool).not.toBeNull();
+      expect(workerPool?.dataset.diffWorkerPoolProfile).toBe("memory-constrained");
+
+      await screen.rerender(renderPanels(null, true, false, false, { diff: false, files: false }));
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).not.toContain("Diff panel content");
+        },
+        { timeout: 2_000 },
+      );
+      expect(document.querySelector("[data-diff-worker-pool-profile]")).toBe(workerPool);
+
+      await screen.rerender(renderPanels("diff", true, false, false, { diff: true, files: false }));
+
+      await expect.element(page.getByText("Diff panel content")).toBeVisible();
+      expect(document.querySelector("[data-diff-worker-pool-profile]")).toBe(workerPool);
+      expect(document.querySelectorAll("[data-diff-worker-pool-profile]")).toHaveLength(1);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("releases the retained mobile worker pool after its idle grace period", async () => {
+    await page.viewport(390, 844);
+    const screen = await render(
+      renderPanels("diff", true, false, false, { diff: true, files: false }),
+    );
+
+    try {
+      await expect.element(page.getByText("Diff panel content")).toBeVisible();
+      const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+      vi.spyOn(globalThis, "setTimeout").mockImplementation((handler, timeout = 0) =>
+        nativeSetTimeout(handler, timeout === MOBILE_WORKER_POOL_IDLE_GRACE_MS ? 0 : timeout),
+      );
+
+      await screen.rerender(renderPanels(null, true, false, false, { diff: false, files: false }));
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).not.toContain("Diff panel content");
+          expect(document.querySelector("[data-diff-worker-pool-profile]")).toBeNull();
+        },
+        { timeout: 2_000 },
+      );
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("fully replaces the worker pool before switching to the mobile profile", async () => {
+    await page.viewport(1200, 800);
+    const screen = await render(
+      renderPanels("diff", false, false, false, { diff: true, files: false }),
+    );
+
+    try {
+      await expect.element(page.getByText("Diff panel content")).toBeVisible();
+      const standardPool = document.querySelector<HTMLElement>(
+        "[data-diff-worker-pool-profile='standard']",
+      );
+      expect(standardPool).not.toBeNull();
+
+      await screen.rerender(renderPanels("diff", true, false, false, { diff: true, files: false }));
+
+      await vi.waitFor(() => {
+        const mobilePool = document.querySelector<HTMLElement>(
+          "[data-diff-worker-pool-profile='memory-constrained']",
+        );
+        expect(mobilePool).not.toBeNull();
+        expect(mobilePool).not.toBe(standardPool);
+        expect(document.querySelectorAll("[data-diff-worker-pool-profile]")).toHaveLength(1);
+      });
     } finally {
       await screen.unmount();
     }
