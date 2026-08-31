@@ -1,7 +1,11 @@
 import { useEffect, type ReactNode } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 
+import { isElectron } from "../env";
 import InboxSidebar from "./InboxSidebar";
+import { isSettingsSidebarPath } from "./appSidebarVariant";
+import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
+import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Sidebar, SidebarProvider, SidebarRail } from "./ui/sidebar";
 import {
   clearShortcutModifierState,
@@ -13,6 +17,8 @@ const THREAD_SIDEBAR_MIN_WIDTH = 13 * 16;
 const THREAD_MAIN_CONTENT_MIN_WIDTH = 40 * 16;
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const showSettingsSidebar = isSettingsSidebarPath(pathname);
 
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
@@ -66,7 +72,14 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
         }}
       >
-        <InboxSidebar />
+        {showSettingsSidebar ? (
+          <>
+            <SidebarChromeHeader isElectron={isElectron} />
+            <SettingsSidebarNav pathname={pathname} />
+          </>
+        ) : (
+          <InboxSidebar />
+        )}
         <SidebarRail />
       </Sidebar>
       {children}
