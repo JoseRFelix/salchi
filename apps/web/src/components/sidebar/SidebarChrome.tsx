@@ -3,6 +3,7 @@ import { SettingsIcon } from "lucide-react";
 import { memo, useCallback } from "react";
 
 import { APP_DISPLAY_NAME, APP_VERSION } from "../../branding";
+import { ConnectionStatusGlyph, useConnectionIndicatorView } from "../ConnectionStatusIndicator";
 import {
   SidebarFooter,
   SidebarHeader,
@@ -81,16 +82,47 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
       <SidebarFooterItems />
       <SidebarMenu>
         <SidebarMenuItem>
-          <SidebarMenuButton
-            size="sm"
-            className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-            onClick={handleSettingsClick}
-          >
-            <SettingsIcon className="size-3.5" />
-            <span>Settings</span>
-          </SidebarMenuButton>
+          <SidebarSettingsButton onClick={handleSettingsClick} />
         </SidebarMenuItem>
       </SidebarMenu>
     </SidebarFooter>
+  );
+});
+
+const SidebarSettingsButton = memo(function SidebarSettingsButton({
+  onClick,
+}: {
+  readonly onClick: () => void;
+}) {
+  const connection = useConnectionIndicatorView();
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <SidebarMenuButton
+            size="sm"
+            className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+            aria-label={`Settings. Connection status: ${connection.label}. ${connection.detail}`}
+            onClick={onClick}
+          >
+            <SettingsIcon className="size-3.5" />
+            <span>Settings</span>
+            <span
+              aria-hidden="true"
+              className="ms-auto flex size-3.5 shrink-0 items-center justify-center"
+            >
+              <ConnectionStatusGlyph tone={connection.tone} />
+            </span>
+          </SidebarMenuButton>
+        }
+      />
+      <TooltipPopup align="end" side="top">
+        <div className="max-w-64 space-y-0.5">
+          <div className="font-medium">{connection.label}</div>
+          <div className="text-muted-foreground">{connection.detail}</div>
+        </div>
+      </TooltipPopup>
+    </Tooltip>
   );
 });

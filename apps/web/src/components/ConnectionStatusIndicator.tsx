@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { cn } from "../lib/utils";
 import { useWsConnectionStatus } from "../rpc/wsConnectionState";
@@ -13,7 +13,7 @@ import { Spinner } from "./ui/spinner";
  * Re-renders once per second while a timed reconnect is pending so the
  * countdown in the detail line stays live. Idle otherwise.
  */
-function useConnectionIndicatorView(): ConnectionIndicatorView {
+export function useConnectionIndicatorView(): ConnectionIndicatorView {
   const status = useWsConnectionStatus();
   const ticking = status.reconnectPhase === "waiting" && status.nextRetryAt !== null;
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -30,7 +30,7 @@ function useConnectionIndicatorView(): ConnectionIndicatorView {
   return deriveConnectionIndicator(status, nowMs);
 }
 
-function ConnectionGlyph({
+export function ConnectionStatusGlyph({
   tone,
   className,
 }: {
@@ -51,23 +51,3 @@ function ConnectionGlyph({
     />
   );
 }
-
-/** Ambient connection pill for the sidebar footer, matching the usage row. */
-export const SidebarConnectionStatus = memo(function SidebarConnectionStatus() {
-  const view = useConnectionIndicatorView();
-
-  return (
-    <div
-      className="flex h-7 w-full items-center gap-2 rounded-lg px-2 py-1.5 text-muted-foreground/70"
-      title={`${view.label} — ${view.detail}`}
-    >
-      <span className="flex size-3.5 shrink-0 items-center justify-center">
-        <ConnectionGlyph tone={view.tone} />
-      </span>
-      <span className="min-w-0 flex-1 truncate text-xs">Connection</span>
-      <span className="shrink-0 truncate text-[10px] tabular-nums text-muted-foreground/70">
-        {view.label}
-      </span>
-    </div>
-  );
-});

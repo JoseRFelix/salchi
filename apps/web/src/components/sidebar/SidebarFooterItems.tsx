@@ -1,4 +1,3 @@
-import { SidebarConnectionStatus } from "../ConnectionStatusIndicator";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarPwaUpdateButton } from "./SidebarPwaUpdateButton";
 import { SidebarUpdatePill } from "./SidebarUpdatePill";
@@ -11,7 +10,6 @@ export function SidebarFooterItems() {
       <SidebarProviderUpdatePill />
       <SidebarUpdatePill />
       <SidebarUsageIndicator />
-      <SidebarConnectionStatus />
     </>
   );
 }
