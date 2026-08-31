@@ -103,7 +103,7 @@ const SidebarSettingsButton = memo(function SidebarSettingsButton({
           <SidebarMenuButton
             size="sm"
             className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-            aria-label={`Settings. Connection status: ${connection.label}. ${connection.detail}`}
+            aria-label={`Settings. Connection status: ${connection.label}.`}
             onClick={onClick}
           >
             <SettingsIcon className="size-3.5" />
@@ -118,10 +118,7 @@ const SidebarSettingsButton = memo(function SidebarSettingsButton({
         }
       />
       <TooltipPopup align="end" side="top">
-        <div className="max-w-64 space-y-0.5">
-          <div className="font-medium">{connection.label}</div>
-          <div className="text-muted-foreground">{connection.detail}</div>
-        </div>
+        {connection.label}
       </TooltipPopup>
     </Tooltip>
   );
