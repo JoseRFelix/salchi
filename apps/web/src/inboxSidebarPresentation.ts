@@ -8,7 +8,6 @@ export const INBOX_SNOOZED_SHELF_DEFAULT_EXPANDED = false;
 export const INBOX_SETTLED_SHELF_DEFAULT_EXPANDED = true;
 export const INBOX_SETTLED_INITIAL_COUNT = 10;
 export const INBOX_SETTLED_PAGE_COUNT = 25;
-export const INBOX_ACTIVE_VIRTUALIZATION_THRESHOLD = 24;
 
 export type InboxRowVariant = "card" | "slim";
 
@@ -50,10 +49,6 @@ export function resolvePaginatedInboxShelfItems<T>(input: {
     }
   }
   return visible;
-}
-
-export function shouldVirtualizeInboxActiveThreads(itemCount: number): boolean {
-  return itemCount > INBOX_ACTIVE_VIRTUALIZATION_THRESHOLD;
 }
 
 export function inboxShelfLabel(title: string, count: number, expanded: boolean): string {

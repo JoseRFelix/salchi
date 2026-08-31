@@ -280,11 +280,13 @@ describe("inbox lifecycle guards and automation", () => {
       }),
     ).toBe(false);
     expect(
-      effectiveInboxSettled(makeThread({ branch: "feature" }), {
-        ...options,
-        changeRequestKnown: false,
-      }),
-    ).toBe(false);
+      effectiveInboxSettled(
+        { ...inactive, branch: "feature" },
+        {
+          ...options,
+        },
+      ),
+    ).toBe(true);
     expect(
       effectiveInboxSettled(inactive, {
         ...options,

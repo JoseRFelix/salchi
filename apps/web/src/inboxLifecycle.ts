@@ -199,7 +199,6 @@ export function effectiveInboxSettled(
     readonly autoSettleAfterDays: number | null;
     readonly autoSettleOnMerge?: boolean | undefined;
     readonly changeRequest?: InboxChangeRequestSettleSource | null | undefined;
-    readonly changeRequestKnown?: boolean | undefined;
   },
 ): boolean {
   if (!canSettleInboxThread(thread, { now: options.now })) {
@@ -225,9 +224,6 @@ export function effectiveInboxSettled(
     return true;
   }
   if (options.changeRequest?.state === "open" || options.autoSettleAfterDays === null) return false;
-  // A branch with no observed change-request snapshot stays visible. This is
-  // conservative until its project is observed and avoids surprising hides.
-  if (thread.branch != null && options.changeRequestKnown === false) return false;
   const lastActivityAt = inboxThreadLastActivityAt(thread);
   if (lastActivityAt == null) return false;
   return (
@@ -270,7 +266,6 @@ export function resolveInboxLifecycleSection(input: {
   readonly autoSettleAfterDays?: number | null | undefined;
   readonly autoSettleOnMerge?: boolean | undefined;
   readonly changeRequest?: InboxChangeRequestSettleSource | null | undefined;
-  readonly changeRequestKnown?: boolean | undefined;
 }): InboxLifecycleSection {
   if (input.isDraft) return "drafts";
   if (effectiveInboxSnoozed(input.thread, { now: input.now })) return "snoozed";
@@ -280,7 +275,6 @@ export function resolveInboxLifecycleSection(input: {
       autoSettleAfterDays: input.autoSettleAfterDays ?? null,
       autoSettleOnMerge: input.autoSettleOnMerge,
       changeRequest: input.changeRequest,
-      changeRequestKnown: input.changeRequestKnown,
     })
   )
     return "settled";
@@ -399,7 +393,6 @@ export function partitionInboxThreads<TThread extends SidebarThreadSummary>(inpu
   readonly autoSettleAfterDays?: number | null | undefined;
   readonly autoSettleOnMerge?: boolean | undefined;
   readonly changeRequestByThreadKey?: ReadonlyMap<string, InboxChangeRequestSettleSource | null>;
-  readonly changeRequestKnownThreadKeys?: ReadonlySet<string>;
 }): InboxThreadPartitions<TThread> {
   const partitions: InboxThreadPartitions<TThread> = {
     drafts: [],
@@ -426,9 +419,6 @@ export function partitionInboxThreads<TThread extends SidebarThreadSummary>(inpu
       autoSettleAfterDays: input.autoSettleAfterDays,
       autoSettleOnMerge: input.autoSettleOnMerge,
       changeRequest,
-      changeRequestKnown:
-        input.changeRequestKnownThreadKeys == null ||
-        input.changeRequestKnownThreadKeys.has(rootKey),
     });
     partitions[section].push(thread);
   }

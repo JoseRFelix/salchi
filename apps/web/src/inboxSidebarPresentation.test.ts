@@ -20,7 +20,6 @@ import {
   reconcileInboxTitleRegeneration,
   resolveInboxSearchHighlight,
   resolveInboxShelfItems,
-  shouldVirtualizeInboxActiveThreads,
 } from "./inboxSidebarPresentation";
 
 afterEach(() => {
@@ -125,13 +124,6 @@ describe("resolvePaginatedInboxShelfItems", () => {
         getKey,
       }),
     ).toEqual([{ key: "thread-35" }]);
-  });
-});
-
-describe("shouldVirtualizeInboxActiveThreads", () => {
-  it("bounds mounted card rows once the active list becomes large", () => {
-    expect(shouldVirtualizeInboxActiveThreads(24)).toBe(false);
-    expect(shouldVirtualizeInboxActiveThreads(25)).toBe(true);
   });
 });
 

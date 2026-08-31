@@ -11,7 +11,7 @@ import type { SidebarThreadSummary } from "../../types";
 import { cn } from "../../lib/utils";
 import { resolveSidebarThreadDisplayTitle } from "../Sidebar.logic";
 import { ProjectFavicon } from "../ProjectFavicon";
-import { ThreadRowChangeRequestStatus } from "../ThreadStatusIndicators";
+import { InboxThreadRowChangeRequestStatus } from "../ThreadStatusIndicators";
 import type { InboxProjectIdentity } from "./InboxThreadRow";
 
 const STATUS_LABELS = {
@@ -49,7 +49,9 @@ export function InboxSearchResultRow(props: {
   readonly now: string;
   readonly lastVisitedAt: string | null;
   readonly changeRequestSnapshot: InboxChangeRequestSnapshot | null;
-  readonly onChangeRequestSnapshot: (snapshot: InboxChangeRequestSnapshot | null) => void;
+  readonly virtualized?: boolean;
+  readonly listPosition?: number;
+  readonly listSize?: number;
   readonly onNavigate: (threadRef: ScopedThreadRef, event: MouseEvent) => void;
   readonly onHighlight: () => void;
 }) {
@@ -68,12 +70,15 @@ export function InboxSearchResultRow(props: {
   const statusLabel = STATUS_LABELS[status];
   const displayTitle = resolveSidebarThreadDisplayTitle(props.thread);
   const activityAt = props.thread.updatedAt ?? props.thread.createdAt;
+  const Row = props.virtualized ? "div" : "li";
 
   return (
-    <li
+    <Row
       id={props.optionId}
       role="option"
       aria-selected={props.isHighlighted}
+      aria-posinset={props.listPosition}
+      aria-setsize={props.listSize}
       className="list-none"
       data-thread-key={scopedThreadKey(threadRef)}
     >
@@ -103,11 +108,10 @@ export function InboxSearchResultRow(props: {
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{displayTitle}</span>
             {props.thread.branch ? (
-              <ThreadRowChangeRequestStatus
+              <InboxThreadRowChangeRequestStatus
                 thread={props.thread}
                 showNumber
                 snapshot={props.changeRequestSnapshot}
-                onSnapshot={props.onChangeRequestSnapshot}
               />
             ) : null}
           </span>
@@ -128,6 +132,6 @@ export function InboxSearchResultRow(props: {
           {statusLabel ?? formatRelativeTimeLabel(activityAt)}
         </span>
       </button>
-    </li>
+    </Row>
   );
 }

@@ -24,9 +24,9 @@ export const InboxChangeRequestSnapshots = Schema.Record(Schema.String, InboxCha
 export type InboxChangeRequestSnapshots = typeof InboxChangeRequestSnapshots.Type;
 
 /**
- * Records a branch-matched status result and otherwise preserves the last
- * trustworthy observation. The inbox can therefore keep showing a PR while
- * another worktree temporarily owns the project's shared git-status cache.
+ * Records a branch-matched change request and otherwise preserves the last
+ * trustworthy observation. A matching branch with no change request clears
+ * the snapshot instead of persisting one "known empty" entry per thread.
  */
 export function nextInboxChangeRequestSnapshot(input: {
   readonly threadBranch: string | null;
@@ -39,21 +39,19 @@ export function nextInboxChangeRequestSnapshot(input: {
     return input.previous?.branch === input.threadBranch ? input.previous : null;
   }
   const pr = input.gitStatus.pr;
+  if (pr == null) return null;
   return {
     branch: input.threadBranch,
     observedAt: input.observedAt,
-    pr:
-      pr == null
-        ? null
-        : {
-            number: pr.number,
-            title: pr.title,
-            url: pr.url,
-            baseRef: pr.baseRef,
-            headRef: pr.headRef,
-            state: pr.state,
-            updatedAt: pr.updatedAt ?? null,
-          },
+    pr: {
+      number: pr.number,
+      title: pr.title,
+      url: pr.url,
+      baseRef: pr.baseRef,
+      headRef: pr.headRef,
+      state: pr.state,
+      updatedAt: pr.updatedAt ?? null,
+    },
   };
 }
 

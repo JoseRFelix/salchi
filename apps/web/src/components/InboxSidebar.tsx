@@ -57,13 +57,21 @@ import {
   resolveInboxSnoozePresets,
   type InboxLifecycleSection,
 } from "../inboxLifecycle";
+import { inboxChangeRequestSettleSource } from "../inboxChangeRequest";
 import {
-  InboxChangeRequestSnapshots,
-  inboxChangeRequestSettleSource,
-  inboxChangeRequestSnapshotMatches,
-  type InboxChangeRequestSnapshot,
-} from "../inboxChangeRequest";
+  groupInboxChangeRequestObservationTargets,
+  type InboxChangeRequestObservationTarget,
+  useInboxChangeRequestSnapshots,
+} from "../inboxChangeRequestState";
 import { classifyInboxBackgroundThread } from "../inboxThreadStatus";
+import {
+  buildInboxSearchListItems,
+  buildInboxSidebarListItems,
+  inboxSidebarListItemSize,
+  inboxSidebarListItemType,
+  shouldVirtualizeInboxList,
+  type InboxSidebarListItem,
+} from "../inboxSidebarList";
 import {
   INBOX_SETTLED_INITIAL_COUNT,
   INBOX_SETTLED_PAGE_COUNT,
@@ -78,7 +86,6 @@ import {
   resolveInboxSearchHighlight,
   resolveInboxParkForwardTarget,
   reconcileInboxTitleRegeneration,
-  shouldVirtualizeInboxActiveThreads,
 } from "../inboxSidebarPresentation";
 import {
   resolveShortcutCommand,
@@ -135,7 +142,8 @@ import { Button } from "./ui/button";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "./ui/menu";
 import { Input } from "./ui/input";
 import { useServerKeybindings } from "../rpc/serverState";
-import { useFixedSharedScrollVirtualizer } from "./virtualization/useSharedScrollVirtualizer";
+import { VirtualizedList } from "./virtualization/VirtualizedList";
+import { InboxChangeRequestObservers } from "./inbox/InboxChangeRequestObservers";
 import { InboxProjectPicker, ALL_PROJECTS_SCOPE } from "./inbox/InboxProjectPicker";
 import {
   InboxThreadRow,
@@ -156,31 +164,26 @@ import { getAcknowledgedCompletionTurnId } from "../threadCompletion";
 import { setThreadCompletionAttention } from "../threadAttention";
 
 const MAX_WAKE_TIMEOUT_MS = 2_147_483_647;
-const INBOX_CARD_ROW_STRIDE = 82;
-const INBOX_SLIM_ROW_STRIDE = 40;
-const INBOX_ACTIVE_VIRTUALIZATION_MOBILE_INITIAL_COUNT = 8;
-const INBOX_ACTIVE_VIRTUALIZATION_DESKTOP_INITIAL_COUNT = 12;
-const INBOX_ACTIVE_VIRTUALIZATION_MOBILE_OVERSCAN = INBOX_CARD_ROW_STRIDE * 3;
-const INBOX_ACTIVE_VIRTUALIZATION_DESKTOP_OVERSCAN = INBOX_CARD_ROW_STRIDE * 6;
-const INBOX_SETTLED_VIRTUALIZATION_OVERSCAN = INBOX_SLIM_ROW_STRIDE * 4;
-const INBOX_CHANGE_REQUEST_SNAPSHOTS_KEY = "salchi:inbox-change-request-snapshots:v1";
-const EMPTY_INBOX_CHANGE_REQUEST_SNAPSHOTS: Record<string, InboxChangeRequestSnapshot> = {};
 
 function InboxShelf(props: {
   readonly title: string;
   readonly count: number;
   readonly expanded: boolean;
   readonly tone: "snoozed" | "settled";
+  readonly virtualized?: boolean;
   readonly onToggle: () => void;
 }) {
   if (props.count === 0) return null;
   return (
-    <SidebarMenuItem className="list-none py-1.5">
+    <SidebarMenuItem
+      {...(props.virtualized ? { render: <div role="listitem" /> } : {})}
+      className="h-[27px] list-none"
+    >
       <button
         type="button"
         aria-expanded={props.expanded}
         data-testid={`inbox-${props.tone}-shelf-toggle`}
-        className="flex w-full cursor-pointer items-center gap-2 px-2 text-left focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+        className="flex h-full w-full cursor-pointer items-center gap-2 px-2 text-left focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
         onClick={props.onToggle}
       >
         <span
@@ -205,6 +208,47 @@ function InboxShelf(props: {
             props.expanded && "rotate-180",
           )}
         />
+      </button>
+    </SidebarMenuItem>
+  );
+}
+
+function InboxDivider(props: {
+  readonly tone: "drafts" | "pinned";
+  readonly virtualized?: boolean;
+}) {
+  return (
+    <SidebarMenuItem
+      {...(props.virtualized ? { render: <div role="separator" /> } : {})}
+      aria-hidden
+      className="h-[13px] list-none px-2 py-1.5"
+    >
+      <div
+        className={cn(
+          "h-px w-full",
+          props.tone === "drafts" ? "bg-amber-500/25" : "bg-sidebar-border/70",
+        )}
+      />
+    </SidebarMenuItem>
+  );
+}
+
+function InboxSettledLoadMore(props: {
+  readonly hiddenCount: number;
+  readonly virtualized?: boolean;
+  readonly onClick: () => void;
+}) {
+  return (
+    <SidebarMenuItem
+      {...(props.virtualized ? { render: <div role="listitem" /> } : {})}
+      className="h-9 list-none px-2 py-1"
+    >
+      <button
+        type="button"
+        className="flex h-7 w-full cursor-pointer items-center rounded-md px-2 text-left text-xs text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+        onClick={props.onClick}
+      >
+        Show {Math.min(INBOX_SETTLED_PAGE_COUNT, props.hiddenCount)} more
       </button>
     </SidebarMenuItem>
   );
@@ -349,11 +393,8 @@ export default function InboxSidebar() {
     INBOX_SETTLED_SHELF_DEFAULT_EXPANDED,
     Schema.Boolean,
   );
-  const [changeRequestSnapshots, setChangeRequestSnapshots] = useLocalStorage(
-    INBOX_CHANGE_REQUEST_SNAPSHOTS_KEY,
-    EMPTY_INBOX_CHANGE_REQUEST_SNAPSHOTS,
-    InboxChangeRequestSnapshots,
-  );
+  const { snapshots: changeRequestSnapshots, recordObservation: recordChangeRequestObservation } =
+    useInboxChangeRequestSnapshots();
   const settledPagingScopeKey = projectScopeKey ?? ALL_PROJECTS_SCOPE;
   const [settledPaging, setSettledPaging] = useState({
     scopeKey: settledPagingScopeKey,
@@ -363,9 +404,6 @@ export default function InboxSidebar() {
     settledPaging.scopeKey === settledPagingScopeKey
       ? settledPaging.visibleCount
       : INBOX_SETTLED_INITIAL_COUNT;
-  const scrollViewportRef = useRef<HTMLDivElement | null>(null);
-  const activeListRef = useRef<HTMLUListElement | null>(null);
-  const settledListRef = useRef<HTMLUListElement | null>(null);
   const draggedPinnedKeyRef = useRef<string | null>(null);
   const [optimisticPinnedRootKeys, setOptimisticPinnedRootKeys] = useState<
     readonly string[] | null
@@ -452,6 +490,22 @@ export default function InboxSidebar() {
           ),
     [scopedProjectRefKeys, threads],
   );
+  const changeRequestObservationGroups = useMemo(() => {
+    const targets: InboxChangeRequestObservationTarget[] = [];
+    for (const thread of scopedThreads) {
+      if (thread.branch === null) continue;
+      const projectKey = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+      const cwd = thread.worktreePath ?? projectIdentityByScopedKey.get(projectKey)?.cwd ?? null;
+      if (cwd === null) continue;
+      targets.push({
+        environmentId: thread.environmentId,
+        cwd,
+        threadKey: scopedThreadKey(threadRefFromSummary(thread)),
+        branch: thread.branch,
+      });
+    }
+    return groupInboxChangeRequestObservationTargets(targets);
+  }, [projectIdentityByScopedKey, scopedThreads]);
   const threadByKey = useMemo(
     () =>
       new Map(
@@ -493,26 +547,6 @@ export default function InboxSidebar() {
       ),
     [changeRequestSnapshots],
   );
-  const changeRequestKnownThreadKeys = useMemo(
-    () => new Set(Object.keys(changeRequestSnapshots)),
-    [changeRequestSnapshots],
-  );
-  const recordChangeRequestSnapshot = useCallback(
-    (threadKey: string, snapshot: InboxChangeRequestSnapshot | null) => {
-      setChangeRequestSnapshots((current) => {
-        const previous = current[threadKey];
-        if (snapshot === null) {
-          if (previous === undefined) return current;
-          const next = { ...current };
-          delete next[threadKey];
-          return next;
-        }
-        if (inboxChangeRequestSnapshotMatches(previous, snapshot)) return current;
-        return { ...current, [threadKey]: snapshot };
-      });
-    },
-    [setChangeRequestSnapshots],
-  );
   const backgroundLivenessByLifecycleKey = useMemo(() => {
     const result = new Map<string, "working" | "monitoring">();
     for (const thread of scopedThreads) {
@@ -539,11 +573,9 @@ export default function InboxSidebar() {
         autoSettleAfterDays: settings.sidebarAutoSettleAfterDays,
         autoSettleOnMerge: settings.sidebarAutoSettleOnMerge,
         changeRequestByThreadKey,
-        changeRequestKnownThreadKeys,
       }),
     [
       changeRequestByThreadKey,
-      changeRequestKnownThreadKeys,
       draftThreadKeys,
       now,
       scopedThreads,
@@ -637,25 +669,6 @@ export default function InboxSidebar() {
     }
   }, [optimisticPinnedRootKeys, pinnedRootKeys]);
 
-  const shouldVirtualizeActive =
-    normalizedSearch.length === 0 && shouldVirtualizeInboxActiveThreads(sectionItems.active.length);
-  const activeVirtualRange = useFixedSharedScrollVirtualizer({
-    enabled: shouldVirtualizeActive,
-    itemCount: sectionItems.active.length,
-    itemStride: INBOX_CARD_ROW_STRIDE,
-    overscan: isMobile
-      ? INBOX_ACTIVE_VIRTUALIZATION_MOBILE_OVERSCAN
-      : INBOX_ACTIVE_VIRTUALIZATION_DESKTOP_OVERSCAN,
-    initialRenderCount: isMobile
-      ? INBOX_ACTIVE_VIRTUALIZATION_MOBILE_INITIAL_COUNT
-      : INBOX_ACTIVE_VIRTUALIZATION_DESKTOP_INITIAL_COUNT,
-    listRef: activeListRef,
-    scrollViewportRef,
-  });
-  const visibleActiveItems = shouldVirtualizeActive
-    ? sectionItems.active.slice(activeVirtualRange.startIndex, activeVirtualRange.endIndex)
-    : sectionItems.active;
-  const activeListHeight = sectionItems.active.length * INBOX_CARD_ROW_STRIDE;
   const visibleSnoozedItems = useMemo(
     () =>
       resolveInboxShelfItems({
@@ -678,27 +691,36 @@ export default function InboxSidebar() {
     [routeThreadKey, sectionItems.settled, settledShelfExpanded, settledVisibleCount],
   );
   const hiddenSettledCount = Math.max(0, sectionItems.settled.length - visibleSettledItems.length);
-  const shouldVirtualizeSettled =
-    normalizedSearch.length === 0 &&
-    isMobile &&
-    settledShelfExpanded &&
-    visibleSettledItems.length > 0 &&
-    !visibleSettledItems.some(
-      (item) => scopedThreadKey(threadRefFromSummary(item.thread)) === routeThreadKey,
-    );
-  const settledVirtualRange = useFixedSharedScrollVirtualizer({
-    enabled: shouldVirtualizeSettled,
-    itemCount: visibleSettledItems.length,
-    itemStride: INBOX_SLIM_ROW_STRIDE,
-    overscan: INBOX_SETTLED_VIRTUALIZATION_OVERSCAN,
-    initialRenderCount: 0,
-    listRef: settledListRef,
-    scrollViewportRef,
+  const inboxListItems = useMemo(
+    () =>
+      buildInboxSidebarListItems({
+        drafts: sectionItems.drafts,
+        pinned: displayedPinnedItems,
+        active: sectionItems.active,
+        visibleSnoozed: visibleSnoozedItems,
+        snoozedCount: sectionItems.snoozed.length,
+        snoozedExpanded: snoozedShelfExpanded,
+        visibleSettled: visibleSettledItems,
+        settledCount: sectionItems.settled.length,
+        settledExpanded: settledShelfExpanded,
+        hiddenSettledCount,
+      }),
+    [
+      displayedPinnedItems,
+      hiddenSettledCount,
+      sectionItems,
+      settledShelfExpanded,
+      snoozedShelfExpanded,
+      visibleSettledItems,
+      visibleSnoozedItems,
+    ],
+  );
+  const searchListItems = useMemo(() => buildInboxSearchListItems(searchResults), [searchResults]);
+  const renderedListItems = normalizedSearch.length > 0 ? searchListItems : inboxListItems;
+  const shouldUseVirtualizedList = shouldVirtualizeInboxList({
+    isMobile,
+    itemCount: renderedListItems.length,
   });
-  const renderedSettledItems = shouldVirtualizeSettled
-    ? visibleSettledItems.slice(settledVirtualRange.startIndex, settledVirtualRange.endIndex)
-    : visibleSettledItems;
-  const settledListHeight = visibleSettledItems.length * INBOX_SLIM_ROW_STRIDE;
   const orderedItems = useMemo(
     () => [
       ...sectionItems.drafts,
@@ -1373,112 +1395,179 @@ export default function InboxSidebar() {
       .catch((error) => lifecycleErrorToast("Could not rename thread", error));
   }, [renameTarget, renameValue]);
 
-  const renderRows = (
-    items: readonly SidebarThreadTreeItem<SidebarThreadSummary>[],
+  const renderThreadRow = (
+    item: SidebarThreadTreeItem<SidebarThreadSummary>,
     section: InboxLifecycleSection,
-    virtualRange?: {
-      readonly startIndex: number;
-      readonly setSize: number;
-      readonly stride: number;
-    },
-  ) =>
-    items.map((item, itemIndex) => {
-      const thread = item.thread;
-      const threadKey = scopedThreadKey(threadRefFromSummary(thread));
-      const lifecycleThreadKey = lifecycleThreadKeyByThreadKey.get(threadKey) ?? threadKey;
-      const lifecycleThread = lifecycleThreadByThreadKey.get(threadKey) ?? thread;
-      const rootIndex = effectivePinnedRootKeys.indexOf(lifecycleThreadKey);
-      const projectKey = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
-      return (
-        <InboxThreadRow
-          key={threadKey}
-          thread={thread}
-          lifecycleThread={lifecycleThread}
-          depth={item.depth}
-          childCount={item.childCount}
-          section={section}
-          projectIdentity={projectIdentityByScopedKey.get(projectKey) ?? null}
-          lifecycleThreadKey={lifecycleThreadKey}
-          isLifecycleRoot={threadKey === lifecycleThreadKey}
-          isActive={routeThreadKey === threadKey}
-          isDraft={draftThreadKeys.has(threadKey)}
-          draftId={draftIdByThreadKey.get(threadKey) ?? null}
-          isSelected={selectedThreadKeys.has(threadKey) || highlightedSearchKey === threadKey}
-          hasActiveLocalDispatch={activeLocalDispatchThreadKeys.has(threadKey)}
-          backgroundLiveness={backgroundLivenessByLifecycleKey.get(lifecycleThreadKey) ?? null}
-          isPending={pendingThreadKeys.has(threadKey)}
-          isThreadExpanded={threadExpandedById[threadKey] ?? true}
-          now={now}
-          timestampFormat={settings.timestampFormat}
-          lastVisitedAt={threadLastVisitedAtById[lifecycleThreadKey] ?? null}
-          canPin={supportsThreadLifecycleCapability(lifecycleThread.environmentId, "threadPinning")}
-          canSnooze={
-            supportsThreadLifecycleCapability(lifecycleThread.environmentId, "threadSnooze") &&
-            canSnoozeInboxThread(lifecycleThread, { now })
-          }
-          canSettle={
-            supportsThreadLifecycleCapability(lifecycleThread.environmentId, "threadSettlement") &&
-            (section === "settled" || canSettleInboxThread(lifecycleThread, { now }))
-          }
-          canReorderPinned={supportsThreadLifecycleCapability(
-            lifecycleThread.environmentId,
-            "threadPinReorder",
-          )}
-          canRegenerateTitle={supportsThreadLifecycleCapability(
-            thread.environmentId,
-            "threadTitleRegeneration",
-          )}
-          canMarkUnread={getAcknowledgedCompletionTurnId(thread) !== null}
-          canMovePinUp={rootIndex > 0}
-          canMovePinDown={rootIndex >= 0 && rootIndex < effectivePinnedRootKeys.length - 1}
-          changeRequestSnapshot={changeRequestSnapshots[threadKey] ?? null}
-          isRenaming={
-            renameTarget !== null &&
-            scopedThreadKey(threadRefFromSummary(renameTarget)) === threadKey
-          }
-          renameValue={renameValue}
-          isRegeneratingTitle={regeneratingTitleByThreadKey[threadKey] !== undefined}
-          onNavigate={navigateToThread}
-          onAction={runAction}
-          onToggleExpanded={toggleThreadExpanded}
-          onPinnedDragStart={(key) => {
-            draggedPinnedKeyRef.current = key;
-          }}
-          onPinnedDrop={(targetKey) => {
-            const movedKey = draggedPinnedKeyRef.current;
-            draggedPinnedKeyRef.current = null;
-            if (!movedKey || movedKey === targetKey) return;
-            const next = effectivePinnedRootKeys.filter((key) => key !== movedKey);
-            const targetIndex = next.indexOf(targetKey);
-            if (targetIndex < 0) return;
-            next.splice(targetIndex, 0, movedKey);
-            setOptimisticPinnedRootKeys(next);
-            void dispatchPinnedOrder(next, movedKey).catch((error) => {
-              setOptimisticPinnedRootKeys(null);
-              lifecycleErrorToast("Could not reorder pinned threads", error);
-            });
-          }}
-          onChangeRequestSnapshot={(snapshot) => recordChangeRequestSnapshot(threadKey, snapshot)}
-          onAcknowledgeWoke={(wokeAt) =>
-            useUiStateStore.getState().markThreadVisited(lifecycleThreadKey, wokeAt)
-          }
-          onStartRename={() => {
-            setRenameTarget(thread);
-            setRenameValue(resolveSidebarThreadDisplayTitle(thread));
-          }}
-          onRenameValueChange={setRenameValue}
-          onCommitRename={commitRename}
-          onCancelRename={() => setRenameTarget(null)}
-          {...(virtualRange
-            ? {
-                virtualIndex: virtualRange.startIndex + itemIndex,
-                virtualSetSize: virtualRange.setSize,
-                virtualStride: virtualRange.stride,
-              }
-            : {})}
-        />
-      );
-    });
+    listPosition?: { readonly index: number; readonly size: number },
+  ) => {
+    const thread = item.thread;
+    const threadKey = scopedThreadKey(threadRefFromSummary(thread));
+    const lifecycleThreadKey = lifecycleThreadKeyByThreadKey.get(threadKey) ?? threadKey;
+    const lifecycleThread = lifecycleThreadByThreadKey.get(threadKey) ?? thread;
+    const rootIndex = effectivePinnedRootKeys.indexOf(lifecycleThreadKey);
+    const projectKey = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+    return (
+      <InboxThreadRow
+        key={threadKey}
+        thread={thread}
+        lifecycleThread={lifecycleThread}
+        depth={item.depth}
+        childCount={item.childCount}
+        section={section}
+        projectIdentity={projectIdentityByScopedKey.get(projectKey) ?? null}
+        lifecycleThreadKey={lifecycleThreadKey}
+        isLifecycleRoot={threadKey === lifecycleThreadKey}
+        isActive={routeThreadKey === threadKey}
+        isDraft={draftThreadKeys.has(threadKey)}
+        draftId={draftIdByThreadKey.get(threadKey) ?? null}
+        isSelected={selectedThreadKeys.has(threadKey) || highlightedSearchKey === threadKey}
+        hasActiveLocalDispatch={activeLocalDispatchThreadKeys.has(threadKey)}
+        backgroundLiveness={backgroundLivenessByLifecycleKey.get(lifecycleThreadKey) ?? null}
+        isPending={pendingThreadKeys.has(threadKey)}
+        isThreadExpanded={threadExpandedById[threadKey] ?? true}
+        now={now}
+        timestampFormat={settings.timestampFormat}
+        lastVisitedAt={threadLastVisitedAtById[lifecycleThreadKey] ?? null}
+        canPin={supportsThreadLifecycleCapability(lifecycleThread.environmentId, "threadPinning")}
+        canSnooze={
+          supportsThreadLifecycleCapability(lifecycleThread.environmentId, "threadSnooze") &&
+          canSnoozeInboxThread(lifecycleThread, { now })
+        }
+        canSettle={
+          supportsThreadLifecycleCapability(lifecycleThread.environmentId, "threadSettlement") &&
+          (section === "settled" || canSettleInboxThread(lifecycleThread, { now }))
+        }
+        canReorderPinned={supportsThreadLifecycleCapability(
+          lifecycleThread.environmentId,
+          "threadPinReorder",
+        )}
+        canRegenerateTitle={supportsThreadLifecycleCapability(
+          thread.environmentId,
+          "threadTitleRegeneration",
+        )}
+        canMarkUnread={getAcknowledgedCompletionTurnId(thread) !== null}
+        canMovePinUp={rootIndex > 0}
+        canMovePinDown={rootIndex >= 0 && rootIndex < effectivePinnedRootKeys.length - 1}
+        changeRequestSnapshot={changeRequestSnapshots[threadKey] ?? null}
+        isRenaming={
+          renameTarget !== null && scopedThreadKey(threadRefFromSummary(renameTarget)) === threadKey
+        }
+        renameValue={renameValue}
+        isRegeneratingTitle={regeneratingTitleByThreadKey[threadKey] !== undefined}
+        onNavigate={navigateToThread}
+        onAction={runAction}
+        onToggleExpanded={toggleThreadExpanded}
+        onPinnedDragStart={(key) => {
+          draggedPinnedKeyRef.current = key;
+        }}
+        onPinnedDrop={(targetKey) => {
+          const movedKey = draggedPinnedKeyRef.current;
+          draggedPinnedKeyRef.current = null;
+          if (!movedKey || movedKey === targetKey) return;
+          const next = effectivePinnedRootKeys.filter((key) => key !== movedKey);
+          const targetIndex = next.indexOf(targetKey);
+          if (targetIndex < 0) return;
+          next.splice(targetIndex, 0, movedKey);
+          setOptimisticPinnedRootKeys(next);
+          void dispatchPinnedOrder(next, movedKey).catch((error) => {
+            setOptimisticPinnedRootKeys(null);
+            lifecycleErrorToast("Could not reorder pinned threads", error);
+          });
+        }}
+        onAcknowledgeWoke={(wokeAt) =>
+          useUiStateStore.getState().markThreadVisited(lifecycleThreadKey, wokeAt)
+        }
+        onStartRename={() => {
+          setRenameTarget(thread);
+          setRenameValue(resolveSidebarThreadDisplayTitle(thread));
+        }}
+        onRenameValueChange={setRenameValue}
+        onCommitRename={commitRename}
+        onCancelRename={() => setRenameTarget(null)}
+        {...(listPosition
+          ? {
+              virtualized: true,
+              listPosition: listPosition.index + 1,
+              listSize: listPosition.size,
+            }
+          : {})}
+      />
+    );
+  };
+
+  const renderSearchRow = (
+    item: Extract<InboxSidebarListItem, { readonly kind: "search" }>,
+    listPosition?: { readonly index: number; readonly size: number },
+  ) => {
+    const thread = item.item.thread;
+    const threadKey = scopedThreadKey(threadRefFromSummary(thread));
+    const lifecycleKey = lifecycleThreadKeyByThreadKey.get(threadKey) ?? threadKey;
+    const lifecycleThread = lifecycleThreadByThreadKey.get(threadKey) ?? thread;
+    const projectKey = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+    return (
+      <InboxSearchResultRow
+        key={item.key}
+        optionId={`inbox-search-option-${item.index}`}
+        thread={thread}
+        lifecycleThread={lifecycleThread}
+        projectIdentity={projectIdentityByScopedKey.get(projectKey) ?? null}
+        isDraft={draftThreadKeys.has(threadKey)}
+        isActive={routeThreadKey === threadKey}
+        isHighlighted={highlightedSearchKey === threadKey}
+        hasActiveLocalDispatch={activeLocalDispatchThreadKeys.has(threadKey)}
+        backgroundLiveness={backgroundLivenessByLifecycleKey.get(lifecycleKey) ?? null}
+        now={now}
+        lastVisitedAt={threadLastVisitedAtById[lifecycleKey] ?? null}
+        changeRequestSnapshot={changeRequestSnapshots[threadKey] ?? null}
+        onNavigate={navigateToThread}
+        onHighlight={() => setSearchHighlightIndex(item.index)}
+        {...(listPosition
+          ? {
+              virtualized: true,
+              listPosition: listPosition.index + 1,
+              listSize: listPosition.size,
+            }
+          : {})}
+      />
+    );
+  };
+
+  const renderListItem = (item: InboxSidebarListItem, index: number, virtualized: boolean) => {
+    const listPosition = virtualized ? { index, size: renderedListItems.length } : undefined;
+    switch (item.kind) {
+      case "thread":
+        return renderThreadRow(item.item, item.section, listPosition);
+      case "search":
+        return renderSearchRow(item, listPosition);
+      case "divider":
+        return <InboxDivider key={item.key} tone={item.tone} virtualized={virtualized} />;
+      case "shelf":
+        return (
+          <InboxShelf
+            key={item.key}
+            title={item.section === "snoozed" ? "Snoozed" : "Settled"}
+            count={item.count}
+            expanded={item.expanded}
+            tone={item.section}
+            virtualized={virtualized}
+            onToggle={
+              item.section === "snoozed"
+                ? () => setSnoozedShelfExpanded((expanded) => !expanded)
+                : () => setSettledShelfExpanded((expanded) => !expanded)
+            }
+          />
+        );
+      case "load-more":
+        return (
+          <InboxSettledLoadMore
+            key={item.key}
+            hiddenCount={item.count}
+            virtualized={virtualized}
+            onClick={showMoreSettled}
+          />
+        );
+    }
+  };
 
   const totalVisibleThreads =
     normalizedSearch.length > 0
@@ -1498,8 +1587,12 @@ export default function InboxSidebar() {
   return (
     <>
       <SidebarUsageBackgroundRefresh />
+      <InboxChangeRequestObservers
+        groups={changeRequestObservationGroups}
+        onObservation={recordChangeRequestObservation}
+      />
       <SidebarChromeHeader isElectron={isElectron} />
-      <SidebarContent className="gap-0" scrollViewportRef={scrollViewportRef}>
+      <div className="flex min-h-0 flex-1 flex-col">
         <SidebarGroup className="px-2 pt-2 pb-1">
           <div className="flex items-center gap-1">
             <div className="relative min-w-0 flex-1">
@@ -1674,168 +1767,67 @@ export default function InboxSidebar() {
           </div>
         ) : null}
 
-        <SidebarGroup
-          id="inbox-thread-list"
-          className="px-2 pt-0 pb-3"
-          data-testid="inbox-thread-list"
-        >
-          <SidebarMenu
-            className="gap-0"
-            role={normalizedSearch.length > 0 ? "listbox" : undefined}
-            aria-label={normalizedSearch.length > 0 ? "Thread search results" : undefined}
-          >
-            {normalizedSearch.length > 0 ? (
-              searchResults.map(({ item }, index) => {
-                const thread = item.thread;
-                const threadKey = scopedThreadKey(threadRefFromSummary(thread));
-                const lifecycleKey = lifecycleThreadKeyByThreadKey.get(threadKey) ?? threadKey;
-                const lifecycleThread = lifecycleThreadByThreadKey.get(threadKey) ?? thread;
-                const projectKey = scopedProjectKey(
-                  scopeProjectRef(thread.environmentId, thread.projectId),
-                );
-                return (
-                  <InboxSearchResultRow
-                    key={threadKey}
-                    optionId={`inbox-search-option-${index}`}
-                    thread={thread}
-                    lifecycleThread={lifecycleThread}
-                    projectIdentity={projectIdentityByScopedKey.get(projectKey) ?? null}
-                    isDraft={draftThreadKeys.has(threadKey)}
-                    isActive={routeThreadKey === threadKey}
-                    isHighlighted={highlightedSearchKey === threadKey}
-                    hasActiveLocalDispatch={activeLocalDispatchThreadKeys.has(threadKey)}
-                    backgroundLiveness={backgroundLivenessByLifecycleKey.get(lifecycleKey) ?? null}
-                    now={now}
-                    lastVisitedAt={threadLastVisitedAtById[lifecycleKey] ?? null}
-                    changeRequestSnapshot={changeRequestSnapshots[threadKey] ?? null}
-                    onChangeRequestSnapshot={(snapshot) =>
-                      recordChangeRequestSnapshot(threadKey, snapshot)
-                    }
-                    onNavigate={navigateToThread}
-                    onHighlight={() => setSearchHighlightIndex(index)}
-                  />
-                );
-              })
-            ) : (
-              <>
-                {renderRows(sectionItems.drafts, "drafts")}
-                {sectionItems.drafts.length > 0 ? (
-                  <SidebarMenuItem
-                    aria-hidden
-                    className="mx-2 my-1.5 h-px list-none bg-amber-500/25"
-                  />
-                ) : null}
-                {renderRows(displayedPinnedItems, "pinned")}
-                {sectionItems.pinned.length > 0 ? (
-                  <SidebarMenuItem
-                    aria-hidden
-                    className="mx-2 my-1.5 h-px list-none bg-sidebar-border/70"
-                  />
-                ) : null}
-                {sectionItems.active.length > 0 ? (
-                  <SidebarMenuItem className="list-none">
-                    <SidebarMenu
-                      ref={activeListRef}
-                      aria-label="Active threads"
-                      className={cn("gap-0", shouldVirtualizeActive && "relative block")}
-                      style={shouldVirtualizeActive ? { height: activeListHeight } : undefined}
-                    >
-                      {renderRows(
-                        visibleActiveItems,
-                        "active",
-                        shouldVirtualizeActive
-                          ? {
-                              startIndex: activeVirtualRange.startIndex,
-                              setSize: sectionItems.active.length,
-                              stride: INBOX_CARD_ROW_STRIDE,
-                            }
-                          : undefined,
-                      )}
-                    </SidebarMenu>
-                  </SidebarMenuItem>
-                ) : null}
-                <InboxShelf
-                  title="Snoozed"
-                  count={sectionItems.snoozed.length}
-                  expanded={normalizedSearch.length > 0 || snoozedShelfExpanded}
-                  tone="snoozed"
-                  onToggle={() => setSnoozedShelfExpanded((expanded) => !expanded)}
-                />
-                {renderRows(visibleSnoozedItems, "snoozed")}
-                <InboxShelf
-                  title="Settled"
-                  count={sectionItems.settled.length}
-                  expanded={normalizedSearch.length > 0 || settledShelfExpanded}
-                  tone="settled"
-                  onToggle={() => setSettledShelfExpanded((expanded) => !expanded)}
-                />
-                {visibleSettledItems.length > 0 ? (
-                  <SidebarMenuItem className="list-none">
-                    <SidebarMenu
-                      ref={settledListRef}
-                      aria-label="Settled threads"
-                      className={cn("gap-0", shouldVirtualizeSettled && "relative block")}
-                      style={shouldVirtualizeSettled ? { height: settledListHeight } : undefined}
-                    >
-                      {renderRows(
-                        renderedSettledItems,
-                        "settled",
-                        shouldVirtualizeSettled
-                          ? {
-                              startIndex: settledVirtualRange.startIndex,
-                              setSize: visibleSettledItems.length,
-                              stride: INBOX_SLIM_ROW_STRIDE,
-                            }
-                          : undefined,
-                      )}
-                    </SidebarMenu>
-                  </SidebarMenuItem>
-                ) : null}
-                {settledShelfExpanded && hiddenSettledCount > 0 ? (
-                  <SidebarMenuItem className="list-none px-2 py-1">
-                    <button
-                      type="button"
-                      className="flex h-7 w-full cursor-pointer items-center rounded-md px-2 text-left text-xs text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-                      onClick={showMoreSettled}
-                    >
-                      Show {Math.min(INBOX_SETTLED_PAGE_COUNT, hiddenSettledCount)} more
-                    </button>
-                  </SidebarMenuItem>
-                ) : null}
-              </>
-            )}
-          </SidebarMenu>
+        {shouldUseVirtualizedList ? (
+          <VirtualizedList
+            id="inbox-thread-list"
+            data-testid="inbox-thread-list"
+            data={renderedListItems}
+            keyExtractor={(item) => item.key}
+            getItemType={(item) => inboxSidebarListItemType(item)}
+            getFixedItemSize={(item) => inboxSidebarListItemSize(item)}
+            renderItem={({ item, index }) => renderListItem(item, index, true)}
+            estimatedItemSize={82}
+            minOverscanItemCount={isMobile ? 4 : 8}
+            maintainVisibleContentPosition={{ data: true, size: true }}
+            role={normalizedSearch.length > 0 ? "listbox" : "list"}
+            aria-label={normalizedSearch.length > 0 ? "Thread search results" : "Inbox threads"}
+            className="min-h-0 flex-1 overflow-x-hidden px-2 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          />
+        ) : (
+          <SidebarContent className="gap-0">
+            <SidebarGroup className="px-2 pt-0 pb-3">
+              <SidebarMenu
+                id="inbox-thread-list"
+                data-testid="inbox-thread-list"
+                className="gap-0"
+                role={normalizedSearch.length > 0 ? "listbox" : undefined}
+                aria-label={normalizedSearch.length > 0 ? "Thread search results" : undefined}
+              >
+                {renderedListItems.map((item, index) => renderListItem(item, index, false))}
+              </SidebarMenu>
 
-          {!bootstrapComplete && totalScopedThreads === 0 ? (
-            <div className="space-y-2 px-2 py-3" aria-label="Loading inbox">
-              {[0, 1, 2].map((index) => (
-                <div key={index} className="h-[4.5rem] animate-pulse rounded-md bg-muted/45" />
-              ))}
-            </div>
-          ) : normalizedSearch.length > 0 && totalVisibleThreads === 0 ? (
-            <div className="flex flex-col items-center gap-1 px-4 py-10 text-center">
-              <SearchIcon className="size-5 text-muted-foreground/40" />
-              <span className="text-sm font-medium">No matching threads</span>
-              <span className="text-xs text-muted-foreground">Try another title.</span>
-            </div>
-          ) : totalScopedThreads === 0 ? (
-            <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
-              <span className="text-sm text-muted-foreground">
-                {projects.length === 0
-                  ? "No projects yet"
-                  : scopedProject
-                    ? `No threads in ${scopedProject.displayName} yet`
-                    : "No threads yet"}
-              </span>
-              {projects.length === 0 ? (
-                <Button size="sm" variant="outline" onClick={openAddProject}>
-                  Add project
-                </Button>
+              {!bootstrapComplete && totalScopedThreads === 0 ? (
+                <div className="space-y-2 px-2 py-3" aria-label="Loading inbox">
+                  {[0, 1, 2].map((index) => (
+                    <div key={index} className="h-[4.5rem] animate-pulse rounded-md bg-muted/45" />
+                  ))}
+                </div>
+              ) : normalizedSearch.length > 0 && totalVisibleThreads === 0 ? (
+                <div className="flex flex-col items-center gap-1 px-4 py-10 text-center">
+                  <SearchIcon className="size-5 text-muted-foreground/40" />
+                  <span className="text-sm font-medium">No matching threads</span>
+                  <span className="text-xs text-muted-foreground">Try another title.</span>
+                </div>
+              ) : totalScopedThreads === 0 ? (
+                <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
+                  <span className="text-sm text-muted-foreground">
+                    {projects.length === 0
+                      ? "No projects yet"
+                      : scopedProject
+                        ? `No threads in ${scopedProject.displayName} yet`
+                        : "No threads yet"}
+                  </span>
+                  {projects.length === 0 ? (
+                    <Button size="sm" variant="outline" onClick={openAddProject}>
+                      Add project
+                    </Button>
+                  ) : null}
+                </div>
               ) : null}
-            </div>
-          ) : null}
-        </SidebarGroup>
-      </SidebarContent>
+            </SidebarGroup>
+          </SidebarContent>
+        )}
+      </div>
       <SidebarSeparator />
       <SidebarChromeFooter />
     </>

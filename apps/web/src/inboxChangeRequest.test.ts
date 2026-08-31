@@ -56,7 +56,7 @@ describe("inbox change-request snapshots", () => {
     });
   });
 
-  it("distinguishes a known no-PR branch from an unobserved or mismatched branch", () => {
+  it("does not persist an entry for a branch without a pull request", () => {
     expect(
       nextInboxChangeRequestSnapshot({
         threadBranch: "feature/inbox",
@@ -64,7 +64,7 @@ describe("inbox change-request snapshots", () => {
         previous: null,
         observedAt: "2026-08-31T10:01:00.000Z",
       }),
-    ).toMatchObject({ branch: "feature/inbox", pr: null });
+    ).toBeNull();
     expect(
       inboxThreadHasBranchMismatch({
         threadBranch: "feature/inbox",

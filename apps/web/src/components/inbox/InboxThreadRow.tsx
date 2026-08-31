@@ -45,7 +45,7 @@ import { resolveSidebarThreadDisplayTitle, resolveThreadRowClassName } from "../
 import { InboxThreadStatus } from "../InboxThreadStatus";
 import { ProjectFavicon } from "../ProjectFavicon";
 import {
-  ThreadRowChangeRequestStatus,
+  InboxThreadRowChangeRequestStatus,
   ThreadRowRemoteStatus,
   ThreadRowTerminalStatus,
 } from "../ThreadStatusIndicators";
@@ -61,7 +61,6 @@ import {
 } from "../ui/menu";
 import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { getFixedVirtualItemStyle } from "../virtualization/useSharedScrollVirtualizer";
 
 export type InboxThreadAction =
   | "toggle-pin"
@@ -134,9 +133,9 @@ interface InboxThreadRowProps {
   readonly isRenaming: boolean;
   readonly renameValue: string;
   readonly isRegeneratingTitle: boolean;
-  readonly virtualIndex?: number;
-  readonly virtualSetSize?: number;
-  readonly virtualStride?: number;
+  readonly virtualized?: boolean;
+  readonly listPosition?: number;
+  readonly listSize?: number;
   readonly onNavigate: (threadRef: ScopedThreadRef, event: React.MouseEvent) => void;
   readonly onAction: (
     action: InboxThreadAction,
@@ -146,7 +145,6 @@ interface InboxThreadRowProps {
   readonly onToggleExpanded: (threadKey: string) => void;
   readonly onPinnedDragStart: (lifecycleThreadKey: string) => void;
   readonly onPinnedDrop: (targetLifecycleThreadKey: string) => void;
-  readonly onChangeRequestSnapshot: (snapshot: InboxChangeRequestSnapshot | null) => void;
   readonly onAcknowledgeWoke: (wokeAt: string) => void;
   readonly onStartRename: () => void;
   readonly onRenameValueChange: (value: string) => void;
@@ -527,9 +525,12 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
     const preview = draftPrompt.trim().split("\n", 1)[0]?.trim() || displayTitle;
     return (
       <SidebarMenuItem
+        render={props.virtualized ? <div role="listitem" /> : undefined}
         className="list-none py-0.5"
         data-thread-item
         data-testid={`inbox-thread-row-${thread.id}`}
+        aria-posinset={props.listPosition}
+        aria-setsize={props.listSize}
       >
         <div
           role="button"
@@ -682,6 +683,7 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
 
   return (
     <SidebarMenuItem
+      render={props.virtualized ? <div role="listitem" /> : undefined}
       className={cn(
         "group/inbox-row list-none rounded-md py-0.5 [content-visibility:auto]",
         rowVariant === "card"
@@ -690,10 +692,9 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
       )}
       data-thread-item
       data-selected={props.isSelected ? "true" : undefined}
-      data-virtual-index={props.virtualIndex}
       data-testid={`inbox-thread-row-${thread.id}`}
-      aria-posinset={props.virtualIndex === undefined ? undefined : props.virtualIndex + 1}
-      aria-setsize={props.virtualSetSize}
+      aria-posinset={props.listPosition}
+      aria-setsize={props.listSize}
       aria-busy={props.isRegeneratingTitle || undefined}
       draggable={draggable}
       onDragStart={(event) => {
@@ -709,11 +710,6 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
         event.preventDefault();
         props.onPinnedDrop(props.lifecycleThreadKey);
       }}
-      style={
-        props.virtualIndex === undefined || props.virtualStride === undefined
-          ? undefined
-          : getFixedVirtualItemStyle(props.virtualIndex, props.virtualStride)
-      }
     >
       <SidebarMenuButton
         render={<div role="button" tabIndex={0} />}
@@ -782,11 +778,10 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
                 />
               ) : null}
               {thread.branch !== null ? (
-                <ThreadRowChangeRequestStatus
+                <InboxThreadRowChangeRequestStatus
                   thread={thread}
                   showNumber
                   snapshot={props.changeRequestSnapshot}
-                  onSnapshot={props.onChangeRequestSnapshot}
                 />
               ) : null}
             </div>

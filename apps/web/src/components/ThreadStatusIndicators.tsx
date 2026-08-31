@@ -245,6 +245,27 @@ export function ThreadRowChangeRequestStatus({
   ) : null;
 }
 
+/**
+ * Pure change-request presentation for inbox rows. The inbox observes git
+ * targets above the virtualized list, so mounting a row never starts work or
+ * changes lifecycle classification.
+ */
+export function InboxThreadRowChangeRequestStatus({
+  thread,
+  showNumber = false,
+  snapshot,
+}: {
+  thread: SidebarThreadSummary;
+  showNumber?: boolean;
+  snapshot: InboxChangeRequestSnapshot | null;
+}) {
+  const pr = snapshot?.branch === thread.branch ? snapshot.pr : null;
+  const prStatus = prStatusIndicator(pr, null);
+  return prStatus ? (
+    <ThreadChangeRequestStatusView status={prStatus} showNumber={showNumber} />
+  ) : null;
+}
+
 function useThreadTerminalStatus(thread: SidebarThreadSummary): TerminalStatusIndicator | null {
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const runningTerminalIds = useTerminalStateStore(
