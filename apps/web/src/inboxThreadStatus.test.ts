@@ -108,6 +108,14 @@ describe("resolveInboxThreadStatus", () => {
       classifyInboxBackgroundThread(makeThread({ subagentRole: "Implement the feature" })),
     ).toBe("working");
   });
+
+  it("keeps a root failure visible above background child liveness", () => {
+    expect(
+      resolve(makeThread({ latestTurn: latestTurn("error") }), {
+        backgroundLiveness: "monitoring",
+      }),
+    ).toBe("failed");
+  });
 });
 
 describe("inbox working duration", () => {

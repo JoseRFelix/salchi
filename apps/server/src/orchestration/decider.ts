@@ -1605,35 +1605,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
       const isSessionActivity =
         command.session.status === "starting" || command.session.status === "running";
-      if (!isSessionActivity || (thread.settledOverride == null && thread.snoozedUntil == null)) {
+      if (!isSessionActivity || thread.settledOverride == null) {
         return sessionSetEvent;
       }
-      const lifecycleEvents: PlannedOrchestrationEvent[] = [];
-      if (thread.settledOverride != null) {
-        lifecycleEvents.push({
-          ...(yield* withEventBase({
-            aggregateKind: "thread",
-            aggregateId: command.threadId,
-            occurredAt: command.createdAt,
-            commandId: command.commandId,
-          })),
-          type: "thread.unsettled",
-          payload: { threadId: command.threadId, reason: "activity", updatedAt: command.createdAt },
-        });
-      }
-      if (thread.snoozedUntil != null) {
-        lifecycleEvents.push({
-          ...(yield* withEventBase({
-            aggregateKind: "thread",
-            aggregateId: command.threadId,
-            occurredAt: command.createdAt,
-            commandId: command.commandId,
-          })),
-          type: "thread.unsnoozed",
-          payload: { threadId: command.threadId, reason: "activity", updatedAt: command.createdAt },
-        });
-      }
-      return [...lifecycleEvents, sessionSetEvent];
+      const unsettledEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.unsettled",
+        payload: { threadId: command.threadId, reason: "activity", updatedAt: command.createdAt },
+      };
+      // Session adoption un-settles resumed work, but it must not cancel a
+      // snooze the user applied while that work was already running. New
+      // user turns still explicitly un-snooze in their command paths.
+      return [unsettledEvent, sessionSetEvent];
     }
 
     case "thread.message.assistant.delta": {

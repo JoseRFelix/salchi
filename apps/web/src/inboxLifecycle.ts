@@ -1,6 +1,8 @@
 import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
+import type { TimestampFormat } from "@salchi/contracts/settings";
 
 import type { SidebarThreadSummary } from "./types";
+import { formatShortTimestamp } from "./timestampFormat";
 
 export type InboxLifecycleSection = "drafts" | "pinned" | "active" | "snoozed" | "settled";
 
@@ -10,6 +12,11 @@ export interface InboxThreadPartitions<TThread> {
   readonly active: TThread[];
   readonly snoozed: TThread[];
   readonly settled: TThread[];
+}
+
+export interface InboxChangeRequestSettleSource {
+  readonly state: "open" | "closed" | "merged";
+  readonly updatedAt?: string | null | undefined;
 }
 
 export type InboxSnoozePresetId = "hour" | "three-hours" | "evening" | "tomorrow" | "next-week";
@@ -24,6 +31,7 @@ export interface InboxSnoozePreset {
 const HOUR_MS = 60 * 60 * 1_000;
 const DAY_MS = 24 * HOUR_MS;
 const PIN_ORDER_DIGITS = "abcdefghijklmnopqrstuvwxyz";
+export const INBOX_QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
 
 function validTimestampMs(value: string | null | undefined): number {
   if (!value) return 0;
@@ -48,6 +56,183 @@ function compareCreatedNewestFirst<
   return (
     validTimestampMs(right.createdAt) - validTimestampMs(left.createdAt) ||
     compareThreadIdentity(left, right)
+  );
+}
+
+type InboxThreadActivitySource = Pick<
+  SidebarThreadSummary,
+  "createdAt" | "latestUserMessageAt" | "latestTurn"
+>;
+
+function threadUserActivityAnchorAt(thread: InboxThreadActivitySource): string {
+  let anchor = thread.createdAt;
+  for (const candidate of [thread.latestUserMessageAt, thread.latestTurn?.requestedAt]) {
+    if (candidate != null && validTimestampMs(candidate) > validTimestampMs(anchor)) {
+      anchor = candidate;
+    }
+  }
+  return anchor;
+}
+
+export function changeRequestAutoSettles(
+  changeRequest: InboxChangeRequestSettleSource | null | undefined,
+  options: {
+    readonly autoSettleOnMerge?: boolean | undefined;
+    readonly thread?: InboxThreadActivitySource | null | undefined;
+  } = {},
+): boolean {
+  if (changeRequest == null) return false;
+  const terminal =
+    changeRequest.state === "closed" ||
+    (changeRequest.state === "merged" && options.autoSettleOnMerge !== false);
+  if (!terminal) return false;
+  if (changeRequest.updatedAt == null || options.thread == null) return true;
+  const changedAt = Date.parse(changeRequest.updatedAt);
+  const userActivityAt = Date.parse(threadUserActivityAnchorAt(options.thread));
+  return Number.isNaN(changedAt) || Number.isNaN(userActivityAt) || changedAt >= userActivityAt;
+}
+
+export function inboxThreadLastActivityAt(
+  thread: Pick<SidebarThreadSummary, "latestUserMessageAt" | "latestTurn">,
+): string | null {
+  const candidates = [
+    thread.latestUserMessageAt,
+    thread.latestTurn?.requestedAt,
+    thread.latestTurn?.startedAt,
+    thread.latestTurn?.completedAt,
+  ];
+  let latest: string | null = null;
+  let latestMs = Number.NEGATIVE_INFINITY;
+  for (const candidate of candidates) {
+    if (candidate == null) continue;
+    const candidateMs = Date.parse(candidate);
+    if (candidateMs > latestMs) {
+      latest = candidate;
+      latestMs = candidateMs;
+    }
+  }
+  return latest;
+}
+
+export function hasInboxQueuedTurnStart(
+  thread: Pick<SidebarThreadSummary, "latestUserMessageAt" | "latestTurn" | "session">,
+  options: { readonly now: string },
+): boolean {
+  if (thread.latestUserMessageAt == null || thread.session?.status === "error") return false;
+  const messageAt = Date.parse(thread.latestUserMessageAt);
+  const now = Date.parse(options.now);
+  if (Number.isNaN(messageAt) || Number.isNaN(now)) return false;
+  if (Math.abs(now - messageAt) > INBOX_QUEUED_TURN_START_GRACE_MS) return false;
+  if (thread.latestTurn == null) return true;
+  return [
+    thread.latestTurn.requestedAt,
+    thread.latestTurn.startedAt,
+    thread.latestTurn.completedAt,
+  ].every((candidate) => candidate == null || Date.parse(candidate) < messageAt);
+}
+
+export function canSettleInboxThread(
+  thread: Pick<
+    SidebarThreadSummary,
+    "hasPendingApprovals" | "hasPendingUserInput" | "latestUserMessageAt" | "latestTurn" | "session"
+  >,
+  options: { readonly now: string },
+): boolean {
+  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return false;
+  if (thread.session?.status === "connecting" || thread.session?.status === "running") return false;
+  return !hasInboxQueuedTurnStart(thread, options);
+}
+
+export function canSnoozeInboxThread(
+  thread: Pick<
+    SidebarThreadSummary,
+    "hasPendingApprovals" | "hasPendingUserInput" | "latestUserMessageAt" | "latestTurn" | "session"
+  >,
+  options: { readonly now: string },
+): boolean {
+  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return false;
+  return !hasInboxQueuedTurnStart(thread, options);
+}
+
+type InboxThreadSnoozeSource = Pick<
+  SidebarThreadSummary,
+  | "snoozedUntil"
+  | "snoozedAt"
+  | "hasPendingApprovals"
+  | "hasPendingUserInput"
+  | "session"
+  | "latestTurn"
+>;
+
+export function threadRaisedHandWhileSnoozed(thread: InboxThreadSnoozeSource): boolean {
+  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return true;
+  if (
+    thread.session?.status === "error" &&
+    (thread.snoozedAt == null ||
+      validTimestampMs(thread.session.updatedAt) > validTimestampMs(thread.snoozedAt))
+  ) {
+    return true;
+  }
+  return (
+    thread.snoozedAt != null &&
+    thread.latestTurn?.state === "completed" &&
+    thread.latestTurn.completedAt != null &&
+    validTimestampMs(thread.latestTurn.completedAt) > validTimestampMs(thread.snoozedAt)
+  );
+}
+
+export function effectiveInboxSnoozed(
+  thread: InboxThreadSnoozeSource,
+  options: { readonly now: string },
+): boolean {
+  if (thread.snoozedUntil == null) return false;
+  const wakeAt = Date.parse(thread.snoozedUntil);
+  const now = Date.parse(options.now);
+  if (Number.isNaN(wakeAt) || Number.isNaN(now) || wakeAt <= now) return false;
+  return !threadRaisedHandWhileSnoozed(thread);
+}
+
+export function effectiveInboxSettled(
+  thread: SidebarThreadSummary,
+  options: {
+    readonly now: string;
+    readonly autoSettleAfterDays: number | null;
+    readonly autoSettleOnMerge?: boolean | undefined;
+    readonly changeRequest?: InboxChangeRequestSettleSource | null | undefined;
+    readonly changeRequestKnown?: boolean | undefined;
+  },
+): boolean {
+  if (!canSettleInboxThread(thread, { now: options.now })) {
+    const queuedStartIsServerAdjudicated =
+      !thread.hasPendingApprovals &&
+      !thread.hasPendingUserInput &&
+      thread.session?.status !== "connecting" &&
+      thread.session?.status !== "running" &&
+      thread.settledOverride === "settled" &&
+      thread.settledAt != null &&
+      thread.latestUserMessageAt != null &&
+      validTimestampMs(thread.settledAt) >= validTimestampMs(thread.latestUserMessageAt);
+    if (!queuedStartIsServerAdjudicated) return false;
+  }
+  if (thread.settledOverride === "settled") return true;
+  if (thread.settledOverride === "active") return false;
+  if (
+    changeRequestAutoSettles(options.changeRequest, {
+      autoSettleOnMerge: options.autoSettleOnMerge,
+      thread,
+    })
+  ) {
+    return true;
+  }
+  if (options.changeRequest?.state === "open" || options.autoSettleAfterDays === null) return false;
+  // A branch with no observed change-request snapshot stays visible. This is
+  // conservative until its project is observed and avoids surprising hides.
+  if (thread.branch != null && options.changeRequestKnown === false) return false;
+  const lastActivityAt = inboxThreadLastActivityAt(thread);
+  if (lastActivityAt == null) return false;
+  return (
+    validTimestampMs(lastActivityAt) <
+    validTimestampMs(options.now) - options.autoSettleAfterDays * DAY_MS
   );
 }
 
@@ -82,17 +267,23 @@ export function resolveInboxLifecycleSection(input: {
   readonly thread: SidebarThreadSummary;
   readonly isDraft: boolean;
   readonly now: string;
+  readonly autoSettleAfterDays?: number | null | undefined;
+  readonly autoSettleOnMerge?: boolean | undefined;
+  readonly changeRequest?: InboxChangeRequestSettleSource | null | undefined;
+  readonly changeRequestKnown?: boolean | undefined;
 }): InboxLifecycleSection {
   if (input.isDraft) return "drafts";
+  if (effectiveInboxSnoozed(input.thread, { now: input.now })) return "snoozed";
   if (
-    input.thread.snoozedUntil != null &&
-    validTimestampMs(input.thread.snoozedUntil) > validTimestampMs(input.now)
-  ) {
-    return "snoozed";
-  }
-  if (input.thread.settledOverride === "settled" || input.thread.settledAt != null) {
+    effectiveInboxSettled(input.thread, {
+      now: input.now,
+      autoSettleAfterDays: input.autoSettleAfterDays ?? null,
+      autoSettleOnMerge: input.autoSettleOnMerge,
+      changeRequest: input.changeRequest,
+      changeRequestKnown: input.changeRequestKnown,
+    })
+  )
     return "settled";
-  }
   if (input.thread.pinnedAt != null) return "pinned";
   return "active";
 }
@@ -205,6 +396,10 @@ export function partitionInboxThreads<TThread extends SidebarThreadSummary>(inpu
   readonly threads: readonly TThread[];
   readonly draftThreadKeys: ReadonlySet<string>;
   readonly now: string;
+  readonly autoSettleAfterDays?: number | null | undefined;
+  readonly autoSettleOnMerge?: boolean | undefined;
+  readonly changeRequestByThreadKey?: ReadonlyMap<string, InboxChangeRequestSettleSource | null>;
+  readonly changeRequestKnownThreadKeys?: ReadonlySet<string>;
 }): InboxThreadPartitions<TThread> {
   const partitions: InboxThreadPartitions<TThread> = {
     drafts: [],
@@ -223,10 +418,17 @@ export function partitionInboxThreads<TThread extends SidebarThreadSummary>(inpu
     const ownKey = threadKey(thread);
     const rootKey = lifecycleKeyByThreadKey.get(ownKey) ?? ownKey;
     const lifecycleThread = rootByKey.get(rootKey) ?? thread;
+    const changeRequest = input.changeRequestByThreadKey?.get(rootKey);
     const section = resolveInboxLifecycleSection({
       thread: lifecycleThread,
       isDraft: input.draftThreadKeys.has(rootKey),
       now: input.now,
+      autoSettleAfterDays: input.autoSettleAfterDays,
+      autoSettleOnMerge: input.autoSettleOnMerge,
+      changeRequest,
+      changeRequestKnown:
+        input.changeRequestKnownThreadKeys == null ||
+        input.changeRequestKnownThreadKeys.has(rootKey),
     });
     partitions[section].push(thread);
   }
@@ -247,16 +449,34 @@ export function partitionInboxThreads<TThread extends SidebarThreadSummary>(inpu
       validTimestampMs(left.snoozedUntil) - validTimestampMs(right.snoozedUntil) ||
       compareCreatedNewestFirst(left, right),
   );
-  partitions.settled.sort(
-    (left, right) =>
-      validTimestampMs(right.settledAt) - validTimestampMs(left.settledAt) ||
-      compareThreadIdentity(left, right),
-  );
+  partitions.settled.sort((left, right) => {
+    const leftKey = threadKey(left);
+    const rightKey = threadKey(right);
+    const leftLifecycleKey = lifecycleKeyByThreadKey.get(leftKey) ?? leftKey;
+    const rightLifecycleKey = lifecycleKeyByThreadKey.get(rightKey) ?? rightKey;
+    return (
+      settledSortTimestampMs(right, input.changeRequestByThreadKey?.get(rightLifecycleKey)) -
+        settledSortTimestampMs(left, input.changeRequestByThreadKey?.get(leftLifecycleKey)) ||
+      compareThreadIdentity(left, right)
+    );
+  });
   return partitions;
 }
 
-function timeLabel(date: Date): string {
-  return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+function settledSortTimestampMs(
+  thread: SidebarThreadSummary,
+  changeRequest: InboxChangeRequestSettleSource | null | undefined,
+): number {
+  return Math.max(
+    validTimestampMs(thread.settledAt),
+    validTimestampMs(changeRequest?.updatedAt),
+    validTimestampMs(inboxThreadLastActivityAt(thread)),
+    validTimestampMs(thread.createdAt),
+  );
+}
+
+function timeLabel(date: Date, timestampFormat: TimestampFormat): string {
+  return formatShortTimestamp(date.toISOString(), timestampFormat);
 }
 
 function atHour(base: Date, hour: number): Date {
@@ -271,20 +491,23 @@ function addCalendarDays(base: Date, days: number): Date {
   return next;
 }
 
-export function resolveInboxSnoozePresets(now: Date): ReadonlyArray<InboxSnoozePreset> {
+export function resolveInboxSnoozePresets(
+  now: Date,
+  timestampFormat: TimestampFormat = "locale",
+): ReadonlyArray<InboxSnoozePreset> {
   const inAnHour = new Date(now.getTime() + HOUR_MS);
   const inThreeHours = new Date(now.getTime() + 3 * HOUR_MS);
   const presets: InboxSnoozePreset[] = [
     {
       id: "hour",
       label: "In 1 hour",
-      whenLabel: timeLabel(inAnHour),
+      whenLabel: timeLabel(inAnHour, timestampFormat),
       snoozedUntil: inAnHour.toISOString(),
     },
     {
       id: "three-hours",
       label: "In 3 hours",
-      whenLabel: timeLabel(inThreeHours),
+      whenLabel: timeLabel(inThreeHours, timestampFormat),
       snoozedUntil: inThreeHours.toISOString(),
     },
   ];
@@ -293,7 +516,7 @@ export function resolveInboxSnoozePresets(now: Date): ReadonlyArray<InboxSnoozeP
     presets.push({
       id: "evening",
       label: "This evening",
-      whenLabel: timeLabel(evening),
+      whenLabel: timeLabel(evening, timestampFormat),
       snoozedUntil: evening.toISOString(),
     });
   }
@@ -301,7 +524,7 @@ export function resolveInboxSnoozePresets(now: Date): ReadonlyArray<InboxSnoozeP
   presets.push({
     id: "tomorrow",
     label: "Tomorrow",
-    whenLabel: timeLabel(tomorrow),
+    whenLabel: timeLabel(tomorrow, timestampFormat),
     snoozedUntil: tomorrow.toISOString(),
   });
   const daysUntilMonday = (1 - now.getDay() + 7) % 7 || 7;
@@ -310,7 +533,7 @@ export function resolveInboxSnoozePresets(now: Date): ReadonlyArray<InboxSnoozeP
     presets.push({
       id: "next-week",
       label: "Next week",
-      whenLabel: `${nextWeek.toLocaleDateString(undefined, { weekday: "short" })} ${timeLabel(nextWeek)}`,
+      whenLabel: `${nextWeek.toLocaleDateString(undefined, { weekday: "short" })} ${timeLabel(nextWeek, timestampFormat)}`,
       snoozedUntil: nextWeek.toISOString(),
     });
   }
@@ -325,14 +548,22 @@ export function snoozeWakeLabel(snoozedUntil: string, now: string): string {
   return `${Math.ceil(remainingMs / DAY_MS)}d`;
 }
 
-export function resolveInboxWokeAt(
-  thread: Pick<SidebarThreadSummary, "snoozedUntil">,
-  now: string,
-): string | null {
-  return thread.snoozedUntil != null &&
-    validTimestampMs(thread.snoozedUntil) <= validTimestampMs(now)
-    ? thread.snoozedUntil
-    : null;
+export function resolveInboxWokeAt(thread: InboxThreadSnoozeSource, now: string): string | null {
+  if (thread.snoozedUntil == null) return null;
+  const wakeAtMs = Date.parse(thread.snoozedUntil);
+  if (Number.isNaN(wakeAtMs)) return null;
+  if (threadRaisedHandWhileSnoozed(thread)) {
+    if (
+      thread.snoozedAt != null &&
+      thread.latestTurn?.state === "completed" &&
+      thread.latestTurn.completedAt != null &&
+      validTimestampMs(thread.latestTurn.completedAt) > validTimestampMs(thread.snoozedAt)
+    ) {
+      return thread.latestTurn.completedAt;
+    }
+    return thread.session?.updatedAt ?? thread.snoozedAt ?? null;
+  }
+  return wakeAtMs <= validTimestampMs(now) ? thread.snoozedUntil : null;
 }
 
 export function getNextInboxWakeAtMs(

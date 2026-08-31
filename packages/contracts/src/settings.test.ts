@@ -25,6 +25,32 @@ describe("ClientSettings defaults", () => {
     expect(legacySettings.autoOpenPlanSidebar).toBe(false);
   });
 
+  it("defaults inbox lifecycle automation to t3code's policy", () => {
+    expect(DEFAULT_CLIENT_SETTINGS.sidebarAutoSettleAfterDays).toBe(3);
+    expect(DEFAULT_CLIENT_SETTINGS.sidebarAutoSettleOnMerge).toBe(true);
+    expect(DEFAULT_CLIENT_SETTINGS.confirmThreadUnpin).toBe(false);
+
+    const decoded = decodeClientSettings({
+      sidebarAutoSettleAfterDays: null,
+      sidebarAutoSettleOnMerge: false,
+      confirmThreadUnpin: true,
+    });
+    expect(decoded.sidebarAutoSettleAfterDays).toBeNull();
+    expect(decoded.sidebarAutoSettleOnMerge).toBe(false);
+    expect(decoded.confirmThreadUnpin).toBe(true);
+  });
+
+  it("accepts only whole-day auto-settle windows from 1 through 90", () => {
+    for (const value of [1, 3, 90]) {
+      expect(
+        decodeClientSettings({ sidebarAutoSettleAfterDays: value }).sidebarAutoSettleAfterDays,
+      ).toBe(value);
+    }
+    for (const value of [0, 3.5, 91]) {
+      expect(() => decodeClientSettings({ sidebarAutoSettleAfterDays: value })).toThrow();
+    }
+  });
+
   it("drops the retired mode toggle while preserving project ordering", () => {
     expect(DEFAULT_CLIENT_SETTINGS).not.toHaveProperty("sidebarNavigationMode");
     expect(DEFAULT_CLIENT_SETTINGS.sidebarProjectSortOrder).toBe("updated_at");

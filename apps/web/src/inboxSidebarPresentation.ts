@@ -77,3 +77,26 @@ export function resolveInboxSearchHighlight<T>(
   if (items.length === 0) return null;
   return items[Math.min(Math.max(0, highlightIndex), items.length - 1)] ?? null;
 }
+
+export function resolveInboxParkForwardTarget(input: {
+  readonly parkedLifecycleKey: string;
+  readonly orderedThreadKeys: readonly string[];
+  readonly lifecycleKeyByThreadKey: ReadonlyMap<string, string>;
+}): string | null {
+  return (
+    input.orderedThreadKeys.find(
+      (key) => (input.lifecycleKeyByThreadKey.get(key) ?? key) !== input.parkedLifecycleKey,
+    ) ?? null
+  );
+}
+
+export function reconcileInboxTitleRegeneration(
+  pendingPreviousTitleByThreadKey: Readonly<Record<string, string>>,
+  currentTitleByThreadKey: ReadonlyMap<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(pendingPreviousTitleByThreadKey).filter(
+      ([key, previousTitle]) => currentTitleByThreadKey.get(key) === previousTitle,
+    ),
+  );
+}

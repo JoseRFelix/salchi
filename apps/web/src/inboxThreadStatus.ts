@@ -88,14 +88,16 @@ export function resolveInboxThreadStatus(input: {
   ) {
     return "working";
   }
+  // A failure on the lifecycle root outranks child/background liveness. The
+  // user needs the actionable state even if a monitoring subagent is alive.
+  if (thread.session?.status === "error" || thread.latestTurn?.state === "error") {
+    return "failed";
+  }
   if (input.backgroundLiveness === "working") {
     return "working";
   }
   if (input.backgroundLiveness === "monitoring") {
     return "monitoring";
-  }
-  if (thread.session?.status === "error" || thread.latestTurn?.state === "error") {
-    return "failed";
   }
   if (input.isWoke) {
     return "woke";

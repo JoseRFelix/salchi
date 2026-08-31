@@ -20,7 +20,11 @@ import {
   type ScopedThreadRef,
 } from "@salchi/contracts";
 import { scopeThreadRef } from "@salchi/client-runtime";
-import { DEFAULT_UNIFIED_SETTINGS } from "@salchi/contracts/settings";
+import {
+  DEFAULT_UNIFIED_SETTINGS,
+  MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
+  MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
+} from "@salchi/contracts/settings";
 import { createModelSelection } from "@salchi/shared/model";
 import {
   findTranscriptionModel,
@@ -73,6 +77,7 @@ import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTime, formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
+import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -119,6 +124,44 @@ const PROJECT_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
 };
 
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
+
+function AutoSettleDaysInput({
+  value,
+  onCommit,
+}: {
+  value: number;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => setDraft(String(value)), [value]);
+
+  return (
+    <Input
+      nativeInput
+      className="w-20"
+      type="number"
+      min={MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
+      max={MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
+      step={1}
+      value={draft}
+      aria-label="Days of inactivity before auto-settle"
+      onChange={(event) => {
+        const nextDraft = event.currentTarget.value;
+        setDraft(nextDraft);
+        const next = Number(nextDraft);
+        if (
+          Number.isInteger(next) &&
+          next >= MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS &&
+          next <= MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS
+        ) {
+          onCommit(next);
+        }
+      }}
+      onBlur={() => setDraft(String(value))}
+    />
+  );
+}
 
 function withoutProviderInstanceKey<V>(
   record: Readonly<Record<ProviderInstanceId, V>> | undefined,
@@ -396,6 +439,13 @@ export function useSettingsRestore(onRestored?: () => void) {
   const changedSettingLabels = useMemo(
     () => [
       ...(isThemeDirty ? ["Theme"] : []),
+      ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
+        ? ["Auto-settle merged threads"]
+        : []),
+      ...(settings.sidebarAutoSettleAfterDays !==
+      DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
+        ? ["Auto-settle inactive threads"]
+        : []),
       ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
         ? ["Time format"]
         : []),
@@ -427,6 +477,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.confirmThreadArchive !== DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive
         ? ["Archive confirmation"]
         : []),
+      ...(settings.confirmThreadUnpin !== DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin
+        ? ["Unpin confirmation"]
+        : []),
       ...(settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete
         ? ["Delete confirmation"]
         : []),
@@ -436,6 +489,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       isGitWritingModelDirty,
       settings.autoOpenPlanSidebar,
       settings.confirmThreadArchive,
+      settings.confirmThreadUnpin,
       settings.confirmThreadDelete,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
@@ -445,6 +499,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.enableAssistantStreaming,
       settings.transcriptionModel,
       settings.timestampFormat,
+      settings.sidebarAutoSettleAfterDays,
+      settings.sidebarAutoSettleOnMerge,
       isThemeDirty,
     ],
   );
@@ -463,6 +519,8 @@ export function useSettingsRestore(onRestored?: () => void) {
     resetColorTheme();
     updateSettings({
       themeMode: DEFAULT_UNIFIED_SETTINGS.themeMode,
+      sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
+      sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
@@ -473,6 +531,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
+      confirmThreadUnpin: DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
       colorThemeLight: DEFAULT_UNIFIED_SETTINGS.colorThemeLight,
@@ -613,6 +672,75 @@ export function GeneralSettingsPanel() {
         <PushNotificationSettingsRow />
 
         <ThemeSettingsRow />
+
+        <SettingsRow
+          title="Auto-settle merged threads"
+          description="Move threads whose pull request was merged into History. Sending new work brings them back."
+          resetAction={
+            settings.sidebarAutoSettleOnMerge !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge ? (
+              <SettingResetButton
+                label="auto-settle merged threads"
+                onClick={() =>
+                  updateSettings({
+                    sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarAutoSettleOnMerge}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarAutoSettleOnMerge: Boolean(checked) })
+              }
+              aria-label="Auto-settle merged threads"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Auto-settle inactive threads"
+          description="Move inactive threads without an open pull request into History."
+          resetAction={
+            settings.sidebarAutoSettleAfterDays !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ? (
+              <SettingResetButton
+                label="auto-settle inactive threads"
+                onClick={() =>
+                  updateSettings({
+                    sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex items-center gap-2">
+              {settings.sidebarAutoSettleAfterDays !== null ? (
+                <>
+                  <AutoSettleDaysInput
+                    value={settings.sidebarAutoSettleAfterDays}
+                    onCommit={(value) => updateSettings({ sidebarAutoSettleAfterDays: value })}
+                  />
+                  <span className="text-xs text-muted-foreground">days</span>
+                </>
+              ) : null}
+              <Switch
+                checked={settings.sidebarAutoSettleAfterDays !== null}
+                onCheckedChange={(checked) =>
+                  updateSettings({
+                    sidebarAutoSettleAfterDays: checked
+                      ? (DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ?? 3)
+                      : null,
+                  })
+                }
+                aria-label="Auto-settle inactive threads"
+              />
+            </div>
+          }
+        />
 
         <SettingsRow
           title="Time format"
@@ -905,6 +1033,32 @@ export function GeneralSettingsPanel() {
               placeholder="~/"
               spellCheck={false}
               aria-label="Add project base directory"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Unpin confirmation"
+          description="Ask before removing a thread from Pinned."
+          resetAction={
+            settings.confirmThreadUnpin !== DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin ? (
+              <SettingResetButton
+                label="unpin confirmation"
+                onClick={() =>
+                  updateSettings({
+                    confirmThreadUnpin: DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.confirmThreadUnpin}
+              onCheckedChange={(checked) =>
+                updateSettings({ confirmThreadUnpin: Boolean(checked) })
+              }
+              aria-label="Confirm thread unpinning"
             />
           }
         />

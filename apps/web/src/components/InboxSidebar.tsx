@@ -3,8 +3,12 @@ import {
   ArchiveIcon,
   CheckIcon,
   ChevronDownIcon,
+  MoreHorizontalIcon,
+  RefreshCwIcon,
   SearchIcon,
   SquarePenIcon,
+  Trash2Icon,
+  Undo2Icon,
   XIcon,
 } from "lucide-react";
 import * as Schema from "effect/Schema";
@@ -15,6 +19,7 @@ import {
   scopeThreadRef,
 } from "@salchi/client-runtime";
 import type { ScopedThreadRef, SidebarProjectGroupingMode } from "@salchi/contracts";
+import type { TimestampFormat } from "@salchi/contracts/settings";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import {
   useCallback,
@@ -42,6 +47,8 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useComposerDraftStore } from "../composerDraftStore";
 import {
   buildInboxLifecycleThreadKeyByThreadKey,
+  canSettleInboxThread,
+  canSnoozeInboxThread,
   generateSpreadPinOrderKeys,
   getNextInboxWakeAtMs,
   partitionInboxThreads,
@@ -50,6 +57,12 @@ import {
   resolveInboxSnoozePresets,
   type InboxLifecycleSection,
 } from "../inboxLifecycle";
+import {
+  InboxChangeRequestSnapshots,
+  inboxChangeRequestSettleSource,
+  inboxChangeRequestSnapshotMatches,
+  type InboxChangeRequestSnapshot,
+} from "../inboxChangeRequest";
 import { classifyInboxBackgroundThread } from "../inboxThreadStatus";
 import {
   INBOX_SETTLED_INITIAL_COUNT,
@@ -63,6 +76,8 @@ import {
   resolveInboxShelfItems,
   resolvePaginatedInboxShelfItems,
   resolveInboxSearchHighlight,
+  resolveInboxParkForwardTarget,
+  reconcileInboxTitleRegeneration,
   shouldVirtualizeInboxActiveThreads,
 } from "../inboxSidebarPresentation";
 import {
@@ -117,14 +132,7 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPopup,
-  DialogTitle,
-} from "./ui/dialog";
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "./ui/menu";
 import { Input } from "./ui/input";
 import { useServerKeybindings } from "../rpc/serverState";
 import { useFixedSharedScrollVirtualizer } from "./virtualization/useSharedScrollVirtualizer";
@@ -135,6 +143,7 @@ import {
   type InboxProjectIdentity,
   type InboxThreadAction,
 } from "./inbox/InboxThreadRow";
+import { InboxSearchResultRow } from "./inbox/InboxSearchResultRow";
 import {
   reorderPinnedThread,
   setThreadPinned,
@@ -154,6 +163,8 @@ const INBOX_ACTIVE_VIRTUALIZATION_DESKTOP_INITIAL_COUNT = 12;
 const INBOX_ACTIVE_VIRTUALIZATION_MOBILE_OVERSCAN = INBOX_CARD_ROW_STRIDE * 3;
 const INBOX_ACTIVE_VIRTUALIZATION_DESKTOP_OVERSCAN = INBOX_CARD_ROW_STRIDE * 6;
 const INBOX_SETTLED_VIRTUALIZATION_OVERSCAN = INBOX_SLIM_ROW_STRIDE * 4;
+const INBOX_CHANGE_REQUEST_SNAPSHOTS_KEY = "salchi:inbox-change-request-snapshots:v1";
+const EMPTY_INBOX_CHANGE_REQUEST_SNAPSHOTS: Record<string, InboxChangeRequestSnapshot> = {};
 
 function InboxShelf(props: {
   readonly title: string;
@@ -196,6 +207,50 @@ function InboxShelf(props: {
         />
       </button>
     </SidebarMenuItem>
+  );
+}
+
+function InboxBulkSnoozeMenu(props: {
+  readonly disabled: boolean;
+  readonly timestampFormat: TimestampFormat;
+  readonly onSelect: (snoozedUntil: string, label: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const presets = useMemo(
+    () => (open ? resolveInboxSnoozePresets(new Date(), props.timestampFormat) : []),
+    [open, props.timestampFormat],
+  );
+  return (
+    <Menu open={open} onOpenChange={setOpen}>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <MenuTrigger
+              aria-label="Snooze selected threads"
+              disabled={props.disabled}
+              className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            />
+          }
+        >
+          <AlarmClockIcon className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipPopup>Snooze selected</TooltipPopup>
+      </Tooltip>
+      <MenuPopup align="end" side="bottom" className="min-w-52">
+        {presets.map((preset) => (
+          <MenuItem
+            key={preset.id}
+            onClick={() => props.onSelect(preset.snoozedUntil, preset.label)}
+          >
+            <AlarmClockIcon />
+            <span className="flex-1">{preset.label}</span>
+            <span className="font-mono text-[10px] text-muted-foreground/60">
+              {preset.whenLabel}
+            </span>
+          </MenuItem>
+        ))}
+      </MenuPopup>
+    </Menu>
   );
 }
 
@@ -244,6 +299,7 @@ export default function InboxSidebar() {
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
   const toggleThreadExpanded = useUiStateStore((state) => state.toggleThreadExpanded);
   const threadExpandedById = useUiStateStore((state) => state.threadExpandedById);
+  const threadLastVisitedAtById = useUiStateStore((state) => state.threadLastVisitedAtById);
   const projectOrder = useUiStateStore((state) => state.projectOrder);
   const reorderProjects = useUiStateStore((state) => state.reorderProjects);
   const openAddProject = useCommandPaletteStore((state) => state.openAddProject);
@@ -271,6 +327,8 @@ export default function InboxSidebar() {
     [routeDraftSession, routeTarget],
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
+  const routeThreadKeyRef = useRef(routeThreadKey);
+  routeThreadKeyRef.current = routeThreadKey;
   const [projectScopeKey, setProjectScopeKey] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchHighlightIndex, setSearchHighlightIndex] = useState(0);
@@ -278,6 +336,9 @@ export default function InboxSidebar() {
   const [now, setNow] = useState(() => new Date().toISOString());
   const [renameTarget, setRenameTarget] = useState<SidebarThreadSummary | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [regeneratingTitleByThreadKey, setRegeneratingTitleByThreadKey] = useState<
+    Record<string, string>
+  >({});
   const [snoozedShelfExpanded, setSnoozedShelfExpanded] = useLocalStorage(
     INBOX_SNOOZED_SHELF_EXPANDED_KEY,
     INBOX_SNOOZED_SHELF_DEFAULT_EXPANDED,
@@ -287,6 +348,11 @@ export default function InboxSidebar() {
     INBOX_SETTLED_SHELF_EXPANDED_KEY,
     INBOX_SETTLED_SHELF_DEFAULT_EXPANDED,
     Schema.Boolean,
+  );
+  const [changeRequestSnapshots, setChangeRequestSnapshots] = useLocalStorage(
+    INBOX_CHANGE_REQUEST_SNAPSHOTS_KEY,
+    EMPTY_INBOX_CHANGE_REQUEST_SNAPSHOTS,
+    InboxChangeRequestSnapshots,
   );
   const settledPagingScopeKey = projectScopeKey ?? ALL_PROJECTS_SCOPE;
   const [settledPaging, setSettledPaging] = useState({
@@ -301,6 +367,9 @@ export default function InboxSidebar() {
   const activeListRef = useRef<HTMLUListElement | null>(null);
   const settledListRef = useRef<HTMLUListElement | null>(null);
   const draggedPinnedKeyRef = useRef<string | null>(null);
+  const [optimisticPinnedRootKeys, setOptimisticPinnedRootKeys] = useState<
+    readonly string[] | null
+  >(null);
 
   const orderedPhysicalProjects = useMemo(
     () =>
@@ -392,6 +461,15 @@ export default function InboxSidebar() {
       ),
     [scopedThreads],
   );
+  useEffect(() => {
+    setRegeneratingTitleByThreadKey((current) => {
+      const next = reconcileInboxTitleRegeneration(
+        current,
+        new Map([...threadByKey].map(([key, thread]) => [key, thread.title])),
+      );
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [threadByKey]);
   const lifecycleThreadKeyByThreadKey = useMemo(
     () => buildInboxLifecycleThreadKeyByThreadKey(scopedThreads),
     [scopedThreads],
@@ -405,6 +483,36 @@ export default function InboxSidebar() {
     }
     return result;
   }, [lifecycleThreadKeyByThreadKey, scopedThreads, threadByKey]);
+  const changeRequestByThreadKey = useMemo(
+    () =>
+      new Map(
+        Object.entries(changeRequestSnapshots).map(([key, snapshot]) => [
+          key,
+          inboxChangeRequestSettleSource(snapshot),
+        ]),
+      ),
+    [changeRequestSnapshots],
+  );
+  const changeRequestKnownThreadKeys = useMemo(
+    () => new Set(Object.keys(changeRequestSnapshots)),
+    [changeRequestSnapshots],
+  );
+  const recordChangeRequestSnapshot = useCallback(
+    (threadKey: string, snapshot: InboxChangeRequestSnapshot | null) => {
+      setChangeRequestSnapshots((current) => {
+        const previous = current[threadKey];
+        if (snapshot === null) {
+          if (previous === undefined) return current;
+          const next = { ...current };
+          delete next[threadKey];
+          return next;
+        }
+        if (inboxChangeRequestSnapshotMatches(previous, snapshot)) return current;
+        return { ...current, [threadKey]: snapshot };
+      });
+    },
+    [setChangeRequestSnapshots],
+  );
   const backgroundLivenessByLifecycleKey = useMemo(() => {
     const result = new Map<string, "working" | "monitoring">();
     for (const thread of scopedThreads) {
@@ -423,23 +531,33 @@ export default function InboxSidebar() {
     return result;
   }, [lifecycleThreadKeyByThreadKey, scopedThreads]);
   const partitions = useMemo(
-    () => partitionInboxThreads({ threads: scopedThreads, draftThreadKeys, now }),
-    [draftThreadKeys, now, scopedThreads],
+    () =>
+      partitionInboxThreads({
+        threads: scopedThreads,
+        draftThreadKeys,
+        now,
+        autoSettleAfterDays: settings.sidebarAutoSettleAfterDays,
+        autoSettleOnMerge: settings.sidebarAutoSettleOnMerge,
+        changeRequestByThreadKey,
+        changeRequestKnownThreadKeys,
+      }),
+    [
+      changeRequestByThreadKey,
+      changeRequestKnownThreadKeys,
+      draftThreadKeys,
+      now,
+      scopedThreads,
+      settings.sidebarAutoSettleAfterDays,
+      settings.sidebarAutoSettleOnMerge,
+    ],
   );
   const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
   const sectionItems = useMemo(() => {
     const flatten = (sectionThreads: readonly SidebarThreadSummary[]) =>
       flattenSidebarThreadTree(sectionThreads, {
         isThreadCollapsed: (thread) =>
-          normalizedSearch.length === 0 &&
           threadExpandedById[scopedThreadKey(threadRefFromSummary(thread))] === false,
-      }).filter(
-        (item) =>
-          normalizedSearch.length === 0 ||
-          resolveSidebarThreadDisplayTitle(item.thread)
-            .toLocaleLowerCase()
-            .includes(normalizedSearch),
-      );
+      });
     return {
       drafts: flatten(partitions.drafts),
       pinned: flatten(partitions.pinned),
@@ -447,7 +565,29 @@ export default function InboxSidebar() {
       snoozed: flatten(partitions.snoozed),
       settled: flatten(partitions.settled),
     };
-  }, [normalizedSearch, partitions, threadExpandedById]);
+  }, [partitions, threadExpandedById]);
+  const searchResults = useMemo(() => {
+    if (normalizedSearch.length === 0) return [];
+    const flattenAll = (sectionThreads: readonly SidebarThreadSummary[]) =>
+      flattenSidebarThreadTree(sectionThreads, { isThreadCollapsed: () => false });
+    return (
+      [
+        ["drafts", flattenAll(partitions.drafts)],
+        ["pinned", flattenAll(partitions.pinned)],
+        ["active", flattenAll(partitions.active)],
+        ["snoozed", flattenAll(partitions.snoozed)],
+        ["settled", flattenAll(partitions.settled)],
+      ] as const
+    ).flatMap(([section, items]) =>
+      items
+        .filter((item) =>
+          resolveSidebarThreadDisplayTitle(item.thread)
+            .toLocaleLowerCase()
+            .includes(normalizedSearch),
+        )
+        .map((item) => ({ section, item })),
+    );
+  }, [normalizedSearch, partitions]);
   const rootPinnedThreads = useMemo(
     () =>
       partitions.pinned.filter((thread) => {
@@ -460,6 +600,42 @@ export default function InboxSidebar() {
     () => rootPinnedThreads.map((thread) => scopedThreadKey(threadRefFromSummary(thread))),
     [rootPinnedThreads],
   );
+  const effectivePinnedRootKeys = useMemo(() => {
+    if (
+      optimisticPinnedRootKeys !== null &&
+      optimisticPinnedRootKeys.length === pinnedRootKeys.length &&
+      optimisticPinnedRootKeys.every((key) => pinnedRootKeys.includes(key))
+    ) {
+      return optimisticPinnedRootKeys;
+    }
+    return pinnedRootKeys;
+  }, [optimisticPinnedRootKeys, pinnedRootKeys]);
+  const displayedPinnedItems = useMemo(() => {
+    const rank = new Map(effectivePinnedRootKeys.map((key, index) => [key, index]));
+    return sectionItems.pinned
+      .map((item, index) => ({ item, index }))
+      .toSorted((left, right) => {
+        const leftKey = scopedThreadKey(threadRefFromSummary(left.item.thread));
+        const rightKey = scopedThreadKey(threadRefFromSummary(right.item.thread));
+        const leftRoot = lifecycleThreadKeyByThreadKey.get(leftKey) ?? leftKey;
+        const rightRoot = lifecycleThreadKeyByThreadKey.get(rightKey) ?? rightKey;
+        return (
+          (rank.get(leftRoot) ?? rank.size) - (rank.get(rightRoot) ?? rank.size) ||
+          left.index - right.index
+        );
+      })
+      .map(({ item }) => item);
+  }, [effectivePinnedRootKeys, lifecycleThreadKeyByThreadKey, sectionItems.pinned]);
+
+  useEffect(() => {
+    if (
+      optimisticPinnedRootKeys !== null &&
+      optimisticPinnedRootKeys.length === pinnedRootKeys.length &&
+      optimisticPinnedRootKeys.every((key, index) => key === pinnedRootKeys[index])
+    ) {
+      setOptimisticPinnedRootKeys(null);
+    }
+  }, [optimisticPinnedRootKeys, pinnedRootKeys]);
 
   const shouldVirtualizeActive =
     normalizedSearch.length === 0 && shouldVirtualizeInboxActiveThreads(sectionItems.active.length);
@@ -482,34 +658,24 @@ export default function InboxSidebar() {
   const activeListHeight = sectionItems.active.length * INBOX_CARD_ROW_STRIDE;
   const visibleSnoozedItems = useMemo(
     () =>
-      normalizedSearch.length > 0
-        ? sectionItems.snoozed
-        : resolveInboxShelfItems({
-            items: sectionItems.snoozed,
-            expanded: snoozedShelfExpanded,
-            activeKey: routeThreadKey,
-            getKey: (item) => scopedThreadKey(threadRefFromSummary(item.thread)),
-          }),
-    [normalizedSearch, routeThreadKey, sectionItems.snoozed, snoozedShelfExpanded],
+      resolveInboxShelfItems({
+        items: sectionItems.snoozed,
+        expanded: snoozedShelfExpanded,
+        activeKey: routeThreadKey,
+        getKey: (item) => scopedThreadKey(threadRefFromSummary(item.thread)),
+      }),
+    [routeThreadKey, sectionItems.snoozed, snoozedShelfExpanded],
   );
   const visibleSettledItems = useMemo(
     () =>
-      normalizedSearch.length > 0
-        ? sectionItems.settled
-        : resolvePaginatedInboxShelfItems({
-            items: sectionItems.settled,
-            expanded: settledShelfExpanded,
-            activeKey: routeThreadKey,
-            visibleCount: settledVisibleCount,
-            getKey: (item) => scopedThreadKey(threadRefFromSummary(item.thread)),
-          }),
-    [
-      normalizedSearch,
-      routeThreadKey,
-      sectionItems.settled,
-      settledShelfExpanded,
-      settledVisibleCount,
-    ],
+      resolvePaginatedInboxShelfItems({
+        items: sectionItems.settled,
+        expanded: settledShelfExpanded,
+        activeKey: routeThreadKey,
+        visibleCount: settledVisibleCount,
+        getKey: (item) => scopedThreadKey(threadRefFromSummary(item.thread)),
+      }),
+    [routeThreadKey, sectionItems.settled, settledShelfExpanded, settledVisibleCount],
   );
   const hiddenSettledCount = Math.max(0, sectionItems.settled.length - visibleSettledItems.length);
   const shouldVirtualizeSettled =
@@ -536,21 +702,35 @@ export default function InboxSidebar() {
   const orderedItems = useMemo(
     () => [
       ...sectionItems.drafts,
-      ...sectionItems.pinned,
+      ...displayedPinnedItems,
       ...sectionItems.active,
       ...visibleSnoozedItems,
       ...visibleSettledItems,
     ],
-    [sectionItems, visibleSettledItems, visibleSnoozedItems],
+    [displayedPinnedItems, sectionItems, visibleSettledItems, visibleSnoozedItems],
   );
   const orderedThreadKeys = useMemo(
-    () => orderedItems.map((item) => scopedThreadKey(threadRefFromSummary(item.thread))),
-    [orderedItems],
+    () =>
+      normalizedSearch.length > 0
+        ? searchResults.map(({ item }) => scopedThreadKey(threadRefFromSummary(item.thread)))
+        : orderedItems.map((item) => scopedThreadKey(threadRefFromSummary(item.thread))),
+    [normalizedSearch, orderedItems, searchResults],
+  );
+  const parkForwardThreadKeys = useMemo(
+    () =>
+      [...sectionItems.drafts, ...displayedPinnedItems, ...sectionItems.active].map((item) =>
+        scopedThreadKey(threadRefFromSummary(item.thread)),
+      ),
+    [displayedPinnedItems, sectionItems.active, sectionItems.drafts],
   );
   const highlightedSearchKey =
     normalizedSearch.length > 0
       ? resolveInboxSearchHighlight(orderedThreadKeys, searchHighlightIndex)
       : null;
+  const highlightedSearchOptionId =
+    normalizedSearch.length > 0 && searchResults.length > 0
+      ? `inbox-search-option-${Math.min(searchHighlightIndex, searchResults.length - 1)}`
+      : undefined;
 
   useEffect(() => {
     if (projectScopeKey !== null && scopedProject === null) setProjectScopeKey(null);
@@ -560,6 +740,10 @@ export default function InboxSidebar() {
     setSearchHighlightIndex(0);
   }, [clearSelection, projectScopeKey]);
   useEffect(() => setSearchHighlightIndex(0), [normalizedSearch]);
+  useEffect(() => {
+    if (highlightedSearchOptionId === undefined) return;
+    document.getElementById(highlightedSearchOptionId)?.scrollIntoView({ block: "nearest" });
+  }, [highlightedSearchOptionId]);
   useEffect(() => {
     const nextWakeAtMs = getNextInboxWakeAtMs(scopedThreads, now);
     if (nextWakeAtMs === null) return;
@@ -714,16 +898,57 @@ export default function InboxSidebar() {
   );
   const movePinned = useCallback(
     async (lifecycleKey: string, direction: -1 | 1) => {
-      const from = pinnedRootKeys.indexOf(lifecycleKey);
+      const from = effectivePinnedRootKeys.indexOf(lifecycleKey);
       const to = from + direction;
-      if (from < 0 || to < 0 || to >= pinnedRootKeys.length) return;
-      const next = [...pinnedRootKeys];
+      if (from < 0 || to < 0 || to >= effectivePinnedRootKeys.length) return;
+      const next = [...effectivePinnedRootKeys];
       const [moved] = next.splice(from, 1);
       if (!moved) return;
       next.splice(to, 0, moved);
-      await dispatchPinnedOrder(next, lifecycleKey);
+      setOptimisticPinnedRootKeys(next);
+      try {
+        await dispatchPinnedOrder(next, lifecycleKey);
+      } catch (error) {
+        setOptimisticPinnedRootKeys(null);
+        throw error;
+      }
     },
-    [dispatchPinnedOrder, pinnedRootKeys],
+    [dispatchPinnedOrder, effectivePinnedRootKeys],
+  );
+
+  const parkForward = useCallback(
+    async (parkedLifecycleKey: string, parkedThread: SidebarThreadSummary) => {
+      const routedKey = routeThreadKeyRef.current;
+      if (
+        routedKey === null ||
+        (lifecycleThreadKeyByThreadKey.get(routedKey) ?? routedKey) !== parkedLifecycleKey
+      ) {
+        return;
+      }
+      const nextKey = resolveInboxParkForwardTarget({
+        parkedLifecycleKey,
+        orderedThreadKeys: parkForwardThreadKeys,
+        lifecycleKeyByThreadKey: lifecycleThreadKeyByThreadKey,
+      });
+      const nextThread = nextKey === null ? null : (threadByKey.get(nextKey) ?? null);
+      if (nextThread !== null) {
+        navigateToThread(threadRefFromSummary(nextThread));
+        return;
+      }
+      if (isMobile) setOpenMobile(false);
+      await newThreadContext.handleNewThread(
+        scopeProjectRef(parkedThread.environmentId, parkedThread.projectId),
+      );
+    },
+    [
+      isMobile,
+      lifecycleThreadKeyByThreadKey,
+      navigateToThread,
+      newThreadContext,
+      parkForwardThreadKeys,
+      setOpenMobile,
+      threadByKey,
+    ],
   );
 
   const handleAction = useCallback(
@@ -734,7 +959,7 @@ export default function InboxSidebar() {
       const snoozePresetId = snoozePresetIdFromInboxAction(action);
       try {
         if (snoozePresetId !== null) {
-          const preset = resolveInboxSnoozePresets(new Date()).find(
+          const preset = resolveInboxSnoozePresets(new Date(), settings.timestampFormat).find(
             (candidate) => candidate.id === snoozePresetId,
           );
           if (!preset) return;
@@ -752,11 +977,18 @@ export default function InboxSidebar() {
               },
             }),
           );
+          await parkForward(lifecycleThreadKey, lifecycleThread);
           return;
         }
         switch (action) {
           case "toggle-pin": {
             if (lifecycleThread.pinnedAt != null) {
+              if (settings.confirmThreadUnpin) {
+                const confirmed = await readLocalApi()?.dialogs.confirm(
+                  `Unpin thread "${resolveSidebarThreadDisplayTitle(lifecycleThread)}"?`,
+                );
+                if (confirmed === false) return;
+              }
               await setThreadPinned(lifecycleRef, false);
               return;
             }
@@ -781,12 +1013,13 @@ export default function InboxSidebar() {
             await unsnoozeThread(lifecycleRef);
             setNow(new Date().toISOString());
             return;
-          case "toggle-settled":
-            await setThreadSettled(
-              lifecycleRef,
-              lifecycleThread.settledOverride !== "settled" && lifecycleThread.settledAt == null,
-            );
+          case "toggle-settled": {
+            const settling =
+              lifecycleThread.settledOverride !== "settled" && lifecycleThread.settledAt == null;
+            await setThreadSettled(lifecycleRef, settling);
+            if (settling) await parkForward(lifecycleThreadKey, lifecycleThread);
             return;
+          }
           case "rename":
             setRenameTarget(thread);
             setRenameValue(resolveSidebarThreadDisplayTitle(thread));
@@ -794,12 +1027,26 @@ export default function InboxSidebar() {
           case "regenerate-title": {
             const api = readEnvironmentApi(thread.environmentId);
             if (!api) return;
-            await api.orchestration.dispatchCommand({
-              type: "thread.meta.update",
-              commandId: newCommandId(),
-              threadId: thread.id,
-              regenerateTitle: true,
-            });
+            const key = scopedThreadKey(threadRef);
+            setRegeneratingTitleByThreadKey((current) => ({
+              ...current,
+              [key]: thread.title,
+            }));
+            try {
+              await api.orchestration.dispatchCommand({
+                type: "thread.meta.update",
+                commandId: newCommandId(),
+                threadId: thread.id,
+                regenerateTitle: true,
+              });
+            } catch (error) {
+              setRegeneratingTitleByThreadKey((current) => {
+                const next = { ...current };
+                delete next[key];
+                return next;
+              });
+              throw error;
+            }
             toastManager.add(
               stackedThreadToast({ type: "info", title: "Regenerating thread title…" }),
             );
@@ -828,6 +1075,33 @@ export default function InboxSidebar() {
               },
             );
             return;
+          case "copy-path":
+          case "copy-branch":
+          case "copy-thread-id": {
+            const projectKey = scopedProjectKey(
+              scopeProjectRef(thread.environmentId, thread.projectId),
+            );
+            const copyValue =
+              action === "copy-path"
+                ? (thread.worktreePath ?? projectIdentityByScopedKey.get(projectKey)?.cwd ?? "")
+                : action === "copy-branch"
+                  ? (thread.branch ?? "")
+                  : thread.id;
+            if (!copyValue) return;
+            await navigator.clipboard.writeText(copyValue);
+            toastManager.add(
+              stackedThreadToast({
+                type: "success",
+                title:
+                  action === "copy-path"
+                    ? "Path copied"
+                    : action === "copy-branch"
+                      ? "Branch copied"
+                      : "Thread ID copied",
+              }),
+            );
+            return;
+          }
           case "copy-metadata":
             await navigator.clipboard.writeText(
               JSON.stringify(
@@ -897,10 +1171,14 @@ export default function InboxSidebar() {
       isMobile,
       movePinned,
       newThreadContext,
+      parkForward,
+      projectIdentityByScopedKey,
       rootPinnedThreads,
       setOpenMobile,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
+      settings.confirmThreadUnpin,
+      settings.timestampFormat,
       threadByKey,
     ],
   );
@@ -918,43 +1196,78 @@ export default function InboxSidebar() {
       ),
     [selectedThreadKeys, threadByKey],
   );
+  const selectedLifecycleThreads = useMemo(() => {
+    const uniqueRoots = new Map<string, SidebarThreadSummary>();
+    for (const thread of selectedThreads) {
+      const ownKey = scopedThreadKey(threadRefFromSummary(thread));
+      const rootKey = lifecycleThreadKeyByThreadKey.get(ownKey) ?? ownKey;
+      uniqueRoots.set(rootKey, threadByKey.get(rootKey) ?? thread);
+    }
+    return [...uniqueRoots.entries()];
+  }, [lifecycleThreadKeyByThreadKey, selectedThreads, threadByKey]);
+  const selectedCanSnooze = selectedLifecycleThreads.every(
+    ([, thread]) =>
+      supportsThreadLifecycleCapability(thread.environmentId, "threadSnooze") &&
+      canSnoozeInboxThread(thread, { now }),
+  );
+  const selectedCanSettle = selectedLifecycleThreads.every(
+    ([, thread]) =>
+      supportsThreadLifecycleCapability(thread.environmentId, "threadSettlement") &&
+      canSettleInboxThread(thread, { now }),
+  );
   const runBulkLifecycle = useCallback(
-    async (operation: "settle" | "snooze") => {
-      const uniqueRoots = new Map<string, SidebarThreadSummary>();
-      for (const thread of selectedThreads) {
-        const ownKey = scopedThreadKey(threadRefFromSummary(thread));
-        const rootKey = lifecycleThreadKeyByThreadKey.get(ownKey) ?? ownKey;
-        const root = threadByKey.get(rootKey) ?? thread;
-        uniqueRoots.set(rootKey, root);
-      }
-      try {
-        if (operation === "settle") {
-          await Promise.all(
-            [...uniqueRoots.values()].map((thread) =>
-              setThreadSettled(threadRefFromSummary(thread), true),
-            ),
-          );
-        } else {
-          const tomorrow = resolveInboxSnoozePresets(new Date()).find(
-            (preset) => preset.id === "tomorrow",
-          );
-          if (tomorrow) {
-            await Promise.all(
-              [...uniqueRoots.values()].map((thread) =>
-                snoozeThread(threadRefFromSummary(thread), tomorrow.snoozedUntil),
-              ),
-            );
-          }
-        }
+    async (operation: "settle" | "snooze", snoozedUntil?: string, snoozeLabel?: string) => {
+      const results = await Promise.allSettled(
+        selectedLifecycleThreads.map(([, thread]) =>
+          operation === "settle"
+            ? setThreadSettled(threadRefFromSummary(thread), true)
+            : snoozedUntil
+              ? snoozeThread(threadRefFromSummary(thread), snoozedUntil)
+              : Promise.resolve(false),
+        ),
+      );
+      const succeeded = selectedLifecycleThreads.filter(
+        (_, index) => results[index]?.status === "fulfilled" && results[index]?.value === true,
+      );
+      const failedCount = results.length - succeeded.length;
+      if (succeeded.length > 0) {
         clearSelection();
-      } catch (error) {
-        lifecycleErrorToast("Bulk action failed", error);
+        if (operation === "snooze") {
+          toastManager.add(
+            stackedThreadToast({
+              type: "success",
+              title: `Snoozed ${succeeded.length} ${succeeded.length === 1 ? "thread" : "threads"}`,
+              description: snoozeLabel,
+              actionProps: {
+                children: "Undo",
+                onClick: () =>
+                  void Promise.all(
+                    succeeded.map(([, thread]) => unsnoozeThread(threadRefFromSummary(thread))),
+                  ),
+              },
+            }),
+          );
+        }
+      }
+      if (failedCount > 0) {
+        lifecycleErrorToast(
+          "Some thread actions failed",
+          new Error(
+            `${failedCount} ${failedCount === 1 ? "thread was" : "threads were"} not updated.`,
+          ),
+        );
       }
     },
-    [clearSelection, lifecycleThreadKeyByThreadKey, selectedThreads, threadByKey],
+    [clearSelection, selectedLifecycleThreads],
   );
   const runBulkArchive = useCallback(async () => {
     try {
+      if (settings.confirmThreadArchive) {
+        const confirmed = await readLocalApi()?.dialogs.confirm(
+          `Archive ${selectedThreads.length} selected ${selectedThreads.length === 1 ? "thread" : "threads"}?`,
+        );
+        if (confirmed === false) return;
+      }
       await Promise.all(
         selectedThreads.map((thread) => archiveThread(threadRefFromSummary(thread))),
       );
@@ -962,10 +1275,52 @@ export default function InboxSidebar() {
     } catch (error) {
       lifecycleErrorToast("Bulk archive failed", error);
     }
-  }, [archiveThread, clearSelection, selectedThreads]);
+  }, [archiveThread, clearSelection, selectedThreads, settings.confirmThreadArchive]);
+
+  const runBulkRegenerateTitles = useCallback(async () => {
+    await Promise.all(
+      selectedThreads.map((thread) => {
+        const ownKey = scopedThreadKey(threadRefFromSummary(thread));
+        const lifecycleKey = lifecycleThreadKeyByThreadKey.get(ownKey) ?? ownKey;
+        return handleAction("regenerate-title", thread, lifecycleKey);
+      }),
+    );
+    clearSelection();
+  }, [clearSelection, handleAction, lifecycleThreadKeyByThreadKey, selectedThreads]);
+
+  const runBulkMarkUnread = useCallback(async () => {
+    await Promise.all(
+      selectedThreads.flatMap((thread) => {
+        const turnId = getAcknowledgedCompletionTurnId(thread);
+        return turnId
+          ? [
+              setThreadCompletionAttention({
+                operation: "mark-unread",
+                environmentId: thread.environmentId,
+                threadId: thread.id,
+                turnId,
+              }),
+            ]
+          : [];
+      }),
+    );
+    clearSelection();
+  }, [clearSelection, selectedThreads]);
+
+  const runBulkDelete = useCallback(async () => {
+    if (settings.confirmThreadDelete) {
+      const confirmed = await readLocalApi()?.dialogs.confirm(
+        `Delete ${selectedThreads.length} selected ${selectedThreads.length === 1 ? "thread" : "threads"}?\nThis permanently clears their conversation history.`,
+      );
+      if (confirmed === false) return;
+    }
+    await Promise.all(selectedThreads.map((thread) => deleteThread(threadRefFromSummary(thread))));
+    clearSelection();
+  }, [clearSelection, deleteThread, selectedThreads, settings.confirmThreadDelete]);
 
   const handleSearchKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (event.nativeEvent.isComposing || event.keyCode === 229) return;
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         const direction = event.key === "ArrowDown" ? 1 : -1;
@@ -1001,6 +1356,23 @@ export default function InboxSidebar() {
     }));
   }, [settledPagingScopeKey]);
 
+  const commitRename = useCallback(() => {
+    const target = renameTarget;
+    const title = renameValue.trim();
+    if (!target || !title) return;
+    const api = readEnvironmentApi(target.environmentId);
+    if (!api) return;
+    void api.orchestration
+      .dispatchCommand({
+        type: "thread.meta.update",
+        commandId: newCommandId(),
+        threadId: target.id,
+        title,
+      })
+      .then(() => setRenameTarget(null))
+      .catch((error) => lifecycleErrorToast("Could not rename thread", error));
+  }, [renameTarget, renameValue]);
+
   const renderRows = (
     items: readonly SidebarThreadTreeItem<SidebarThreadSummary>[],
     section: InboxLifecycleSection,
@@ -1015,7 +1387,7 @@ export default function InboxSidebar() {
       const threadKey = scopedThreadKey(threadRefFromSummary(thread));
       const lifecycleThreadKey = lifecycleThreadKeyByThreadKey.get(threadKey) ?? threadKey;
       const lifecycleThread = lifecycleThreadByThreadKey.get(threadKey) ?? thread;
-      const rootIndex = pinnedRootKeys.indexOf(lifecycleThreadKey);
+      const rootIndex = effectivePinnedRootKeys.indexOf(lifecycleThreadKey);
       const projectKey = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
       return (
         <InboxThreadRow
@@ -1037,15 +1409,17 @@ export default function InboxSidebar() {
           isPending={pendingThreadKeys.has(threadKey)}
           isThreadExpanded={threadExpandedById[threadKey] ?? true}
           now={now}
+          timestampFormat={settings.timestampFormat}
+          lastVisitedAt={threadLastVisitedAtById[lifecycleThreadKey] ?? null}
           canPin={supportsThreadLifecycleCapability(lifecycleThread.environmentId, "threadPinning")}
-          canSnooze={supportsThreadLifecycleCapability(
-            lifecycleThread.environmentId,
-            "threadSnooze",
-          )}
-          canSettle={supportsThreadLifecycleCapability(
-            lifecycleThread.environmentId,
-            "threadSettlement",
-          )}
+          canSnooze={
+            supportsThreadLifecycleCapability(lifecycleThread.environmentId, "threadSnooze") &&
+            canSnoozeInboxThread(lifecycleThread, { now })
+          }
+          canSettle={
+            supportsThreadLifecycleCapability(lifecycleThread.environmentId, "threadSettlement") &&
+            (section === "settled" || canSettleInboxThread(lifecycleThread, { now }))
+          }
           canReorderPinned={supportsThreadLifecycleCapability(
             lifecycleThread.environmentId,
             "threadPinReorder",
@@ -1056,7 +1430,14 @@ export default function InboxSidebar() {
           )}
           canMarkUnread={getAcknowledgedCompletionTurnId(thread) !== null}
           canMovePinUp={rootIndex > 0}
-          canMovePinDown={rootIndex >= 0 && rootIndex < pinnedRootKeys.length - 1}
+          canMovePinDown={rootIndex >= 0 && rootIndex < effectivePinnedRootKeys.length - 1}
+          changeRequestSnapshot={changeRequestSnapshots[threadKey] ?? null}
+          isRenaming={
+            renameTarget !== null &&
+            scopedThreadKey(threadRefFromSummary(renameTarget)) === threadKey
+          }
+          renameValue={renameValue}
+          isRegeneratingTitle={regeneratingTitleByThreadKey[threadKey] !== undefined}
           onNavigate={navigateToThread}
           onAction={runAction}
           onToggleExpanded={toggleThreadExpanded}
@@ -1067,14 +1448,27 @@ export default function InboxSidebar() {
             const movedKey = draggedPinnedKeyRef.current;
             draggedPinnedKeyRef.current = null;
             if (!movedKey || movedKey === targetKey) return;
-            const next = pinnedRootKeys.filter((key) => key !== movedKey);
+            const next = effectivePinnedRootKeys.filter((key) => key !== movedKey);
             const targetIndex = next.indexOf(targetKey);
             if (targetIndex < 0) return;
             next.splice(targetIndex, 0, movedKey);
-            void dispatchPinnedOrder(next, movedKey).catch((error) =>
-              lifecycleErrorToast("Could not reorder pinned threads", error),
-            );
+            setOptimisticPinnedRootKeys(next);
+            void dispatchPinnedOrder(next, movedKey).catch((error) => {
+              setOptimisticPinnedRootKeys(null);
+              lifecycleErrorToast("Could not reorder pinned threads", error);
+            });
           }}
+          onChangeRequestSnapshot={(snapshot) => recordChangeRequestSnapshot(threadKey, snapshot)}
+          onAcknowledgeWoke={(wokeAt) =>
+            useUiStateStore.getState().markThreadVisited(lifecycleThreadKey, wokeAt)
+          }
+          onStartRename={() => {
+            setRenameTarget(thread);
+            setRenameValue(resolveSidebarThreadDisplayTitle(thread));
+          }}
+          onRenameValueChange={setRenameValue}
+          onCommitRename={commitRename}
+          onCancelRename={() => setRenameTarget(null)}
           {...(virtualRange
             ? {
                 virtualIndex: virtualRange.startIndex + itemIndex,
@@ -1087,11 +1481,13 @@ export default function InboxSidebar() {
     });
 
   const totalVisibleThreads =
-    sectionItems.drafts.length +
-    sectionItems.pinned.length +
-    sectionItems.active.length +
-    sectionItems.snoozed.length +
-    sectionItems.settled.length;
+    normalizedSearch.length > 0
+      ? searchResults.length
+      : sectionItems.drafts.length +
+        sectionItems.pinned.length +
+        sectionItems.active.length +
+        sectionItems.snoozed.length +
+        sectionItems.settled.length;
   const totalScopedThreads =
     partitions.drafts.length +
     partitions.pinned.length +
@@ -1112,6 +1508,10 @@ export default function InboxSidebar() {
                 ref={searchInputRef}
                 aria-label="Search thread titles"
                 aria-controls="inbox-thread-list"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={normalizedSearch.length > 0}
+                aria-activedescendant={highlightedSearchOptionId}
                 className="h-8 border-transparent bg-transparent pr-8 pl-7 text-[14px] shadow-none hover:bg-accent/50 focus-visible:border-ring focus-visible:bg-background"
                 placeholder="Search threads"
                 value={searchQuery}
@@ -1195,28 +1595,21 @@ export default function InboxSidebar() {
         {selectedThreadKeys.size > 0 ? (
           <div className="sticky top-0 z-10 mx-2 mb-2 flex items-center gap-1 rounded-lg border bg-popover/95 px-2 py-1.5 shadow-sm backdrop-blur-sm">
             <span className="mr-auto text-xs font-medium">{selectedThreadKeys.size} selected</span>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    aria-label="Snooze selected threads"
-                    className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-                    onClick={() => void runBulkLifecycle("snooze")}
-                  />
-                }
-              >
-                <AlarmClockIcon className="size-3.5" />
-              </TooltipTrigger>
-              <TooltipPopup>Snooze until tomorrow</TooltipPopup>
-            </Tooltip>
+            <InboxBulkSnoozeMenu
+              disabled={!selectedCanSnooze}
+              timestampFormat={settings.timestampFormat}
+              onSelect={(snoozedUntil, label) =>
+                void runBulkLifecycle("snooze", snoozedUntil, label)
+              }
+            />
             <Tooltip>
               <TooltipTrigger
                 render={
                   <button
                     type="button"
                     aria-label="Settle selected threads"
-                    className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                    disabled={!selectedCanSettle}
+                    className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                     onClick={() => void runBulkLifecycle("settle")}
                   />
                 }
@@ -1225,6 +1618,36 @@ export default function InboxSidebar() {
               </TooltipTrigger>
               <TooltipPopup>Settle</TooltipPopup>
             </Tooltip>
+            <Menu>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <MenuTrigger
+                      aria-label="More actions for selected threads"
+                      className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                    />
+                  }
+                >
+                  <MoreHorizontalIcon className="size-3.5" />
+                </TooltipTrigger>
+                <TooltipPopup>More actions</TooltipPopup>
+              </Tooltip>
+              <MenuPopup align="end" side="bottom" className="min-w-48">
+                <MenuItem onClick={() => void runBulkRegenerateTitles()}>
+                  <RefreshCwIcon />
+                  Regenerate titles
+                </MenuItem>
+                <MenuItem onClick={() => void runBulkMarkUnread()}>
+                  <Undo2Icon />
+                  Mark unread
+                </MenuItem>
+                <MenuSeparator />
+                <MenuItem variant="destructive" onClick={() => void runBulkDelete()}>
+                  <Trash2Icon />
+                  Delete
+                </MenuItem>
+              </MenuPopup>
+            </Menu>
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1256,88 +1679,131 @@ export default function InboxSidebar() {
           className="px-2 pt-0 pb-3"
           data-testid="inbox-thread-list"
         >
-          <SidebarMenu className="gap-0">
-            {renderRows(sectionItems.drafts, "drafts")}
-            {sectionItems.drafts.length > 0 ? (
-              <SidebarMenuItem aria-hidden className="mx-2 my-1.5 h-px list-none bg-amber-500/25" />
-            ) : null}
-            {renderRows(sectionItems.pinned, "pinned")}
-            {sectionItems.pinned.length > 0 ? (
-              <SidebarMenuItem
-                aria-hidden
-                className="mx-2 my-1.5 h-px list-none bg-sidebar-border/70"
-              />
-            ) : null}
-            {sectionItems.active.length > 0 ? (
-              <SidebarMenuItem className="list-none">
-                <SidebarMenu
-                  ref={activeListRef}
-                  aria-label="Active threads"
-                  className={cn("gap-0", shouldVirtualizeActive && "relative block")}
-                  style={shouldVirtualizeActive ? { height: activeListHeight } : undefined}
-                >
-                  {renderRows(
-                    visibleActiveItems,
-                    "active",
-                    shouldVirtualizeActive
-                      ? {
-                          startIndex: activeVirtualRange.startIndex,
-                          setSize: sectionItems.active.length,
-                          stride: INBOX_CARD_ROW_STRIDE,
-                        }
-                      : undefined,
-                  )}
-                </SidebarMenu>
-              </SidebarMenuItem>
-            ) : null}
-            <InboxShelf
-              title="Snoozed"
-              count={sectionItems.snoozed.length}
-              expanded={normalizedSearch.length > 0 || snoozedShelfExpanded}
-              tone="snoozed"
-              onToggle={() => setSnoozedShelfExpanded((expanded) => !expanded)}
-            />
-            {renderRows(visibleSnoozedItems, "snoozed")}
-            <InboxShelf
-              title="Settled"
-              count={sectionItems.settled.length}
-              expanded={normalizedSearch.length > 0 || settledShelfExpanded}
-              tone="settled"
-              onToggle={() => setSettledShelfExpanded((expanded) => !expanded)}
-            />
-            {visibleSettledItems.length > 0 ? (
-              <SidebarMenuItem className="list-none">
-                <SidebarMenu
-                  ref={settledListRef}
-                  aria-label="Settled threads"
-                  className={cn("gap-0", shouldVirtualizeSettled && "relative block")}
-                  style={shouldVirtualizeSettled ? { height: settledListHeight } : undefined}
-                >
-                  {renderRows(
-                    renderedSettledItems,
-                    "settled",
-                    shouldVirtualizeSettled
-                      ? {
-                          startIndex: settledVirtualRange.startIndex,
-                          setSize: visibleSettledItems.length,
-                          stride: INBOX_SLIM_ROW_STRIDE,
-                        }
-                      : undefined,
-                  )}
-                </SidebarMenu>
-              </SidebarMenuItem>
-            ) : null}
-            {normalizedSearch.length === 0 && settledShelfExpanded && hiddenSettledCount > 0 ? (
-              <SidebarMenuItem className="list-none px-2 py-1">
-                <button
-                  type="button"
-                  className="flex h-7 w-full cursor-pointer items-center rounded-md px-2 text-left text-xs text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-                  onClick={showMoreSettled}
-                >
-                  Show {Math.min(INBOX_SETTLED_PAGE_COUNT, hiddenSettledCount)} more
-                </button>
-              </SidebarMenuItem>
-            ) : null}
+          <SidebarMenu
+            className="gap-0"
+            role={normalizedSearch.length > 0 ? "listbox" : undefined}
+            aria-label={normalizedSearch.length > 0 ? "Thread search results" : undefined}
+          >
+            {normalizedSearch.length > 0 ? (
+              searchResults.map(({ item }, index) => {
+                const thread = item.thread;
+                const threadKey = scopedThreadKey(threadRefFromSummary(thread));
+                const lifecycleKey = lifecycleThreadKeyByThreadKey.get(threadKey) ?? threadKey;
+                const lifecycleThread = lifecycleThreadByThreadKey.get(threadKey) ?? thread;
+                const projectKey = scopedProjectKey(
+                  scopeProjectRef(thread.environmentId, thread.projectId),
+                );
+                return (
+                  <InboxSearchResultRow
+                    key={threadKey}
+                    optionId={`inbox-search-option-${index}`}
+                    thread={thread}
+                    lifecycleThread={lifecycleThread}
+                    projectIdentity={projectIdentityByScopedKey.get(projectKey) ?? null}
+                    isDraft={draftThreadKeys.has(threadKey)}
+                    isActive={routeThreadKey === threadKey}
+                    isHighlighted={highlightedSearchKey === threadKey}
+                    hasActiveLocalDispatch={activeLocalDispatchThreadKeys.has(threadKey)}
+                    backgroundLiveness={backgroundLivenessByLifecycleKey.get(lifecycleKey) ?? null}
+                    now={now}
+                    lastVisitedAt={threadLastVisitedAtById[lifecycleKey] ?? null}
+                    changeRequestSnapshot={changeRequestSnapshots[threadKey] ?? null}
+                    onChangeRequestSnapshot={(snapshot) =>
+                      recordChangeRequestSnapshot(threadKey, snapshot)
+                    }
+                    onNavigate={navigateToThread}
+                    onHighlight={() => setSearchHighlightIndex(index)}
+                  />
+                );
+              })
+            ) : (
+              <>
+                {renderRows(sectionItems.drafts, "drafts")}
+                {sectionItems.drafts.length > 0 ? (
+                  <SidebarMenuItem
+                    aria-hidden
+                    className="mx-2 my-1.5 h-px list-none bg-amber-500/25"
+                  />
+                ) : null}
+                {renderRows(displayedPinnedItems, "pinned")}
+                {sectionItems.pinned.length > 0 ? (
+                  <SidebarMenuItem
+                    aria-hidden
+                    className="mx-2 my-1.5 h-px list-none bg-sidebar-border/70"
+                  />
+                ) : null}
+                {sectionItems.active.length > 0 ? (
+                  <SidebarMenuItem className="list-none">
+                    <SidebarMenu
+                      ref={activeListRef}
+                      aria-label="Active threads"
+                      className={cn("gap-0", shouldVirtualizeActive && "relative block")}
+                      style={shouldVirtualizeActive ? { height: activeListHeight } : undefined}
+                    >
+                      {renderRows(
+                        visibleActiveItems,
+                        "active",
+                        shouldVirtualizeActive
+                          ? {
+                              startIndex: activeVirtualRange.startIndex,
+                              setSize: sectionItems.active.length,
+                              stride: INBOX_CARD_ROW_STRIDE,
+                            }
+                          : undefined,
+                      )}
+                    </SidebarMenu>
+                  </SidebarMenuItem>
+                ) : null}
+                <InboxShelf
+                  title="Snoozed"
+                  count={sectionItems.snoozed.length}
+                  expanded={normalizedSearch.length > 0 || snoozedShelfExpanded}
+                  tone="snoozed"
+                  onToggle={() => setSnoozedShelfExpanded((expanded) => !expanded)}
+                />
+                {renderRows(visibleSnoozedItems, "snoozed")}
+                <InboxShelf
+                  title="Settled"
+                  count={sectionItems.settled.length}
+                  expanded={normalizedSearch.length > 0 || settledShelfExpanded}
+                  tone="settled"
+                  onToggle={() => setSettledShelfExpanded((expanded) => !expanded)}
+                />
+                {visibleSettledItems.length > 0 ? (
+                  <SidebarMenuItem className="list-none">
+                    <SidebarMenu
+                      ref={settledListRef}
+                      aria-label="Settled threads"
+                      className={cn("gap-0", shouldVirtualizeSettled && "relative block")}
+                      style={shouldVirtualizeSettled ? { height: settledListHeight } : undefined}
+                    >
+                      {renderRows(
+                        renderedSettledItems,
+                        "settled",
+                        shouldVirtualizeSettled
+                          ? {
+                              startIndex: settledVirtualRange.startIndex,
+                              setSize: visibleSettledItems.length,
+                              stride: INBOX_SLIM_ROW_STRIDE,
+                            }
+                          : undefined,
+                      )}
+                    </SidebarMenu>
+                  </SidebarMenuItem>
+                ) : null}
+                {settledShelfExpanded && hiddenSettledCount > 0 ? (
+                  <SidebarMenuItem className="list-none px-2 py-1">
+                    <button
+                      type="button"
+                      className="flex h-7 w-full cursor-pointer items-center rounded-md px-2 text-left text-xs text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+                      onClick={showMoreSettled}
+                    >
+                      Show {Math.min(INBOX_SETTLED_PAGE_COUNT, hiddenSettledCount)} more
+                    </button>
+                  </SidebarMenuItem>
+                ) : null}
+              </>
+            )}
           </SidebarMenu>
 
           {!bootstrapComplete && totalScopedThreads === 0 ? (
@@ -1372,56 +1838,6 @@ export default function InboxSidebar() {
       </SidebarContent>
       <SidebarSeparator />
       <SidebarChromeFooter />
-
-      <Dialog
-        open={renameTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) setRenameTarget(null);
-        }}
-      >
-        <DialogPopup>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              const target = renameTarget;
-              const title = renameValue.trim();
-              if (!target || !title) return;
-              const api = readEnvironmentApi(target.environmentId);
-              if (!api) return;
-              void api.orchestration
-                .dispatchCommand({
-                  type: "thread.meta.update",
-                  commandId: newCommandId(),
-                  threadId: target.id,
-                  title,
-                })
-                .then(() => setRenameTarget(null))
-                .catch((error) => lifecycleErrorToast("Could not rename thread", error));
-            }}
-          >
-            <DialogHeader>
-              <DialogTitle>Rename thread</DialogTitle>
-              <DialogDescription>Give this thread a concise, recognizable title.</DialogDescription>
-            </DialogHeader>
-            <div className="px-6 pb-6">
-              <Input
-                autoFocus
-                aria-label="Thread title"
-                value={renameValue}
-                onChange={(event) => setRenameValue(event.target.value)}
-              />
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setRenameTarget(null)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={renameValue.trim().length === 0}>
-                Rename
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogPopup>
-      </Dialog>
     </>
   );
 }

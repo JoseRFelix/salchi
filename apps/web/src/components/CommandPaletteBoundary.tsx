@@ -40,6 +40,20 @@ export function CommandPaletteBoundary({ children }: { children: ReactNode }) {
   }, [setOpen]);
 
   useEffect(() => {
+    if (!open) return;
+
+    const closePaletteBeforeNestedDialogs = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setOpen(false);
+    };
+
+    window.addEventListener("keydown", closePaletteBeforeNestedDialogs, true);
+    return () => window.removeEventListener("keydown", closePaletteBeforeNestedDialogs, true);
+  }, [open, setOpen]);
+
+  useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented) return;
       const command = resolveShortcutCommand(event, keybindings, {
@@ -61,8 +75,8 @@ export function CommandPaletteBoundary({ children }: { children: ReactNode }) {
 
   return (
     <ComposerHandleContext value={composerHandleRef}>
+      {children}
       <CommandDialog open={open} onOpenChange={setOpen}>
-        {children}
         {open ? (
           <Suspense fallback={null}>
             <LazyCommandPaletteDialog />

@@ -16,6 +16,8 @@ import {
   moveInboxSearchHighlightIndex,
   resolvePaginatedInboxShelfItems,
   resolveInboxRowVariant,
+  resolveInboxParkForwardTarget,
+  reconcileInboxTitleRegeneration,
   resolveInboxSearchHighlight,
   resolveInboxShelfItems,
   shouldVirtualizeInboxActiveThreads,
@@ -24,6 +26,46 @@ import {
 afterEach(() => {
   removeLocalStorageItem(INBOX_SNOOZED_SHELF_EXPANDED_KEY);
   removeLocalStorageItem(INBOX_SETTLED_SHELF_EXPANDED_KEY);
+});
+
+describe("title regeneration pending state", () => {
+  it("clears when the projected title changes or the thread disappears", () => {
+    expect(
+      reconcileInboxTitleRegeneration(
+        { first: "Old", second: "Same", removed: "Gone" },
+        new Map([
+          ["first", "New"],
+          ["second", "Same"],
+        ]),
+      ),
+    ).toEqual({ second: "Same" });
+  });
+});
+
+describe("park-forward navigation", () => {
+  it("skips the parked root and its subagents", () => {
+    expect(
+      resolveInboxParkForwardTarget({
+        parkedLifecycleKey: "root-a",
+        orderedThreadKeys: ["root-a", "child-a", "root-b"],
+        lifecycleKeyByThreadKey: new Map([
+          ["root-a", "root-a"],
+          ["child-a", "root-a"],
+          ["root-b", "root-b"],
+        ]),
+      }),
+    ).toBe("root-b");
+  });
+
+  it("returns null when no other active or draft work remains", () => {
+    expect(
+      resolveInboxParkForwardTarget({
+        parkedLifecycleKey: "root-a",
+        orderedThreadKeys: ["root-a", "child-a"],
+        lifecycleKeyByThreadKey: new Map([["child-a", "root-a"]]),
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("resolveInboxRowVariant", () => {

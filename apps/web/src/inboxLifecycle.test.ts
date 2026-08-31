@@ -1,10 +1,15 @@
 import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
-import { EnvironmentId, ProjectId, ThreadId } from "@salchi/contracts";
+import { EnvironmentId, ProjectId, ProviderDriverKind, ThreadId, TurnId } from "@salchi/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   activeThreadAnchorTimestampMs,
   buildInboxLifecycleThreadKeyByThreadKey,
+  canSettleInboxThread,
+  canSnoozeInboxThread,
+  changeRequestAutoSettles,
+  effectiveInboxSettled,
+  effectiveInboxSnoozed,
   generateSpreadPinOrderKeys,
   getNextInboxWakeAtMs,
   partitionInboxThreads,
@@ -15,17 +20,53 @@ import {
   resolveInboxWokeAt,
   snoozeWakeLabel,
   sortPinnedThreadsByOrderKey,
+  threadRaisedHandWhileSnoozed,
 } from "./inboxLifecycle";
 import type { SidebarThreadSummary } from "./types";
 
 const environmentId = EnvironmentId.make("environment-local");
 const otherEnvironmentId = EnvironmentId.make("environment-remote");
 const projectId = ProjectId.make("project-1");
+const provider = ProviderDriverKind.make("codex");
+
+function latestTurn(
+  state: "running" | "interrupted" | "completed" | "error",
+  requestedAt = "2026-08-27T10:00:00.000Z",
+) {
+  return {
+    turnId: TurnId.make(`turn-${state}-${requestedAt}`),
+    state,
+    requestedAt,
+    startedAt: requestedAt,
+    completedAt: state === "running" ? null : requestedAt,
+    assistantMessageId: null,
+  } as const;
+}
+
+function session(
+  status: "connecting" | "running" | "ready" | "error" | "closed",
+  updatedAt = "2026-08-27T10:00:00.000Z",
+) {
+  return {
+    provider,
+    status,
+    createdAt: "2026-08-27T09:00:00.000Z",
+    updatedAt,
+    orchestrationStatus:
+      status === "connecting"
+        ? ("starting" as const)
+        : status === "closed"
+          ? ("stopped" as const)
+          : status,
+  };
+}
 
 function makeThread(
-  id: string,
-  overrides: Partial<SidebarThreadSummary> = {},
+  idOrOverrides: string | Partial<SidebarThreadSummary>,
+  maybeOverrides: Partial<SidebarThreadSummary> = {},
 ): SidebarThreadSummary {
+  const id = typeof idOrOverrides === "string" ? idOrOverrides : "thread";
+  const overrides = typeof idOrOverrides === "string" ? maybeOverrides : idOrOverrides;
   const createdAt = overrides.createdAt ?? "2026-08-27T10:00:00.000Z";
   return {
     id: ThreadId.make(id),
@@ -199,6 +240,88 @@ describe("inbox lifecycle partitioning", () => {
   });
 });
 
+describe("inbox lifecycle guards and automation", () => {
+  it("allows running work to be snoozed but not settled", () => {
+    const running = makeThread({
+      session: session("running"),
+      latestTurn: latestTurn("running"),
+    });
+    const options = { now: "2026-08-27T10:01:00.000Z" };
+    expect(canSnoozeInboxThread(running, options)).toBe(true);
+    expect(canSettleInboxThread(running, options)).toBe(false);
+  });
+
+  it("blocks hidden queued starts and user-attention work", () => {
+    const queued = makeThread({
+      latestUserMessageAt: "2026-08-27T10:00:30.000Z",
+      latestTurn: latestTurn("completed", "2026-08-27T10:00:00.000Z"),
+    });
+    const options = { now: "2026-08-27T10:01:00.000Z" };
+    expect(canSnoozeInboxThread(queued, options)).toBe(false);
+    expect(canSettleInboxThread(queued, options)).toBe(false);
+    expect(canSnoozeInboxThread(makeThread({ hasPendingApprovals: true }), options)).toBe(false);
+  });
+
+  it("auto-settles inactive and terminal change-request work conservatively", () => {
+    const inactive = makeThread({
+      latestUserMessageAt: "2026-08-20T10:00:00.000Z",
+      latestTurn: latestTurn("completed", "2026-08-20T10:00:00.000Z"),
+    });
+    const options = {
+      now: "2026-08-27T10:00:00.000Z",
+      autoSettleAfterDays: 3,
+      autoSettleOnMerge: true,
+    } as const;
+    expect(effectiveInboxSettled(inactive, options)).toBe(true);
+    expect(
+      effectiveInboxSettled(inactive, {
+        ...options,
+        changeRequest: { state: "open" },
+      }),
+    ).toBe(false);
+    expect(
+      effectiveInboxSettled(makeThread({ branch: "feature" }), {
+        ...options,
+        changeRequestKnown: false,
+      }),
+    ).toBe(false);
+    expect(
+      effectiveInboxSettled(inactive, {
+        ...options,
+        changeRequest: { state: "merged", updatedAt: "2026-08-26T10:00:00.000Z" },
+      }),
+    ).toBe(true);
+    expect(
+      effectiveInboxSettled(inactive, {
+        ...options,
+        autoSettleOnMerge: false,
+        changeRequest: { state: "merged" },
+      }),
+    ).toBe(true);
+    expect(
+      effectiveInboxSettled(inactive, {
+        ...options,
+        autoSettleAfterDays: null,
+        autoSettleOnMerge: false,
+        changeRequest: { state: "merged" },
+      }),
+    ).toBe(false);
+  });
+
+  it("does not re-auto-settle when the user re-engaged after a terminal request", () => {
+    const thread = makeThread({ latestUserMessageAt: "2026-08-27T11:00:00.000Z" });
+    const changeRequest = { state: "closed" as const, updatedAt: "2026-08-27T10:00:00.000Z" };
+    expect(changeRequestAutoSettles(changeRequest, { thread })).toBe(false);
+    expect(
+      effectiveInboxSettled(thread, {
+        now: "2026-08-27T12:00:00.000Z",
+        autoSettleAfterDays: null,
+        changeRequest,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("pinned ordering", () => {
   it("places a new pin before the current first key", () => {
     const orderKey = pinOrderKeyBetween(null, "g");
@@ -296,6 +419,27 @@ describe("snooze presentation", () => {
       }),
     ).toBe("active");
     expect(resolveInboxWokeAt(thread, "2026-08-27T10:00:01.000Z")).toBe("2026-08-27T10:00:00.000Z");
+  });
+
+  it("wakes early for approval, a fresh failure, or a completed run", () => {
+    const base = {
+      snoozedAt: "2026-08-27T10:00:00.000Z",
+      snoozedUntil: "2026-08-28T10:00:00.000Z",
+    } as const;
+    const approval = makeThread({ ...base, hasPendingApprovals: true });
+    const failed = makeThread({ ...base, session: session("error", "2026-08-27T11:00:00.000Z") });
+    const completed = makeThread({
+      ...base,
+      latestTurn: latestTurn("completed", "2026-08-27T12:00:00.000Z"),
+    });
+    for (const thread of [approval, failed, completed]) {
+      expect(threadRaisedHandWhileSnoozed(thread)).toBe(true);
+      expect(effectiveInboxSnoozed(thread, { now: "2026-08-27T13:00:00.000Z" })).toBe(false);
+    }
+    expect(resolveInboxWokeAt(failed, "2026-08-27T13:00:00.000Z")).toBe("2026-08-27T11:00:00.000Z");
+    expect(resolveInboxWokeAt(completed, "2026-08-27T13:00:00.000Z")).toBe(
+      "2026-08-27T12:00:00.000Z",
+    );
   });
 });
 

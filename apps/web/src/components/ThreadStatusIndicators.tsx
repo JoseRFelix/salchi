@@ -1,7 +1,7 @@
 import { scopeProjectRef, scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
 import type { VcsStatusResult } from "@salchi/contracts";
 import { CloudIcon, GitPullRequestIcon, TerminalIcon } from "lucide-react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { usePrimaryEnvironmentId } from "../environments/primary";
 import {
   useSavedEnvironmentRegistryStore,
@@ -12,6 +12,10 @@ import { useLocalDispatchStore } from "../localDispatchStore";
 import { type AppState, selectProjectByRef, useStore } from "../store";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { resolveChangeRequestPresentation } from "../sourceControlPresentation";
+import {
+  nextInboxChangeRequestSnapshot,
+  type InboxChangeRequestSnapshot,
+} from "../inboxChangeRequest";
 import { resolveThreadStatusPill, type ThreadStatusPill } from "./Sidebar.logic";
 import type { SidebarThreadSummary } from "../types";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -152,7 +156,13 @@ export function ThreadStatusLabel({
  * Change request state without the compact thread-status dot. Full inbox cards
  * use this alongside their t3code-style status slot.
  */
-function useThreadChangeRequestStatus(thread: SidebarThreadSummary): PrStatusIndicator | null {
+function useThreadChangeRequestStatus(
+  thread: SidebarThreadSummary,
+  options: {
+    readonly snapshot?: InboxChangeRequestSnapshot | null;
+    readonly onSnapshot?: ((snapshot: InboxChangeRequestSnapshot | null) => void) | undefined;
+  } = {},
+): PrStatusIndicator | null {
   const threadProjectCwd = useStore(
     useMemo(
       () => (state: AppState) =>
@@ -166,7 +176,26 @@ function useThreadChangeRequestStatus(thread: SidebarThreadSummary): PrStatusInd
     environmentId: thread.environmentId,
     cwd: thread.branch != null ? gitCwd : null,
   });
-  const pr = resolveThreadPr(thread.branch, gitStatus.data);
+  const onSnapshotRef = useRef(options.onSnapshot);
+  const snapshotRef = useRef(options.snapshot);
+  onSnapshotRef.current = options.onSnapshot;
+  snapshotRef.current = options.snapshot;
+
+  useEffect(() => {
+    const onSnapshot = onSnapshotRef.current;
+    if (onSnapshot == null || gitStatus.data == null) return;
+    const next = nextInboxChangeRequestSnapshot({
+      threadBranch: thread.branch,
+      gitStatus: gitStatus.data,
+      previous: snapshotRef.current ?? null,
+      observedAt: new Date().toISOString(),
+    });
+    onSnapshot(next);
+  }, [gitStatus.data, thread.branch]);
+  const currentPr = resolveThreadPr(thread.branch, gitStatus.data);
+  const snapshotPr =
+    options.snapshot?.branch === thread.branch ? (options.snapshot.pr ?? null) : null;
+  const pr = currentPr ?? snapshotPr;
   return prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
 }
 
@@ -181,9 +210,13 @@ function ThreadChangeRequestStatusView({
     <Tooltip>
       <TooltipTrigger
         render={
-          <span
+          <a
+            href={status.url}
+            target="_blank"
+            rel="noreferrer"
             aria-label={status.tooltip}
             className={`inline-flex items-center justify-center gap-0.5 ${status.colorClass}`}
+            onClick={(event) => event.stopPropagation()}
           />
         }
       >
@@ -198,11 +231,15 @@ function ThreadChangeRequestStatusView({
 export function ThreadRowChangeRequestStatus({
   thread,
   showNumber = false,
+  snapshot = null,
+  onSnapshot,
 }: {
   thread: SidebarThreadSummary;
   showNumber?: boolean;
+  snapshot?: InboxChangeRequestSnapshot | null;
+  onSnapshot?: ((snapshot: InboxChangeRequestSnapshot | null) => void) | undefined;
 }) {
-  const prStatus = useThreadChangeRequestStatus(thread);
+  const prStatus = useThreadChangeRequestStatus(thread, { snapshot, onSnapshot });
   return prStatus ? (
     <ThreadChangeRequestStatusView status={prStatus} showNumber={showNumber} />
   ) : null;

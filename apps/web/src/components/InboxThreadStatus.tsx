@@ -45,6 +45,7 @@ export function InboxThreadStatus(props: {
   readonly isWoke: boolean;
   readonly backgroundLiveness?: InboxBackgroundLiveness;
   readonly thread: SidebarThreadSummary;
+  readonly onAcknowledgeWoke?: (() => void) | undefined;
 }) {
   const status = resolveInboxThreadStatus({
     thread: props.thread,
@@ -105,7 +106,32 @@ export function InboxThreadStatus(props: {
                     icon: <CircleCheckIcon aria-hidden className="size-3.5 shrink-0" />,
                   };
 
-  return (
+  const content = (
+    <>
+      {presentation.icon}
+      <span role="status">{presentation.label}</span>
+      {status === "working" ? (
+        <WorkingDuration startedAt={resolveInboxWorkingStartedAt(props.thread)} />
+      ) : null}
+    </>
+  );
+
+  return status === "woke" && props.onAcknowledgeWoke ? (
+    <button
+      type="button"
+      aria-label="Acknowledge woke thread"
+      className={cn(
+        "inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-sm text-[11px] font-medium hover:underline focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
+        presentation.className,
+      )}
+      onClick={(event) => {
+        event.stopPropagation();
+        props.onAcknowledgeWoke?.();
+      }}
+    >
+      {content}
+    </button>
+  ) : (
     <span
       aria-label={presentation.label}
       className={cn(
@@ -113,11 +139,7 @@ export function InboxThreadStatus(props: {
         presentation.className,
       )}
     >
-      {presentation.icon}
-      <span role="status">{presentation.label}</span>
-      {status === "working" ? (
-        <WorkingDuration startedAt={resolveInboxWorkingStartedAt(props.thread)} />
-      ) : null}
+      {content}
     </span>
   );
 }

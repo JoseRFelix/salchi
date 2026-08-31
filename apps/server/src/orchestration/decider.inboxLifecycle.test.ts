@@ -234,6 +234,38 @@ it.layer(NodeServices.layer)("inbox lifecycle decider and projector", (it) => {
     }),
   );
 
+  it.effect("keeps a user snooze when a running session snapshot arrives", () =>
+    Effect.gen(function* () {
+      const snoozedUntil = "2099-01-01T09:00:00.000Z";
+      const readModel = makeReadModel({
+        snoozedUntil,
+        snoozedAt: createdAt,
+      });
+      const decided = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.session.set",
+          commandId: CommandId.make("command-running-while-snoozed"),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: activityAt,
+          },
+          createdAt: activityAt,
+        },
+        readModel,
+      });
+
+      expect(asEvents(decided).map((event) => event.type)).toEqual(["thread.session-set"]);
+      const projected = yield* projectEvents(readModel, decided);
+      expect(onlyThread(projected)).toMatchObject({ snoozedUntil, snoozedAt: createdAt });
+    }),
+  );
+
   it.effect("preserves an explicit un-settle anchor when activity resumes", () =>
     Effect.gen(function* () {
       const anchor = "2026-08-20T12:00:00.000Z";

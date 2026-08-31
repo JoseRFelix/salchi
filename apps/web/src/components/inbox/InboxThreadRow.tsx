@@ -1,5 +1,6 @@
 import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
 import type { ContextMenuItem, ScopedThreadRef } from "@salchi/contracts";
+import type { TimestampFormat } from "@salchi/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -36,6 +37,7 @@ import { resolveInboxRowVariant } from "../../inboxSidebarPresentation";
 import type { InboxBackgroundLiveness } from "../../inboxThreadStatus";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import type { SidebarThreadSummary } from "../../types";
+import type { InboxChangeRequestSnapshot } from "../../inboxChangeRequest";
 import { useLongPressContextMenu } from "../../hooks/useLongPressContextMenu";
 import { readLocalApi } from "../../localApi";
 import { cn } from "../../lib/utils";
@@ -47,7 +49,16 @@ import {
   ThreadRowRemoteStatus,
   ThreadRowTerminalStatus,
 } from "../ThreadStatusIndicators";
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuSub,
+  MenuSubPopup,
+  MenuSubTrigger,
+  MenuTrigger,
+} from "../ui/menu";
 import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { getFixedVirtualItemStyle } from "../virtualization/useSharedScrollVirtualizer";
@@ -61,6 +72,9 @@ export type InboxThreadAction =
   | "regenerate-title"
   | "mark-unread"
   | "create-on-branch"
+  | "copy-path"
+  | "copy-branch"
+  | "copy-thread-id"
   | "copy-metadata"
   | "move-pin-up"
   | "move-pin-down"
@@ -106,6 +120,8 @@ interface InboxThreadRowProps {
   readonly isPending: boolean;
   readonly isThreadExpanded: boolean;
   readonly now: string;
+  readonly timestampFormat: TimestampFormat;
+  readonly lastVisitedAt: string | null;
   readonly canPin: boolean;
   readonly canSnooze: boolean;
   readonly canSettle: boolean;
@@ -114,6 +130,10 @@ interface InboxThreadRowProps {
   readonly canMarkUnread: boolean;
   readonly canMovePinUp: boolean;
   readonly canMovePinDown: boolean;
+  readonly changeRequestSnapshot: InboxChangeRequestSnapshot | null;
+  readonly isRenaming: boolean;
+  readonly renameValue: string;
+  readonly isRegeneratingTitle: boolean;
   readonly virtualIndex?: number;
   readonly virtualSetSize?: number;
   readonly virtualStride?: number;
@@ -126,6 +146,12 @@ interface InboxThreadRowProps {
   readonly onToggleExpanded: (threadKey: string) => void;
   readonly onPinnedDragStart: (lifecycleThreadKey: string) => void;
   readonly onPinnedDrop: (targetLifecycleThreadKey: string) => void;
+  readonly onChangeRequestSnapshot: (snapshot: InboxChangeRequestSnapshot | null) => void;
+  readonly onAcknowledgeWoke: (wokeAt: string) => void;
+  readonly onStartRename: () => void;
+  readonly onRenameValueChange: (value: string) => void;
+  readonly onCommitRename: () => void;
+  readonly onCancelRename: () => void;
 }
 
 function lifecycleActionItems(input: {
@@ -139,11 +165,12 @@ function lifecycleActionItems(input: {
   readonly canRegenerateTitle: boolean;
   readonly canMarkUnread: boolean;
   readonly hasBranch: boolean;
+  readonly timestampFormat: TimestampFormat;
 }): ContextMenuItem<InboxThreadAction>[] {
   if (input.isDraft) {
     return [{ id: "discard-draft", label: "Discard draft", destructive: true, icon: "trash" }];
   }
-  const snoozeItems = resolveInboxSnoozePresets(new Date()).map(
+  const snoozeItems = resolveInboxSnoozePresets(new Date(), input.timestampFormat).map(
     (preset) =>
       ({
         id: `snooze-${preset.id}`,
@@ -179,6 +206,9 @@ function lifecycleActionItems(input: {
       label: "Create thread on this branch",
       disabled: !input.hasBranch,
     },
+    { id: "copy-path", label: "Copy path" },
+    { id: "copy-branch", label: "Copy branch", disabled: !input.hasBranch },
+    { id: "copy-thread-id", label: "Copy thread ID" },
     { id: "copy-metadata", label: "Copy metadata" },
     { id: "archive", label: "Archive", disabled: input.isBusy },
     { id: "delete", label: "Delete", destructive: true, icon: "trash" },
@@ -187,10 +217,14 @@ function lifecycleActionItems(input: {
 
 function SnoozeMenu(props: {
   readonly disabled: boolean;
+  readonly timestampFormat: TimestampFormat;
   readonly onAction: (action: InboxThreadAction) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const presets = useMemo(() => (open ? resolveInboxSnoozePresets(new Date()) : []), [open]);
+  const presets = useMemo(
+    () => (open ? resolveInboxSnoozePresets(new Date(), props.timestampFormat) : []),
+    [open, props.timestampFormat],
+  );
   return (
     <Menu open={open} onOpenChange={setOpen}>
       <Tooltip>
@@ -233,6 +267,7 @@ function AdvancedActionsMenu(props: {
   readonly canMarkUnread: boolean;
   readonly canMovePinUp: boolean;
   readonly canMovePinDown: boolean;
+  readonly isRegeneratingTitle: boolean;
   readonly onAction: (action: InboxThreadAction) => void;
 }) {
   return (
@@ -278,11 +313,11 @@ function AdvancedActionsMenu(props: {
           Rename
         </MenuItem>
         <MenuItem
-          disabled={!props.canRegenerateTitle || props.isBusy}
+          disabled={!props.canRegenerateTitle || props.isBusy || props.isRegeneratingTitle}
           onClick={() => props.onAction("regenerate-title")}
         >
-          <RefreshCwIcon />
-          Regenerate title
+          <RefreshCwIcon className={props.isRegeneratingTitle ? "animate-spin" : undefined} />
+          {props.isRegeneratingTitle ? "Regenerating title…" : "Regenerate title"}
         </MenuItem>
         <MenuItem disabled={!props.canMarkUnread} onClick={() => props.onAction("mark-unread")}>
           <Undo2Icon />
@@ -295,10 +330,24 @@ function AdvancedActionsMenu(props: {
           <GitBranchIcon />
           Create on this branch
         </MenuItem>
-        <MenuItem onClick={() => props.onAction("copy-metadata")}>
-          <ClipboardCopyIcon />
-          Copy metadata
-        </MenuItem>
+        <MenuSub>
+          <MenuSubTrigger>
+            <ClipboardCopyIcon />
+            Copy
+          </MenuSubTrigger>
+          <MenuSubPopup className="min-w-44">
+            <MenuItem onClick={() => props.onAction("copy-path")}>Path</MenuItem>
+            <MenuItem
+              disabled={props.thread.branch === null}
+              onClick={() => props.onAction("copy-branch")}
+            >
+              Branch
+            </MenuItem>
+            <MenuItem onClick={() => props.onAction("copy-thread-id")}>Thread ID</MenuItem>
+            <MenuSeparator />
+            <MenuItem onClick={() => props.onAction("copy-metadata")}>All metadata</MenuItem>
+          </MenuSubPopup>
+        </MenuSub>
         <MenuSeparator />
         <MenuItem disabled={props.isBusy} onClick={() => props.onAction("archive")}>
           <ArchiveIcon />
@@ -313,6 +362,51 @@ function AdvancedActionsMenu(props: {
   );
 }
 
+function ThreadTitleWithDetails(props: {
+  readonly thread: SidebarThreadSummary;
+  readonly displayTitle: string;
+  readonly projectIdentity: InboxProjectIdentity | null;
+  readonly compact?: boolean;
+  readonly changeRequestSnapshot: InboxChangeRequestSnapshot | null;
+}) {
+  const providerLabel = props.thread.modelSelection
+    ? `${props.thread.modelSelection.instanceId} · ${props.thread.modelSelection.model}`
+    : null;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate font-medium",
+              props.compact ? "text-[13px]" : "text-sm",
+            )}
+          />
+        }
+      >
+        {props.displayTitle}
+      </TooltipTrigger>
+      <TooltipPopup side="right" className="max-w-80 space-y-1 px-3 py-2 text-left">
+        <div className="font-medium text-foreground">{props.displayTitle}</div>
+        <div>{props.projectIdentity?.displayName ?? "Unknown project"}</div>
+        <div className="break-all font-mono text-[10px]">
+          {props.thread.worktreePath ?? props.projectIdentity?.cwd ?? "Path unavailable"}
+        </div>
+        {props.thread.branch ? <div>Branch: {props.thread.branch}</div> : null}
+        {providerLabel ? <div>Provider: {providerLabel}</div> : null}
+        {props.thread.session?.lastError ? (
+          <div className="text-destructive">Last error: {props.thread.session.lastError}</div>
+        ) : null}
+        {props.thread.branch != null &&
+        props.changeRequestSnapshot != null &&
+        props.changeRequestSnapshot.branch !== props.thread.branch ? (
+          <div>Pull request data is pending for the current branch.</div>
+        ) : null}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
 export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRowProps) {
   const { thread, lifecycleThread, depth, childCount } = props;
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
@@ -321,7 +415,10 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
     props.draftId === null ? "" : (state.draftsByThreadKey[props.draftId]?.prompt ?? ""),
   );
   const activityAt = thread.updatedAt ?? thread.createdAt;
-  const isWoke = resolveInboxWokeAt(lifecycleThread, props.now) !== null;
+  const wokeAt = resolveInboxWokeAt(lifecycleThread, props.now);
+  const isWoke =
+    wokeAt !== null &&
+    (props.lastVisitedAt === null || Date.parse(props.lastVisitedAt) < Date.parse(wokeAt));
   const isPinned = lifecycleThread.pinnedAt != null;
   const isBusy =
     props.isPending ||
@@ -356,6 +453,7 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
           canRegenerateTitle: props.canRegenerateTitle,
           canMarkUnread: props.canMarkUnread,
           hasBranch: thread.branch !== null,
+          timestampFormat: props.timestampFormat,
         }),
         position,
       );
@@ -391,6 +489,39 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
         />
       </button>
     ) : null;
+  const titleContent = props.isRenaming ? (
+    <input
+      autoFocus
+      aria-label={`Rename ${displayTitle}`}
+      className="h-6 min-w-0 flex-1 rounded border border-ring bg-background px-1.5 text-[13px] font-medium outline-none ring-2 ring-ring/20"
+      value={props.renameValue}
+      onChange={(event) => props.onRenameValueChange(event.currentTarget.value)}
+      onPointerDown={stopPropagation}
+      onClick={stopPropagation}
+      onBlur={() => {
+        if (props.renameValue.trim()) props.onCommitRename();
+        else props.onCancelRename();
+      }}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+        if (event.key === "Enter") {
+          event.preventDefault();
+          if (props.renameValue.trim()) props.onCommitRename();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          props.onCancelRename();
+        }
+      }}
+    />
+  ) : (
+    <ThreadTitleWithDetails
+      thread={thread}
+      displayTitle={displayTitle}
+      projectIdentity={props.projectIdentity}
+      changeRequestSnapshot={props.changeRequestSnapshot}
+    />
+  );
 
   if (props.isDraft) {
     const preview = draftPrompt.trim().split("\n", 1)[0]?.trim() || displayTitle;
@@ -476,7 +607,11 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
           <TooltipPopup side="top">Wake now</TooltipPopup>
         </Tooltip>
       ) : props.section !== "settled" ? (
-        <SnoozeMenu disabled={!props.canSnooze || isBusy} onAction={runAction} />
+        <SnoozeMenu
+          disabled={!props.canSnooze || isBusy}
+          timestampFormat={props.timestampFormat}
+          onAction={runAction}
+        />
       ) : null}
       <Tooltip>
         <TooltipTrigger
@@ -513,6 +648,7 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
         canMarkUnread={props.canMarkUnread}
         canMovePinUp={props.canMovePinUp}
         canMovePinDown={props.canMovePinDown}
+        isRegeneratingTitle={props.isRegeneratingTitle}
         onAction={runAction}
       />
     </span>
@@ -531,6 +667,7 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
             isActive={props.isActive}
             isWoke={isWoke}
             thread={thread}
+            onAcknowledgeWoke={wokeAt === null ? undefined : () => props.onAcknowledgeWoke(wokeAt)}
           />
         ) : null}
         <ThreadRowTerminalStatus thread={thread} />
@@ -557,6 +694,7 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
       data-testid={`inbox-thread-row-${thread.id}`}
       aria-posinset={props.virtualIndex === undefined ? undefined : props.virtualIndex + 1}
       aria-setsize={props.virtualSetSize}
+      aria-busy={props.isRegeneratingTitle || undefined}
       draggable={draggable}
       onDragStart={(event) => {
         if (!draggable) return;
@@ -593,6 +731,11 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
           draggable && "cursor-grab active:cursor-grabbing",
         )}
         onClick={(event) => props.onNavigate(threadRef, event)}
+        onDoubleClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          props.onStartRename();
+        }}
         onKeyDown={(event) => {
           if (
             event.target === event.currentTarget &&
@@ -631,11 +774,20 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
                   className="size-3 shrink-0 text-muted-foreground/55"
                 />
               ) : null}
-              <span className="min-w-0 flex-1 truncate text-sm font-medium" title={displayTitle}>
-                {displayTitle}
-              </span>
+              {titleContent}
+              {props.isRegeneratingTitle ? (
+                <RefreshCwIcon
+                  aria-label="Regenerating title"
+                  className="size-3 shrink-0 animate-spin text-muted-foreground"
+                />
+              ) : null}
               {thread.branch !== null ? (
-                <ThreadRowChangeRequestStatus thread={thread} showNumber />
+                <ThreadRowChangeRequestStatus
+                  thread={thread}
+                  showNumber
+                  snapshot={props.changeRequestSnapshot}
+                  onSnapshot={props.onChangeRequestSnapshot}
+                />
               ) : null}
             </div>
             <div className="mt-0.5 flex min-h-4 min-w-0 items-center gap-2 text-[10px] text-muted-foreground/55">
@@ -673,9 +825,17 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
             {depth > 0 ? (
               <GitBranchIcon className="size-3 shrink-0 text-muted-foreground/55" />
             ) : null}
-            <span className="min-w-8 flex-1 truncate text-[13px]" title={displayTitle}>
-              {displayTitle}
-            </span>
+            {props.isRenaming ? (
+              titleContent
+            ) : (
+              <ThreadTitleWithDetails
+                thread={thread}
+                displayTitle={displayTitle}
+                projectIdentity={props.projectIdentity}
+                changeRequestSnapshot={props.changeRequestSnapshot}
+                compact
+              />
+            )}
             <span className="max-w-16 shrink truncate text-[10px] text-muted-foreground/55">
               {projectName}
             </span>

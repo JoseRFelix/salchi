@@ -2328,7 +2328,7 @@ async function openMobileSidebarFromTrigger(): Promise<void> {
   );
   trigger.click();
   await waitForElement(
-    () => document.querySelector('[data-mobile="true"][data-sidebar="sidebar"]'),
+    () => document.querySelector('[data-mobile="true"][data-sidebar="sidebar"][data-open]'),
     "Mobile sidebar should have opened.",
   );
 }
@@ -9004,51 +9004,45 @@ describe("ChatView timeline estimator parity (full app)", () => {
   it("opens and closes the command palette without closing the mobile sidebar", async () => {
     const mounted = await mountChatView({
       viewport: COMPACT_FOOTER_VIEWPORT,
-      snapshot: createSnapshotForTargetUser({
-        targetMessageId: "msg-user-mobile-command-palette-trigger" as MessageId,
-        targetText: "mobile command palette trigger",
-      }),
+      snapshot: createSnapshotWithSecondaryProject(),
     });
 
     try {
       await openMobileSidebarFromTrigger();
       const mobileSidebar = await waitForElement(
-        () => document.querySelector<HTMLElement>('[data-mobile="true"][data-sidebar="sidebar"]'),
+        () =>
+          document.querySelector<HTMLElement>(
+            '[data-mobile="true"][data-sidebar="sidebar"][data-open]',
+          ),
         "Mobile sidebar should remain mounted while the command palette is open.",
       );
-      const trigger = page.getByTestId("command-palette-trigger");
-      await expect.element(trigger).toBeInTheDocument();
-      await trigger.click();
+      const trigger = await waitForElement(
+        () => mobileSidebar.querySelector<HTMLButtonElement>('button[aria-label="New thread"]'),
+        "New-thread trigger did not render in the mobile inbox.",
+      );
+      trigger.click();
 
-      const palette = page.getByTestId("command-palette");
-      await expect.element(palette).toBeInTheDocument();
+      await waitForElement(
+        () => document.querySelector('[data-testid="command-palette"]'),
+        "New-thread project palette did not open.",
+      );
       expect(mobileSidebar).toHaveAttribute("data-open", "");
-      const input = await waitForCommandPaletteInput("Search commands, projects, and threads...");
-      await expect
-        .element(page.getByPlaceholder("Search commands, projects, and threads..."))
-        .toBeInTheDocument();
-      expect(document.activeElement).not.toBe(input);
 
-      const backdrop = await waitForElement(
-        () => document.querySelector<HTMLElement>('[data-slot="command-dialog-backdrop"]'),
-        "Command palette backdrop did not open.",
-      );
-      backdrop.dispatchEvent(
-        new PointerEvent("pointerdown", { bubbles: true, button: 0, cancelable: true }),
-      );
-      backdrop.dispatchEvent(
-        new PointerEvent("pointerup", { bubbles: true, button: 0, cancelable: true }),
-      );
-      backdrop.dispatchEvent(
-        new MouseEvent("click", { bubbles: true, button: 0, cancelable: true }),
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
       );
 
-      await expect.element(palette).not.toBeInTheDocument();
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector('[data-testid="command-palette"]')).toBeNull();
+        },
+        { interval: 16, timeout: 8_000 },
+      );
       expect(mobileSidebar).toHaveAttribute("data-open", "");
     } finally {
       await mounted.cleanup();
     }
-  });
+  }, 45_000);
 
   it("opens the default mobile inbox with content and keeps it open for new-thread palette", async () => {
     const mounted = await mountChatView({
