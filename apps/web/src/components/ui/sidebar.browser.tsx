@@ -1,6 +1,6 @@
 import "../../index.css";
 
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -80,6 +80,28 @@ describe("mobile Sidebar", () => {
       expect(document.querySelector('[data-sidebar-trigger-icon="back"]')).toBeNull();
     } finally {
       await desktopScreen.unmount();
+    }
+  });
+
+  it("does not draw a focus outline around the mobile sidebar popup", async () => {
+    await page.viewport(390, 700);
+    const screen = await render(<MobileSidebarHarness />);
+
+    try {
+      await userEvent.keyboard("{Tab}");
+      document.querySelector<HTMLButtonElement>('[data-slot="sidebar-trigger"]')?.click();
+      await expect.element(page.getByText("Mobile sidebar content")).toBeVisible();
+      const mobileSidebar = document.querySelector<HTMLElement>(
+        '[data-mobile="true"][data-sidebar="sidebar"]',
+      );
+      expect(mobileSidebar).not.toBeNull();
+
+      mobileSidebar!.focus();
+      expect(document.activeElement).toBe(mobileSidebar);
+      expect(mobileSidebar!.matches(":focus-visible")).toBe(true);
+      expect(getComputedStyle(mobileSidebar!).outlineStyle).toBe("none");
+    } finally {
+      await screen.unmount();
     }
   });
 

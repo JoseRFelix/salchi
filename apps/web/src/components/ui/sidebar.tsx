@@ -269,7 +269,7 @@ function Sidebar({
           <SheetPopup
             allowOutsidePointerEvents
             className={cn(
-              "w-(--sidebar-width) max-w-none bg-sidebar p-0 text-sidebar-foreground",
+              "w-(--sidebar-width) max-w-none bg-sidebar p-0 text-sidebar-foreground outline-none",
               className,
             )}
             data-mobile="true"
