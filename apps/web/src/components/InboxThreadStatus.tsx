@@ -68,7 +68,12 @@ export function InboxThreadStatus(props: {
       ? {
           label: "Working",
           className: cn("text-sky-600 dark:text-sky-400", !props.isActive && "opacity-75"),
-          icon: <CircleDashedIcon aria-hidden className="size-3.5 shrink-0" />,
+          icon: (
+            <CircleDashedIcon
+              aria-hidden
+              className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none"
+            />
+          ),
         }
       : status === "monitoring"
         ? {
