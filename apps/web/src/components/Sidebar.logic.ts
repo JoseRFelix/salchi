@@ -1,11 +1,6 @@
 import * as React from "react";
-import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@salchi/contracts/settings";
-import {
-  getThreadSortTimestamp,
-  sortThreads,
-  toSortableTimestamp,
-  type ThreadSortInput,
-} from "../lib/threadSort";
+import type { SidebarThreadSortOrder } from "@salchi/contracts/settings";
+import { sortThreads, type ThreadSortInput } from "../lib/threadSort";
 import type { SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
 import { hasActiveSessionWork, isLatestTurnSettled } from "../session-logic";
@@ -28,13 +23,6 @@ export function shouldEnableSidebarListAnimations(
 // reloads do not hydrate conversation pages for threads the user has not opened.
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 0;
 export type SidebarNewThreadEnvMode = "local" | "worktree";
-type SidebarProject = {
-  id: string;
-  name: string;
-  createdAt?: string | undefined;
-  updatedAt?: string | undefined;
-};
-
 export type ThreadTraversalDirection = "previous" | "next";
 
 export interface ThreadStatusPill {
@@ -619,58 +607,4 @@ export function getFallbackThreadIdAfterDelete<
       sortOrder,
     )[0]?.id ?? null
   );
-}
-export function getProjectSortTimestamp(
-  project: SidebarProject,
-  projectThreads: readonly ThreadSortInput[],
-  sortOrder: Exclude<SidebarProjectSortOrder, "manual">,
-): number {
-  if (projectThreads.length > 0) {
-    return projectThreads.reduce(
-      (latest, thread) => Math.max(latest, getThreadSortTimestamp(thread, sortOrder)),
-      Number.NEGATIVE_INFINITY,
-    );
-  }
-
-  if (sortOrder === "created_at") {
-    return toSortableTimestamp(project.createdAt) ?? Number.NEGATIVE_INFINITY;
-  }
-  return toSortableTimestamp(project.updatedAt ?? project.createdAt) ?? Number.NEGATIVE_INFINITY;
-}
-
-export function sortProjectsForSidebar<
-  TProject extends SidebarProject,
-  TThread extends Pick<Thread, "projectId" | "createdAt" | "updatedAt"> & ThreadSortInput,
->(
-  projects: readonly TProject[],
-  threads: readonly TThread[],
-  sortOrder: SidebarProjectSortOrder,
-): TProject[] {
-  if (sortOrder === "manual") {
-    return [...projects];
-  }
-
-  const threadsByProjectId = new Map<string, TThread[]>();
-  for (const thread of threads) {
-    const existing = threadsByProjectId.get(thread.projectId) ?? [];
-    existing.push(thread);
-    threadsByProjectId.set(thread.projectId, existing);
-  }
-
-  return [...projects].toSorted((left, right) => {
-    const rightTimestamp = getProjectSortTimestamp(
-      right,
-      threadsByProjectId.get(right.id) ?? [],
-      sortOrder,
-    );
-    const leftTimestamp = getProjectSortTimestamp(
-      left,
-      threadsByProjectId.get(left.id) ?? [],
-      sortOrder,
-    );
-    const byTimestamp =
-      rightTimestamp === leftTimestamp ? 0 : rightTimestamp > leftTimestamp ? 1 : -1;
-    if (byTimestamp !== 0) return byTimestamp;
-    return left.name.localeCompare(right.name) || left.id.localeCompare(right.id);
-  });
 }

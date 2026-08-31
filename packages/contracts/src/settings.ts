@@ -18,14 +18,6 @@ export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"])
 export type TimestampFormat = typeof TimestampFormat.Type;
 export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
 
-export const SidebarNavigationMode = Schema.Literals(["project", "inbox"]);
-export type SidebarNavigationMode = typeof SidebarNavigationMode.Type;
-export const DEFAULT_SIDEBAR_NAVIGATION_MODE: SidebarNavigationMode = "project";
-
-export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_at", "manual"]);
-export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
-export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "updated_at";
-
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
@@ -37,16 +29,6 @@ export const SidebarProjectGroupingMode = Schema.Literals([
 ]);
 export type SidebarProjectGroupingMode = typeof SidebarProjectGroupingMode.Type;
 export const DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE: SidebarProjectGroupingMode = "repository";
-export const MIN_SIDEBAR_THREAD_PREVIEW_COUNT = 1;
-export const MAX_SIDEBAR_THREAD_PREVIEW_COUNT = 15;
-export const SidebarThreadPreviewCount = Schema.Int.check(
-  Schema.isBetween({
-    minimum: MIN_SIDEBAR_THREAD_PREVIEW_COUNT,
-    maximum: MAX_SIDEBAR_THREAD_PREVIEW_COUNT,
-  }),
-);
-export type SidebarThreadPreviewCount = typeof SidebarThreadPreviewCount.Type;
-export const DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT: SidebarThreadPreviewCount = 6;
 
 export const ImportedColorThemeReference = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -95,9 +77,6 @@ export const ClientSettingsSchema = Schema.Struct({
       modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  sidebarNavigationMode: SidebarNavigationMode.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_NAVIGATION_MODE)),
-  ),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
   ),
@@ -105,14 +84,8 @@ export const ClientSettingsSchema = Schema.Struct({
     TrimmedNonEmptyString,
     SidebarProjectGroupingMode,
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  sidebarProjectSortOrder: SidebarProjectSortOrder.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_SORT_ORDER)),
-  ),
   sidebarThreadSortOrder: SidebarThreadSortOrder.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_SORT_ORDER)),
-  ),
-  sidebarThreadPreviewCount: SidebarThreadPreviewCount.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT)),
   ),
   timestampFormat: TimestampFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
@@ -604,14 +577,11 @@ export const ClientSettingsPatch = Schema.Struct({
       }),
     ),
   ),
-  sidebarNavigationMode: Schema.optionalKey(SidebarNavigationMode),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),
   ),
-  sidebarProjectSortOrder: Schema.optionalKey(SidebarProjectSortOrder),
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
-  sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   timestampFormat: Schema.optionalKey(TimestampFormat),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

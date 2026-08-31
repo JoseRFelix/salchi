@@ -25,12 +25,19 @@ describe("ClientSettings defaults", () => {
     expect(legacySettings.autoOpenPlanSidebar).toBe(false);
   });
 
-  it("keeps the existing project-first sidebar as the default", () => {
-    expect(DEFAULT_CLIENT_SETTINGS.sidebarNavigationMode).toBe("project");
-    expect(decodeClientSettings({}).sidebarNavigationMode).toBe("project");
-    expect(decodeClientSettings({ sidebarNavigationMode: "inbox" }).sidebarNavigationMode).toBe(
-      "inbox",
-    );
+  it("drops retired project-sidebar settings from persisted settings", () => {
+    expect(DEFAULT_CLIENT_SETTINGS).not.toHaveProperty("sidebarNavigationMode");
+    expect(DEFAULT_CLIENT_SETTINGS).not.toHaveProperty("sidebarProjectSortOrder");
+    expect(DEFAULT_CLIENT_SETTINGS).not.toHaveProperty("sidebarThreadPreviewCount");
+
+    const decoded = decodeClientSettings({
+      sidebarNavigationMode: "project",
+      sidebarProjectSortOrder: "manual",
+      sidebarThreadPreviewCount: 6,
+    });
+    expect(decoded).not.toHaveProperty("sidebarNavigationMode");
+    expect(decoded).not.toHaveProperty("sidebarProjectSortOrder");
+    expect(decoded).not.toHaveProperty("sidebarThreadPreviewCount");
   });
 });
 

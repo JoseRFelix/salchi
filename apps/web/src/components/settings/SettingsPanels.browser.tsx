@@ -773,6 +773,20 @@ describe("GeneralSettingsPanel observability", () => {
       .toBeInTheDocument();
   });
 
+  it("does not expose the retired project and inbox mode setting", async () => {
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <GeneralSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect.element(page.getByText("Time format", { exact: true })).toBeInTheDocument();
+    await expect.element(page.getByText("Sidebar mode", { exact: true })).not.toBeInTheDocument();
+    await expect.element(page.getByLabelText("Use Inbox mode")).not.toBeInTheDocument();
+  });
+
   it("shows local dictation model sizes and supported choices", async () => {
     const updateSettings = vi.fn<LocalApi["server"]["updateSettings"]>().mockResolvedValue({
       ...DEFAULT_SERVER_SETTINGS,

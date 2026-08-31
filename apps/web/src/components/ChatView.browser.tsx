@@ -9050,14 +9050,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("opens the new-thread palette from the mobile inbox without closing the sidebar", async () => {
-    localStorage.setItem(
-      CLIENT_SETTINGS_STORAGE_KEY,
-      JSON.stringify({
-        ...DEFAULT_CLIENT_SETTINGS,
-        sidebarNavigationMode: "inbox",
-      }),
-    );
+  it("opens the default mobile inbox with content and keeps it open for new-thread palette", async () => {
     const mounted = await mountChatView({
       viewport: COMPACT_FOOTER_VIEWPORT,
       snapshot: createSnapshotWithSecondaryProject(),
@@ -9069,6 +9062,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => document.querySelector<HTMLElement>('[data-mobile="true"][data-sidebar="sidebar"]'),
         "Mobile inbox sidebar should remain mounted while the command palette is open.",
       );
+      expect(mobileSidebar.querySelector('[data-testid="inbox-thread-list"]')).not.toBeNull();
       const trigger = page.getByRole("button", { name: "New thread", exact: true });
       await expect.element(trigger).toBeInTheDocument();
       await trigger.click();

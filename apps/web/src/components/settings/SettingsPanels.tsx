@@ -392,12 +392,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
         ? ["Time format"]
         : []),
-      ...(settings.sidebarNavigationMode !== DEFAULT_UNIFIED_SETTINGS.sidebarNavigationMode
-        ? ["Sidebar mode"]
-        : []),
-      ...(settings.sidebarThreadPreviewCount !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount
-        ? ["Visible threads"]
-        : []),
       ...(settings.diffWordWrap !== DEFAULT_UNIFIED_SETTINGS.diffWordWrap
         ? ["Diff line wrapping"]
         : []),
@@ -443,8 +437,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.automaticGitFetchInterval,
       settings.enableAssistantStreaming,
       settings.transcriptionModel,
-      settings.sidebarThreadPreviewCount,
-      settings.sidebarNavigationMode,
       settings.timestampFormat,
       isThemeDirty,
     ],
@@ -465,10 +457,8 @@ export function useSettingsRestore(onRestored?: () => void) {
     updateSettings({
       themeMode: DEFAULT_UNIFIED_SETTINGS.themeMode,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
-      sidebarNavigationMode: DEFAULT_UNIFIED_SETTINGS.sidebarNavigationMode,
       diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
-      sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
       enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
       transcriptionModel: DEFAULT_UNIFIED_SETTINGS.transcriptionModel,
@@ -616,39 +606,6 @@ export function GeneralSettingsPanel() {
         <PushNotificationSettingsRow />
 
         <ThemeSettingsRow />
-
-        <SettingsRow
-          title="Sidebar mode"
-          description="Project mode keeps projects first and remains the default. Inbox mode shows one project filter above a global lifecycle inbox; its pin, snooze, and settle state is stored only on this device while the mode is a prototype."
-          resetAction={
-            settings.sidebarNavigationMode !== DEFAULT_UNIFIED_SETTINGS.sidebarNavigationMode ? (
-              <SettingResetButton
-                label="sidebar mode"
-                onClick={() =>
-                  updateSettings({
-                    sidebarNavigationMode: DEFAULT_UNIFIED_SETTINGS.sidebarNavigationMode,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">
-                {settings.sidebarNavigationMode === "inbox"
-                  ? "Inbox mode (prototype)"
-                  : "Project mode"}
-              </span>
-              <Switch
-                checked={settings.sidebarNavigationMode === "inbox"}
-                onCheckedChange={(checked) =>
-                  updateSettings({ sidebarNavigationMode: checked ? "inbox" : "project" })
-                }
-                aria-label="Use Inbox mode"
-              />
-            </div>
-          }
-        />
 
         <SettingsRow
           title="Time format"
