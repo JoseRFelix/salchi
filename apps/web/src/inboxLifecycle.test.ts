@@ -1,577 +1,311 @@
-import {
-  EnvironmentId,
-  ProviderDriverKind,
-  ProjectId,
-  ThreadId,
-  type ProviderInteractionMode,
-} from "@salchi/contracts";
 import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
+import { EnvironmentId, ProjectId, ThreadId } from "@salchi/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
-  applyInboxLifecycleAction,
+  activeThreadAnchorTimestampMs,
   buildInboxLifecycleThreadKeyByThreadKey,
+  generateSpreadPinOrderKeys,
   getNextInboxWakeAtMs,
-  INBOX_LIFECYCLE_STORAGE_KEY,
-  parseInboxLifecycleDocument,
   partitionInboxThreads,
-  persistInboxLifecycleState,
-  readInboxLifecycleState,
+  pinOrderKeyBetween,
+  planPinnedReorder,
   resolveInboxLifecycleSection,
-  resolveInboxSnoozeUntil,
-  resolveInboxThreadActivityAt,
+  resolveInboxSnoozePresets,
   resolveInboxWokeAt,
-  type InboxLifecycleByThreadKey,
+  snoozeWakeLabel,
+  sortPinnedThreadsByOrderKey,
 } from "./inboxLifecycle";
-import { createMemoryStorage } from "./testUtils/memoryStorage";
 import type { SidebarThreadSummary } from "./types";
 
 const environmentId = EnvironmentId.make("environment-local");
+const otherEnvironmentId = EnvironmentId.make("environment-remote");
 const projectId = ProjectId.make("project-1");
 
-function makeThread(input: {
-  readonly id: string;
-  readonly createdAt: string;
-  readonly archivedAt?: string | null;
-  readonly parentThreadId?: string | null;
-}): SidebarThreadSummary {
+function makeThread(
+  id: string,
+  overrides: Partial<SidebarThreadSummary> = {},
+): SidebarThreadSummary {
+  const createdAt = overrides.createdAt ?? "2026-08-27T10:00:00.000Z";
   return {
-    id: ThreadId.make(input.id),
+    id: ThreadId.make(id),
     environmentId,
     projectId,
-    title: input.id,
-    interactionMode: "default" satisfies ProviderInteractionMode,
-    parentThreadId: input.parentThreadId ? ThreadId.make(input.parentThreadId) : null,
+    title: id,
+    interactionMode: "default",
+    parentThreadId: null,
     session: null,
-    createdAt: input.createdAt,
-    archivedAt: input.archivedAt ?? null,
+    createdAt,
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    unsettledAt: null,
+    snoozedUntil: null,
+    snoozedAt: null,
+    pinnedAt: null,
+    pinOrderKey: null,
+    updatedAt: createdAt,
     latestTurn: null,
     branch: null,
     worktreePath: null,
-    latestUserMessageAt: input.createdAt,
+    latestUserMessageAt: createdAt,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
+    ...overrides,
   };
 }
 
-function key(thread: SidebarThreadSummary): string {
+function key(thread: Pick<SidebarThreadSummary, "environmentId" | "id">): string {
   return scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
 }
 
-describe("inbox lifecycle interactions", () => {
-  it("preserves pin state through snooze and settle transitions", () => {
-    const threadKey = "environment-local:thread-1";
-    let state: InboxLifecycleByThreadKey = {};
-    state = applyInboxLifecycleAction(state, {
-      type: "pin",
-      threadKey,
-      at: "2026-08-25T10:00:00.000Z",
-    });
-    state = applyInboxLifecycleAction(state, {
-      type: "snooze",
-      threadKey,
-      until: "2026-08-25T12:00:00.000Z",
+describe("inbox lifecycle partitioning", () => {
+  it("uses drafts first and then snoozed, settled, pinned, and active precedence", () => {
+    const lifecycleThread = makeThread("thread", {
+      pinnedAt: "2026-08-27T08:00:00.000Z",
+      settledOverride: "settled",
+      settledAt: "2026-08-27T09:00:00.000Z",
+      snoozedUntil: "2026-08-27T14:00:00.000Z",
     });
 
     expect(
-      resolveInboxLifecycleSection(threadKey, state, new Set(), "2026-08-25T11:00:00.000Z"),
-    ).toBe("snoozed");
-
-    state = applyInboxLifecycleAction(state, {
-      type: "settle",
-      threadKey,
-      at: "2026-08-25T11:05:00.000Z",
-    });
-    expect(state[threadKey]).toEqual({
-      pinnedAt: "2026-08-25T10:00:00.000Z",
-      snoozedUntil: null,
-      settledAt: "2026-08-25T11:05:00.000Z",
-      reactivatedAt: null,
-      wokeAt: null,
-    });
-    expect(
-      resolveInboxLifecycleSection(threadKey, state, new Set(), "2026-08-25T11:06:00.000Z"),
-    ).toBe("settled");
-
-    state = applyInboxLifecycleAction(state, {
-      type: "unsettle",
-      threadKey,
-      at: "2026-08-25T11:06:00.000Z",
-    });
-    expect(
-      resolveInboxLifecycleSection(threadKey, state, new Set(), "2026-08-25T11:06:00.000Z"),
-    ).toBe("pinned");
-    state = applyInboxLifecycleAction(state, {
-      type: "unpin",
-      threadKey,
-      at: "2026-08-25T11:07:00.000Z",
-    });
-    expect(state[threadKey]).toMatchObject({
-      pinnedAt: null,
-      reactivatedAt: "2026-08-25T11:07:00.000Z",
-    });
-  });
-
-  it("lets an expired snooze return to the underlying lifecycle section", () => {
-    const threadKey = "environment-local:thread-1";
-    const state: InboxLifecycleByThreadKey = {
-      [threadKey]: {
-        pinnedAt: "2026-08-25T09:00:00.000Z",
-        snoozedUntil: "2026-08-25T10:00:00.000Z",
-        settledAt: null,
-        reactivatedAt: null,
-        wokeAt: null,
-      },
-    };
-    expect(
-      resolveInboxLifecycleSection(threadKey, state, new Set(), "2026-08-25T10:00:01.000Z"),
-    ).toBe("pinned");
-  });
-
-  it("returns a settled thread to history after its snooze expires", () => {
-    const threadKey = "environment-local:thread-1";
-    let state = applyInboxLifecycleAction(
-      {},
-      {
-        type: "settle",
-        threadKey,
-        at: "2026-08-25T09:00:00.000Z",
-      },
-    );
-    state = applyInboxLifecycleAction(state, {
-      type: "snooze",
-      threadKey,
-      until: "2026-08-25T11:00:00.000Z",
-    });
-
-    expect(
-      resolveInboxLifecycleSection(threadKey, state, new Set(), "2026-08-25T10:00:00.000Z"),
-    ).toBe("snoozed");
-    expect(
-      resolveInboxLifecycleSection(threadKey, state, new Set(), "2026-08-25T11:00:00.000Z"),
-    ).toBe("settled");
-    expect(applyInboxLifecycleAction(state, { type: "remove", threadKey })).toEqual({});
-  });
-
-  it("promotes an early wake and clears its attention marker after acknowledgement", () => {
-    const threadKey = "environment-local:thread-wake";
-    let state = applyInboxLifecycleAction(
-      {},
-      {
-        type: "snooze",
-        threadKey,
-        until: "2026-08-25T12:00:00.000Z",
-      },
-    );
-    state = applyInboxLifecycleAction(state, {
-      type: "unsnooze",
-      threadKey,
-      at: "2026-08-25T11:00:00.000Z",
-    });
-    expect(state[threadKey]).toMatchObject({
-      snoozedUntil: null,
-      reactivatedAt: "2026-08-25T11:00:00.000Z",
-      wokeAt: "2026-08-25T11:00:00.000Z",
-    });
-
-    state = applyInboxLifecycleAction(state, {
-      type: "acknowledge-wake",
-      threadKey,
-      at: "2026-08-25T11:00:00.000Z",
-    });
-    expect(resolveInboxWokeAt(state[threadKey], "2026-08-25T11:01:00.000Z")).toBeNull();
-    expect(state[threadKey]?.reactivatedAt).toBe("2026-08-25T11:00:00.000Z");
-  });
-
-  it("keeps drafts ahead of any persisted lifecycle state", () => {
-    const threadKey = "environment-local:thread-1";
-    const state: InboxLifecycleByThreadKey = {
-      [threadKey]: {
-        pinnedAt: "2026-08-25T09:00:00.000Z",
-        snoozedUntil: "2026-08-26T09:00:00.000Z",
-        settledAt: "2026-08-25T10:00:00.000Z",
-        reactivatedAt: null,
-        wokeAt: null,
-      },
-    };
-
-    expect(
-      resolveInboxLifecycleSection(
-        threadKey,
-        state,
-        new Set([threadKey]),
-        "2026-08-25T11:00:00.000Z",
-      ),
+      resolveInboxLifecycleSection({
+        thread: lifecycleThread,
+        isDraft: true,
+        now: "2026-08-27T11:00:00.000Z",
+      }),
     ).toBe("drafts");
-  });
-});
-
-describe("partitionInboxThreads", () => {
-  it("partitions and deterministically sorts every lifecycle section", () => {
-    const drafts = [
-      makeThread({ id: "draft-old", createdAt: "2026-08-25T08:00:00.000Z" }),
-      makeThread({ id: "draft-new", createdAt: "2026-08-25T09:00:00.000Z" }),
-    ];
-    const pinned = [
-      makeThread({ id: "pin-second", createdAt: "2026-08-25T12:00:00.000Z" }),
-      makeThread({ id: "pin-first", createdAt: "2026-08-25T07:00:00.000Z" }),
-    ];
-    const active = [
-      makeThread({ id: "active-old", createdAt: "2026-08-25T06:00:00.000Z" }),
-      makeThread({ id: "active-new", createdAt: "2026-08-25T13:00:00.000Z" }),
-    ];
-    const snoozed = [
-      makeThread({ id: "wake-later", createdAt: "2026-08-25T15:00:00.000Z" }),
-      makeThread({ id: "wake-first", createdAt: "2026-08-25T05:00:00.000Z" }),
-    ];
-    const settled = [
-      makeThread({ id: "settled-old", createdAt: "2026-08-25T14:00:00.000Z" }),
-      makeThread({ id: "settled-new", createdAt: "2026-08-25T04:00:00.000Z" }),
-    ];
-    const archived = makeThread({
-      id: "archived",
-      createdAt: "2026-08-25T16:00:00.000Z",
-      archivedAt: "2026-08-25T16:01:00.000Z",
-    });
-    const hidden = {
-      ...makeThread({ id: "hidden", createdAt: "2026-08-25T17:00:00.000Z" }),
-      hiddenFromThreadList: true,
-    };
-    const lifecycleByThreadKey: InboxLifecycleByThreadKey = {
-      [key(pinned[0]!)]: {
-        pinnedAt: "2026-08-25T10:01:00.000Z",
-        snoozedUntil: null,
-        settledAt: null,
-        reactivatedAt: null,
-        wokeAt: null,
-      },
-      [key(pinned[1]!)]: {
-        pinnedAt: "2026-08-25T10:00:00.000Z",
-        snoozedUntil: null,
-        settledAt: null,
-        reactivatedAt: null,
-        wokeAt: null,
-      },
-      [key(snoozed[0]!)]: {
-        pinnedAt: null,
-        snoozedUntil: "2026-08-25T13:00:00.000Z",
-        settledAt: null,
-        reactivatedAt: null,
-        wokeAt: null,
-      },
-      [key(snoozed[1]!)]: {
-        pinnedAt: null,
-        snoozedUntil: "2026-08-25T12:00:00.000Z",
-        settledAt: null,
-        reactivatedAt: null,
-        wokeAt: null,
-      },
-      [key(settled[0]!)]: {
-        pinnedAt: null,
-        snoozedUntil: null,
-        settledAt: "2026-08-25T09:00:00.000Z",
-        reactivatedAt: null,
-        wokeAt: null,
-      },
-      [key(settled[1]!)]: {
-        pinnedAt: null,
-        snoozedUntil: null,
-        settledAt: "2026-08-25T10:00:00.000Z",
-        reactivatedAt: null,
-        wokeAt: null,
-      },
-    };
-    const partitioned = partitionInboxThreads({
-      threads: [...active, ...settled, ...drafts, ...pinned, ...snoozed, archived, hidden],
-      lifecycleByThreadKey,
-      draftThreadKeys: new Set(drafts.map(key)),
-      now: "2026-08-25T11:00:00.000Z",
-    });
-
-    expect(partitioned.drafts.map((thread) => thread.id)).toEqual([
-      ThreadId.make("draft-new"),
-      ThreadId.make("draft-old"),
-    ]);
-    expect(partitioned.pinned.map((thread) => thread.id)).toEqual([
-      ThreadId.make("pin-first"),
-      ThreadId.make("pin-second"),
-    ]);
-    expect(partitioned.active.map((thread) => thread.id)).toEqual([
-      ThreadId.make("active-new"),
-      ThreadId.make("active-old"),
-    ]);
-    expect(partitioned.snoozed.map((thread) => thread.id)).toEqual([
-      ThreadId.make("wake-first"),
-      ThreadId.make("wake-later"),
-    ]);
-    expect(partitioned.settled.map((thread) => thread.id)).toEqual([
-      ThreadId.make("settled-new"),
-      ThreadId.make("settled-old"),
-    ]);
-    expect(Object.values(partitioned).flat()).not.toContain(archived);
-    expect(Object.values(partitioned).flat()).not.toContain(hidden);
-  });
-
-  it("keeps subagents in their root thread's lifecycle section", () => {
-    const root = makeThread({ id: "root", createdAt: "2026-08-25T10:00:00.000Z" });
-    const child = makeThread({
-      id: "child",
-      parentThreadId: "root",
-      createdAt: "2026-08-25T11:00:00.000Z",
-    });
-    const rootKey = key(root);
-    const childKey = key(child);
-    const lifecycleByThreadKey: InboxLifecycleByThreadKey = {
-      [rootKey]: {
-        pinnedAt: "2026-08-25T11:30:00.000Z",
-        snoozedUntil: null,
-        settledAt: null,
-        reactivatedAt: null,
-        wokeAt: null,
-      },
-    };
-
-    expect(buildInboxLifecycleThreadKeyByThreadKey([child, root]).get(childKey)).toBe(rootKey);
-    const partitioned = partitionInboxThreads({
-      threads: [child, root],
-      lifecycleByThreadKey,
-      draftThreadKeys: new Set(),
-      now: "2026-08-25T12:00:00.000Z",
-    });
-    expect(new Set(partitioned.pinned.map(key))).toEqual(new Set([rootKey, childKey]));
-    expect(partitioned.active).toEqual([]);
-  });
-
-  it("uses scoped identity as a stable tie-breaker", () => {
-    const alpha = makeThread({ id: "alpha", createdAt: "2026-08-25T10:00:00.000Z" });
-    const beta = makeThread({ id: "beta", createdAt: "2026-08-25T10:00:00.000Z" });
-    const partition = (threads: readonly SidebarThreadSummary[]) =>
-      partitionInboxThreads({
-        threads,
-        lifecycleByThreadKey: {},
-        draftThreadKeys: new Set(),
-        now: "2026-08-25T11:00:00.000Z",
-      }).active.map(key);
-
-    expect(partition([beta, alpha])).toEqual(partition([alpha, beta]));
-    expect(partition([beta, alpha])).toEqual([key(alpha), key(beta)]);
-  });
-
-  it("promotes newly active root groups without reordering on completion updates", () => {
-    const newThread = makeThread({
-      id: "new-thread",
-      createdAt: "2026-08-25T10:00:00.000Z",
-    });
-    const oldRoot = {
-      ...makeThread({ id: "old-root", createdAt: "2026-08-25T08:00:00.000Z" }),
-      latestUserMessageAt: "2026-08-25T11:00:00.000Z",
-    };
-    const activeChild = {
-      ...makeThread({
-        id: "active-child",
-        parentThreadId: "old-root",
-        createdAt: "2026-08-25T08:30:00.000Z",
-      }),
-      latestUserMessageAt: "2026-08-25T12:00:00.000Z",
-    };
-    const completedChild = {
-      ...activeChild,
-      updatedAt: "2026-08-25T13:00:00.000Z",
-    };
-
-    const partition = (threads: readonly SidebarThreadSummary[]) =>
-      partitionInboxThreads({
-        threads,
-        lifecycleByThreadKey: {},
-        draftThreadKeys: new Set(),
-        now: "2026-08-25T13:00:00.000Z",
-      }).active;
-
-    expect(partition([newThread, oldRoot, activeChild]).map(key)).toEqual([
-      key(activeChild),
-      key(oldRoot),
-      key(newThread),
-    ]);
-    expect(partition([newThread, oldRoot, completedChild]).map(key)).toEqual([
-      key(completedChild),
-      key(oldRoot),
-      key(newThread),
-    ]);
-  });
-
-  it("uses an explicit reactivation timestamp ahead of older message activity", () => {
-    const thread = makeThread({ id: "reactivated", createdAt: "2026-08-25T08:00:00.000Z" });
     expect(
-      resolveInboxThreadActivityAt(thread, {
-        pinnedAt: null,
-        snoozedUntil: null,
-        settledAt: null,
-        reactivatedAt: "2026-08-25T12:00:00.000Z",
-        wokeAt: null,
+      resolveInboxLifecycleSection({
+        thread: lifecycleThread,
+        isDraft: false,
+        now: "2026-08-27T11:00:00.000Z",
       }),
-    ).toBe("2026-08-25T12:00:00.000Z");
-  });
-
-  it("promotes a newly active session without using its later completion transition", () => {
-    const thread = makeThread({ id: "session-activity", createdAt: "2026-08-25T08:00:00.000Z" });
-    const runningSession = {
-      provider: ProviderDriverKind.make("codex"),
-      status: "running" as const,
-      orchestrationStatus: "running" as const,
-      createdAt: "2026-08-25T08:00:00.000Z",
-      updatedAt: "2026-08-25T12:00:00.000Z",
-    };
-
-    expect(resolveInboxThreadActivityAt({ ...thread, session: runningSession }, undefined)).toBe(
-      "2026-08-25T12:00:00.000Z",
-    );
+    ).toBe("snoozed");
     expect(
-      resolveInboxThreadActivityAt(
-        {
-          ...thread,
-          session: {
-            ...runningSession,
-            status: "ready",
-            orchestrationStatus: "ready",
-            updatedAt: "2026-08-25T13:00:00.000Z",
-          },
+      resolveInboxLifecycleSection({
+        thread: { ...lifecycleThread, snoozedUntil: null },
+        isDraft: false,
+        now: "2026-08-27T11:00:00.000Z",
+      }),
+    ).toBe("settled");
+    expect(
+      resolveInboxLifecycleSection({
+        thread: {
+          ...lifecycleThread,
+          snoozedUntil: null,
+          settledOverride: "active",
+          settledAt: null,
         },
-        undefined,
-      ),
-    ).toBe("2026-08-25T08:00:00.000Z");
+        isDraft: false,
+        now: "2026-08-27T11:00:00.000Z",
+      }),
+    ).toBe("pinned");
+  });
+
+  it("shares a root thread's lifecycle and draft state with its subagents", () => {
+    const root = makeThread("root", { pinnedAt: "2026-08-27T09:00:00.000Z" });
+    const child = makeThread("child", { parentThreadId: root.id });
+    const lifecycleKeys = buildInboxLifecycleThreadKeyByThreadKey([root, child]);
+
+    expect(lifecycleKeys.get(key(child))).toBe(key(root));
+    const partitions = partitionInboxThreads({
+      threads: [root, child],
+      draftThreadKeys: new Set([key(root)]),
+      now: "2026-08-27T11:00:00.000Z",
+    });
+    expect(partitions.drafts.map((thread) => thread.id)).toEqual([child.id, root.id]);
+    expect(partitions.pinned).toEqual([]);
+  });
+
+  it("keeps active threads in creation order despite later activity", () => {
+    const olderButRecentlyActive = makeThread("older", {
+      createdAt: "2026-08-27T08:00:00.000Z",
+      updatedAt: "2026-08-27T15:00:00.000Z",
+    });
+    const newer = makeThread("newer", {
+      createdAt: "2026-08-27T10:00:00.000Z",
+      updatedAt: "2026-08-27T10:00:00.000Z",
+    });
+
+    const partitions = partitionInboxThreads({
+      threads: [olderButRecentlyActive, newer],
+      draftThreadKeys: new Set(),
+      now: "2026-08-27T16:00:00.000Z",
+    });
+    expect(partitions.active.map((thread) => thread.id)).toEqual([
+      newer.id,
+      olderButRecentlyActive.id,
+    ]);
+  });
+
+  it("reanchors a manually un-settled thread without using ordinary activity", () => {
+    const reactivated = makeThread("reactivated", {
+      createdAt: "2026-08-27T08:00:00.000Z",
+      updatedAt: "2026-08-27T09:00:00.000Z",
+      unsettledAt: "2026-08-27T15:00:00.000Z",
+    });
+    const newer = makeThread("newer", { createdAt: "2026-08-27T10:00:00.000Z" });
+
+    expect(activeThreadAnchorTimestampMs(reactivated)).toBe(Date.parse("2026-08-27T15:00:00.000Z"));
+    expect(
+      partitionInboxThreads({
+        threads: [newer, reactivated],
+        draftThreadKeys: new Set(),
+        now: "2026-08-27T16:00:00.000Z",
+      }).active.map((thread) => thread.id),
+    ).toEqual([reactivated.id, newer.id]);
+  });
+
+  it("sorts snoozed by wake time and settled by settlement time", () => {
+    const wakeLater = makeThread("wake-later", {
+      snoozedUntil: "2026-08-28T12:00:00.000Z",
+    });
+    const wakeSooner = makeThread("wake-sooner", {
+      snoozedUntil: "2026-08-28T09:00:00.000Z",
+    });
+    const settledOlder = makeThread("settled-older", {
+      settledOverride: "settled",
+      settledAt: "2026-08-26T09:00:00.000Z",
+    });
+    const settledNewer = makeThread("settled-newer", {
+      settledOverride: "settled",
+      settledAt: "2026-08-27T09:00:00.000Z",
+    });
+
+    const partitions = partitionInboxThreads({
+      threads: [wakeLater, settledOlder, wakeSooner, settledNewer],
+      draftThreadKeys: new Set(),
+      now: "2026-08-27T16:00:00.000Z",
+    });
+    expect(partitions.snoozed.map((thread) => thread.id)).toEqual([wakeSooner.id, wakeLater.id]);
+    expect(partitions.settled.map((thread) => thread.id)).toEqual([
+      settledNewer.id,
+      settledOlder.id,
+    ]);
+  });
+
+  it("filters archived and hidden threads", () => {
+    const archived = makeThread("archived", { archivedAt: "2026-08-27T12:00:00.000Z" });
+    const hidden = makeThread("hidden", { hiddenFromThreadList: true });
+    const visible = makeThread("visible");
+    const partitions = partitionInboxThreads({
+      threads: [archived, hidden, visible],
+      draftThreadKeys: new Set(),
+      now: "2026-08-27T13:00:00.000Z",
+    });
+    expect(partitions.active.map((thread) => thread.id)).toEqual([visible.id]);
   });
 });
 
-describe("inbox lifecycle persistence", () => {
-  it("round-trips the versioned prototype document", () => {
-    const storage = createMemoryStorage();
-    const state: InboxLifecycleByThreadKey = {
-      "environment-local:thread-1": {
-        pinnedAt: "2026-08-25T10:00:00.000Z",
-        snoozedUntil: null,
-        settledAt: null,
-        reactivatedAt: null,
-        wokeAt: null,
-      },
-    };
-    persistInboxLifecycleState(storage, state);
-
-    expect(readInboxLifecycleState(storage)).toEqual(state);
-    expect(JSON.parse(storage.getItem(INBOX_LIFECYCLE_STORAGE_KEY) ?? "{}")).toMatchObject({
-      version: 2,
-    });
+describe("pinned ordering", () => {
+  it("places a new pin before the current first key", () => {
+    const orderKey = pinOrderKeyBetween(null, "g");
+    expect(orderKey).not.toBeNull();
+    expect(orderKey! < "g").toBe(true);
   });
 
-  it("drops corrupt documents, keys, timestamps, and empty entries", () => {
-    expect(parseInboxLifecycleDocument("{")).toEqual({});
-    expect(
-      parseInboxLifecycleDocument(
-        JSON.stringify({
-          version: 1,
-          threads: {
-            "": { pinnedAt: "2026-08-25T10:00:00.000Z" },
-            invalid: { pinnedAt: "not-a-date" },
-            "environment-local:thread-valid": {
-              pinnedAt: "2026-08-25T10:00:00.000Z",
-              snoozedUntil: 123,
-              settledAt: null,
-            },
-          },
-        }),
-      ),
-    ).toEqual({
-      "environment-local:thread-valid": {
-        pinnedAt: "2026-08-25T10:00:00.000Z",
-        snoozedUntil: null,
-        settledAt: null,
-        reactivatedAt: null,
-        wokeAt: null,
-      },
-    });
+  it("sorts persisted order keys first and keyless legacy pins newest first", () => {
+    const threads = [
+      makeThread("legacy-old", {
+        createdAt: "2026-08-27T08:00:00.000Z",
+        pinnedAt: "2026-08-27T08:00:00.000Z",
+      }),
+      makeThread("second", { pinnedAt: "2026-08-27T10:00:00.000Z", pinOrderKey: "m" }),
+      makeThread("first", { pinnedAt: "2026-08-27T10:00:00.000Z", pinOrderKey: "g" }),
+      makeThread("legacy-new", {
+        createdAt: "2026-08-27T09:00:00.000Z",
+        pinnedAt: "2026-08-27T09:00:00.000Z",
+      }),
+    ];
+    expect(sortPinnedThreadsByOrderKey(threads).map((thread) => thread.id)).toEqual([
+      ThreadId.make("first"),
+      ThreadId.make("second"),
+      ThreadId.make("legacy-new"),
+      ThreadId.make("legacy-old"),
+    ]);
   });
 
-  it("migrates version-one entries with empty activity metadata", () => {
+  it("uses a fractional update when possible and rebalances invalid legacy keys", () => {
     expect(
-      parseInboxLifecycleDocument(
-        JSON.stringify({
-          version: 1,
-          threads: {
-            "environment-local:thread-old": {
-              pinnedAt: "2026-08-25T10:00:00.000Z",
-              snoozedUntil: null,
-              settledAt: null,
-            },
-          },
-        }),
-      ),
-    ).toEqual({
-      "environment-local:thread-old": {
-        pinnedAt: "2026-08-25T10:00:00.000Z",
-        snoozedUntil: null,
-        settledAt: null,
-        reactivatedAt: null,
-        wokeAt: null,
-      },
+      planPinnedReorder({
+        orderedIds: ["second", "first", "third"],
+        keysById: new Map([
+          ["first", "g"],
+          ["second", "m"],
+          ["third", "t"],
+        ]),
+        movedId: "second",
+      }),
+    ).toEqual([{ id: "second", orderKey: expect.any(String) }]);
+
+    const rebalanced = planPinnedReorder({
+      orderedIds: ["legacy", "first", "third"],
+      keysById: new Map([
+        ["legacy", null],
+        ["first", "g"],
+        ["third", "t"],
+      ]),
+      movedId: "first",
     });
+    expect(rebalanced).toHaveLength(3);
+    expect(rebalanced.map(({ orderKey }) => orderKey)).toEqual(generateSpreadPinOrderKeys(3));
   });
 });
 
-describe("inbox snooze timing", () => {
-  it("resolves predictable duration presets and the earliest wake boundary", () => {
-    const now = "2026-08-25T10:00:00.000Z";
-    expect(resolveInboxSnoozeUntil("one-hour", now)).toBe("2026-08-25T11:00:00.000Z");
-    const tomorrow = new Date(resolveInboxSnoozeUntil("tomorrow", now));
-    expect(tomorrow.getDate()).toBe(new Date(now).getDate() + 1);
-    expect(tomorrow.getHours()).toBe(9);
-    expect(resolveInboxSnoozeUntil("one-week", now)).toBe("2026-09-01T10:00:00.000Z");
+describe("snooze presentation", () => {
+  it("offers five contextual presets earlier in the day", () => {
+    const now = new Date(2026, 7, 27, 10, 0, 0, 0);
+    const presets = resolveInboxSnoozePresets(now);
+    expect(presets.map((preset) => preset.id)).toEqual([
+      "hour",
+      "three-hours",
+      "evening",
+      "tomorrow",
+      "next-week",
+    ]);
+    expect(presets.every((preset) => Date.parse(preset.snoozedUntil) > now.getTime())).toBe(true);
+    expect(presets.every((preset) => preset.whenLabel.length > 0)).toBe(true);
+  });
+
+  it("reports wake countdowns and the next pending wake", () => {
+    const now = "2026-08-27T10:00:00.000Z";
+    expect(snoozeWakeLabel("2026-08-27T10:45:00.000Z", now)).toBe("45m");
+    expect(snoozeWakeLabel("2026-08-27T13:00:00.000Z", now)).toBe("3h");
+    expect(snoozeWakeLabel("2026-08-29T10:00:00.000Z", now)).toBe("2d");
     expect(
       getNextInboxWakeAtMs(
-        {
-          later: {
-            pinnedAt: null,
-            snoozedUntil: "2026-08-25T12:00:00.000Z",
-            settledAt: null,
-            reactivatedAt: null,
-            wokeAt: null,
-          },
-          first: {
-            pinnedAt: null,
-            snoozedUntil: "2026-08-25T11:00:00.000Z",
-            settledAt: null,
-            reactivatedAt: null,
-            wokeAt: null,
-          },
-        },
+        [
+          makeThread("past", { snoozedUntil: "2026-08-27T09:00:00.000Z" }),
+          makeThread("later", { snoozedUntil: "2026-08-27T13:00:00.000Z" }),
+          makeThread("next", { snoozedUntil: "2026-08-27T11:00:00.000Z" }),
+        ],
         now,
       ),
-    ).toBe(Date.parse("2026-08-25T11:00:00.000Z"));
+    ).toBe(Date.parse("2026-08-27T11:00:00.000Z"));
   });
 
-  it("surfaces an expired or explicitly early wake until it is acknowledged", () => {
+  it("returns expired snoozes to active and exposes a Woke timestamp", () => {
+    const thread = makeThread("woke", { snoozedUntil: "2026-08-27T10:00:00.000Z" });
     expect(
-      resolveInboxWokeAt(
-        {
-          pinnedAt: null,
-          snoozedUntil: "2026-08-25T11:00:00.000Z",
-          settledAt: null,
-          reactivatedAt: null,
-          wokeAt: null,
-        },
-        "2026-08-25T11:01:00.000Z",
-      ),
-    ).toBe("2026-08-25T11:00:00.000Z");
-    expect(
-      resolveInboxWokeAt(
-        {
-          pinnedAt: null,
-          snoozedUntil: null,
-          settledAt: null,
-          reactivatedAt: "2026-08-25T10:30:00.000Z",
-          wokeAt: "2026-08-25T10:30:00.000Z",
-        },
-        "2026-08-25T10:31:00.000Z",
-      ),
-    ).toBe("2026-08-25T10:30:00.000Z");
+      resolveInboxLifecycleSection({
+        thread,
+        isDraft: false,
+        now: "2026-08-27T10:00:01.000Z",
+      }),
+    ).toBe("active");
+    expect(resolveInboxWokeAt(thread, "2026-08-27T10:00:01.000Z")).toBe("2026-08-27T10:00:00.000Z");
+  });
+});
+
+describe("multi-environment identity", () => {
+  it("keeps identical thread ids in different environments distinct", () => {
+    const local = makeThread("same");
+    const remote = makeThread("same", { environmentId: otherEnvironmentId });
+    expect(key(local)).not.toBe(key(remote));
+    const lifecycleKeys = buildInboxLifecycleThreadKeyByThreadKey([local, remote]);
+    expect(lifecycleKeys.get(key(local))).toBe(key(local));
+    expect(lifecycleKeys.get(key(remote))).toBe(key(remote));
   });
 });

@@ -1,25 +1,6 @@
-import { parseScopedThreadKey, scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
-import { create } from "zustand";
+import { scopedThreadKey, scopeThreadRef } from "@salchi/client-runtime";
 
 import type { SidebarThreadSummary } from "./types";
-
-export const INBOX_LIFECYCLE_STORAGE_KEY = "salchi:sidebar-inbox-prototype:lifecycle:v1";
-const INBOX_LIFECYCLE_VERSION = 2;
-
-export interface InboxThreadLifecycle {
-  readonly pinnedAt: string | null;
-  readonly snoozedUntil: string | null;
-  readonly settledAt: string | null;
-  readonly reactivatedAt: string | null;
-  readonly wokeAt: string | null;
-}
-
-export type InboxLifecycleByThreadKey = Readonly<Record<string, InboxThreadLifecycle>>;
-
-interface PersistedInboxLifecycleDocument {
-  readonly version: typeof INBOX_LIFECYCLE_VERSION;
-  readonly threads: InboxLifecycleByThreadKey;
-}
 
 export type InboxLifecycleSection = "drafts" | "pinned" | "active" | "snoozed" | "settled";
 
@@ -31,350 +12,197 @@ export interface InboxThreadPartitions<TThread> {
   readonly settled: TThread[];
 }
 
-export type InboxSnoozePreset = "one-hour" | "tomorrow" | "one-week";
+export type InboxSnoozePresetId = "hour" | "three-hours" | "evening" | "tomorrow" | "next-week";
 
-export type InboxLifecycleAction =
-  | { readonly type: "pin"; readonly threadKey: string; readonly at: string }
-  | { readonly type: "unpin"; readonly threadKey: string; readonly at: string }
-  | { readonly type: "snooze"; readonly threadKey: string; readonly until: string }
-  | { readonly type: "unsnooze"; readonly threadKey: string; readonly at: string }
-  | { readonly type: "settle"; readonly threadKey: string; readonly at: string }
-  | { readonly type: "unsettle"; readonly threadKey: string; readonly at: string }
-  | { readonly type: "acknowledge-wake"; readonly threadKey: string; readonly at: string }
-  | { readonly type: "remove"; readonly threadKey: string };
-
-const EMPTY_THREAD_LIFECYCLE: InboxThreadLifecycle = {
-  pinnedAt: null,
-  snoozedUntil: null,
-  settledAt: null,
-  reactivatedAt: null,
-  wokeAt: null,
-};
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+export interface InboxSnoozePreset {
+  readonly id: InboxSnoozePresetId;
+  readonly label: string;
+  readonly whenLabel: string;
+  readonly snoozedUntil: string;
 }
 
-function sanitizeTimestamp(value: unknown): string | null {
-  return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null;
-}
-
-function sanitizeLifecycleEntry(value: unknown): InboxThreadLifecycle | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const entry = {
-    pinnedAt: sanitizeTimestamp(value.pinnedAt),
-    snoozedUntil: sanitizeTimestamp(value.snoozedUntil),
-    settledAt: sanitizeTimestamp(value.settledAt),
-    reactivatedAt: sanitizeTimestamp(value.reactivatedAt),
-    wokeAt: sanitizeTimestamp(value.wokeAt),
-  } satisfies InboxThreadLifecycle;
-  return entry.pinnedAt ||
-    entry.snoozedUntil ||
-    entry.settledAt ||
-    entry.reactivatedAt ||
-    entry.wokeAt
-    ? entry
-    : null;
-}
-
-export function parseInboxLifecycleDocument(raw: string | null): InboxLifecycleByThreadKey {
-  if (!raw) {
-    return {};
-  }
-  try {
-    const document = JSON.parse(raw) as unknown;
-    if (
-      !isRecord(document) ||
-      (document.version !== 1 && document.version !== INBOX_LIFECYCLE_VERSION) ||
-      !isRecord(document.threads)
-    ) {
-      return {};
-    }
-    const entries = Object.entries(document.threads).flatMap(([threadKey, value]) => {
-      const entry = parseScopedThreadKey(threadKey) ? sanitizeLifecycleEntry(value) : null;
-      return entry ? ([[threadKey, entry]] as const) : [];
-    });
-    return Object.fromEntries(entries);
-  } catch {
-    return {};
-  }
-}
-
-export function readInboxLifecycleState(
-  storage: Pick<Storage, "getItem">,
-): InboxLifecycleByThreadKey {
-  try {
-    return parseInboxLifecycleDocument(storage.getItem(INBOX_LIFECYCLE_STORAGE_KEY));
-  } catch {
-    return {};
-  }
-}
-
-export function persistInboxLifecycleState(
-  storage: Pick<Storage, "setItem">,
-  lifecycleByThreadKey: InboxLifecycleByThreadKey,
-): void {
-  const document = {
-    version: INBOX_LIFECYCLE_VERSION,
-    threads: lifecycleByThreadKey,
-  } satisfies PersistedInboxLifecycleDocument;
-  try {
-    storage.setItem(INBOX_LIFECYCLE_STORAGE_KEY, JSON.stringify(document));
-  } catch {
-    // The inbox is a presentation prototype. Storage failures must not block navigation or chat.
-  }
-}
-
-function browserStorage(): Storage | null {
-  try {
-    return typeof window === "undefined" ? null : window.localStorage;
-  } catch {
-    return null;
-  }
-}
-
-function threadLifecycleOrEmpty(
-  state: InboxLifecycleByThreadKey,
-  threadKey: string,
-): InboxThreadLifecycle {
-  return state[threadKey] ?? EMPTY_THREAD_LIFECYCLE;
-}
-
-function setThreadLifecycle(
-  state: InboxLifecycleByThreadKey,
-  threadKey: string,
-  lifecycle: InboxThreadLifecycle,
-): InboxLifecycleByThreadKey {
-  if (
-    !lifecycle.pinnedAt &&
-    !lifecycle.snoozedUntil &&
-    !lifecycle.settledAt &&
-    !lifecycle.reactivatedAt &&
-    !lifecycle.wokeAt
-  ) {
-    if (!state[threadKey]) {
-      return state;
-    }
-    const next = { ...state };
-    delete next[threadKey];
-    return next;
-  }
-  return {
-    ...state,
-    [threadKey]: lifecycle,
-  };
-}
-
-export function applyInboxLifecycleAction(
-  state: InboxLifecycleByThreadKey,
-  action: InboxLifecycleAction,
-): InboxLifecycleByThreadKey {
-  if (!parseScopedThreadKey(action.threadKey)) {
-    return state;
-  }
-  if (action.type === "remove") {
-    if (!state[action.threadKey]) {
-      return state;
-    }
-    const next = { ...state };
-    delete next[action.threadKey];
-    return next;
-  }
-
-  const current = threadLifecycleOrEmpty(state, action.threadKey);
-  switch (action.type) {
-    case "pin":
-      return setThreadLifecycle(state, action.threadKey, {
-        ...current,
-        pinnedAt: action.at,
-      });
-    case "unpin":
-      return setThreadLifecycle(state, action.threadKey, {
-        ...current,
-        pinnedAt: null,
-        reactivatedAt: action.at,
-      });
-    case "snooze":
-      return setThreadLifecycle(state, action.threadKey, {
-        ...current,
-        snoozedUntil: action.until,
-        wokeAt: null,
-      });
-    case "unsnooze":
-      return setThreadLifecycle(state, action.threadKey, {
-        ...current,
-        snoozedUntil: null,
-        reactivatedAt: action.at,
-        wokeAt: action.at,
-      });
-    case "settle":
-      return setThreadLifecycle(state, action.threadKey, {
-        ...current,
-        settledAt: action.at,
-        snoozedUntil: null,
-        wokeAt: null,
-      });
-    case "unsettle":
-      return setThreadLifecycle(state, action.threadKey, {
-        ...current,
-        settledAt: null,
-        reactivatedAt: action.at,
-      });
-    case "acknowledge-wake":
-      return setThreadLifecycle(state, action.threadKey, {
-        ...current,
-        snoozedUntil: null,
-        reactivatedAt: action.at,
-        wokeAt: null,
-      });
-  }
-}
+const HOUR_MS = 60 * 60 * 1_000;
+const DAY_MS = 24 * HOUR_MS;
+const PIN_ORDER_DIGITS = "abcdefghijklmnopqrstuvwxyz";
 
 function validTimestampMs(value: string | null | undefined): number {
-  if (!value) {
-    return 0;
-  }
+  if (!value) return 0;
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-function inboxThreadKey(thread: Pick<SidebarThreadSummary, "environmentId" | "id">): string {
+function threadKey(thread: Pick<SidebarThreadSummary, "environmentId" | "id">): string {
   return scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+}
+
+function compareThreadIdentity(
+  left: Pick<SidebarThreadSummary, "environmentId" | "id">,
+  right: Pick<SidebarThreadSummary, "environmentId" | "id">,
+): number {
+  return threadKey(left).localeCompare(threadKey(right));
+}
+
+function compareCreatedNewestFirst<
+  T extends Pick<SidebarThreadSummary, "createdAt" | "environmentId" | "id">,
+>(left: T, right: T): number {
+  return (
+    validTimestampMs(right.createdAt) - validTimestampMs(left.createdAt) ||
+    compareThreadIdentity(left, right)
+  );
 }
 
 export function buildInboxLifecycleThreadKeyByThreadKey<
   TThread extends Pick<SidebarThreadSummary, "environmentId" | "id" | "parentThreadId">,
 >(threads: readonly TThread[]): ReadonlyMap<string, string> {
-  const threadByKey = new Map(threads.map((thread) => [inboxThreadKey(thread), thread] as const));
+  const threadByKey = new Map(threads.map((thread) => [threadKey(thread), thread] as const));
   const lifecycleKeyByThreadKey = new Map<string, string>();
-
-  const resolveLifecycleKey = (thread: TThread): string => {
-    const threadKey = inboxThreadKey(thread);
-    const cached = lifecycleKeyByThreadKey.get(threadKey);
-    if (cached) {
-      return cached;
-    }
-    const visited = new Set<string>([threadKey]);
+  for (const thread of threads) {
+    const ownKey = threadKey(thread);
+    if (lifecycleKeyByThreadKey.has(ownKey)) continue;
+    const visited = new Set<string>([ownKey]);
     let current = thread;
-    let lifecycleKey = threadKey;
+    let lifecycleKey = ownKey;
     while (current.parentThreadId) {
       const parentKey = scopedThreadKey(
         scopeThreadRef(current.environmentId, current.parentThreadId),
       );
-      if (visited.has(parentKey)) {
-        break;
-      }
+      if (visited.has(parentKey)) break;
       const parent = threadByKey.get(parentKey);
-      if (!parent) {
-        break;
-      }
+      if (!parent) break;
       visited.add(parentKey);
       lifecycleKey = parentKey;
       current = parent;
     }
-    for (const visitedKey of visited) {
-      lifecycleKeyByThreadKey.set(visitedKey, lifecycleKey);
-    }
-    return lifecycleKey;
-  };
-
-  for (const thread of threads) {
-    resolveLifecycleKey(thread);
+    for (const key of visited) lifecycleKeyByThreadKey.set(key, lifecycleKey);
   }
   return lifecycleKeyByThreadKey;
 }
 
-function compareThreadKeys(
-  left: Pick<SidebarThreadSummary, "environmentId" | "id">,
-  right: Pick<SidebarThreadSummary, "environmentId" | "id">,
-): number {
-  return inboxThreadKey(left).localeCompare(inboxThreadKey(right));
-}
-
-function compareCreatedNewestFirst<
-  TThread extends Pick<SidebarThreadSummary, "createdAt" | "environmentId" | "id">,
->(left: TThread, right: TThread): number {
-  return (
-    validTimestampMs(right.createdAt) - validTimestampMs(left.createdAt) ||
-    compareThreadKeys(left, right)
-  );
-}
-
-export function resolveInboxThreadActivityAt(
-  thread: Pick<
-    SidebarThreadSummary,
-    "createdAt" | "latestTurn" | "latestUserMessageAt" | "session"
-  >,
-  lifecycle: InboxThreadLifecycle | undefined,
-): string {
-  const activeSessionAt =
-    thread.session?.status === "connecting" || thread.session?.status === "running"
-      ? thread.session.updatedAt
-      : null;
-  const candidates = [
-    thread.createdAt,
-    thread.latestUserMessageAt,
-    thread.latestTurn?.requestedAt,
-    activeSessionAt,
-    lifecycle?.reactivatedAt,
-    lifecycle?.snoozedUntil,
-  ];
-  let latest = thread.createdAt;
-  let latestMs = validTimestampMs(thread.createdAt);
-  for (const candidate of candidates) {
-    const candidateMs = validTimestampMs(candidate);
-    if (candidate && candidateMs > latestMs) {
-      latest = candidate;
-      latestMs = candidateMs;
-    }
-  }
-  return latest;
-}
-
-export function resolveInboxWokeAt(
-  lifecycle: InboxThreadLifecycle | undefined,
-  now: string,
-): string | null {
-  if (lifecycle?.wokeAt) {
-    return lifecycle.wokeAt;
-  }
+export function resolveInboxLifecycleSection(input: {
+  readonly thread: SidebarThreadSummary;
+  readonly isDraft: boolean;
+  readonly now: string;
+}): InboxLifecycleSection {
+  if (input.isDraft) return "drafts";
   if (
-    lifecycle?.snoozedUntil &&
-    validTimestampMs(lifecycle.snoozedUntil) <= validTimestampMs(now)
+    input.thread.snoozedUntil != null &&
+    validTimestampMs(input.thread.snoozedUntil) > validTimestampMs(input.now)
   ) {
-    return lifecycle.snoozedUntil;
-  }
-  return null;
-}
-
-export function resolveInboxLifecycleSection(
-  threadKey: string,
-  lifecycleByThreadKey: InboxLifecycleByThreadKey,
-  draftThreadKeys: ReadonlySet<string>,
-  now: string,
-): InboxLifecycleSection {
-  if (draftThreadKeys.has(threadKey)) {
-    return "drafts";
-  }
-  const lifecycle = lifecycleByThreadKey[threadKey];
-  const nowMs = validTimestampMs(now);
-  if (lifecycle?.snoozedUntil && validTimestampMs(lifecycle.snoozedUntil) > nowMs) {
     return "snoozed";
   }
-  if (lifecycle?.settledAt) {
+  if (input.thread.settledOverride === "settled" || input.thread.settledAt != null) {
     return "settled";
   }
-  if (lifecycle?.pinnedAt) {
-    return "pinned";
-  }
+  if (input.thread.pinnedAt != null) return "pinned";
   return "active";
+}
+
+export function activeThreadAnchorTimestampMs(
+  thread: Pick<SidebarThreadSummary, "createdAt" | "unsettledAt">,
+): number {
+  return Math.max(validTimestampMs(thread.createdAt), validTimestampMs(thread.unsettledAt));
+}
+
+function isValidPinOrderKey(key: string): boolean {
+  if (key.length === 0 || key.at(-1) === PIN_ORDER_DIGITS[0]) return false;
+  for (const character of key) {
+    if (!PIN_ORDER_DIGITS.includes(character)) return false;
+  }
+  return true;
+}
+
+function pinOrderMidpoint(before: string, after: string): string {
+  if (after !== "" && before >= after) throw new Error("pin order bounds are out of order");
+  if (after !== "") {
+    let prefixLength = 0;
+    while ((before.charAt(prefixLength) || PIN_ORDER_DIGITS[0]) === after.charAt(prefixLength)) {
+      prefixLength += 1;
+    }
+    if (prefixLength > 0) {
+      return (
+        after.slice(0, prefixLength) +
+        pinOrderMidpoint(before.slice(prefixLength), after.slice(prefixLength))
+      );
+    }
+  }
+  const beforeDigit = before === "" ? 0 : PIN_ORDER_DIGITS.indexOf(before.charAt(0));
+  const afterDigit =
+    after === "" ? PIN_ORDER_DIGITS.length : PIN_ORDER_DIGITS.indexOf(after.charAt(0));
+  if (afterDigit - beforeDigit > 1) {
+    return PIN_ORDER_DIGITS.charAt(Math.round((beforeDigit + afterDigit) / 2));
+  }
+  if (after.length > 1) return after.charAt(0);
+  return PIN_ORDER_DIGITS.charAt(beforeDigit) + pinOrderMidpoint(before.slice(1), "");
+}
+
+export function pinOrderKeyBetween(before: string | null, after: string | null): string | null {
+  const lower = before ?? "";
+  const upper = after ?? "";
+  if (lower !== "" && !isValidPinOrderKey(lower)) return null;
+  if (upper !== "" && !isValidPinOrderKey(upper)) return null;
+  if (upper !== "" && lower >= upper) return null;
+  return pinOrderMidpoint(lower, upper);
+}
+
+export function generateSpreadPinOrderKeys(count: number): string[] {
+  const space = PIN_ORDER_DIGITS.length * PIN_ORDER_DIGITS.length;
+  const step = space / (count + 1);
+  const keys: string[] = [];
+  let previous = 0;
+  for (let index = 0; index < count; index += 1) {
+    let value = Math.max(Math.round(step * (index + 1)), previous + 1);
+    if (value % PIN_ORDER_DIGITS.length === 0) value += 1;
+    value = Math.min(value, space - 1);
+    previous = value;
+    keys.push(
+      PIN_ORDER_DIGITS.charAt(Math.floor(value / PIN_ORDER_DIGITS.length)) +
+        PIN_ORDER_DIGITS.charAt(value % PIN_ORDER_DIGITS.length),
+    );
+  }
+  return keys;
+}
+
+export function planPinnedReorder(input: {
+  readonly orderedIds: readonly string[];
+  readonly keysById: ReadonlyMap<string, string | null | undefined>;
+  readonly movedId: string;
+}): ReadonlyArray<{ readonly id: string; readonly orderKey: string }> {
+  const movedIndex = input.orderedIds.indexOf(input.movedId);
+  if (movedIndex === -1) return [];
+  const beforeId = movedIndex > 0 ? (input.orderedIds[movedIndex - 1] ?? null) : null;
+  const afterId =
+    movedIndex < input.orderedIds.length - 1 ? (input.orderedIds[movedIndex + 1] ?? null) : null;
+  const beforeKey = beforeId === null ? null : (input.keysById.get(beforeId) ?? null);
+  const afterKey = afterId === null ? null : (input.keysById.get(afterId) ?? null);
+  if ((beforeId === null || beforeKey !== null) && (afterId === null || afterKey !== null)) {
+    const orderKey = pinOrderKeyBetween(beforeKey, afterKey);
+    if (orderKey !== null) return [{ id: input.movedId, orderKey }];
+  }
+  const spreadKeys = generateSpreadPinOrderKeys(input.orderedIds.length);
+  return input.orderedIds.flatMap((id, index) => {
+    const orderKey = spreadKeys[index]!;
+    return input.keysById.get(id) === orderKey ? [] : [{ id, orderKey }];
+  });
+}
+
+export function sortPinnedThreadsByOrderKey<
+  T extends Pick<SidebarThreadSummary, "createdAt" | "environmentId" | "id" | "pinOrderKey">,
+>(threads: readonly T[]): T[] {
+  const keyed = threads.filter((thread) => thread.pinOrderKey != null);
+  const keyless = threads.filter((thread) => thread.pinOrderKey == null);
+  keyed.sort((left, right) =>
+    left.pinOrderKey! < right.pinOrderKey!
+      ? -1
+      : left.pinOrderKey! > right.pinOrderKey!
+        ? 1
+        : compareThreadIdentity(left, right),
+  );
+  keyless.sort(compareCreatedNewestFirst);
+  return [...keyed, ...keyless];
 }
 
 export function partitionInboxThreads<TThread extends SidebarThreadSummary>(input: {
   readonly threads: readonly TThread[];
-  readonly lifecycleByThreadKey: InboxLifecycleByThreadKey;
   readonly draftThreadKeys: ReadonlySet<string>;
   readonly now: string;
 }): InboxThreadPartitions<TThread> {
@@ -389,129 +217,133 @@ export function partitionInboxThreads<TThread extends SidebarThreadSummary>(inpu
     (thread) => thread.archivedAt === null && thread.hiddenFromThreadList !== true,
   );
   const lifecycleKeyByThreadKey = buildInboxLifecycleThreadKeyByThreadKey(visibleThreads);
-  const activityAtByLifecycleKey = new Map<string, number>();
+  const rootByKey = new Map(visibleThreads.map((thread) => [threadKey(thread), thread] as const));
+
   for (const thread of visibleThreads) {
-    const threadKey = inboxThreadKey(thread);
-    const lifecycleThreadKey = lifecycleKeyByThreadKey.get(threadKey) ?? threadKey;
-    const activityAt = validTimestampMs(
-      resolveInboxThreadActivityAt(thread, input.lifecycleByThreadKey[lifecycleThreadKey]),
-    );
-    activityAtByLifecycleKey.set(
-      lifecycleThreadKey,
-      Math.max(activityAtByLifecycleKey.get(lifecycleThreadKey) ?? 0, activityAt),
-    );
-  }
-  for (const thread of visibleThreads) {
-    const threadKey = inboxThreadKey(thread);
-    const lifecycleThreadKey = lifecycleKeyByThreadKey.get(threadKey) ?? threadKey;
-    partitions[
-      resolveInboxLifecycleSection(
-        lifecycleThreadKey,
-        input.lifecycleByThreadKey,
-        input.draftThreadKeys,
-        input.now,
-      )
-    ].push(thread);
+    const ownKey = threadKey(thread);
+    const rootKey = lifecycleKeyByThreadKey.get(ownKey) ?? ownKey;
+    const lifecycleThread = rootByKey.get(rootKey) ?? thread;
+    const section = resolveInboxLifecycleSection({
+      thread: lifecycleThread,
+      isDraft: input.draftThreadKeys.has(rootKey),
+      now: input.now,
+    });
+    partitions[section].push(thread);
   }
 
   partitions.drafts.sort(compareCreatedNewestFirst);
-  partitions.active.sort((left, right) => {
-    const leftKey = lifecycleKeyByThreadKey.get(inboxThreadKey(left)) ?? inboxThreadKey(left);
-    const rightKey = lifecycleKeyByThreadKey.get(inboxThreadKey(right)) ?? inboxThreadKey(right);
-    return (
-      (activityAtByLifecycleKey.get(rightKey) ?? 0) -
-        (activityAtByLifecycleKey.get(leftKey) ?? 0) || compareCreatedNewestFirst(left, right)
-    );
-  });
-  partitions.pinned.sort((left, right) => {
-    const leftKey = lifecycleKeyByThreadKey.get(inboxThreadKey(left)) ?? inboxThreadKey(left);
-    const rightKey = lifecycleKeyByThreadKey.get(inboxThreadKey(right)) ?? inboxThreadKey(right);
-    const leftLifecycle = input.lifecycleByThreadKey[leftKey];
-    const rightLifecycle = input.lifecycleByThreadKey[rightKey];
-    return (
-      validTimestampMs(leftLifecycle?.pinnedAt) - validTimestampMs(rightLifecycle?.pinnedAt) ||
-      compareCreatedNewestFirst(left, right)
-    );
-  });
-  partitions.snoozed.sort((left, right) => {
-    const leftKey = lifecycleKeyByThreadKey.get(inboxThreadKey(left)) ?? inboxThreadKey(left);
-    const rightKey = lifecycleKeyByThreadKey.get(inboxThreadKey(right)) ?? inboxThreadKey(right);
-    const leftLifecycle = input.lifecycleByThreadKey[leftKey];
-    const rightLifecycle = input.lifecycleByThreadKey[rightKey];
-    return (
-      validTimestampMs(leftLifecycle?.snoozedUntil) -
-        validTimestampMs(rightLifecycle?.snoozedUntil) || compareCreatedNewestFirst(left, right)
-    );
-  });
-  partitions.settled.sort((left, right) => {
-    const leftKey = lifecycleKeyByThreadKey.get(inboxThreadKey(left)) ?? inboxThreadKey(left);
-    const rightKey = lifecycleKeyByThreadKey.get(inboxThreadKey(right)) ?? inboxThreadKey(right);
-    const leftLifecycle = input.lifecycleByThreadKey[leftKey];
-    const rightLifecycle = input.lifecycleByThreadKey[rightKey];
-    return (
-      validTimestampMs(rightLifecycle?.settledAt) - validTimestampMs(leftLifecycle?.settledAt) ||
-      compareThreadKeys(left, right)
-    );
-  });
+  partitions.active.sort(
+    (left, right) =>
+      activeThreadAnchorTimestampMs(right) - activeThreadAnchorTimestampMs(left) ||
+      compareThreadIdentity(left, right),
+  );
+  partitions.pinned.splice(
+    0,
+    partitions.pinned.length,
+    ...sortPinnedThreadsByOrderKey(partitions.pinned),
+  );
+  partitions.snoozed.sort(
+    (left, right) =>
+      validTimestampMs(left.snoozedUntil) - validTimestampMs(right.snoozedUntil) ||
+      compareCreatedNewestFirst(left, right),
+  );
+  partitions.settled.sort(
+    (left, right) =>
+      validTimestampMs(right.settledAt) - validTimestampMs(left.settledAt) ||
+      compareThreadIdentity(left, right),
+  );
   return partitions;
 }
 
-export function resolveInboxSnoozeUntil(preset: InboxSnoozePreset, now: string): string {
-  const nowMs = validTimestampMs(now);
-  if (preset === "tomorrow") {
-    const tomorrowMorning = new Date(nowMs);
-    tomorrowMorning.setDate(tomorrowMorning.getDate() + 1);
-    tomorrowMorning.setHours(9, 0, 0, 0);
-    return tomorrowMorning.toISOString();
+function timeLabel(date: Date): string {
+  return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+function atHour(base: Date, hour: number): Date {
+  const next = new Date(base);
+  next.setHours(hour, 0, 0, 0);
+  return next;
+}
+
+function addCalendarDays(base: Date, days: number): Date {
+  const next = new Date(base);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+export function resolveInboxSnoozePresets(now: Date): ReadonlyArray<InboxSnoozePreset> {
+  const inAnHour = new Date(now.getTime() + HOUR_MS);
+  const inThreeHours = new Date(now.getTime() + 3 * HOUR_MS);
+  const presets: InboxSnoozePreset[] = [
+    {
+      id: "hour",
+      label: "In 1 hour",
+      whenLabel: timeLabel(inAnHour),
+      snoozedUntil: inAnHour.toISOString(),
+    },
+    {
+      id: "three-hours",
+      label: "In 3 hours",
+      whenLabel: timeLabel(inThreeHours),
+      snoozedUntil: inThreeHours.toISOString(),
+    },
+  ];
+  const evening = atHour(now, 18);
+  if (evening.getTime() - now.getTime() > HOUR_MS) {
+    presets.push({
+      id: "evening",
+      label: "This evening",
+      whenLabel: timeLabel(evening),
+      snoozedUntil: evening.toISOString(),
+    });
   }
-  const durationMs = preset === "one-hour" ? 60 * 60_000 : 7 * 86_400_000;
-  return new Date(nowMs + durationMs).toISOString();
+  const tomorrow = atHour(addCalendarDays(now, 1), 9);
+  presets.push({
+    id: "tomorrow",
+    label: "Tomorrow",
+    whenLabel: timeLabel(tomorrow),
+    snoozedUntil: tomorrow.toISOString(),
+  });
+  const daysUntilMonday = (1 - now.getDay() + 7) % 7 || 7;
+  const nextWeek = atHour(addCalendarDays(now, daysUntilMonday), 9);
+  if (nextWeek.getTime() !== tomorrow.getTime()) {
+    presets.push({
+      id: "next-week",
+      label: "Next week",
+      whenLabel: `${nextWeek.toLocaleDateString(undefined, { weekday: "short" })} ${timeLabel(nextWeek)}`,
+      snoozedUntil: nextWeek.toISOString(),
+    });
+  }
+  return presets;
+}
+
+export function snoozeWakeLabel(snoozedUntil: string, now: string): string {
+  const remainingMs = validTimestampMs(snoozedUntil) - validTimestampMs(now);
+  if (remainingMs <= 0) return "now";
+  if (remainingMs < HOUR_MS) return `${Math.max(1, Math.ceil(remainingMs / 60_000))}m`;
+  if (remainingMs < DAY_MS) return `${Math.ceil(remainingMs / HOUR_MS)}h`;
+  return `${Math.ceil(remainingMs / DAY_MS)}d`;
+}
+
+export function resolveInboxWokeAt(
+  thread: Pick<SidebarThreadSummary, "snoozedUntil">,
+  now: string,
+): string | null {
+  return thread.snoozedUntil != null &&
+    validTimestampMs(thread.snoozedUntil) <= validTimestampMs(now)
+    ? thread.snoozedUntil
+    : null;
 }
 
 export function getNextInboxWakeAtMs(
-  lifecycleByThreadKey: InboxLifecycleByThreadKey,
+  threads: readonly Pick<SidebarThreadSummary, "snoozedUntil">[],
   now: string,
 ): number | null {
   const nowMs = validTimestampMs(now);
-  let nextWakeAtMs = Number.POSITIVE_INFINITY;
-  for (const lifecycle of Object.values(lifecycleByThreadKey)) {
-    const wakeAtMs = validTimestampMs(lifecycle.snoozedUntil);
-    if (wakeAtMs > nowMs && wakeAtMs < nextWakeAtMs) {
-      nextWakeAtMs = wakeAtMs;
-    }
+  let nextWake = Number.POSITIVE_INFINITY;
+  for (const thread of threads) {
+    const wake = validTimestampMs(thread.snoozedUntil);
+    if (wake > nowMs && wake < nextWake) nextWake = wake;
   }
-  return Number.isFinite(nextWakeAtMs) ? nextWakeAtMs : null;
-}
-
-interface InboxLifecycleStore {
-  readonly lifecycleByThreadKey: InboxLifecycleByThreadKey;
-  readonly dispatch: (action: InboxLifecycleAction) => void;
-}
-
-const initialLifecycleState = (() => {
-  const storage = browserStorage();
-  return storage ? readInboxLifecycleState(storage) : {};
-})();
-
-export const useInboxLifecycleStore = create<InboxLifecycleStore>((set) => ({
-  lifecycleByThreadKey: initialLifecycleState,
-  dispatch: (action) => {
-    set((current) => {
-      const next = applyInboxLifecycleAction(current.lifecycleByThreadKey, action);
-      if (next === current.lifecycleByThreadKey) {
-        return current;
-      }
-      const storage = browserStorage();
-      if (storage) {
-        persistInboxLifecycleState(storage, next);
-      }
-      return { lifecycleByThreadKey: next };
-    });
-  },
-}));
-
-export function __resetInboxLifecycleStoreForTests(
-  lifecycleByThreadKey: InboxLifecycleByThreadKey = {},
-): void {
-  useInboxLifecycleStore.setState({ lifecycleByThreadKey });
+  return Number.isFinite(nextWake) ? nextWake : null;
 }

@@ -3,12 +3,28 @@ import type { SidebarThreadSummary } from "./types";
 
 export type InboxThreadStatus =
   | "working"
+  | "monitoring"
   | "approval"
   | "input"
   | "failed"
   | "woke"
   | "done"
   | "ready";
+
+export type InboxBackgroundLiveness = "working" | "monitoring" | null;
+
+export function classifyInboxBackgroundThread(
+  thread: Pick<SidebarThreadSummary, "subagentKind" | "subagentNickname" | "subagentRole">,
+): Exclude<InboxBackgroundLiveness, null> {
+  const description = [thread.subagentKind, thread.subagentNickname, thread.subagentRole]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ");
+  return /\b(?:monitor|monitoring|watch|watching|poll|polling|tail|tailing|babysit)\b/i.test(
+    description,
+  )
+    ? "monitoring"
+    : "working";
+}
 
 function firstValidTimestamp(
   ...candidates: ReadonlyArray<string | null | undefined>
@@ -55,6 +71,7 @@ export function resolveInboxThreadStatus(input: {
   readonly hasActiveLocalDispatch: boolean;
   readonly isActive: boolean;
   readonly isWoke: boolean;
+  readonly backgroundLiveness?: InboxBackgroundLiveness;
 }): InboxThreadStatus {
   const { thread } = input;
   if (thread.hasPendingApprovals) {
@@ -70,6 +87,12 @@ export function resolveInboxThreadStatus(input: {
     thread.latestTurn?.state === "running"
   ) {
     return "working";
+  }
+  if (input.backgroundLiveness === "working") {
+    return "working";
+  }
+  if (input.backgroundLiveness === "monitoring") {
+    return "monitoring";
   }
   if (thread.session?.status === "error" || thread.latestTurn?.state === "error") {
     return "failed";

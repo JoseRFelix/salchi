@@ -25,9 +25,9 @@ describe("ClientSettings defaults", () => {
     expect(legacySettings.autoOpenPlanSidebar).toBe(false);
   });
 
-  it("drops retired project-sidebar settings from persisted settings", () => {
+  it("drops the retired mode toggle while preserving project ordering", () => {
     expect(DEFAULT_CLIENT_SETTINGS).not.toHaveProperty("sidebarNavigationMode");
-    expect(DEFAULT_CLIENT_SETTINGS).not.toHaveProperty("sidebarProjectSortOrder");
+    expect(DEFAULT_CLIENT_SETTINGS.sidebarProjectSortOrder).toBe("updated_at");
     expect(DEFAULT_CLIENT_SETTINGS).not.toHaveProperty("sidebarThreadPreviewCount");
 
     const decoded = decodeClientSettings({
@@ -36,8 +36,17 @@ describe("ClientSettings defaults", () => {
       sidebarThreadPreviewCount: 6,
     });
     expect(decoded).not.toHaveProperty("sidebarNavigationMode");
-    expect(decoded).not.toHaveProperty("sidebarProjectSortOrder");
+    expect(decoded.sidebarProjectSortOrder).toBe("manual");
     expect(decoded).not.toHaveProperty("sidebarThreadPreviewCount");
+  });
+
+  it("accepts every project order and rejects unknown values", () => {
+    for (const sidebarProjectSortOrder of ["updated_at", "created_at", "manual"] as const) {
+      expect(decodeClientSettings({ sidebarProjectSortOrder }).sidebarProjectSortOrder).toBe(
+        sidebarProjectSortOrder,
+      );
+    }
+    expect(() => decodeClientSettings({ sidebarProjectSortOrder: "alphabetical" })).toThrow();
   });
 });
 

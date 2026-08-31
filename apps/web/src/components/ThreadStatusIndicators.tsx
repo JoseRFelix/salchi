@@ -17,6 +17,7 @@ import type { SidebarThreadSummary } from "../types";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export interface PrStatusIndicator {
+  number: number;
   label: string;
   colorClass: string;
   tooltip: string;
@@ -40,6 +41,7 @@ export function prStatusIndicator(
 
   if (pr.state === "open") {
     return {
+      number: pr.number,
       label: `${presentation.shortName} open`,
       colorClass: "text-emerald-600 dark:text-emerald-300/90",
       tooltip: `#${pr.number} ${presentation.shortName} open: ${pr.title}`,
@@ -48,6 +50,7 @@ export function prStatusIndicator(
   }
   if (pr.state === "closed") {
     return {
+      number: pr.number,
       label: `${presentation.shortName} closed`,
       colorClass: "text-zinc-500 dark:text-zinc-400/80",
       tooltip: `#${pr.number} ${presentation.shortName} closed: ${pr.title}`,
@@ -56,6 +59,7 @@ export function prStatusIndicator(
   }
   if (pr.state === "merged") {
     return {
+      number: pr.number,
       label: `${presentation.shortName} merged`,
       colorClass: "text-violet-600 dark:text-violet-300/90",
       tooltip: `#${pr.number} ${presentation.shortName} merged: ${pr.title}`,
@@ -166,27 +170,42 @@ function useThreadChangeRequestStatus(thread: SidebarThreadSummary): PrStatusInd
   return prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
 }
 
-function ThreadChangeRequestStatusView({ status }: { status: PrStatusIndicator }) {
+function ThreadChangeRequestStatusView({
+  status,
+  showNumber = false,
+}: {
+  status: PrStatusIndicator;
+  showNumber?: boolean;
+}) {
   return (
     <Tooltip>
       <TooltipTrigger
         render={
           <span
             aria-label={status.tooltip}
-            className={`inline-flex items-center justify-center ${status.colorClass}`}
+            className={`inline-flex items-center justify-center gap-0.5 ${status.colorClass}`}
           />
         }
       >
         <ChangeRequestStatusIcon className="size-3" />
+        {showNumber ? <span className="text-[10px] font-medium">#{status.number}</span> : null}
       </TooltipTrigger>
       <TooltipPopup side="top">{status.tooltip}</TooltipPopup>
     </Tooltip>
   );
 }
 
-export function ThreadRowChangeRequestStatus({ thread }: { thread: SidebarThreadSummary }) {
+export function ThreadRowChangeRequestStatus({
+  thread,
+  showNumber = false,
+}: {
+  thread: SidebarThreadSummary;
+  showNumber?: boolean;
+}) {
   const prStatus = useThreadChangeRequestStatus(thread);
-  return prStatus ? <ThreadChangeRequestStatusView status={prStatus} /> : null;
+  return prStatus ? (
+    <ThreadChangeRequestStatusView status={prStatus} showNumber={showNumber} />
+  ) : null;
 }
 
 function useThreadTerminalStatus(thread: SidebarThreadSummary): TerminalStatusIndicator | null {

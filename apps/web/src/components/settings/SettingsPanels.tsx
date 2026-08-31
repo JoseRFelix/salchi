@@ -14,6 +14,7 @@ import {
   type DesktopUpdateChannel,
   PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
+  type SidebarProjectSortOrder,
   type ProviderInstanceConfig,
   type ProviderInstanceId,
   type ScopedThreadRef,
@@ -110,6 +111,12 @@ const TIMESTAMP_FORMAT_LABELS = {
   "12-hour": "12-hour",
   "24-hour": "24-hour",
 } as const;
+
+const PROJECT_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
+  updated_at: "Recent activity",
+  created_at: "Recently created",
+  manual: "Manual",
+};
 
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 
@@ -644,6 +651,47 @@ export function GeneralSettingsPanel() {
                 <SelectItem hideIndicator value="24-hour">
                   {TIMESTAMP_FORMAT_LABELS["24-hour"]}
                 </SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
+          title="Project order"
+          description="Choose how projects are ordered in the inbox picker. Manual order can be changed from the picker."
+          resetAction={
+            settings.sidebarProjectSortOrder !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder ? (
+              <SettingResetButton
+                label="project order"
+                onClick={() =>
+                  updateSettings({
+                    sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.sidebarProjectSortOrder}
+              onValueChange={(value) => {
+                if (value === "updated_at" || value === "created_at" || value === "manual") {
+                  updateSettings({ sidebarProjectSortOrder: value });
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-40" aria-label="Project order">
+                <SelectValue>{PROJECT_SORT_LABELS[settings.sidebarProjectSortOrder]}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {(
+                  Object.entries(PROJECT_SORT_LABELS) as Array<[SidebarProjectSortOrder, string]>
+                ).map(([value, label]) => (
+                  <SelectItem key={value} hideIndicator value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
               </SelectPopup>
             </Select>
           }

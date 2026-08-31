@@ -29,6 +29,7 @@ const clientSettings: ClientSettings = {
   sidebarProjectGroupingOverrides: {
     "environment-1:/tmp/project-a": "separate",
   },
+  sidebarProjectSortOrder: "updated_at",
   sidebarThreadSortOrder: "created_at",
   timestampFormat: "24-hour",
   colorThemeLight: "default",

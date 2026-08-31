@@ -1,19 +1,11 @@
 import {
   AlarmClockIcon,
-  AlarmClockOffIcon,
   ArchiveIcon,
   CheckIcon,
   ChevronDownIcon,
-  ChevronRightIcon,
-  FolderIcon,
-  FolderPlusIcon,
-  GitBranchIcon,
-  MoreHorizontalIcon,
-  PinIcon,
   SearchIcon,
   SquarePenIcon,
-  Trash2Icon,
-  Undo2Icon,
+  XIcon,
 } from "lucide-react";
 import * as Schema from "effect/Schema";
 import {
@@ -22,9 +14,17 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@salchi/client-runtime";
-import type { ContextMenuItem, ScopedThreadRef } from "@salchi/contracts";
+import type { ScopedThreadRef, SidebarProjectGroupingMode } from "@salchi/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { isElectron } from "../env";
@@ -33,36 +33,36 @@ import {
   useSavedEnvironmentRegistryStore,
   useSavedEnvironmentRuntimeStore,
 } from "../environments/runtime";
-import { useSettings } from "../hooks/useSettings";
+import { useSettings, useUpdateSettings } from "../hooks/useSettings";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useSidebarThreadPresentation } from "../hooks/useSidebarThreadPresentation";
 import { useSidebarLocalDispatchReconciliation } from "../hooks/useSidebarLocalDispatchReconciliation";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
-import { useLongPressContextMenu } from "../hooks/useLongPressContextMenu";
 import { useComposerDraftStore } from "../composerDraftStore";
 import {
   buildInboxLifecycleThreadKeyByThreadKey,
+  generateSpreadPinOrderKeys,
   getNextInboxWakeAtMs,
   partitionInboxThreads,
-  resolveInboxSnoozeUntil,
-  resolveInboxThreadActivityAt,
-  resolveInboxWokeAt,
+  pinOrderKeyBetween,
+  planPinnedReorder,
+  resolveInboxSnoozePresets,
   type InboxLifecycleSection,
-  type InboxSnoozePreset,
-  useInboxLifecycleStore,
 } from "../inboxLifecycle";
+import { classifyInboxBackgroundThread } from "../inboxThreadStatus";
 import {
-  INBOX_SETTLED_SHELF_DEFAULT_EXPANDED,
-  INBOX_SETTLED_SHELF_EXPANDED_KEY,
   INBOX_SETTLED_INITIAL_COUNT,
   INBOX_SETTLED_PAGE_COUNT,
+  INBOX_SETTLED_SHELF_DEFAULT_EXPANDED,
+  INBOX_SETTLED_SHELF_EXPANDED_KEY,
   INBOX_SNOOZED_SHELF_DEFAULT_EXPANDED,
   INBOX_SNOOZED_SHELF_EXPANDED_KEY,
   inboxShelfLabel,
-  resolvePaginatedInboxShelfItems,
-  resolveInboxRowVariant,
+  moveInboxSearchHighlightIndex,
   resolveInboxShelfItems,
+  resolvePaginatedInboxShelfItems,
+  resolveInboxSearchHighlight,
   shouldVirtualizeInboxActiveThreads,
 } from "../inboxSidebarPresentation";
 import {
@@ -73,8 +73,13 @@ import {
 } from "../keybindings";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { cn } from "../lib/utils";
-import { selectProjectGroupingSettings } from "../logicalProject";
+import { newCommandId, cn } from "../lib/utils";
+import {
+  deriveProjectGroupingOverrideKey,
+  getProjectOrderKey,
+  resolveProjectGroupingMode,
+  selectProjectGroupingSettings,
+} from "../logicalProject";
 import { useModelPickerOpen } from "../modelPickerOpenState";
 import { readLocalApi } from "../localApi";
 import { readEnvironmentApi } from "../environmentApi";
@@ -87,47 +92,60 @@ import {
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
-import { formatRelativeTimeLabel } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { useUiStateStore } from "../uiStateStore";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import {
   flattenSidebarThreadTree,
+  orderItemsByPreferredIds,
   resolveAdjacentThreadId,
   resolveSidebarThreadDisplayTitle,
-  resolveThreadRowClassName,
   shouldCreateNewThreadInCurrentProject,
+  sortLogicalProjectsForSidebar,
   type SidebarThreadTreeItem,
 } from "./Sidebar.logic";
-import { ProjectFavicon } from "./ProjectFavicon";
-import { InboxThreadStatus } from "./InboxThreadStatus";
-import {
-  ThreadRowChangeRequestStatus,
-  ThreadRowRemoteStatus,
-  ThreadRowTerminalStatus,
-} from "./ThreadStatusIndicators";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarUsageBackgroundRefresh } from "./sidebar/SidebarUsageIndicator";
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "./ui/menu";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import {
   SidebarContent,
   SidebarGroup,
   SidebarMenu,
-  SidebarMenuButton,
   SidebarMenuItem,
   SidebarSeparator,
   useSidebar,
 } from "./ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { stackedThreadToast, toastManager } from "./ui/toast";
-import { useServerKeybindings } from "../rpc/serverState";
+import { Button } from "./ui/button";
 import {
-  getFixedVirtualItemStyle,
-  useFixedSharedScrollVirtualizer,
-} from "./virtualization/useSharedScrollVirtualizer";
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPopup,
+  DialogTitle,
+} from "./ui/dialog";
+import { Input } from "./ui/input";
+import { useServerKeybindings } from "../rpc/serverState";
+import { useFixedSharedScrollVirtualizer } from "./virtualization/useSharedScrollVirtualizer";
+import { InboxProjectPicker, ALL_PROJECTS_SCOPE } from "./inbox/InboxProjectPicker";
+import {
+  InboxThreadRow,
+  snoozePresetIdFromInboxAction,
+  type InboxProjectIdentity,
+  type InboxThreadAction,
+} from "./inbox/InboxThreadRow";
+import {
+  reorderPinnedThread,
+  setThreadPinned,
+  setThreadSettled,
+  snoozeThread,
+  supportsThreadLifecycleCapability,
+  unsnoozeThread,
+} from "../threadLifecycle";
+import { getAcknowledgedCompletionTurnId } from "../threadCompletion";
+import { setThreadCompletionAttention } from "../threadAttention";
 
-const ALL_PROJECTS_SCOPE = "__salchi_inbox_all_projects__";
 const MAX_WAKE_TIMEOUT_MS = 2_147_483_647;
 const INBOX_CARD_ROW_STRIDE = 82;
 const INBOX_SLIM_ROW_STRIDE = 40;
@@ -137,472 +155,6 @@ const INBOX_ACTIVE_VIRTUALIZATION_MOBILE_OVERSCAN = INBOX_CARD_ROW_STRIDE * 3;
 const INBOX_ACTIVE_VIRTUALIZATION_DESKTOP_OVERSCAN = INBOX_CARD_ROW_STRIDE * 6;
 const INBOX_SETTLED_VIRTUALIZATION_OVERSCAN = INBOX_SLIM_ROW_STRIDE * 4;
 
-type InboxThreadAction =
-  | "toggle-pin"
-  | "snooze-one-hour"
-  | "snooze-tomorrow"
-  | "snooze-one-week"
-  | "unsnooze"
-  | "toggle-settled"
-  | "archive"
-  | "delete"
-  | "discard-draft";
-
-interface InboxProjectIdentity {
-  readonly cwd: string;
-  readonly displayName: string;
-  readonly environmentLabel: string | null;
-}
-
-interface InboxThreadRowProps {
-  readonly thread: SidebarThreadSummary;
-  readonly depth: number;
-  readonly childCount: number;
-  readonly section: InboxLifecycleSection;
-  readonly projectIdentity: InboxProjectIdentity | null;
-  readonly lifecycleThreadKey: string;
-  readonly isActive: boolean;
-  readonly isDraft: boolean;
-  readonly hasActiveLocalDispatch: boolean;
-  readonly isPending: boolean;
-  readonly isThreadExpanded: boolean;
-  readonly now: string;
-  readonly virtualIndex?: number;
-  readonly virtualSetSize?: number;
-  readonly virtualStride?: number;
-  readonly onNavigate: (threadRef: ScopedThreadRef) => void;
-  readonly onAction: (
-    action: InboxThreadAction,
-    thread: SidebarThreadSummary,
-    lifecycleThreadKey: string,
-  ) => void;
-  readonly onToggleExpanded: (threadKey: string) => void;
-}
-
-function lifecycleActionItems(input: {
-  readonly isBusy: boolean;
-  readonly isDraft: boolean;
-  readonly isPending: boolean;
-  readonly isPinned: boolean;
-  readonly section: InboxLifecycleSection;
-}): ContextMenuItem<InboxThreadAction>[] {
-  if (input.isDraft) {
-    return [
-      {
-        id: "discard-draft",
-        label: "Discard draft",
-        destructive: true,
-        icon: "trash",
-      },
-    ];
-  }
-  if (input.isPending) {
-    return [];
-  }
-  return [
-    { id: "toggle-pin", label: input.isPinned ? "Unpin" : "Pin" },
-    ...(input.section === "snoozed"
-      ? ([{ id: "unsnooze", label: "Wake now" }] satisfies ContextMenuItem<InboxThreadAction>[])
-      : ([
-          { id: "snooze-one-hour", label: "Snooze for 1 hour" },
-          { id: "snooze-tomorrow", label: "Snooze until tomorrow" },
-          { id: "snooze-one-week", label: "Snooze for 1 week" },
-        ] satisfies ContextMenuItem<InboxThreadAction>[])),
-    {
-      id: "toggle-settled",
-      label: input.section === "settled" ? "Move to active" : "Settle",
-      ...(input.isBusy ? { disabled: true } : {}),
-    },
-    {
-      id: "archive",
-      label: "Archive",
-      ...(input.isBusy ? { disabled: true } : {}),
-    },
-    { id: "delete", label: "Delete", destructive: true, icon: "trash" },
-  ];
-}
-
-function InboxThreadActionsMenu(props: {
-  readonly thread: SidebarThreadSummary;
-  readonly lifecycleThreadKey: string;
-  readonly isBusy: boolean;
-  readonly isDraft: boolean;
-  readonly isPending: boolean;
-  readonly isPinned: boolean;
-  readonly section: InboxLifecycleSection;
-  readonly onAction: InboxThreadRowProps["onAction"];
-}) {
-  const run = (action: InboxThreadAction) =>
-    props.onAction(action, props.thread, props.lifecycleThreadKey);
-  const stopPropagation = (event: React.SyntheticEvent) => event.stopPropagation();
-
-  if (props.isPending && !props.isDraft) {
-    return null;
-  }
-
-  return (
-    <Menu>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <MenuTrigger
-              aria-label={`Actions for ${resolveSidebarThreadDisplayTitle(props.thread)}`}
-              data-thread-selection-safe
-              className="inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-              onPointerDown={stopPropagation}
-              onClick={stopPropagation}
-            />
-          }
-        >
-          <MoreHorizontalIcon className="size-3.5" />
-        </TooltipTrigger>
-        <TooltipPopup side="top">Thread actions</TooltipPopup>
-      </Tooltip>
-      <MenuPopup align="end" side="bottom" className="min-w-48">
-        {props.isDraft ? (
-          <MenuItem variant="destructive" onClick={() => run("discard-draft")}>
-            <Trash2Icon />
-            Discard draft
-          </MenuItem>
-        ) : (
-          <>
-            <MenuItem onClick={() => run("toggle-pin")}>
-              <PinIcon />
-              {props.isPinned ? "Unpin" : "Pin"}
-            </MenuItem>
-            {props.section === "snoozed" ? (
-              <MenuItem onClick={() => run("unsnooze")}>
-                <AlarmClockOffIcon />
-                Wake now
-              </MenuItem>
-            ) : (
-              <>
-                <MenuItem onClick={() => run("snooze-one-hour")}>
-                  <AlarmClockIcon />
-                  Snooze for 1 hour
-                </MenuItem>
-                <MenuItem onClick={() => run("snooze-tomorrow")}>
-                  <AlarmClockIcon />
-                  Snooze until tomorrow
-                </MenuItem>
-                <MenuItem onClick={() => run("snooze-one-week")}>
-                  <AlarmClockIcon />
-                  Snooze for 1 week
-                </MenuItem>
-              </>
-            )}
-            <MenuItem disabled={props.isBusy} onClick={() => run("toggle-settled")}>
-              {props.section === "settled" ? <Undo2Icon /> : <CheckIcon />}
-              {props.section === "settled" ? "Move to active" : "Settle"}
-            </MenuItem>
-            <MenuSeparator />
-            <MenuItem disabled={props.isBusy} onClick={() => run("archive")}>
-              <ArchiveIcon />
-              Archive
-            </MenuItem>
-            <MenuItem variant="destructive" onClick={() => run("delete")}>
-              <Trash2Icon />
-              Delete
-            </MenuItem>
-          </>
-        )}
-      </MenuPopup>
-    </Menu>
-  );
-}
-
-const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRowProps) {
-  const { thread, depth, childCount } = props;
-  const threadRef = scopeThreadRef(thread.environmentId, thread.id);
-  const threadKey = scopedThreadKey(threadRef);
-  const lifecycle = useInboxLifecycleStore(
-    (state) => state.lifecycleByThreadKey[props.lifecycleThreadKey],
-  );
-  const activityAt = resolveInboxThreadActivityAt(thread, lifecycle);
-  const isWoke = resolveInboxWokeAt(lifecycle, props.now) !== null;
-  const isPinned = lifecycle?.pinnedAt !== null && lifecycle?.pinnedAt !== undefined;
-  const isBusy =
-    props.isPending ||
-    (thread.session?.status === "running" && thread.session.activeTurnId != null);
-  const displayTitle = resolveSidebarThreadDisplayTitle(thread);
-  const lifecycleLabel =
-    props.section === "snoozed" && lifecycle?.snoozedUntil
-      ? formatRelativeTimeLabel(lifecycle.snoozedUntil)
-      : props.section === "settled" && lifecycle?.settledAt
-        ? formatRelativeTimeLabel(lifecycle.settledAt)
-        : null;
-  const lifecycleTitle =
-    props.section === "snoozed" && lifecycleLabel
-      ? `Wakes ${lifecycleLabel}`
-      : props.section === "settled" && lifecycleLabel
-        ? `Settled ${lifecycleLabel}`
-        : undefined;
-  const rowVariant = resolveInboxRowVariant(props.section);
-  const projectName = props.projectIdentity?.displayName ?? "Unknown project";
-
-  const handleActivate = useCallback(
-    (_event: React.MouseEvent) => {
-      props.onNavigate(threadRef);
-    },
-    [props, threadRef],
-  );
-  const handleKeyDown = useCallback(
-    (event: React.KeyboardEvent) => {
-      if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) {
-        return;
-      }
-      event.preventDefault();
-      props.onNavigate(threadRef);
-    },
-    [props, threadRef],
-  );
-  const openContextMenu = useCallback(
-    async (position: { x: number; y: number }) => {
-      const api = readLocalApi();
-      if (!api) {
-        return;
-      }
-      const items = lifecycleActionItems({
-        isBusy,
-        isDraft: props.isDraft,
-        isPending: props.isPending,
-        isPinned,
-        section: props.section,
-      });
-      if (items.length === 0) {
-        return;
-      }
-      const clicked = await api.contextMenu.show(items, position);
-      if (clicked) {
-        props.onAction(clicked, thread, props.lifecycleThreadKey);
-      }
-    },
-    [isBusy, isPinned, props, thread],
-  );
-  const handleContextMenu = useCallback(
-    (event: React.MouseEvent) => {
-      event.preventDefault();
-      void openContextMenu({ x: event.clientX, y: event.clientY });
-    },
-    [openContextMenu],
-  );
-  const {
-    onClickCapture,
-    onContextMenuCapture,
-    onPointerCancelCapture,
-    onPointerDownCapture,
-    onPointerMoveCapture,
-    onPointerUpCapture,
-  } = useLongPressContextMenu<HTMLButtonElement>({
-    enabled: !props.isPending || props.isDraft,
-    onLongPress: openContextMenu,
-  });
-  const stopPropagation = (event: React.SyntheticEvent) => event.stopPropagation();
-  const toggleExpanded = (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    props.onToggleExpanded(threadKey);
-  };
-  const expandControl =
-    childCount > 0 ? (
-      <button
-        type="button"
-        data-thread-selection-safe
-        aria-label={props.isThreadExpanded ? `Collapse ${displayTitle}` : `Expand ${displayTitle}`}
-        aria-expanded={props.isThreadExpanded}
-        className="-ml-1 inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-        onPointerDown={stopPropagation}
-        onClick={toggleExpanded}
-      >
-        <ChevronRightIcon
-          className={cn(
-            "size-3.5 transition-transform duration-150",
-            props.isThreadExpanded && "rotate-90",
-          )}
-        />
-      </button>
-    ) : null;
-  const actionsSlot = (
-    <div className="flex min-w-0 shrink-0 items-center gap-1 self-center">
-      <span className="flex min-w-0 items-center gap-1 md:group-hover/inbox-row:hidden md:group-focus-within/inbox-row:hidden">
-        {isPinned ? (
-          <PinIcon aria-label="Pinned" className="size-3 text-muted-foreground/65" />
-        ) : null}
-        {rowVariant === "card" ? (
-          <InboxThreadStatus
-            activityAt={activityAt}
-            hasActiveLocalDispatch={props.hasActiveLocalDispatch}
-            isActive={props.isActive}
-            isWoke={isWoke}
-            thread={thread}
-          />
-        ) : null}
-        <ThreadRowTerminalStatus thread={thread} />
-        {props.projectIdentity?.environmentLabel ? (
-          <ThreadRowRemoteStatus environmentLabel={props.projectIdentity.environmentLabel} />
-        ) : null}
-      </span>
-      <span className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover/inbox-row:opacity-100 group-focus-within/inbox-row:opacity-100 max-sm:opacity-100">
-        {isPinned ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <button
-                  type="button"
-                  data-thread-selection-safe
-                  aria-label={`Unpin ${displayTitle}`}
-                  className="inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-muted-foreground/65 hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring max-sm:hidden"
-                  onPointerDown={stopPropagation}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    props.onAction("toggle-pin", thread, props.lifecycleThreadKey);
-                  }}
-                />
-              }
-            >
-              <PinIcon className="size-3.5" />
-            </TooltipTrigger>
-            <TooltipPopup side="top">Unpin</TooltipPopup>
-          </Tooltip>
-        ) : null}
-        <InboxThreadActionsMenu
-          thread={thread}
-          lifecycleThreadKey={props.lifecycleThreadKey}
-          isBusy={isBusy}
-          isDraft={props.isDraft}
-          isPending={props.isPending}
-          isPinned={isPinned}
-          section={props.section}
-          onAction={props.onAction}
-        />
-      </span>
-    </div>
-  );
-
-  return (
-    <SidebarMenuItem
-      className={cn(
-        "group/inbox-row list-none rounded-md py-0.5 [content-visibility:auto]",
-        rowVariant === "card"
-          ? "[contain-intrinsic-size:auto_82px]"
-          : "[contain-intrinsic-size:auto_40px]",
-      )}
-      data-thread-item
-      data-virtual-index={props.virtualIndex}
-      data-testid={`inbox-thread-row-${thread.id}`}
-      aria-posinset={props.virtualIndex === undefined ? undefined : props.virtualIndex + 1}
-      aria-setsize={props.virtualSetSize}
-      style={
-        props.virtualIndex === undefined || props.virtualStride === undefined
-          ? undefined
-          : getFixedVirtualItemStyle(props.virtualIndex, props.virtualStride)
-      }
-    >
-      <SidebarMenuButton
-        render={<div role="button" tabIndex={0} />}
-        isActive={props.isActive}
-        className={cn(
-          resolveThreadRowClassName({
-            isActive: props.isActive,
-            isSelected: false,
-            isDraft: props.isDraft,
-          }),
-          rowVariant === "card"
-            ? "h-[4.875rem] items-stretch rounded-md px-2.5 py-2"
-            : "h-9 items-center gap-2 rounded-md px-2.5 py-1",
-          props.section === "settled" && !props.isActive && "opacity-65",
-        )}
-        onClick={handleActivate}
-        onKeyDown={handleKeyDown}
-        onContextMenu={handleContextMenu}
-        onClickCapture={onClickCapture}
-        onContextMenuCapture={onContextMenuCapture}
-        onPointerCancelCapture={onPointerCancelCapture}
-        onPointerDownCapture={onPointerDownCapture}
-        onPointerMoveCapture={onPointerMoveCapture}
-        onPointerUpCapture={onPointerUpCapture}
-      >
-        {rowVariant === "card" ? (
-          <div className={cn("flex min-w-0 flex-1 flex-col justify-center", depth > 0 && "pl-3")}>
-            <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground/65">
-              <ProjectFavicon
-                environmentId={thread.environmentId}
-                cwd={props.projectIdentity?.cwd ?? ""}
-                className="size-4"
-              />
-              <span className="min-w-0 truncate">{projectName}</span>
-              {props.projectIdentity?.environmentLabel ? (
-                <span className="min-w-0 truncate">· {props.projectIdentity.environmentLabel}</span>
-              ) : null}
-              <div className="ml-auto">{actionsSlot}</div>
-            </div>
-            <div className="mt-1 flex min-w-0 items-center gap-1.5">
-              {expandControl}
-              {depth > 0 ? (
-                <GitBranchIcon
-                  aria-label="Subagent"
-                  className="size-3 shrink-0 text-muted-foreground/55"
-                />
-              ) : null}
-              {thread.branch !== null ? <ThreadRowChangeRequestStatus thread={thread} /> : null}
-              <span
-                className="min-w-0 flex-1 truncate text-[13px] font-medium"
-                title={displayTitle}
-              >
-                {displayTitle}
-              </span>
-            </div>
-            <div className="mt-0.5 flex min-h-4 min-w-0 items-center gap-1.5 pl-0.5 text-[10px] text-muted-foreground/55">
-              {thread.branch ? (
-                <>
-                  <GitBranchIcon className="size-3 shrink-0" />
-                  <span className="truncate">{thread.branch}</span>
-                </>
-              ) : props.isDraft ? (
-                <span>Unsent draft</span>
-              ) : null}
-            </div>
-          </div>
-        ) : (
-          <>
-            <ProjectFavicon
-              environmentId={thread.environmentId}
-              cwd={props.projectIdentity?.cwd ?? ""}
-              className="size-4"
-            />
-            {expandControl}
-            {depth > 0 ? (
-              <GitBranchIcon
-                aria-label="Subagent"
-                className="size-3 shrink-0 text-muted-foreground/55"
-              />
-            ) : null}
-            {thread.branch !== null ? <ThreadRowChangeRequestStatus thread={thread} /> : null}
-            <span className="min-w-8 flex-1 truncate text-[13px]" title={displayTitle}>
-              {displayTitle}
-            </span>
-            <span
-              className="max-w-16 shrink truncate text-[10px] text-muted-foreground/55"
-              title={projectName}
-            >
-              {projectName}
-            </span>
-            {lifecycleLabel ? (
-              <span
-                className="shrink-0 text-[10px] text-muted-foreground/55"
-                title={lifecycleTitle}
-              >
-                {lifecycleLabel}
-              </span>
-            ) : null}
-            {actionsSlot}
-          </>
-        )}
-      </SidebarMenuButton>
-    </SidebarMenuItem>
-  );
-});
-
 function InboxShelf(props: {
   readonly title: string;
   readonly count: number;
@@ -610,9 +162,7 @@ function InboxShelf(props: {
   readonly tone: "snoozed" | "settled";
   readonly onToggle: () => void;
 }) {
-  if (props.count === 0) {
-    return null;
-  }
+  if (props.count === 0) return null;
   return (
     <SidebarMenuItem className="list-none py-1.5">
       <button
@@ -625,8 +175,9 @@ function InboxShelf(props: {
         <span
           className={cn(
             "shrink-0 text-[10px] font-medium uppercase tracking-wider",
-            props.tone === "snoozed" && "text-blue-600 dark:text-blue-400",
-            props.tone === "settled" && "text-muted-foreground/55",
+            props.tone === "snoozed"
+              ? "text-blue-600 dark:text-blue-400"
+              : "text-muted-foreground/55",
           )}
         >
           {inboxShelfLabel(props.title, props.count, props.expanded)}
@@ -638,7 +189,6 @@ function InboxShelf(props: {
           )}
         />
         <ChevronDownIcon
-          aria-hidden="true"
           className={cn(
             "size-3.5 shrink-0 text-muted-foreground/50 transition-transform duration-150",
             props.expanded && "rotate-180",
@@ -649,9 +199,27 @@ function InboxShelf(props: {
   );
 }
 
+function lifecycleErrorToast(title: string, error: unknown): void {
+  toastManager.add(
+    stackedThreadToast({
+      type: "error",
+      title,
+      description: error instanceof Error ? error.message : "An unexpected error occurred.",
+    }),
+  );
+}
+
+function threadRefFromSummary(thread: SidebarThreadSummary): ScopedThreadRef {
+  return scopeThreadRef(thread.environmentId, thread.id);
+}
+
 export default function InboxSidebar() {
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const serverThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
+  const bootstrapComplete = useStore((state) => {
+    const states = Object.values(state.environmentStateById);
+    return states.length > 0 && states.every((environment) => environment.bootstrapComplete);
+  });
   const {
     threads,
     pendingThreadKeys,
@@ -660,23 +228,24 @@ export default function InboxSidebar() {
     activeLocalDispatchThreadKeys,
   } = useSidebarThreadPresentation(serverThreads);
   useSidebarLocalDispatchReconciliation(threads);
-  const lifecycleByThreadKey = useInboxLifecycleStore((state) => state.lifecycleByThreadKey);
-  const dispatchLifecycle = useInboxLifecycleStore((state) => state.dispatch);
+  const settings = useSettings();
+  const { updateSettings } = useUpdateSettings();
   const projectGroupingSettings = useSettings(selectProjectGroupingSettings);
-  const confirmThreadArchive = useSettings((settings) => settings.confirmThreadArchive);
-  const confirmThreadDelete = useSettings((settings) => settings.confirmThreadDelete);
-  const defaultThreadEnvMode = useSettings((settings) => settings.defaultThreadEnvMode);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const savedEnvironmentRegistry = useSavedEnvironmentRegistryStore((state) => state.byId);
   const savedEnvironmentRuntimeById = useSavedEnvironmentRuntimeStore((state) => state.byId);
   const { archiveThread, deleteThread } = useThreadActions();
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
+  const selectedThreadKeys = useThreadSelectionStore((state) => state.selectedThreadKeys);
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((state) => state.setAnchor);
+  const toggleThreadSelection = useThreadSelectionStore((state) => state.toggleThread);
+  const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
   const toggleThreadExpanded = useUiStateStore((state) => state.toggleThreadExpanded);
   const threadExpandedById = useUiStateStore((state) => state.threadExpandedById);
-  const openCommandPalette = useCommandPaletteStore((state) => state.setOpen);
+  const projectOrder = useUiStateStore((state) => state.projectOrder);
+  const reorderProjects = useUiStateStore((state) => state.reorderProjects);
   const openAddProject = useCommandPaletteStore((state) => state.openAddProject);
   const openNewThreadIn = useCommandPaletteStore((state) => state.openNewThreadIn);
   const newThreadContext = useHandleNewThread();
@@ -703,7 +272,12 @@ export default function InboxSidebar() {
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
   const [projectScopeKey, setProjectScopeKey] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchHighlightIndex, setSearchHighlightIndex] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [now, setNow] = useState(() => new Date().toISOString());
+  const [renameTarget, setRenameTarget] = useState<SidebarThreadSummary | null>(null);
+  const [renameValue, setRenameValue] = useState("");
   const [snoozedShelfExpanded, setSnoozedShelfExpanded] = useLocalStorage(
     INBOX_SNOOZED_SHELF_EXPANDED_KEY,
     INBOX_SNOOZED_SHELF_DEFAULT_EXPANDED,
@@ -726,29 +300,47 @@ export default function InboxSidebar() {
   const scrollViewportRef = useRef<HTMLDivElement | null>(null);
   const activeListRef = useRef<HTMLUListElement | null>(null);
   const settledListRef = useRef<HTMLUListElement | null>(null);
+  const draggedPinnedKeyRef = useRef<string | null>(null);
 
-  const projectGroups = useMemo(
+  const orderedPhysicalProjects = useMemo(
+    () =>
+      orderItemsByPreferredIds({
+        items: projects,
+        preferredIds: projectOrder,
+        getId: getProjectOrderKey,
+      }),
+    [projectOrder, projects],
+  );
+  const unsortedProjectGroups = useMemo(
     () =>
       buildSidebarProjectSnapshots({
-        projects,
+        projects:
+          settings.sidebarProjectSortOrder === "manual" ? orderedPhysicalProjects : projects,
         settings: projectGroupingSettings,
         primaryEnvironmentId,
         resolveEnvironmentLabel: (environmentId) =>
           savedEnvironmentRuntimeById[environmentId]?.descriptor?.label ??
           savedEnvironmentRegistry[environmentId]?.label ??
           null,
-      }).toSorted(
-        (left, right) =>
-          left.displayName.localeCompare(right.displayName) ||
-          left.projectKey.localeCompare(right.projectKey),
-      ),
+      }),
     [
+      orderedPhysicalProjects,
       primaryEnvironmentId,
       projectGroupingSettings,
       projects,
       savedEnvironmentRegistry,
       savedEnvironmentRuntimeById,
+      settings.sidebarProjectSortOrder,
     ],
+  );
+  const projectGroups = useMemo(
+    () =>
+      sortLogicalProjectsForSidebar(
+        unsortedProjectGroups,
+        threads,
+        settings.sidebarProjectSortOrder,
+      ),
+    [settings.sidebarProjectSortOrder, threads, unsortedProjectGroups],
   );
   const scopedProject = useMemo(
     () =>
@@ -791,22 +383,63 @@ export default function InboxSidebar() {
           ),
     [scopedProjectRefKeys, threads],
   );
-  const partitions = useMemo(
+  const threadByKey = useMemo(
     () =>
-      partitionInboxThreads({ threads: scopedThreads, lifecycleByThreadKey, draftThreadKeys, now }),
-    [draftThreadKeys, lifecycleByThreadKey, now, scopedThreads],
+      new Map(
+        scopedThreads.map(
+          (thread) => [scopedThreadKey(threadRefFromSummary(thread)), thread] as const,
+        ),
+      ),
+    [scopedThreads],
   );
   const lifecycleThreadKeyByThreadKey = useMemo(
     () => buildInboxLifecycleThreadKeyByThreadKey(scopedThreads),
     [scopedThreads],
   );
+  const lifecycleThreadByThreadKey = useMemo(() => {
+    const result = new Map<string, SidebarThreadSummary>();
+    for (const thread of scopedThreads) {
+      const ownKey = scopedThreadKey(threadRefFromSummary(thread));
+      const lifecycleKey = lifecycleThreadKeyByThreadKey.get(ownKey) ?? ownKey;
+      result.set(ownKey, threadByKey.get(lifecycleKey) ?? thread);
+    }
+    return result;
+  }, [lifecycleThreadKeyByThreadKey, scopedThreads, threadByKey]);
+  const backgroundLivenessByLifecycleKey = useMemo(() => {
+    const result = new Map<string, "working" | "monitoring">();
+    for (const thread of scopedThreads) {
+      const ownKey = scopedThreadKey(threadRefFromSummary(thread));
+      const lifecycleKey = lifecycleThreadKeyByThreadKey.get(ownKey) ?? ownKey;
+      if (
+        lifecycleKey !== ownKey &&
+        (thread.session?.status === "connecting" || thread.session?.status === "running")
+      ) {
+        const liveness = classifyInboxBackgroundThread(thread);
+        if (liveness === "working" || !result.has(lifecycleKey)) {
+          result.set(lifecycleKey, liveness);
+        }
+      }
+    }
+    return result;
+  }, [lifecycleThreadKeyByThreadKey, scopedThreads]);
+  const partitions = useMemo(
+    () => partitionInboxThreads({ threads: scopedThreads, draftThreadKeys, now }),
+    [draftThreadKeys, now, scopedThreads],
+  );
+  const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
   const sectionItems = useMemo(() => {
     const flatten = (sectionThreads: readonly SidebarThreadSummary[]) =>
       flattenSidebarThreadTree(sectionThreads, {
         isThreadCollapsed: (thread) =>
-          threadExpandedById[scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))] ===
-          false,
-      });
+          normalizedSearch.length === 0 &&
+          threadExpandedById[scopedThreadKey(threadRefFromSummary(thread))] === false,
+      }).filter(
+        (item) =>
+          normalizedSearch.length === 0 ||
+          resolveSidebarThreadDisplayTitle(item.thread)
+            .toLocaleLowerCase()
+            .includes(normalizedSearch),
+      );
     return {
       drafts: flatten(partitions.drafts),
       pinned: flatten(partitions.pinned),
@@ -814,8 +447,22 @@ export default function InboxSidebar() {
       snoozed: flatten(partitions.snoozed),
       settled: flatten(partitions.settled),
     };
-  }, [partitions, threadExpandedById]);
-  const shouldVirtualizeActive = shouldVirtualizeInboxActiveThreads(sectionItems.active.length);
+  }, [normalizedSearch, partitions, threadExpandedById]);
+  const rootPinnedThreads = useMemo(
+    () =>
+      partitions.pinned.filter((thread) => {
+        const key = scopedThreadKey(threadRefFromSummary(thread));
+        return (lifecycleThreadKeyByThreadKey.get(key) ?? key) === key;
+      }),
+    [lifecycleThreadKeyByThreadKey, partitions.pinned],
+  );
+  const pinnedRootKeys = useMemo(
+    () => rootPinnedThreads.map((thread) => scopedThreadKey(threadRefFromSummary(thread))),
+    [rootPinnedThreads],
+  );
+
+  const shouldVirtualizeActive =
+    normalizedSearch.length === 0 && shouldVirtualizeInboxActiveThreads(sectionItems.active.length);
   const activeVirtualRange = useFixedSharedScrollVirtualizer({
     enabled: shouldVirtualizeActive,
     itemCount: sectionItems.active.length,
@@ -835,37 +482,44 @@ export default function InboxSidebar() {
   const activeListHeight = sectionItems.active.length * INBOX_CARD_ROW_STRIDE;
   const visibleSnoozedItems = useMemo(
     () =>
-      resolveInboxShelfItems({
-        items: sectionItems.snoozed,
-        expanded: snoozedShelfExpanded,
-        activeKey: routeThreadKey,
-        getKey: (item) =>
-          scopedThreadKey(scopeThreadRef(item.thread.environmentId, item.thread.id)),
-      }),
-    [routeThreadKey, sectionItems.snoozed, snoozedShelfExpanded],
+      normalizedSearch.length > 0
+        ? sectionItems.snoozed
+        : resolveInboxShelfItems({
+            items: sectionItems.snoozed,
+            expanded: snoozedShelfExpanded,
+            activeKey: routeThreadKey,
+            getKey: (item) => scopedThreadKey(threadRefFromSummary(item.thread)),
+          }),
+    [normalizedSearch, routeThreadKey, sectionItems.snoozed, snoozedShelfExpanded],
   );
   const visibleSettledItems = useMemo(
     () =>
-      resolvePaginatedInboxShelfItems({
-        items: sectionItems.settled,
-        expanded: settledShelfExpanded,
-        activeKey: routeThreadKey,
-        visibleCount: settledVisibleCount,
-        getKey: (item) =>
-          scopedThreadKey(scopeThreadRef(item.thread.environmentId, item.thread.id)),
-      }),
-    [routeThreadKey, sectionItems.settled, settledShelfExpanded, settledVisibleCount],
+      normalizedSearch.length > 0
+        ? sectionItems.settled
+        : resolvePaginatedInboxShelfItems({
+            items: sectionItems.settled,
+            expanded: settledShelfExpanded,
+            activeKey: routeThreadKey,
+            visibleCount: settledVisibleCount,
+            getKey: (item) => scopedThreadKey(threadRefFromSummary(item.thread)),
+          }),
+    [
+      normalizedSearch,
+      routeThreadKey,
+      sectionItems.settled,
+      settledShelfExpanded,
+      settledVisibleCount,
+    ],
   );
   const hiddenSettledCount = Math.max(0, sectionItems.settled.length - visibleSettledItems.length);
-  const hasRoutedSettledItem =
-    routeThreadKey !== null &&
-    visibleSettledItems.some(
-      (item) =>
-        scopedThreadKey(scopeThreadRef(item.thread.environmentId, item.thread.id)) ===
-        routeThreadKey,
-    );
   const shouldVirtualizeSettled =
-    isMobile && settledShelfExpanded && visibleSettledItems.length > 0 && !hasRoutedSettledItem;
+    normalizedSearch.length === 0 &&
+    isMobile &&
+    settledShelfExpanded &&
+    visibleSettledItems.length > 0 &&
+    !visibleSettledItems.some(
+      (item) => scopedThreadKey(threadRefFromSummary(item.thread)) === routeThreadKey,
+    );
   const settledVirtualRange = useFixedSharedScrollVirtualizer({
     enabled: shouldVirtualizeSettled,
     itemCount: visibleSettledItems.length,
@@ -887,123 +541,114 @@ export default function InboxSidebar() {
       ...visibleSnoozedItems,
       ...visibleSettledItems,
     ],
-    [
-      sectionItems.active,
-      sectionItems.drafts,
-      sectionItems.pinned,
-      visibleSettledItems,
-      visibleSnoozedItems,
-    ],
+    [sectionItems, visibleSettledItems, visibleSnoozedItems],
   );
   const orderedThreadKeys = useMemo(
-    () =>
-      orderedItems.map((item) =>
-        scopedThreadKey(scopeThreadRef(item.thread.environmentId, item.thread.id)),
-      ),
+    () => orderedItems.map((item) => scopedThreadKey(threadRefFromSummary(item.thread))),
     [orderedItems],
   );
-  const threadByKey = useMemo(
-    () =>
-      new Map(
-        scopedThreads.map(
-          (thread) =>
-            [scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread] as const,
-        ),
-      ),
-    [scopedThreads],
-  );
+  const highlightedSearchKey =
+    normalizedSearch.length > 0
+      ? resolveInboxSearchHighlight(orderedThreadKeys, searchHighlightIndex)
+      : null;
 
   useEffect(() => {
-    if (projectScopeKey !== null && scopedProject === null) {
-      setProjectScopeKey(null);
-    }
+    if (projectScopeKey !== null && scopedProject === null) setProjectScopeKey(null);
   }, [projectScopeKey, scopedProject]);
   useEffect(() => {
     clearSelection();
+    setSearchHighlightIndex(0);
   }, [clearSelection, projectScopeKey]);
+  useEffect(() => setSearchHighlightIndex(0), [normalizedSearch]);
   useEffect(() => {
-    const nextWakeAtMs = getNextInboxWakeAtMs(lifecycleByThreadKey, now);
-    if (nextWakeAtMs === null) {
-      return;
-    }
+    const nextWakeAtMs = getNextInboxWakeAtMs(scopedThreads, now);
+    if (nextWakeAtMs === null) return;
     const delayMs = Math.min(Math.max(0, nextWakeAtMs - Date.now()) + 50, MAX_WAKE_TIMEOUT_MS);
     const timeout = window.setTimeout(() => setNow(new Date().toISOString()), delayMs);
     return () => window.clearTimeout(timeout);
-  }, [lifecycleByThreadKey, now]);
+  }, [now, scopedThreads]);
+
   const navigateToThread = useCallback(
-    (threadRef: ScopedThreadRef) => {
-      const threadKey = scopedThreadKey(threadRef);
-      const lifecycleThreadKey = lifecycleThreadKeyByThreadKey.get(threadKey) ?? threadKey;
-      const lifecycle = useInboxLifecycleStore.getState().lifecycleByThreadKey[lifecycleThreadKey];
-      const wokeAt = resolveInboxWokeAt(lifecycle, new Date().toISOString());
-      if (wokeAt) {
-        dispatchLifecycle({
-          type: "acknowledge-wake",
-          threadKey: lifecycleThreadKey,
-          at: wokeAt,
-        });
-      }
-      clearSelection();
-      setSelectionAnchor(threadKey);
-      if (isMobile) {
-        setOpenMobile(false);
-      }
-      const draftId = draftIdByThreadKey.get(threadKey);
-      if (draftId) {
-        void navigate({ to: "/draft/$draftId", params: { draftId } });
+    (
+      threadRef: ScopedThreadRef,
+      event?: Pick<ReactMouseEvent, "metaKey" | "ctrlKey" | "shiftKey">,
+    ) => {
+      const key = scopedThreadKey(threadRef);
+      if (event?.metaKey || event?.ctrlKey) {
+        toggleThreadSelection(key);
         return;
       }
-      void navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(threadRef),
-      });
+      if (event?.shiftKey) {
+        rangeSelectTo(key, orderedThreadKeys);
+        return;
+      }
+      clearSelection();
+      setSelectionAnchor(key);
+      const lifecycleKey = lifecycleThreadKeyByThreadKey.get(key) ?? key;
+      const lifecycleThread = threadByKey.get(lifecycleKey);
+      if (lifecycleThread?.snoozedUntil && Date.parse(lifecycleThread.snoozedUntil) <= Date.now()) {
+        void unsnoozeThread(threadRefFromSummary(lifecycleThread));
+      }
+      if (isMobile) setOpenMobile(false);
+      const draftId = draftIdByThreadKey.get(key);
+      if (draftId) {
+        void navigate({ to: "/draft/$draftId", params: { draftId } });
+      } else {
+        void navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(threadRef),
+        });
+      }
     },
     [
       clearSelection,
-      dispatchLifecycle,
       draftIdByThreadKey,
       isMobile,
       lifecycleThreadKeyByThreadKey,
       navigate,
+      orderedThreadKeys,
+      rangeSelectTo,
       setOpenMobile,
       setSelectionAnchor,
+      threadByKey,
+      toggleThreadSelection,
     ],
   );
   const createThread = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
+    (event: ReactMouseEvent<HTMLButtonElement>) => {
       if (!shouldCreateNewThreadInCurrentProject(event.shiftKey, projectGroups.length)) {
         openNewThreadIn();
         return;
       }
-      if (isMobile) {
-        setOpenMobile(false);
-      }
+      if (isMobile) setOpenMobile(false);
       void startNewThreadFromContext({
         activeDraftThread: newThreadContext.activeDraftThread,
         activeThread: newThreadContext.activeThread,
         defaultProjectRef: newThreadContext.defaultProjectRef,
-        defaultThreadEnvMode,
+        defaultThreadEnvMode: settings.defaultThreadEnvMode,
         handleNewThread: newThreadContext.handleNewThread,
       });
     },
     [
-      defaultThreadEnvMode,
       isMobile,
       newThreadContext,
       openNewThreadIn,
       projectGroups.length,
       setOpenMobile,
+      settings.defaultThreadEnvMode,
     ],
   );
-
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.new") ??
     (projectGroups.length <= 1 ? shortcutLabelForCommand(keybindings, "chat.newLocal") : null);
-  const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat) {
+      if (
+        event.defaultPrevented ||
+        event.repeat ||
+        document.activeElement === searchInputRef.current
+      ) {
         return;
       }
       const terminalOpen = routeThreadRef
@@ -1028,16 +673,11 @@ export default function InboxSidebar() {
           : jumpIndex === null
             ? null
             : (orderedThreadKeys[jumpIndex] ?? null);
-      if (!targetKey) {
-        return;
-      }
-      const target = threadByKey.get(targetKey);
-      if (!target) {
-        return;
-      }
+      const target = targetKey ? threadByKey.get(targetKey) : null;
+      if (!target) return;
       event.preventDefault();
       event.stopPropagation();
-      navigateToThread(scopeThreadRef(target.environmentId, target.id));
+      navigateToThread(threadRefFromSummary(target));
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -1051,131 +691,217 @@ export default function InboxSidebar() {
     threadByKey,
   ]);
 
+  const dispatchPinnedOrder = useCallback(
+    async (orderedKeys: readonly string[], movedKey: string) => {
+      const assignments = planPinnedReorder({
+        orderedIds: orderedKeys,
+        movedId: movedKey,
+        keysById: new Map(
+          rootPinnedThreads.map((thread) => [
+            scopedThreadKey(threadRefFromSummary(thread)),
+            thread.pinOrderKey,
+          ]),
+        ),
+      });
+      await Promise.all(
+        assignments.map(({ id, orderKey }) => {
+          const thread = threadByKey.get(id);
+          return thread ? reorderPinnedThread(threadRefFromSummary(thread), orderKey) : false;
+        }),
+      );
+    },
+    [rootPinnedThreads, threadByKey],
+  );
+  const movePinned = useCallback(
+    async (lifecycleKey: string, direction: -1 | 1) => {
+      const from = pinnedRootKeys.indexOf(lifecycleKey);
+      const to = from + direction;
+      if (from < 0 || to < 0 || to >= pinnedRootKeys.length) return;
+      const next = [...pinnedRootKeys];
+      const [moved] = next.splice(from, 1);
+      if (!moved) return;
+      next.splice(to, 0, moved);
+      await dispatchPinnedOrder(next, lifecycleKey);
+    },
+    [dispatchPinnedOrder, pinnedRootKeys],
+  );
+
   const handleAction = useCallback(
     async (action: InboxThreadAction, thread: SidebarThreadSummary, lifecycleThreadKey: string) => {
-      const threadRef = scopeThreadRef(thread.environmentId, thread.id);
-      const currentLifecycle =
-        useInboxLifecycleStore.getState().lifecycleByThreadKey[lifecycleThreadKey];
-      const actionNow = new Date().toISOString();
-      const snooze = (preset: InboxSnoozePreset) => {
-        dispatchLifecycle({
-          type: "snooze",
-          threadKey: lifecycleThreadKey,
-          until: resolveInboxSnoozeUntil(preset, actionNow),
-        });
-        setNow(actionNow);
-      };
-
-      switch (action) {
-        case "toggle-pin":
-          dispatchLifecycle(
-            currentLifecycle?.pinnedAt
-              ? { type: "unpin", threadKey: lifecycleThreadKey, at: actionNow }
-              : { type: "pin", threadKey: lifecycleThreadKey, at: actionNow },
+      const threadRef = threadRefFromSummary(thread);
+      const lifecycleThread = threadByKey.get(lifecycleThreadKey) ?? thread;
+      const lifecycleRef = threadRefFromSummary(lifecycleThread);
+      const snoozePresetId = snoozePresetIdFromInboxAction(action);
+      try {
+        if (snoozePresetId !== null) {
+          const preset = resolveInboxSnoozePresets(new Date()).find(
+            (candidate) => candidate.id === snoozePresetId,
           );
-          return;
-        case "snooze-one-hour":
-          snooze("one-hour");
-          return;
-        case "snooze-tomorrow":
-          snooze("tomorrow");
-          return;
-        case "snooze-one-week":
-          snooze("one-week");
-          return;
-        case "unsnooze":
-          dispatchLifecycle({ type: "unsnooze", threadKey: lifecycleThreadKey, at: actionNow });
-          setNow(actionNow);
-          return;
-        case "toggle-settled":
-          dispatchLifecycle(
-            currentLifecycle?.settledAt
-              ? { type: "unsettle", threadKey: lifecycleThreadKey, at: actionNow }
-              : { type: "settle", threadKey: lifecycleThreadKey, at: actionNow },
+          if (!preset) return;
+          const applied = await snoozeThread(lifecycleRef, preset.snoozedUntil);
+          if (!applied) throw new Error("This environment does not support thread snoozing.");
+          setNow(new Date().toISOString());
+          toastManager.add(
+            stackedThreadToast({
+              type: "success",
+              title: `Snoozed ${resolveSidebarThreadDisplayTitle(lifecycleThread)}`,
+              description: `Wakes ${preset.whenLabel}`,
+              actionProps: {
+                children: "Undo",
+                onClick: () => void unsnoozeThread(lifecycleRef),
+              },
+            }),
           );
-          return;
-        case "discard-draft": {
-          const draftId = draftIdByThreadKey.get(scopedThreadKey(threadRef));
-          if (!draftId) {
-            return;
-          }
-          if (confirmThreadDelete) {
-            const confirmed = await readLocalApi()?.dialogs.confirm(
-              `Discard draft "${resolveSidebarThreadDisplayTitle(thread)}"?`,
-            );
-            if (confirmed === false) {
-              return;
-            }
-          }
-          clearDraftThread(draftId);
-          if (scopedThreadKey(threadRef) === lifecycleThreadKey) {
-            dispatchLifecycle({ type: "remove", threadKey: lifecycleThreadKey });
-          }
           return;
         }
-        case "archive": {
-          if (confirmThreadArchive) {
-            const confirmed = await readLocalApi()?.dialogs.confirm(
-              `Archive thread "${resolveSidebarThreadDisplayTitle(thread)}"?`,
-            );
-            if (confirmed === false) {
+        switch (action) {
+          case "toggle-pin": {
+            if (lifecycleThread.pinnedAt != null) {
+              await setThreadPinned(lifecycleRef, false);
               return;
             }
+            const firstKey = rootPinnedThreads[0]?.pinOrderKey ?? null;
+            let orderKey: string | null | undefined = pinOrderKeyBetween(null, firstKey);
+            if (orderKey === null) {
+              const normalized = generateSpreadPinOrderKeys(rootPinnedThreads.length + 1);
+              orderKey = normalized[0] ?? undefined;
+              await Promise.all(
+                rootPinnedThreads.map((pinned, index) => {
+                  const key = normalized[index + 1];
+                  return key
+                    ? reorderPinnedThread(threadRefFromSummary(pinned), key)
+                    : Promise.resolve(false);
+                }),
+              );
+            }
+            await setThreadPinned(lifecycleRef, true, orderKey ?? undefined);
+            return;
           }
-          try {
+          case "unsnooze":
+            await unsnoozeThread(lifecycleRef);
+            setNow(new Date().toISOString());
+            return;
+          case "toggle-settled":
+            await setThreadSettled(
+              lifecycleRef,
+              lifecycleThread.settledOverride !== "settled" && lifecycleThread.settledAt == null,
+            );
+            return;
+          case "rename":
+            setRenameTarget(thread);
+            setRenameValue(resolveSidebarThreadDisplayTitle(thread));
+            return;
+          case "regenerate-title": {
+            const api = readEnvironmentApi(thread.environmentId);
+            if (!api) return;
+            await api.orchestration.dispatchCommand({
+              type: "thread.meta.update",
+              commandId: newCommandId(),
+              threadId: thread.id,
+              regenerateTitle: true,
+            });
+            toastManager.add(
+              stackedThreadToast({ type: "info", title: "Regenerating thread title…" }),
+            );
+            return;
+          }
+          case "mark-unread": {
+            const turnId = getAcknowledgedCompletionTurnId(thread);
+            if (!turnId) return;
+            await setThreadCompletionAttention({
+              operation: "mark-unread",
+              environmentId: thread.environmentId,
+              threadId: thread.id,
+              turnId,
+            });
+            return;
+          }
+          case "create-on-branch":
+            if (!thread.branch) return;
+            if (isMobile) setOpenMobile(false);
+            await newThreadContext.handleNewThread(
+              scopeProjectRef(thread.environmentId, thread.projectId),
+              {
+                branch: thread.branch,
+                worktreePath: thread.worktreePath,
+                envMode: thread.worktreePath ? "worktree" : "local",
+              },
+            );
+            return;
+          case "copy-metadata":
+            await navigator.clipboard.writeText(
+              JSON.stringify(
+                {
+                  environmentId: thread.environmentId,
+                  threadId: thread.id,
+                  projectId: thread.projectId,
+                  title: thread.title,
+                  branch: thread.branch,
+                  worktreePath: thread.worktreePath,
+                  provider: thread.modelSelection?.instanceId ?? null,
+                },
+                null,
+                2,
+              ),
+            );
+            toastManager.add(
+              stackedThreadToast({ type: "success", title: "Thread metadata copied" }),
+            );
+            return;
+          case "move-pin-up":
+            await movePinned(lifecycleThreadKey, -1);
+            return;
+          case "move-pin-down":
+            await movePinned(lifecycleThreadKey, 1);
+            return;
+          case "discard-draft": {
+            const draftId = draftIdByThreadKey.get(scopedThreadKey(threadRef));
+            if (!draftId) return;
+            if (settings.confirmThreadDelete) {
+              const confirmed = await readLocalApi()?.dialogs.confirm(
+                `Discard draft "${resolveSidebarThreadDisplayTitle(thread)}"?`,
+              );
+              if (confirmed === false) return;
+            }
+            clearDraftThread(draftId);
+            return;
+          }
+          case "archive":
+            if (settings.confirmThreadArchive) {
+              const confirmed = await readLocalApi()?.dialogs.confirm(
+                `Archive thread "${resolveSidebarThreadDisplayTitle(thread)}"?`,
+              );
+              if (confirmed === false) return;
+            }
             await archiveThread(threadRef);
-          } catch (error) {
-            toastManager.add(
-              stackedThreadToast({
-                type: "error",
-                title: "Failed to archive thread",
-                description: error instanceof Error ? error.message : "An error occurred.",
-              }),
-            );
-          }
-          return;
-        }
-        case "delete": {
-          if (!readEnvironmentApi(thread.environmentId)) {
             return;
-          }
-          if (confirmThreadDelete) {
-            const confirmed = await readLocalApi()?.dialogs.confirm(
-              [
-                `Delete thread "${resolveSidebarThreadDisplayTitle(thread)}"?`,
-                "This permanently clears conversation history for this thread.",
-              ].join("\n"),
-            );
-            if (confirmed === false) {
-              return;
+          case "delete":
+            if (settings.confirmThreadDelete) {
+              const confirmed = await readLocalApi()?.dialogs.confirm(
+                `Delete thread "${resolveSidebarThreadDisplayTitle(thread)}"?\nThis permanently clears its conversation history.`,
+              );
+              if (confirmed === false) return;
             }
-          }
-          try {
             await deleteThread(threadRef);
-            if (scopedThreadKey(threadRef) === lifecycleThreadKey) {
-              dispatchLifecycle({ type: "remove", threadKey: lifecycleThreadKey });
-            }
-          } catch (error) {
-            toastManager.add(
-              stackedThreadToast({
-                type: "error",
-                title: "Failed to delete thread",
-                description: error instanceof Error ? error.message : "An error occurred.",
-              }),
-            );
-          }
-          return;
+            return;
         }
+      } catch (error) {
+        lifecycleErrorToast("Thread action failed", error);
       }
     },
     [
       archiveThread,
       clearDraftThread,
-      confirmThreadArchive,
-      confirmThreadDelete,
       deleteThread,
-      dispatchLifecycle,
       draftIdByThreadKey,
+      isMobile,
+      movePinned,
+      newThreadContext,
+      rootPinnedThreads,
+      setOpenMobile,
+      settings.confirmThreadArchive,
+      settings.confirmThreadDelete,
+      threadByKey,
     ],
   );
   const runAction = useCallback(
@@ -1183,6 +909,87 @@ export default function InboxSidebar() {
       void handleAction(action, thread, lifecycleThreadKey);
     },
     [handleAction],
+  );
+
+  const selectedThreads = useMemo(
+    () =>
+      [...selectedThreadKeys].flatMap((key) =>
+        threadByKey.get(key) ? [threadByKey.get(key)!] : [],
+      ),
+    [selectedThreadKeys, threadByKey],
+  );
+  const runBulkLifecycle = useCallback(
+    async (operation: "settle" | "snooze") => {
+      const uniqueRoots = new Map<string, SidebarThreadSummary>();
+      for (const thread of selectedThreads) {
+        const ownKey = scopedThreadKey(threadRefFromSummary(thread));
+        const rootKey = lifecycleThreadKeyByThreadKey.get(ownKey) ?? ownKey;
+        const root = threadByKey.get(rootKey) ?? thread;
+        uniqueRoots.set(rootKey, root);
+      }
+      try {
+        if (operation === "settle") {
+          await Promise.all(
+            [...uniqueRoots.values()].map((thread) =>
+              setThreadSettled(threadRefFromSummary(thread), true),
+            ),
+          );
+        } else {
+          const tomorrow = resolveInboxSnoozePresets(new Date()).find(
+            (preset) => preset.id === "tomorrow",
+          );
+          if (tomorrow) {
+            await Promise.all(
+              [...uniqueRoots.values()].map((thread) =>
+                snoozeThread(threadRefFromSummary(thread), tomorrow.snoozedUntil),
+              ),
+            );
+          }
+        }
+        clearSelection();
+      } catch (error) {
+        lifecycleErrorToast("Bulk action failed", error);
+      }
+    },
+    [clearSelection, lifecycleThreadKeyByThreadKey, selectedThreads, threadByKey],
+  );
+  const runBulkArchive = useCallback(async () => {
+    try {
+      await Promise.all(
+        selectedThreads.map((thread) => archiveThread(threadRefFromSummary(thread))),
+      );
+      clearSelection();
+    } catch (error) {
+      lifecycleErrorToast("Bulk archive failed", error);
+    }
+  }, [archiveThread, clearSelection, selectedThreads]);
+
+  const handleSearchKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        setSearchHighlightIndex((current) =>
+          moveInboxSearchHighlightIndex(current, orderedThreadKeys.length, direction),
+        );
+        return;
+      }
+      if (event.key === "Enter") {
+        const key = highlightedSearchKey;
+        const target = key ? threadByKey.get(key) : null;
+        if (target) {
+          event.preventDefault();
+          navigateToThread(threadRefFromSummary(target));
+        }
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSearchQuery("");
+        searchInputRef.current?.blur();
+      }
+    },
+    [highlightedSearchKey, navigateToThread, orderedThreadKeys.length, threadByKey],
   );
   const showMoreSettled = useCallback(() => {
     setSettledPaging((current) => ({
@@ -1205,26 +1012,69 @@ export default function InboxSidebar() {
   ) =>
     items.map((item, itemIndex) => {
       const thread = item.thread;
-      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+      const threadKey = scopedThreadKey(threadRefFromSummary(thread));
+      const lifecycleThreadKey = lifecycleThreadKeyByThreadKey.get(threadKey) ?? threadKey;
+      const lifecycleThread = lifecycleThreadByThreadKey.get(threadKey) ?? thread;
+      const rootIndex = pinnedRootKeys.indexOf(lifecycleThreadKey);
       const projectKey = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
       return (
         <InboxThreadRow
           key={threadKey}
           thread={thread}
+          lifecycleThread={lifecycleThread}
           depth={item.depth}
           childCount={item.childCount}
           section={section}
           projectIdentity={projectIdentityByScopedKey.get(projectKey) ?? null}
-          lifecycleThreadKey={lifecycleThreadKeyByThreadKey.get(threadKey) ?? threadKey}
+          lifecycleThreadKey={lifecycleThreadKey}
+          isLifecycleRoot={threadKey === lifecycleThreadKey}
           isActive={routeThreadKey === threadKey}
           isDraft={draftThreadKeys.has(threadKey)}
+          draftId={draftIdByThreadKey.get(threadKey) ?? null}
+          isSelected={selectedThreadKeys.has(threadKey) || highlightedSearchKey === threadKey}
           hasActiveLocalDispatch={activeLocalDispatchThreadKeys.has(threadKey)}
+          backgroundLiveness={backgroundLivenessByLifecycleKey.get(lifecycleThreadKey) ?? null}
           isPending={pendingThreadKeys.has(threadKey)}
           isThreadExpanded={threadExpandedById[threadKey] ?? true}
           now={now}
+          canPin={supportsThreadLifecycleCapability(lifecycleThread.environmentId, "threadPinning")}
+          canSnooze={supportsThreadLifecycleCapability(
+            lifecycleThread.environmentId,
+            "threadSnooze",
+          )}
+          canSettle={supportsThreadLifecycleCapability(
+            lifecycleThread.environmentId,
+            "threadSettlement",
+          )}
+          canReorderPinned={supportsThreadLifecycleCapability(
+            lifecycleThread.environmentId,
+            "threadPinReorder",
+          )}
+          canRegenerateTitle={supportsThreadLifecycleCapability(
+            thread.environmentId,
+            "threadTitleRegeneration",
+          )}
+          canMarkUnread={getAcknowledgedCompletionTurnId(thread) !== null}
+          canMovePinUp={rootIndex > 0}
+          canMovePinDown={rootIndex >= 0 && rootIndex < pinnedRootKeys.length - 1}
           onNavigate={navigateToThread}
           onAction={runAction}
           onToggleExpanded={toggleThreadExpanded}
+          onPinnedDragStart={(key) => {
+            draggedPinnedKeyRef.current = key;
+          }}
+          onPinnedDrop={(targetKey) => {
+            const movedKey = draggedPinnedKeyRef.current;
+            draggedPinnedKeyRef.current = null;
+            if (!movedKey || movedKey === targetKey) return;
+            const next = pinnedRootKeys.filter((key) => key !== movedKey);
+            const targetIndex = next.indexOf(targetKey);
+            if (targetIndex < 0) return;
+            next.splice(targetIndex, 0, movedKey);
+            void dispatchPinnedOrder(next, movedKey).catch((error) =>
+              lifecycleErrorToast("Could not reorder pinned threads", error),
+            );
+          }}
           {...(virtualRange
             ? {
                 virtualIndex: virtualRange.startIndex + itemIndex,
@@ -1236,12 +1086,18 @@ export default function InboxSidebar() {
       );
     });
 
-  const totalScopedThreads =
+  const totalVisibleThreads =
     sectionItems.drafts.length +
     sectionItems.pinned.length +
     sectionItems.active.length +
     sectionItems.snoozed.length +
     sectionItems.settled.length;
+  const totalScopedThreads =
+    partitions.drafts.length +
+    partitions.pinned.length +
+    partitions.active.length +
+    partitions.snoozed.length +
+    partitions.settled.length;
 
   return (
     <>
@@ -1250,19 +1106,32 @@ export default function InboxSidebar() {
       <SidebarContent className="gap-0" scrollViewportRef={scrollViewportRef}>
         <SidebarGroup className="px-2 pt-2 pb-1">
           <div className="flex items-center gap-1">
-            <SidebarMenu className="flex-1">
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  size="sm"
-                  className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:ring-0"
-                  data-testid="inbox-command-palette-trigger"
-                  onClick={() => openCommandPalette(true)}
+            <div className="relative min-w-0 flex-1">
+              <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground/55" />
+              <Input
+                ref={searchInputRef}
+                aria-label="Search thread titles"
+                aria-controls="inbox-thread-list"
+                className="h-8 border-transparent bg-transparent pr-8 pl-7 text-[14px] shadow-none hover:bg-accent/50 focus-visible:border-ring focus-visible:bg-background"
+                placeholder="Search threads"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                onKeyDown={handleSearchKeyDown}
+              />
+              {searchQuery ? (
+                <button
+                  type="button"
+                  aria-label="Clear thread search"
+                  className="absolute top-1/2 right-1 inline-flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                  onClick={() => {
+                    setSearchQuery("");
+                    searchInputRef.current?.focus();
+                  }}
                 >
-                  <SearchIcon className="size-3.5" />
-                  <span className="flex-1 truncate text-left text-[15px]">Search</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
+                  <XIcon className="size-3.5" />
+                </button>
+              ) : null}
+            </div>
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1270,118 +1139,133 @@ export default function InboxSidebar() {
                     type="button"
                     aria-label="New thread"
                     disabled={projects.length === 0}
-                    className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex size-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={createThread}
                   />
                 }
               >
-                <SquarePenIcon className="size-3.5" />
+                <SquarePenIcon className="size-4" />
               </TooltipTrigger>
               <TooltipPopup side="right">
-                {projectGroups.length > 1 ? (
-                  <span className="flex flex-col gap-0.5">
-                    <span>
-                      {newThreadShortcutLabel
-                        ? `New thread (${newThreadShortcutLabel})`
-                        : "New thread"}
-                    </span>
-                    <span className="text-muted-foreground">
-                      New thread in current project: Shift+click
-                      {newThreadInProjectShortcutLabel
-                        ? ` (${newThreadInProjectShortcutLabel})`
-                        : ""}
-                    </span>
-                  </span>
-                ) : newThreadShortcutLabel ? (
-                  `New thread (${newThreadShortcutLabel})`
-                ) : (
-                  "New thread"
-                )}
+                {newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"}
               </TooltipPopup>
             </Tooltip>
           </div>
         </SidebarGroup>
 
         <SidebarGroup className="px-2 pt-1 pb-2">
-          <div className="flex items-center gap-1">
-            <Select
-              value={projectScopeKey ?? ALL_PROJECTS_SCOPE}
-              onValueChange={(value) =>
-                setProjectScopeKey(value === ALL_PROJECTS_SCOPE ? null : value)
+          <InboxProjectPicker
+            projects={projectGroups}
+            selectedProject={scopedProject}
+            selectedKey={projectScopeKey}
+            sortOrder={settings.sidebarProjectSortOrder}
+            resolveGroupingMode={(project) =>
+              resolveProjectGroupingMode(
+                project.memberProjects[0] ?? project,
+                projectGroupingSettings,
+              )
+            }
+            onSelect={setProjectScopeKey}
+            onAddProject={openAddProject}
+            onSortOrderChange={(sortOrder) =>
+              updateSettings({ sidebarProjectSortOrder: sortOrder })
+            }
+            onMoveProject={(project, direction) => {
+              const index = projectGroups.findIndex(
+                (candidate) => candidate.projectKey === project.projectKey,
+              );
+              const target = projectGroups[index + direction];
+              if (!target) return;
+              reorderProjects(
+                project.memberProjects.map(getProjectOrderKey),
+                target.memberProjects.map(getProjectOrderKey),
+              );
+            }}
+            onGroupingModeChange={(project, mode: SidebarProjectGroupingMode) => {
+              const overrides = { ...settings.sidebarProjectGroupingOverrides };
+              for (const member of project.memberProjects) {
+                overrides[deriveProjectGroupingOverrideKey(member)] = mode;
               }
-            >
-              <SelectTrigger
-                variant="ghost"
-                size="sm"
-                className="min-w-0 flex-1 justify-start px-2"
-                aria-label="Inbox project scope"
-              >
-                {scopedProject ? (
-                  <ProjectFavicon
-                    environmentId={scopedProject.environmentId}
-                    cwd={scopedProject.cwd}
-                    className="size-4"
-                  />
-                ) : (
-                  <FolderIcon className="size-4" />
-                )}
-                <SelectValue>{scopedProject?.displayName ?? "All projects"}</SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="start" alignItemWithTrigger={false} className="max-w-72">
-                <SelectItem hideIndicator value={ALL_PROJECTS_SCOPE}>
-                  <span className="flex min-w-0 items-center gap-2">
-                    <FolderIcon className="size-4 text-muted-foreground" />
-                    <span className="min-w-0 truncate">All projects</span>
-                  </span>
-                </SelectItem>
-                {projectGroups.map((project) => (
-                  <SelectItem key={project.projectKey} hideIndicator value={project.projectKey}>
-                    <span className="flex min-w-0 items-center gap-2">
-                      <ProjectFavicon
-                        environmentId={project.environmentId}
-                        cwd={project.cwd}
-                        className="size-4"
-                      />
-                      <span className="min-w-0 truncate">{project.displayName}</span>
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
+              updateSettings({ sidebarProjectGroupingOverrides: overrides });
+            }}
+            onOpenGeneralSettings={() => void navigate({ to: "/settings/general" })}
+          />
+        </SidebarGroup>
+
+        {selectedThreadKeys.size > 0 ? (
+          <div className="sticky top-0 z-10 mx-2 mb-2 flex items-center gap-1 rounded-lg border bg-popover/95 px-2 py-1.5 shadow-sm backdrop-blur-sm">
+            <span className="mr-auto text-xs font-medium">{selectedThreadKeys.size} selected</span>
             <Tooltip>
               <TooltipTrigger
                 render={
                   <button
                     type="button"
-                    aria-label="Add project"
-                    className="inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-                    onClick={openAddProject}
+                    aria-label="Snooze selected threads"
+                    className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                    onClick={() => void runBulkLifecycle("snooze")}
                   />
                 }
               >
-                <FolderPlusIcon className="size-3.5" />
+                <AlarmClockIcon className="size-3.5" />
               </TooltipTrigger>
-              <TooltipPopup side="right">Add project</TooltipPopup>
+              <TooltipPopup>Snooze until tomorrow</TooltipPopup>
             </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="Settle selected threads"
+                    className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                    onClick={() => void runBulkLifecycle("settle")}
+                  />
+                }
+              >
+                <CheckIcon className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipPopup>Settle</TooltipPopup>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="Archive selected threads"
+                    className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                    onClick={() => void runBulkArchive()}
+                  />
+                }
+              >
+                <ArchiveIcon className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipPopup>Archive</TooltipPopup>
+            </Tooltip>
+            <button
+              type="button"
+              aria-label="Clear selection"
+              className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+              onClick={clearSelection}
+            >
+              <XIcon className="size-3.5" />
+            </button>
           </div>
-        </SidebarGroup>
+        ) : null}
 
-        <SidebarGroup className="px-2 pt-0 pb-3" data-testid="inbox-thread-list">
+        <SidebarGroup
+          id="inbox-thread-list"
+          className="px-2 pt-0 pb-3"
+          data-testid="inbox-thread-list"
+        >
           <SidebarMenu className="gap-0">
             {renderRows(sectionItems.drafts, "drafts")}
             {sectionItems.drafts.length > 0 ? (
-              <SidebarMenuItem
-                aria-hidden="true"
-                className="mx-2 my-1.5 h-px list-none bg-sidebar-border/70"
-                data-testid="inbox-draft-divider"
-              />
+              <SidebarMenuItem aria-hidden className="mx-2 my-1.5 h-px list-none bg-amber-500/25" />
             ) : null}
             {renderRows(sectionItems.pinned, "pinned")}
             {sectionItems.pinned.length > 0 ? (
               <SidebarMenuItem
-                aria-hidden="true"
+                aria-hidden
                 className="mx-2 my-1.5 h-px list-none bg-sidebar-border/70"
-                data-testid="inbox-pinned-divider"
               />
             ) : null}
             {sectionItems.active.length > 0 ? (
@@ -1390,7 +1274,6 @@ export default function InboxSidebar() {
                   ref={activeListRef}
                   aria-label="Active threads"
                   className={cn("gap-0", shouldVirtualizeActive && "relative block")}
-                  data-inbox-active-list-virtualized={shouldVirtualizeActive ? "true" : "false"}
                   style={shouldVirtualizeActive ? { height: activeListHeight } : undefined}
                 >
                   {renderRows(
@@ -1410,7 +1293,7 @@ export default function InboxSidebar() {
             <InboxShelf
               title="Snoozed"
               count={sectionItems.snoozed.length}
-              expanded={snoozedShelfExpanded}
+              expanded={normalizedSearch.length > 0 || snoozedShelfExpanded}
               tone="snoozed"
               onToggle={() => setSnoozedShelfExpanded((expanded) => !expanded)}
             />
@@ -1418,7 +1301,7 @@ export default function InboxSidebar() {
             <InboxShelf
               title="Settled"
               count={sectionItems.settled.length}
-              expanded={settledShelfExpanded}
+              expanded={normalizedSearch.length > 0 || settledShelfExpanded}
               tone="settled"
               onToggle={() => setSettledShelfExpanded((expanded) => !expanded)}
             />
@@ -1428,7 +1311,6 @@ export default function InboxSidebar() {
                   ref={settledListRef}
                   aria-label="Settled threads"
                   className={cn("gap-0", shouldVirtualizeSettled && "relative block")}
-                  data-inbox-settled-list-virtualized={shouldVirtualizeSettled ? "true" : "false"}
                   style={shouldVirtualizeSettled ? { height: settledListHeight } : undefined}
                 >
                   {renderRows(
@@ -1445,12 +1327,11 @@ export default function InboxSidebar() {
                 </SidebarMenu>
               </SidebarMenuItem>
             ) : null}
-            {settledShelfExpanded && hiddenSettledCount > 0 ? (
+            {normalizedSearch.length === 0 && settledShelfExpanded && hiddenSettledCount > 0 ? (
               <SidebarMenuItem className="list-none px-2 py-1">
                 <button
                   type="button"
-                  className="flex h-7 w-full cursor-pointer items-center rounded-md px-2 text-left text-xs text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-                  data-testid="inbox-settled-show-more"
+                  className="flex h-7 w-full cursor-pointer items-center rounded-md px-2 text-left text-xs text-muted-foreground/70 hover:bg-accent hover:text-foreground"
                   onClick={showMoreSettled}
                 >
                   Show {Math.min(INBOX_SETTLED_PAGE_COUNT, hiddenSettledCount)} more
@@ -1459,19 +1340,88 @@ export default function InboxSidebar() {
             ) : null}
           </SidebarMenu>
 
-          {totalScopedThreads === 0 ? (
-            <div className="flex flex-col items-center gap-2 px-2 py-8 text-center text-xs text-muted-foreground/60">
-              {projects.length === 0
-                ? "No projects yet"
-                : scopedProject
-                  ? `No threads in ${scopedProject.displayName} yet`
-                  : "No threads yet"}
+          {!bootstrapComplete && totalScopedThreads === 0 ? (
+            <div className="space-y-2 px-2 py-3" aria-label="Loading inbox">
+              {[0, 1, 2].map((index) => (
+                <div key={index} className="h-[4.5rem] animate-pulse rounded-md bg-muted/45" />
+              ))}
+            </div>
+          ) : normalizedSearch.length > 0 && totalVisibleThreads === 0 ? (
+            <div className="flex flex-col items-center gap-1 px-4 py-10 text-center">
+              <SearchIcon className="size-5 text-muted-foreground/40" />
+              <span className="text-sm font-medium">No matching threads</span>
+              <span className="text-xs text-muted-foreground">Try another title.</span>
+            </div>
+          ) : totalScopedThreads === 0 ? (
+            <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
+              <span className="text-sm text-muted-foreground">
+                {projects.length === 0
+                  ? "No projects yet"
+                  : scopedProject
+                    ? `No threads in ${scopedProject.displayName} yet`
+                    : "No threads yet"}
+              </span>
+              {projects.length === 0 ? (
+                <Button size="sm" variant="outline" onClick={openAddProject}>
+                  Add project
+                </Button>
+              ) : null}
             </div>
           ) : null}
         </SidebarGroup>
       </SidebarContent>
       <SidebarSeparator />
       <SidebarChromeFooter />
+
+      <Dialog
+        open={renameTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRenameTarget(null);
+        }}
+      >
+        <DialogPopup>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              const target = renameTarget;
+              const title = renameValue.trim();
+              if (!target || !title) return;
+              const api = readEnvironmentApi(target.environmentId);
+              if (!api) return;
+              void api.orchestration
+                .dispatchCommand({
+                  type: "thread.meta.update",
+                  commandId: newCommandId(),
+                  threadId: target.id,
+                  title,
+                })
+                .then(() => setRenameTarget(null))
+                .catch((error) => lifecycleErrorToast("Could not rename thread", error));
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>Rename thread</DialogTitle>
+              <DialogDescription>Give this thread a concise, recognizable title.</DialogDescription>
+            </DialogHeader>
+            <div className="px-6 pb-6">
+              <Input
+                autoFocus
+                aria-label="Thread title"
+                value={renameValue}
+                onChange={(event) => setRenameValue(event.target.value)}
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setRenameTarget(null)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={renameValue.trim().length === 0}>
+                Rename
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogPopup>
+      </Dialog>
     </>
   );
 }

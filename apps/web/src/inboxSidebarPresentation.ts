@@ -59,3 +59,21 @@ export function shouldVirtualizeInboxActiveThreads(itemCount: number): boolean {
 export function inboxShelfLabel(title: string, count: number, expanded: boolean): string {
   return expanded ? title : `${title} (${count})`;
 }
+
+export function moveInboxSearchHighlightIndex(
+  currentIndex: number,
+  itemCount: number,
+  direction: -1 | 1,
+): number {
+  if (itemCount <= 0) return 0;
+  const safeIndex = Math.min(Math.max(0, currentIndex), itemCount - 1);
+  return (safeIndex + direction + itemCount) % itemCount;
+}
+
+export function resolveInboxSearchHighlight<T>(
+  items: readonly T[],
+  highlightIndex: number,
+): T | null {
+  if (items.length === 0) return null;
+  return items[Math.min(Math.max(0, highlightIndex), items.length - 1)] ?? null;
+}

@@ -17,6 +17,8 @@ export interface SidebarDraftThreadInput {
   readonly draftId: DraftId;
   readonly thread: DraftThreadState;
   readonly composerDraft: ComposerThreadDraftState | null;
+  readonly hasPendingInput?: boolean;
+  readonly draftTitle?: string;
 }
 
 export interface SidebarThreadPresentationInput {
@@ -106,8 +108,9 @@ function buildPendingThreadSummary(input: {
   readonly localDispatch: LocalDispatchSnapshot | null;
   readonly serverThread: Thread | undefined;
   readonly rowRef: ScopedThreadRef;
+  readonly draftTitle?: string;
 }): SidebarThreadSummary {
-  const { composerDraft, draftThread, localDispatch, rowRef, serverThread } = input;
+  const { composerDraft, draftThread, draftTitle, localDispatch, rowRef, serverThread } = input;
   const activityAt =
     localDispatch?.startedAt ??
     serverThread?.updatedAt ??
@@ -116,7 +119,9 @@ function buildPendingThreadSummary(input: {
   const latestUserMessageAt =
     localDispatch?.startedAt ?? latestServerUserMessageAt(serverThread) ?? activityAt;
   const promptTitle = truncate(composerDraft?.prompt ?? "");
-  const title = serverThread?.title.trim() ? serverThread.title : promptTitle || "New thread";
+  const title = serverThread?.title.trim()
+    ? serverThread.title
+    : (draftTitle ?? promptTitle) || "New thread";
 
   return {
     id: rowRef.threadId,
@@ -169,7 +174,7 @@ export function buildSidebarThreadPresentation(
     const isComposerDraft =
       !localDispatch &&
       !isPromotedMissingSidebarSummary &&
-      hasPendingComposerInput(draftInput.composerDraft);
+      (draftInput.hasPendingInput ?? hasPendingComposerInput(draftInput.composerDraft));
     if (!localDispatch && !isPromotedMissingSidebarSummary && !isComposerDraft) {
       continue;
     }
@@ -182,6 +187,7 @@ export function buildSidebarThreadPresentation(
     pendingThreads.push(
       buildPendingThreadSummary({
         composerDraft: draftInput.composerDraft,
+        ...(draftInput.draftTitle !== undefined ? { draftTitle: draftInput.draftTitle } : {}),
         draftThread,
         localDispatch,
         rowRef,

@@ -5,6 +5,7 @@ import {
   formatInboxWorkingDurationLabel,
   resolveInboxThreadStatus,
   resolveInboxWorkingStartedAt,
+  type InboxBackgroundLiveness,
 } from "../inboxThreadStatus";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
@@ -42,6 +43,7 @@ export function InboxThreadStatus(props: {
   readonly hasActiveLocalDispatch: boolean;
   readonly isActive: boolean;
   readonly isWoke: boolean;
+  readonly backgroundLiveness?: InboxBackgroundLiveness;
   readonly thread: SidebarThreadSummary;
 }) {
   const status = resolveInboxThreadStatus({
@@ -49,6 +51,7 @@ export function InboxThreadStatus(props: {
     hasActiveLocalDispatch: props.hasActiveLocalDispatch,
     isActive: props.isActive,
     isWoke: props.isWoke,
+    backgroundLiveness: props.backgroundLiveness ?? null,
   });
 
   if (status === "ready") {
@@ -66,35 +69,41 @@ export function InboxThreadStatus(props: {
           className: cn("text-sky-600 dark:text-sky-400", !props.isActive && "opacity-75"),
           icon: <CircleDashedIcon aria-hidden className="size-3.5 shrink-0" />,
         }
-      : status === "approval"
+      : status === "monitoring"
         ? {
-            label: "Approval",
-            className: "text-amber-700 dark:text-amber-300",
+            label: "Monitoring",
+            className: "text-sky-600 dark:text-sky-400",
             icon: null,
           }
-        : status === "input"
+        : status === "approval"
           ? {
-              label: "Input",
-              className: "text-indigo-600 dark:text-indigo-300",
+              label: "Approval",
+              className: "text-amber-700 dark:text-amber-300",
               icon: null,
             }
-          : status === "failed"
+          : status === "input"
             ? {
-                label: "Failed",
-                className: "text-red-700 dark:text-red-300",
+                label: "Input",
+                className: "text-indigo-600 dark:text-indigo-300",
                 icon: null,
               }
-            : status === "woke"
+            : status === "failed"
               ? {
-                  label: "Woke",
-                  className: "text-amber-700 dark:text-amber-300",
-                  icon: <AlarmClockIcon aria-hidden className="size-3.5 shrink-0" />,
+                  label: "Failed",
+                  className: "text-red-700 dark:text-red-300",
+                  icon: null,
                 }
-              : {
-                  label: "Done",
-                  className: "text-emerald-700 dark:text-emerald-300",
-                  icon: <CircleCheckIcon aria-hidden className="size-3.5 shrink-0" />,
-                };
+              : status === "woke"
+                ? {
+                    label: "Woke",
+                    className: "text-amber-700 dark:text-amber-300",
+                    icon: <AlarmClockIcon aria-hidden className="size-3.5 shrink-0" />,
+                  }
+                : {
+                    label: "Done",
+                    className: "text-emerald-700 dark:text-emerald-300",
+                    icon: <CircleCheckIcon aria-hidden className="size-3.5 shrink-0" />,
+                  };
 
   return (
     <span

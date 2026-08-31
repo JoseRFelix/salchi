@@ -66,6 +66,8 @@ function makeSnapshot(text: string): OrchestrationThreadDetailSnapshot {
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
       deletedAt: null,
       session: {
         threadId,

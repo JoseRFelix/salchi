@@ -8,6 +8,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  classifyInboxBackgroundThread,
   formatInboxWorkingDurationLabel,
   resolveInboxThreadStatus,
   resolveInboxWorkingStartedAt,
@@ -47,13 +48,19 @@ function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThrea
 
 const resolve = (
   thread: SidebarThreadSummary,
-  options: { active?: boolean; dispatching?: boolean; woke?: boolean } = {},
+  options: {
+    active?: boolean;
+    backgroundLiveness?: "working" | "monitoring" | null;
+    dispatching?: boolean;
+    woke?: boolean;
+  } = {},
 ) =>
   resolveInboxThreadStatus({
     thread,
     hasActiveLocalDispatch: options.dispatching ?? false,
     isActive: options.active ?? false,
     isWoke: options.woke ?? false,
+    backgroundLiveness: options.backgroundLiveness ?? null,
   });
 
 describe("resolveInboxThreadStatus", () => {
@@ -89,6 +96,17 @@ describe("resolveInboxThreadStatus", () => {
         }),
       ),
     ).toBe("ready");
+  });
+
+  it("matches t3code's working and monitoring background liveness", () => {
+    expect(resolve(makeThread(), { backgroundLiveness: "working" })).toBe("working");
+    expect(resolve(makeThread(), { backgroundLiveness: "monitoring" })).toBe("monitoring");
+    expect(
+      classifyInboxBackgroundThread(makeThread({ subagentRole: "Watch pull request checks" })),
+    ).toBe("monitoring");
+    expect(
+      classifyInboxBackgroundThread(makeThread({ subagentRole: "Implement the feature" })),
+    ).toBe("working");
   });
 });
 

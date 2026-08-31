@@ -6,7 +6,10 @@ import { useShallow } from "zustand/react/shallow";
 import { DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { useLocalDispatchStore } from "../localDispatchStore";
 import { selectThreadByRef, useStore } from "../store";
-import { buildSidebarThreadPresentation } from "../sidebarThreadPresentation";
+import {
+  buildSidebarThreadPresentation,
+  hasPendingComposerInput,
+} from "../sidebarThreadPresentation";
 import type { SidebarThreadSummary, Thread } from "../types";
 
 export function useSidebarThreadPresentation(
@@ -27,9 +30,11 @@ export function useSidebarThreadPresentation(
       ),
     [draftThreadsByDraftId, projectRefs],
   );
-  const composerDrafts = useComposerDraftStore(
+  const composerDraftHasPendingInput = useComposerDraftStore(
     useShallow((store) =>
-      draftThreadEntries.map(([draftId]) => store.draftsByThreadKey[draftId] ?? null),
+      draftThreadEntries.map(([draftId]) =>
+        hasPendingComposerInput(store.draftsByThreadKey[draftId]),
+      ),
     ),
   );
   const draftThreads = useMemo(
@@ -37,9 +42,11 @@ export function useSidebarThreadPresentation(
       draftThreadEntries.map(([draftId, thread], index) => ({
         draftId: DraftId.make(draftId),
         thread,
-        composerDraft: composerDrafts[index] ?? null,
+        composerDraft: null,
+        hasPendingInput: composerDraftHasPendingInput[index] ?? false,
+        draftTitle: "New thread",
       })),
-    [composerDrafts, draftThreadEntries],
+    [composerDraftHasPendingInput, draftThreadEntries],
   );
   const draftServerLookupRefs = useMemo(() => {
     const refsByKey = new Map<string, ReturnType<typeof scopeThreadRef>>();

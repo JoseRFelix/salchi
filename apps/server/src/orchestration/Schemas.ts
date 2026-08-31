@@ -4,6 +4,13 @@ import {
   ProjectDeletedPayload as ContractsProjectDeletedPayloadSchema,
   ThreadCreatedPayload as ContractsThreadCreatedPayloadSchema,
   ThreadArchivedPayload as ContractsThreadArchivedPayloadSchema,
+  ThreadSettledPayload as ContractsThreadSettledPayloadSchema,
+  ThreadUnsettledPayload as ContractsThreadUnsettledPayloadSchema,
+  ThreadSnoozedPayload as ContractsThreadSnoozedPayloadSchema,
+  ThreadUnsnoozedPayload as ContractsThreadUnsnoozedPayloadSchema,
+  ThreadPinnedPayload as ContractsThreadPinnedPayloadSchema,
+  ThreadUnpinnedPayload as ContractsThreadUnpinnedPayloadSchema,
+  ThreadPinReorderedPayload as ContractsThreadPinReorderedPayloadSchema,
   ThreadMetaUpdatedPayload as ContractsThreadMetaUpdatedPayloadSchema,
   ThreadRuntimeModeSetPayload as ContractsThreadRuntimeModeSetPayloadSchema,
   ThreadInteractionModeSetPayload as ContractsThreadInteractionModeSetPayloadSchema,
@@ -38,6 +45,13 @@ export const ProjectDeletedPayload = ContractsProjectDeletedPayloadSchema;
 
 export const ThreadCreatedPayload = ContractsThreadCreatedPayloadSchema;
 export const ThreadArchivedPayload = ContractsThreadArchivedPayloadSchema;
+export const ThreadSettledPayload = ContractsThreadSettledPayloadSchema;
+export const ThreadUnsettledPayload = ContractsThreadUnsettledPayloadSchema;
+export const ThreadSnoozedPayload = ContractsThreadSnoozedPayloadSchema;
+export const ThreadUnsnoozedPayload = ContractsThreadUnsnoozedPayloadSchema;
+export const ThreadPinnedPayload = ContractsThreadPinnedPayloadSchema;
+export const ThreadUnpinnedPayload = ContractsThreadUnpinnedPayloadSchema;
+export const ThreadPinReorderedPayload = ContractsThreadPinReorderedPayloadSchema;
 export const ThreadMetaUpdatedPayload = ContractsThreadMetaUpdatedPayloadSchema;
 export const ThreadRuntimeModeSetPayload = ContractsThreadRuntimeModeSetPayloadSchema;
 export const ThreadInteractionModeSetPayload = ContractsThreadInteractionModeSetPayloadSchema;

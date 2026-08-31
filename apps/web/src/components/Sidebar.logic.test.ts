@@ -20,6 +20,7 @@ import {
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
+  sortLogicalProjectsForSidebar,
   shouldClearThreadSelectionOnMouseDown,
   shouldCreateNewThreadInCurrentProject,
   shouldEnableSidebarListAnimations,
@@ -36,6 +37,87 @@ import {
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "../types";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
+
+describe("sortLogicalProjectsForSidebar", () => {
+  const projects = [
+    {
+      projectKey: "project-alpha",
+      displayName: "Alpha",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      memberProjectRefs: [
+        {
+          environmentId: EnvironmentId.make("environment-local"),
+          projectId: ProjectId.make("project-alpha"),
+        },
+      ],
+    },
+    {
+      projectKey: "project-beta",
+      displayName: "Beta",
+      createdAt: "2026-02-01T00:00:00.000Z",
+      updatedAt: "2026-02-02T00:00:00.000Z",
+      memberProjectRefs: [
+        {
+          environmentId: EnvironmentId.make("environment-local"),
+          projectId: ProjectId.make("project-beta"),
+        },
+      ],
+    },
+  ] as const;
+
+  it("preserves configured manual order", () => {
+    expect(
+      sortLogicalProjectsForSidebar(projects, [], "manual").map((project) => project.projectKey),
+    ).toEqual(["project-alpha", "project-beta"]);
+  });
+
+  it("uses the latest thread activity for updated ordering", () => {
+    const ordered = sortLogicalProjectsForSidebar(
+      projects,
+      [
+        {
+          environmentId: "environment-local",
+          projectId: "project-alpha",
+          archivedAt: null,
+          createdAt: "2026-01-03T00:00:00.000Z",
+          updatedAt: "2026-03-01T00:00:00.000Z",
+        },
+        {
+          environmentId: "environment-local",
+          projectId: "project-beta",
+          archivedAt: null,
+          createdAt: "2026-02-03T00:00:00.000Z",
+          updatedAt: "2026-02-04T00:00:00.000Z",
+        },
+      ],
+      "updated_at",
+    );
+    expect(ordered.map((project) => project.projectKey)).toEqual(["project-alpha", "project-beta"]);
+  });
+
+  it("uses thread creation time and ignores archived threads for created ordering", () => {
+    const ordered = sortLogicalProjectsForSidebar(
+      projects,
+      [
+        {
+          environmentId: "environment-local",
+          projectId: "project-alpha",
+          archivedAt: null,
+          createdAt: "2026-04-01T00:00:00.000Z",
+        },
+        {
+          environmentId: "environment-local",
+          projectId: "project-beta",
+          archivedAt: "2026-06-01T00:00:00.000Z",
+          createdAt: "2026-05-01T00:00:00.000Z",
+        },
+      ],
+      "created_at",
+    );
+    expect(ordered.map((project) => project.projectKey)).toEqual(["project-alpha", "project-beta"]);
+  });
+});
 
 describe("shouldEnableSidebarListAnimations", () => {
   it("keeps animations disabled while cached environments are reconciling", () => {

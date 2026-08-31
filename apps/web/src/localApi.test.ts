@@ -685,6 +685,7 @@ describe("wsApi", () => {
       sidebarProjectGroupingOverrides: {
         "environment-local:/tmp/project": "separate" as const,
       },
+      sidebarProjectSortOrder: "manual" as const,
       sidebarThreadSortOrder: "created_at" as const,
       timestampFormat: "24-hour" as const,
       colorThemeLight: "default",
@@ -750,6 +751,7 @@ describe("wsApi", () => {
       sidebarProjectGroupingOverrides: {
         "environment-local:/tmp/project": "separate" as const,
       },
+      sidebarProjectSortOrder: "manual" as const,
       sidebarThreadSortOrder: "created_at" as const,
       timestampFormat: "24-hour" as const,
       colorThemeLight: "default",
