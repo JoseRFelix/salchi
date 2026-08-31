@@ -49,7 +49,12 @@ import {
   type Icon,
 } from "../Icons";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
-import { SettingResetButton, SettingsPageContainer, SettingsSection } from "./settingsLayout";
+import {
+  SettingResetButton,
+  SettingsPageContainer,
+  SettingsRow,
+  SettingsSection,
+} from "./settingsLayout";
 
 const EMPTY_DISCOVERY_RESULT: SourceControlDiscoveryResult = {
   versionControlSystems: [],
@@ -438,6 +443,65 @@ function EmptySourceControlDiscovery({
   );
 }
 
+function DiffViewerSettingsSection() {
+  const settings = useSettings();
+  const { updateSettings } = useUpdateSettings();
+
+  return (
+    <SettingsSection title="Diff viewer">
+      <SettingsRow
+        title="Diff line wrapping"
+        description="Set the default wrap state when the diff panel opens."
+        resetAction={
+          settings.diffWordWrap !== DEFAULT_UNIFIED_SETTINGS.diffWordWrap ? (
+            <SettingResetButton
+              label="diff line wrapping"
+              onClick={() =>
+                updateSettings({
+                  diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.diffWordWrap}
+            onCheckedChange={(checked) => updateSettings({ diffWordWrap: Boolean(checked) })}
+            aria-label="Wrap diff lines by default"
+          />
+        }
+      />
+
+      <SettingsRow
+        title="Hide whitespace changes"
+        description="Set whether the diff panel ignores whitespace-only edits by default."
+        resetAction={
+          settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace ? (
+            <SettingResetButton
+              label="diff whitespace changes"
+              onClick={() =>
+                updateSettings({
+                  diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.diffIgnoreWhitespace}
+            onCheckedChange={(checked) =>
+              updateSettings({ diffIgnoreWhitespace: Boolean(checked) })
+            }
+            aria-label="Hide whitespace changes by default"
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 export function SourceControlSettingsPanel() {
   const discovery = useSourceControlDiscovery();
   const result = discovery.data ?? EMPTY_DISCOVERY_RESULT;
@@ -504,6 +568,7 @@ export function SourceControlSettingsPanel() {
           onScan={handleScan}
         />
       )}
+      <DiffViewerSettingsSection />
     </SettingsPageContainer>
   );
 }

@@ -1,36 +1,17 @@
-import {
-  ArchiveIcon,
-  ArchiveX,
-  LoaderIcon,
-  MoonIcon,
-  PlusIcon,
-  RefreshCwIcon,
-  SunIcon,
-} from "lucide-react";
-import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { ArchiveIcon, ArchiveX, LoaderIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   defaultInstanceIdForDriver,
   type DesktopUpdateChannel,
   PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
-  type SidebarProjectSortOrder,
   type ProviderInstanceConfig,
   type ProviderInstanceId,
   type ScopedThreadRef,
 } from "@salchi/contracts";
 import { scopeThreadRef } from "@salchi/client-runtime";
-import {
-  DEFAULT_UNIFIED_SETTINGS,
-  MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
-  MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
-} from "@salchi/contracts/settings";
+import { DEFAULT_UNIFIED_SETTINGS } from "@salchi/contracts/settings";
 import { createModelSelection } from "@salchi/shared/model";
-import {
-  findTranscriptionModel,
-  isTranscriptionModel,
-  TRANSCRIPTION_MODELS,
-} from "@salchi/shared/transcriptionModel";
 import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
@@ -48,17 +29,7 @@ import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import { useTheme } from "../../hooks/useTheme";
-import {
-  DEFAULT_THEME_SENTINEL,
-  isColorThemeCustomized,
-  useColorTheme,
-} from "../../hooks/useColorTheme";
-import { BUNDLED_THEMES, findBundledTheme, type ThemeDescriptor } from "../../themes";
-import {
-  getImportedThemesSnapshot,
-  subscribeImportedThemes,
-  type ImportedThemeRecord,
-} from "../../importedThemes";
+import { isColorThemeCustomized, useColorTheme } from "../../hooks/useColorTheme";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useDesktopUpdateState } from "../../lib/desktopUpdateReactQuery";
@@ -76,10 +47,7 @@ import { selectProjectsAcrossEnvironments, useStore } from "../../store";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTime, formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
-import { DraftInput } from "../ui/draft-input";
-import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
@@ -117,51 +85,7 @@ const TIMESTAMP_FORMAT_LABELS = {
   "24-hour": "24-hour",
 } as const;
 
-const PROJECT_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
-  updated_at: "Recent activity",
-  created_at: "Recently created",
-  manual: "Manual",
-};
-
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
-
-function AutoSettleDaysInput({
-  value,
-  onCommit,
-}: {
-  value: number;
-  onCommit: (value: number) => void;
-}) {
-  const [draft, setDraft] = useState(String(value));
-
-  useEffect(() => setDraft(String(value)), [value]);
-
-  return (
-    <Input
-      nativeInput
-      className="w-20"
-      type="number"
-      min={MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
-      max={MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
-      step={1}
-      value={draft}
-      aria-label="Days of inactivity before auto-settle"
-      onChange={(event) => {
-        const nextDraft = event.currentTarget.value;
-        setDraft(nextDraft);
-        const next = Number(nextDraft);
-        if (
-          Number.isInteger(next) &&
-          next >= MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS &&
-          next <= MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS
-        ) {
-          onCommit(next);
-        }
-      }}
-      onBlur={() => setDraft(String(value))}
-    />
-  );
-}
 
 function withoutProviderInstanceKey<V>(
   record: Readonly<Record<ProviderInstanceId, V>> | undefined,
@@ -431,7 +355,7 @@ export function useSettingsRestore(onRestored?: () => void) {
   const { updateSettings } = useUpdateSettings();
   const isThemeDirty = theme !== "system" || isColorThemeCustomized(colorThemeSelection);
 
-  const isGitWritingModelDirty = !Equal.equals(
+  const isTextGenerationModelDirty = !Equal.equals(
     settings.textGenerationModelSelection ?? null,
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
   );
@@ -439,6 +363,9 @@ export function useSettingsRestore(onRestored?: () => void) {
   const changedSettingLabels = useMemo(
     () => [
       ...(isThemeDirty ? ["Theme"] : []),
+      ...(settings.sidebarProjectSortOrder !== DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder
+        ? ["Project order"]
+        : []),
       ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
         ? ["Auto-settle merged threads"]
         : []),
@@ -483,10 +410,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete
         ? ["Delete confirmation"]
         : []),
-      ...(isGitWritingModelDirty ? ["Git writing model"] : []),
+      ...(isTextGenerationModelDirty ? ["Text generation model"] : []),
     ],
     [
-      isGitWritingModelDirty,
+      isTextGenerationModelDirty,
       settings.autoOpenPlanSidebar,
       settings.confirmThreadArchive,
       settings.confirmThreadUnpin,
@@ -501,6 +428,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.timestampFormat,
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarAutoSettleOnMerge,
+      settings.sidebarProjectSortOrder,
       isThemeDirty,
     ],
   );
@@ -519,6 +447,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     resetColorTheme();
     updateSettings({
       themeMode: DEFAULT_UNIFIED_SETTINGS.themeMode,
+      sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
@@ -546,94 +475,10 @@ export function useSettingsRestore(onRestored?: () => void) {
   };
 }
 
-function modeDisplayLabel(mode: ThemeDescriptor["type"]): string {
-  return mode === "light" ? "Light" : "Dark";
-}
-
-function colorThemeLabel(
-  id: string,
-  mode: ThemeDescriptor["type"],
-  themes: ReadonlyArray<ThemeDescriptor>,
-): string {
-  if (id === DEFAULT_THEME_SENTINEL) return `Default ${modeDisplayLabel(mode)}`;
-  return themes.find((theme) => theme.id === id)?.label ?? findBundledTheme(id)?.label ?? id;
-}
-
-function useImportedThemes(): ReadonlyArray<ImportedThemeRecord> {
-  return useSyncExternalStore(subscribeImportedThemes, getImportedThemesSnapshot, () => []);
-}
-
-function ThemeSettingsRow() {
-  const { theme, setTheme } = useTheme();
-  const { selection, resolvedMode, reset } = useColorTheme();
-  const { updateSettings } = useUpdateSettings();
-  const importedThemes = useImportedThemes();
-  const navigate = useNavigate();
-
-  const themeDescriptors = useMemo<ReadonlyArray<ThemeDescriptor>>(
-    () => [
-      ...importedThemes.map((theme) => ({
-        id: theme.id,
-        label: theme.label,
-        type: theme.type,
-        source: "imported" as const,
-      })),
-      ...BUNDLED_THEMES,
-    ],
-    [importedThemes],
-  );
-
-  const handleUseSystemDefault = useCallback(() => {
-    setTheme("system");
-    reset();
-    updateSettings({
-      themeMode: DEFAULT_UNIFIED_SETTINGS.themeMode,
-      colorThemeLight: DEFAULT_UNIFIED_SETTINGS.colorThemeLight,
-      colorThemeDark: DEFAULT_UNIFIED_SETTINGS.colorThemeDark,
-    });
-  }, [reset, setTheme, updateSettings]);
-
-  const goToThemes = useCallback(() => {
-    void navigate({ to: "/themes" });
-  }, [navigate]);
-
-  const isThemeDirty = theme !== "system" || isColorThemeCustomized(selection);
-  const displayMode = theme === "system" ? resolvedMode : theme;
-  const displayLabel = colorThemeLabel(selection[displayMode], displayMode, themeDescriptors);
-  const DisplayIcon = displayMode === "light" ? SunIcon : MoonIcon;
-
-  return (
-    <SettingsRow
-      title="Theme"
-      description="Follow your OS with built-in colors, or pick a theme to pin Salchi to that theme's mode."
-      control={
-        <div className="flex w-full flex-col gap-2 sm:w-auto">
-          <div className="flex min-w-64 items-center gap-2">
-            <Button className="min-w-0 flex-1 justify-start" onClick={goToThemes} variant="outline">
-              <DisplayIcon className="size-3.5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 truncate">{displayLabel}</span>
-            </Button>
-            {isThemeDirty ? (
-              <button
-                className="shrink-0 rounded-full border border-border bg-background px-2 py-0.5 font-medium text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-                onClick={handleUseSystemDefault}
-                type="button"
-              >
-                Restore
-              </button>
-            ) : null}
-          </div>
-        </div>
-      }
-    />
-  );
-}
-
 export function GeneralSettingsPanel() {
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const observability = useServerObservability();
-  const serverProviders = useServerProviders();
   const diagnosticsDescription = formatDiagnosticsDescription({
     localTracingEnabled: observability?.localTracingEnabled ?? false,
     otlpTracesEnabled: observability?.otlpTracesEnabled ?? false,
@@ -642,105 +487,10 @@ export function GeneralSettingsPanel() {
     otlpMetricsUrl: observability?.otlpMetricsUrl,
   });
 
-  const textGenerationModelSelection = resolveAppModelSelectionState(settings, serverProviders);
-  const textGenInstanceId = textGenerationModelSelection.instanceId;
-  const textGenModel = textGenerationModelSelection.model;
-  const textGenModelOptions = textGenerationModelSelection.options;
-  const gitModelInstanceEntries = sortProviderInstanceEntries(
-    deriveProviderInstanceEntries(serverProviders),
-  );
-  const textGenInstanceEntry = gitModelInstanceEntries.find(
-    (entry) => entry.instanceId === textGenInstanceId,
-  );
-  const textGenProvider: ProviderDriverKind =
-    textGenInstanceEntry?.driverKind ?? DEFAULT_DRIVER_KIND;
-  const gitModelOptionsByInstance = getCustomModelOptionsByInstance(
-    settings,
-    serverProviders,
-    textGenInstanceId,
-    textGenModel,
-  );
-  const isGitWritingModelDirty = !Equal.equals(
-    settings.textGenerationModelSelection ?? null,
-    DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
-  );
-  const transcriptionModel = findTranscriptionModel(settings.transcriptionModel);
-
   return (
     <SettingsPageContainer>
       <SettingsSection title="General">
         <PushNotificationSettingsRow />
-
-        <ThemeSettingsRow />
-
-        <SettingsRow
-          title="Auto-settle merged threads"
-          description="Move threads whose pull request was merged into History. Sending new work brings them back."
-          resetAction={
-            settings.sidebarAutoSettleOnMerge !==
-            DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge ? (
-              <SettingResetButton
-                label="auto-settle merged threads"
-                onClick={() =>
-                  updateSettings({
-                    sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.sidebarAutoSettleOnMerge}
-              onCheckedChange={(checked) =>
-                updateSettings({ sidebarAutoSettleOnMerge: Boolean(checked) })
-              }
-              aria-label="Auto-settle merged threads"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Auto-settle inactive threads"
-          description="Move inactive threads without an open pull request into History."
-          resetAction={
-            settings.sidebarAutoSettleAfterDays !==
-            DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ? (
-              <SettingResetButton
-                label="auto-settle inactive threads"
-                onClick={() =>
-                  updateSettings({
-                    sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <div className="flex items-center gap-2">
-              {settings.sidebarAutoSettleAfterDays !== null ? (
-                <>
-                  <AutoSettleDaysInput
-                    value={settings.sidebarAutoSettleAfterDays}
-                    onCommit={(value) => updateSettings({ sidebarAutoSettleAfterDays: value })}
-                  />
-                  <span className="text-xs text-muted-foreground">days</span>
-                </>
-              ) : null}
-              <Switch
-                checked={settings.sidebarAutoSettleAfterDays !== null}
-                onCheckedChange={(checked) =>
-                  updateSettings({
-                    sidebarAutoSettleAfterDays: checked
-                      ? (DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ?? 3)
-                      : null,
-                  })
-                }
-                aria-label="Auto-settle inactive threads"
-              />
-            </div>
-          }
-        />
 
         <SettingsRow
           title="Time format"
@@ -783,411 +533,6 @@ export function GeneralSettingsPanel() {
             </Select>
           }
         />
-
-        <SettingsRow
-          title="Project order"
-          description="Choose how projects are ordered in the inbox picker. Manual order can be changed from the picker."
-          resetAction={
-            settings.sidebarProjectSortOrder !==
-            DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder ? (
-              <SettingResetButton
-                label="project order"
-                onClick={() =>
-                  updateSettings({
-                    sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Select
-              value={settings.sidebarProjectSortOrder}
-              onValueChange={(value) => {
-                if (value === "updated_at" || value === "created_at" || value === "manual") {
-                  updateSettings({ sidebarProjectSortOrder: value });
-                }
-              }}
-            >
-              <SelectTrigger className="w-full sm:w-40" aria-label="Project order">
-                <SelectValue>{PROJECT_SORT_LABELS[settings.sidebarProjectSortOrder]}</SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                {(
-                  Object.entries(PROJECT_SORT_LABELS) as Array<[SidebarProjectSortOrder, string]>
-                ).map(([value, label]) => (
-                  <SelectItem key={value} hideIndicator value={value}>
-                    {label}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          }
-        />
-
-        <SettingsRow
-          title="Diff line wrapping"
-          description="Set the default wrap state when the diff panel opens."
-          resetAction={
-            settings.diffWordWrap !== DEFAULT_UNIFIED_SETTINGS.diffWordWrap ? (
-              <SettingResetButton
-                label="diff line wrapping"
-                onClick={() =>
-                  updateSettings({
-                    diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.diffWordWrap}
-              onCheckedChange={(checked) => updateSettings({ diffWordWrap: Boolean(checked) })}
-              aria-label="Wrap diff lines by default"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Hide whitespace changes"
-          description="Set whether the diff panel ignores whitespace-only edits by default."
-          resetAction={
-            settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace ? (
-              <SettingResetButton
-                label="diff whitespace changes"
-                onClick={() =>
-                  updateSettings({
-                    diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.diffIgnoreWhitespace}
-              onCheckedChange={(checked) =>
-                updateSettings({ diffIgnoreWhitespace: Boolean(checked) })
-              }
-              aria-label="Hide whitespace changes by default"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Assistant output"
-          description="Show token-by-token output while a response is in progress."
-          resetAction={
-            settings.enableAssistantStreaming !==
-            DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming ? (
-              <SettingResetButton
-                label="assistant output"
-                onClick={() =>
-                  updateSettings({
-                    enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.enableAssistantStreaming}
-              onCheckedChange={(checked) =>
-                updateSettings({ enableAssistantStreaming: Boolean(checked) })
-              }
-              aria-label="Stream assistant messages"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Dictation model"
-          description={`Runs locally on this server. ${transcriptionModel.label} downloads ${transcriptionModel.downloadSizeLabel} and uses ${transcriptionModel.memorySizeLabel}. Larger models improve accuracy but transcribe more slowly.`}
-          resetAction={
-            settings.transcriptionModel !== DEFAULT_UNIFIED_SETTINGS.transcriptionModel ? (
-              <SettingResetButton
-                label="dictation model"
-                onClick={() =>
-                  updateSettings({
-                    transcriptionModel: DEFAULT_UNIFIED_SETTINGS.transcriptionModel,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Select
-              value={settings.transcriptionModel}
-              onValueChange={(value) => {
-                if (value && isTranscriptionModel(value)) {
-                  updateSettings({ transcriptionModel: value });
-                }
-              }}
-            >
-              <SelectTrigger className="w-full sm:w-44" aria-label="Dictation model">
-                <SelectValue>
-                  {transcriptionModel.label} · {transcriptionModel.downloadSizeLabel}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                {TRANSCRIPTION_MODELS.map((model) => (
-                  <SelectItem key={model.id} hideIndicator value={model.id}>
-                    {model.label} · {model.downloadSizeLabel}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          }
-        />
-
-        <SettingsRow
-          title="Auto-open task panel"
-          description="Open the right-side plan and task panel automatically when steps appear."
-          resetAction={
-            settings.autoOpenPlanSidebar !== DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar ? (
-              <SettingResetButton
-                label="auto-open task panel"
-                onClick={() =>
-                  updateSettings({
-                    autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.autoOpenPlanSidebar}
-              onCheckedChange={(checked) =>
-                updateSettings({ autoOpenPlanSidebar: Boolean(checked) })
-              }
-              aria-label="Open the task panel automatically"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="New threads"
-          description="Pick the default workspace mode for newly created draft threads."
-          resetAction={
-            settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode ? (
-              <SettingResetButton
-                label="new threads"
-                onClick={() =>
-                  updateSettings({
-                    defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Select
-              value={settings.defaultThreadEnvMode}
-              onValueChange={(value) => {
-                if (value === "local" || value === "worktree") {
-                  updateSettings({ defaultThreadEnvMode: value });
-                }
-              }}
-            >
-              <SelectTrigger className="w-full sm:w-44" aria-label="Default thread mode">
-                <SelectValue>
-                  {settings.defaultThreadEnvMode === "worktree" ? "New worktree" : "Local"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value="local">
-                  Local
-                </SelectItem>
-                <SelectItem hideIndicator value="worktree">
-                  New worktree
-                </SelectItem>
-              </SelectPopup>
-            </Select>
-          }
-        />
-
-        <SettingsRow
-          title="Add project starts in"
-          description='Leave empty to use "~/" when the Add Project browser opens.'
-          resetAction={
-            settings.addProjectBaseDirectory !==
-            DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory ? (
-              <SettingResetButton
-                label="add project base directory"
-                onClick={() =>
-                  updateSettings({
-                    addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <DraftInput
-              className="w-full sm:w-72"
-              value={settings.addProjectBaseDirectory}
-              onCommit={(next) => updateSettings({ addProjectBaseDirectory: next })}
-              placeholder="~/"
-              spellCheck={false}
-              aria-label="Add project base directory"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Unpin confirmation"
-          description="Ask before removing a thread from Pinned."
-          resetAction={
-            settings.confirmThreadUnpin !== DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin ? (
-              <SettingResetButton
-                label="unpin confirmation"
-                onClick={() =>
-                  updateSettings({
-                    confirmThreadUnpin: DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.confirmThreadUnpin}
-              onCheckedChange={(checked) =>
-                updateSettings({ confirmThreadUnpin: Boolean(checked) })
-              }
-              aria-label="Confirm thread unpinning"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Archive confirmation"
-          description="Require a second click on the inline archive action before a thread is archived."
-          resetAction={
-            settings.confirmThreadArchive !== DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive ? (
-              <SettingResetButton
-                label="archive confirmation"
-                onClick={() =>
-                  updateSettings({
-                    confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.confirmThreadArchive}
-              onCheckedChange={(checked) =>
-                updateSettings({ confirmThreadArchive: Boolean(checked) })
-              }
-              aria-label="Confirm thread archiving"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Delete confirmation"
-          description="Ask before deleting a thread and its chat history."
-          resetAction={
-            settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete ? (
-              <SettingResetButton
-                label="delete confirmation"
-                onClick={() =>
-                  updateSettings({
-                    confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.confirmThreadDelete}
-              onCheckedChange={(checked) =>
-                updateSettings({ confirmThreadDelete: Boolean(checked) })
-              }
-              aria-label="Confirm thread deletion"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Text generation model"
-          description="Configure the model used for thread titles, branch names, commit messages, and PR text."
-          resetAction={
-            isGitWritingModelDirty ? (
-              <SettingResetButton
-                label="text generation model"
-                onClick={() =>
-                  updateSettings({
-                    textGenerationModelSelection:
-                      DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <div className="flex flex-wrap items-center justify-end gap-1.5">
-              <ProviderModelPicker
-                activeInstanceId={textGenInstanceId}
-                model={textGenModel}
-                lockedProvider={null}
-                instanceEntries={gitModelInstanceEntries}
-                modelOptionsByInstance={gitModelOptionsByInstance}
-                triggerVariant="outline"
-                triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
-                onInstanceModelChange={(instanceId, model) => {
-                  updateSettings({
-                    textGenerationModelSelection: resolveAppModelSelectionState(
-                      {
-                        ...settings,
-                        textGenerationModelSelection: createModelSelection(instanceId, model),
-                      },
-                      serverProviders,
-                    ),
-                  });
-                }}
-              />
-              <TraitsPicker
-                provider={textGenProvider}
-                models={
-                  // Use the exact instance's models (rather than the
-                  // first-kind-match) so a custom text-gen instance like
-                  // `codex_personal` gets its own model list, not the
-                  // default Codex one.
-                  textGenInstanceEntry?.models ?? []
-                }
-                model={textGenModel}
-                prompt=""
-                onPromptChange={() => {}}
-                modelOptions={textGenModelOptions}
-                allowPromptInjectedEffort={false}
-                triggerVariant="outline"
-                triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
-                onModelOptionsChange={(nextOptions) => {
-                  updateSettings({
-                    textGenerationModelSelection: resolveAppModelSelectionState(
-                      {
-                        ...settings,
-                        textGenerationModelSelection: createModelSelection(
-                          textGenInstanceId,
-                          textGenModel,
-                          nextOptions,
-                        ),
-                      },
-                      serverProviders,
-                    ),
-                  });
-                }}
-              />
-            </div>
-          }
-        />
       </SettingsSection>
 
       <SettingsSection title="About">
@@ -1210,6 +555,100 @@ export function GeneralSettingsPanel() {
         />
       </SettingsSection>
     </SettingsPageContainer>
+  );
+}
+
+function TextGenerationModelSettingsRow() {
+  const settings = useSettings();
+  const { updateSettings } = useUpdateSettings();
+  const serverProviders = useServerProviders();
+  const selection = resolveAppModelSelectionState(settings, serverProviders);
+  const instanceId = selection.instanceId;
+  const model = selection.model;
+  const modelOptions = selection.options;
+  const instanceEntries = sortProviderInstanceEntries(
+    deriveProviderInstanceEntries(serverProviders),
+  );
+  const instanceEntry = instanceEntries.find((entry) => entry.instanceId === instanceId);
+  const provider: ProviderDriverKind = instanceEntry?.driverKind ?? DEFAULT_DRIVER_KIND;
+  const modelOptionsByInstance = getCustomModelOptionsByInstance(
+    settings,
+    serverProviders,
+    instanceId,
+    model,
+  );
+  const isDirty = !Equal.equals(
+    settings.textGenerationModelSelection ?? null,
+    DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
+  );
+
+  return (
+    <SettingsRow
+      title="Text generation model"
+      description="Configure the model used for thread titles, branch names, commit messages, and PR text."
+      resetAction={
+        isDirty ? (
+          <SettingResetButton
+            label="text generation model"
+            onClick={() =>
+              updateSettings({
+                textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
+              })
+            }
+          />
+        ) : null
+      }
+      control={
+        <div className="flex flex-wrap items-center justify-end gap-1.5">
+          <ProviderModelPicker
+            activeInstanceId={instanceId}
+            model={model}
+            lockedProvider={null}
+            instanceEntries={instanceEntries}
+            modelOptionsByInstance={modelOptionsByInstance}
+            triggerVariant="outline"
+            triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+            onInstanceModelChange={(nextInstanceId, nextModel) => {
+              updateSettings({
+                textGenerationModelSelection: resolveAppModelSelectionState(
+                  {
+                    ...settings,
+                    textGenerationModelSelection: createModelSelection(nextInstanceId, nextModel),
+                  },
+                  serverProviders,
+                ),
+              });
+            }}
+          />
+          <TraitsPicker
+            provider={provider}
+            models={instanceEntry?.models ?? []}
+            model={model}
+            prompt=""
+            onPromptChange={() => {}}
+            modelOptions={modelOptions}
+            allowPromptInjectedEffort={false}
+            triggerVariant="outline"
+            triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+            onModelOptionsChange={(nextOptions) => {
+              updateSettings({
+                textGenerationModelSelection: resolveAppModelSelectionState(
+                  {
+                    ...settings,
+                    textGenerationModelSelection: createModelSelection(
+                      instanceId,
+                      model,
+                      nextOptions,
+                    ),
+                  },
+                  serverProviders,
+                ),
+              });
+            }}
+          />
+        </div>
+      }
+    />
   );
 }
 
@@ -1559,6 +998,10 @@ export function ProviderSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <SettingsSection title="App utility model">
+        <TextGenerationModelSettingsRow />
+      </SettingsSection>
+
       <SettingsSection
         title="Providers"
         headerAction={

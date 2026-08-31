@@ -21,7 +21,7 @@ import type {
   ThemeSearchItem,
   ThemeSortBy,
 } from "@salchi/contracts";
-import type { UnifiedSettings } from "@salchi/contracts/settings";
+import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@salchi/contracts/settings";
 
 import { Button } from "../components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../components/ui/input-group";
@@ -29,7 +29,11 @@ import { SidebarInset, SidebarTrigger } from "../components/ui/sidebar";
 import { Skeleton } from "../components/ui/skeleton";
 import { Spinner } from "../components/ui/spinner";
 import { toastManager } from "../components/ui/toast";
-import { DEFAULT_THEME_SENTINEL, useColorTheme } from "../hooks/useColorTheme";
+import {
+  DEFAULT_THEME_SENTINEL,
+  isColorThemeCustomized,
+  useColorTheme,
+} from "../hooks/useColorTheme";
 import { useUpdateSettings } from "../hooks/useSettings";
 import { useTheme, type Theme } from "../hooks/useTheme";
 import {
@@ -488,8 +492,9 @@ function ThemePreviewRouteView() {
   const navigate = useNavigate();
   const importedThemes = useImportedThemes();
   const themePreviewColumnCount = useThemePreviewColumnCount();
-  const { theme: appearanceTheme } = useTheme();
-  const { resolvedMode, activeThemeId } = useColorTheme();
+  const { theme: appearanceTheme, setTheme } = useTheme();
+  const { resolvedMode, activeThemeId, reset: resetColorTheme, selection } = useColorTheme();
+  const { updateSettings } = useUpdateSettings();
   // Capture the active theme once on mount so it can be pinned to the top of the
   // installed list. We deliberately don't follow later selections — re-sorting
   // the grid out from under the user as they click themes is jarring.
@@ -505,6 +510,19 @@ function ThemePreviewRouteView() {
     ],
     [importedThemes],
   );
+  const activeThemeLabel =
+    installedThemes.find((theme) => theme.type === resolvedMode && theme.id === activeThemeId)
+      ?.label ?? activeThemeId;
+  const followsSystemDefaults = appearanceTheme === "system" && !isColorThemeCustomized(selection);
+  const handleFollowSystem = useCallback(() => {
+    setTheme("system");
+    resetColorTheme();
+    updateSettings({
+      themeMode: DEFAULT_UNIFIED_SETTINGS.themeMode,
+      colorThemeLight: DEFAULT_UNIFIED_SETTINGS.colorThemeLight,
+      colorThemeDark: DEFAULT_UNIFIED_SETTINGS.colorThemeDark,
+    });
+  }, [resetColorTheme, setTheme, updateSettings]);
   const [category, setCategory] = useState<ThemeCategory>("installed");
   const [installedQuery, setInstalledQuery] = useState("");
   const [onlineQuery, setOnlineQuery] = useState("");
@@ -723,8 +741,18 @@ function ThemePreviewRouteView() {
             <SidebarTrigger className="size-7 shrink-0 md:hidden" />
             <PaletteIcon className="size-4 text-muted-foreground" />
             <h1 className="min-w-0 truncate font-medium text-[15px] text-foreground md:text-sm">
-              Theme previews
+              Themes
             </h1>
+            <div className="ms-auto flex min-w-0 items-center gap-2">
+              <span className="max-w-52 truncate text-xs text-muted-foreground max-sm:hidden">
+                {followsSystemDefaults ? "Following system" : `Current: ${activeThemeLabel}`}
+              </span>
+              {!followsSystemDefaults ? (
+                <Button onClick={handleFollowSystem} size="xs" variant="outline">
+                  Follow system
+                </Button>
+              ) : null}
+            </div>
           </div>
         </header>
 

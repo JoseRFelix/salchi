@@ -3,9 +3,12 @@ import {
   ArchiveIcon,
   ArrowLeftIcon,
   BotIcon,
+  FolderIcon,
   GitBranchIcon,
+  InboxIcon,
   KeyboardIcon,
   Link2Icon,
+  MessageSquareIcon,
   PaletteIcon,
   Settings2Icon,
 } from "lucide-react";
@@ -15,6 +18,7 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
+  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -25,6 +29,9 @@ import { SidebarPwaUpdateButton } from "../sidebar/SidebarPwaUpdateButton";
 
 export type SettingsSectionPath =
   | "/settings/general"
+  | "/settings/inbox"
+  | "/settings/workspace"
+  | "/settings/chat"
   | "/settings/keybindings"
   | "/settings/providers"
   | "/settings/source-control"
@@ -32,19 +39,44 @@ export type SettingsSectionPath =
   | "/settings/archived"
   | "/themes";
 
-export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
+export interface SettingsNavItem {
   label: string;
   to: SettingsSectionPath;
   icon: ComponentType<{ className?: string }>;
-}> = [
-  { label: "General", to: "/settings/general", icon: Settings2Icon },
-  { label: "Keybindings", to: "/settings/keybindings", icon: KeyboardIcon },
-  { label: "Providers", to: "/settings/providers", icon: BotIcon },
-  { label: "Source Control", to: "/settings/source-control", icon: GitBranchIcon },
-  { label: "Connections", to: "/settings/connections", icon: Link2Icon },
-  { label: "Themes", to: "/themes", icon: PaletteIcon },
-  { label: "Archive", to: "/settings/archived", icon: ArchiveIcon },
+}
+
+export interface SettingsNavGroup {
+  label: string;
+  items: ReadonlyArray<SettingsNavItem>;
+}
+
+export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
+  {
+    label: "Preferences",
+    items: [
+      { label: "General", to: "/settings/general", icon: Settings2Icon },
+      { label: "Inbox", to: "/settings/inbox", icon: InboxIcon },
+      { label: "Workspace", to: "/settings/workspace", icon: FolderIcon },
+      { label: "Chat", to: "/settings/chat", icon: MessageSquareIcon },
+      { label: "Keybindings", to: "/settings/keybindings", icon: KeyboardIcon },
+      { label: "Themes", to: "/themes", icon: PaletteIcon },
+    ],
+  },
+  {
+    label: "Integrations",
+    items: [
+      { label: "Providers", to: "/settings/providers", icon: BotIcon },
+      { label: "Source Control", to: "/settings/source-control", icon: GitBranchIcon },
+      { label: "Connections", to: "/settings/connections", icon: Link2Icon },
+    ],
+  },
+  {
+    label: "Data",
+    items: [{ label: "Archive", to: "/settings/archived", icon: ArchiveIcon }],
+  },
 ];
+
+export const SETTINGS_NAV_ITEMS = SETTINGS_NAV_GROUPS.flatMap((group) => group.items);
 
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const navigate = useNavigate();
@@ -68,37 +100,42 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   return (
     <>
       <SidebarContent className="overflow-x-hidden">
-        <SidebarGroup className="px-2 py-3">
-          <SidebarMenu>
-            {SETTINGS_NAV_ITEMS.map((item) => {
-              const Icon = item.icon;
-              const isActive = pathname === item.to;
-              return (
-                <SidebarMenuItem key={item.to}>
-                  <SidebarMenuButton
-                    size="sm"
-                    isActive={isActive}
-                    className={
-                      isActive
-                        ? "gap-2.5 px-2.5 py-2 text-left text-[15px] font-medium text-foreground md:text-[13px]"
-                        : "gap-2.5 px-2.5 py-2 text-left text-[15px] text-muted-foreground/70 hover:text-foreground/80 md:text-[13px]"
-                    }
-                    onClick={() => handleSectionClick(item.to)}
-                  >
-                    <Icon
+        {SETTINGS_NAV_GROUPS.map((group) => (
+          <SidebarGroup className="px-2 py-1 first:pt-3 last:pb-3" key={group.label}>
+            <SidebarGroupLabel className="h-6 px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground/50">
+              {group.label}
+            </SidebarGroupLabel>
+            <SidebarMenu>
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                const isActive = pathname === item.to;
+                return (
+                  <SidebarMenuItem key={item.to}>
+                    <SidebarMenuButton
+                      size="sm"
+                      isActive={isActive}
                       className={
                         isActive
-                          ? "size-4 shrink-0 text-foreground"
-                          : "size-4 shrink-0 text-muted-foreground/60"
+                          ? "gap-2.5 px-2.5 py-2 text-left text-[15px] font-medium text-foreground md:text-[13px]"
+                          : "gap-2.5 px-2.5 py-2 text-left text-[15px] text-muted-foreground/70 hover:text-foreground/80 md:text-[13px]"
                       }
-                    />
-                    <span className="truncate">{item.label}</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              );
-            })}
-          </SidebarMenu>
-        </SidebarGroup>
+                      onClick={() => handleSectionClick(item.to)}
+                    >
+                      <Icon
+                        className={
+                          isActive
+                            ? "size-4 shrink-0 text-foreground"
+                            : "size-4 shrink-0 text-muted-foreground/60"
+                        }
+                      />
+                      <span className="truncate">{item.label}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
+            </SidebarMenu>
+          </SidebarGroup>
+        ))}
       </SidebarContent>
 
       <SidebarSeparator />

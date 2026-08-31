@@ -32,6 +32,7 @@ import { ConnectionsSettings } from "./ConnectionsSettings";
 import { DiagnosticsSettingsPanel } from "./DiagnosticsSettings";
 import { GeneralSettingsPanel, ProviderSettingsPanel } from "./SettingsPanels";
 import { SourceControlSettingsPanel } from "./SourceControlSettings";
+import { ChatSettingsPanel } from "./ThreadExperienceSettings";
 import { toastManager } from "../ui/toast";
 
 vi.mock("./PushNotificationSettings", () => ({
@@ -783,6 +784,13 @@ describe("GeneralSettingsPanel observability", () => {
     );
 
     await expect.element(page.getByText("Time format", { exact: true })).toBeInTheDocument();
+    await expect.element(page.getByText("Project order", { exact: true })).not.toBeInTheDocument();
+    await expect
+      .element(page.getByText("Assistant output", { exact: true }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(page.getByText("Dictation model", { exact: true }))
+      .not.toBeInTheDocument();
     await expect.element(page.getByText("Sidebar mode", { exact: true })).not.toBeInTheDocument();
     await expect.element(page.getByLabelText("Use Inbox mode")).not.toBeInTheDocument();
   });
@@ -805,7 +813,7 @@ describe("GeneralSettingsPanel observability", () => {
 
     mounted = await render(
       <AppAtomRegistryProvider>
-        <GeneralSettingsPanel />
+        <ChatSettingsPanel />
       </AppAtomRegistryProvider>,
     );
 
