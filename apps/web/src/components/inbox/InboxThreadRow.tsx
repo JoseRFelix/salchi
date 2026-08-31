@@ -81,6 +81,19 @@ export type InboxThreadAction =
   | "delete"
   | "discard-draft";
 
+export function dispatchInboxThreadMenuAction(
+  event: Pick<SyntheticEvent, "stopPropagation">,
+  action: InboxThreadAction,
+  input: {
+    readonly dismiss: () => void;
+    readonly onAction: (action: InboxThreadAction) => void;
+  },
+) {
+  event.stopPropagation();
+  input.dismiss();
+  input.onAction(action);
+}
+
 export function snoozePresetIdFromInboxAction(
   action: InboxThreadAction,
 ): InboxSnoozePresetId | null {
@@ -240,9 +253,23 @@ function SnoozeMenu(props: {
         </TooltipTrigger>
         <TooltipPopup side="top">Snooze</TooltipPopup>
       </Tooltip>
-      <MenuPopup align="end" side="bottom" className="min-w-52">
+      <MenuPopup
+        align="end"
+        side="bottom"
+        className="min-w-52"
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+      >
         {presets.map((preset) => (
-          <MenuItem key={preset.id} onClick={() => props.onAction(`snooze-${preset.id}`)}>
+          <MenuItem
+            key={preset.id}
+            onClick={(event) =>
+              dispatchInboxThreadMenuAction(event, `snooze-${preset.id}`, {
+                dismiss: () => setOpen(false),
+                onAction: props.onAction,
+              })
+            }
+          >
             <AlarmClockIcon />
             <span className="flex-1">{preset.label}</span>
             <span className="font-mono text-[10px] text-muted-foreground/60">
