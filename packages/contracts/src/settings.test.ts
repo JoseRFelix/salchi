@@ -51,19 +51,26 @@ describe("ClientSettings defaults", () => {
     }
   });
 
-  it("drops the retired mode toggle while preserving project ordering", () => {
-    expect(DEFAULT_CLIENT_SETTINGS).not.toHaveProperty("sidebarNavigationMode");
+  it("defaults to Project view and preserves an explicit Inbox choice", () => {
+    expect(DEFAULT_CLIENT_SETTINGS.sidebarNavigationMode).toBe("project");
+    expect(DEFAULT_CLIENT_SETTINGS.hasSeenInboxIntroduction).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.sidebarProjectSortOrder).toBe("updated_at");
-    expect(DEFAULT_CLIENT_SETTINGS).not.toHaveProperty("sidebarThreadPreviewCount");
+    expect(DEFAULT_CLIENT_SETTINGS.sidebarThreadPreviewCount).toBe(6);
 
     const decoded = decodeClientSettings({
-      sidebarNavigationMode: "project",
+      hasSeenInboxIntroduction: true,
+      sidebarNavigationMode: "inbox",
       sidebarProjectSortOrder: "manual",
-      sidebarThreadPreviewCount: 6,
+      sidebarThreadPreviewCount: 8,
     });
-    expect(decoded).not.toHaveProperty("sidebarNavigationMode");
+    expect(decoded.sidebarNavigationMode).toBe("inbox");
+    expect(decoded.hasSeenInboxIntroduction).toBe(true);
     expect(decoded.sidebarProjectSortOrder).toBe("manual");
-    expect(decoded).not.toHaveProperty("sidebarThreadPreviewCount");
+    expect(decoded.sidebarThreadPreviewCount).toBe(8);
+
+    expect(() => decodeClientSettings({ sidebarNavigationMode: "global" })).toThrow();
+    expect(() => decodeClientSettings({ sidebarThreadPreviewCount: 0 })).toThrow();
+    expect(() => decodeClientSettings({ sidebarThreadPreviewCount: 16 })).toThrow();
   });
 
   it("accepts every project order and rejects unknown values", () => {

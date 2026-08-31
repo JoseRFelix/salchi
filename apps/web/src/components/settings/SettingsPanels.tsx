@@ -366,6 +366,12 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarProjectSortOrder !== DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder
         ? ["Project order"]
         : []),
+      ...(settings.sidebarNavigationMode !== DEFAULT_UNIFIED_SETTINGS.sidebarNavigationMode
+        ? ["Sidebar view"]
+        : []),
+      ...(settings.sidebarThreadPreviewCount !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount
+        ? ["Visible project threads"]
+        : []),
       ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
         ? ["Auto-settle merged threads"]
         : []),
@@ -428,7 +434,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.timestampFormat,
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarAutoSettleOnMerge,
+      settings.sidebarNavigationMode,
       settings.sidebarProjectSortOrder,
+      settings.sidebarThreadPreviewCount,
       isThemeDirty,
     ],
   );
@@ -447,7 +455,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     resetColorTheme();
     updateSettings({
       themeMode: DEFAULT_UNIFIED_SETTINGS.themeMode,
+      sidebarNavigationMode: DEFAULT_UNIFIED_SETTINGS.sidebarNavigationMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
+      sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,

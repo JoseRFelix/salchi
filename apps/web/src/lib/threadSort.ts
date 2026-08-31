@@ -1,5 +1,5 @@
 import type { ProjectId } from "@salchi/contracts";
-import type { SidebarThreadSortOrder } from "@salchi/contracts/settings";
+import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@salchi/contracts/settings";
 import type { Thread } from "../types";
 
 export type ThreadSortInput = Pick<Thread, "createdAt" | "updatedAt"> & {
@@ -69,7 +69,7 @@ function getLatestUserMessageTimestamp(thread: ThreadSortInput): number {
 
 export function getThreadSortTimestamp(
   thread: ThreadSortInput,
-  sortOrder: SidebarThreadSortOrder,
+  sortOrder: SidebarThreadSortOrder | Exclude<SidebarProjectSortOrder, "manual">,
 ): number {
   if (sortOrder === "created_at") {
     return (

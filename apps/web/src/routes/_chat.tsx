@@ -35,6 +35,7 @@ function ChatRouteGlobalShortcuts() {
       : false,
   );
   const defaultThreadEnvMode = useSettings((settings) => settings.defaultThreadEnvMode);
+  const sidebarNavigationMode = useSettings((settings) => settings.sidebarNavigationMode);
   const projectGroupingSettings = useSettings(selectProjectGroupingSettings);
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -87,7 +88,10 @@ function ChatRouteGlobalShortcuts() {
       if (command === "chat.new") {
         event.preventDefault();
         event.stopPropagation();
-        if (!shouldCreateNewThreadInCurrentProject(false, projectGroupCount)) {
+        if (
+          sidebarNavigationMode === "inbox" &&
+          !shouldCreateNewThreadInCurrentProject(false, projectGroupCount)
+        ) {
           useCommandPaletteStore.getState().openNewThreadIn();
           return;
         }
@@ -118,6 +122,7 @@ function ChatRouteGlobalShortcuts() {
     terminalOpen,
     defaultThreadEnvMode,
     projectGroupCount,
+    sidebarNavigationMode,
   ]);
 
   return null;

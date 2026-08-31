@@ -1,4 +1,4 @@
-import type { SidebarProjectSortOrder } from "@salchi/contracts";
+import type { SidebarNavigationMode, SidebarProjectSortOrder } from "@salchi/contracts";
 import {
   DEFAULT_UNIFIED_SETTINGS,
   MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
@@ -12,6 +12,7 @@ import {
 import { useEffect, useState } from "react";
 
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
+import { sidebarNavigationChoicePatch } from "../appSidebarVariant";
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -27,6 +28,11 @@ const PROJECT_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Recent activity",
   created_at: "Recently created",
   manual: "Manual",
+};
+
+const SIDEBAR_MODE_LABELS: Record<SidebarNavigationMode, string> = {
+  project: "Project",
+  inbox: "Inbox",
 };
 
 function AutoSettleDaysInput({
@@ -73,10 +79,52 @@ export function InboxSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <SettingsSection title="View">
+        <SettingsRow
+          title="Sidebar view"
+          description="Project keeps work grouped under each project. Inbox combines every project into one lifecycle-based work queue."
+          resetAction={
+            settings.sidebarNavigationMode !== DEFAULT_UNIFIED_SETTINGS.sidebarNavigationMode ? (
+              <SettingResetButton
+                label="sidebar view"
+                onClick={() =>
+                  updateSettings(
+                    sidebarNavigationChoicePatch(DEFAULT_UNIFIED_SETTINGS.sidebarNavigationMode),
+                  )
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.sidebarNavigationMode}
+              onValueChange={(value) => {
+                if (value === "project" || value === "inbox") {
+                  updateSettings(sidebarNavigationChoicePatch(value));
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-40" aria-label="Sidebar view">
+                <SelectValue>{SIDEBAR_MODE_LABELS[settings.sidebarNavigationMode]}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {(
+                  Object.entries(SIDEBAR_MODE_LABELS) as Array<[SidebarNavigationMode, string]>
+                ).map(([value, label]) => (
+                  <SelectItem key={value} hideIndicator value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          }
+        />
+      </SettingsSection>
+
       <SettingsSection title="Organization">
         <SettingsRow
           title="Project order"
-          description="Choose how projects are ordered in the inbox picker. Manual order can be changed from the picker."
+          description="Choose how projects are ordered in the sidebar and Inbox picker. Manual order can be changed from either view."
           resetAction={
             settings.sidebarProjectSortOrder !==
             DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder ? (

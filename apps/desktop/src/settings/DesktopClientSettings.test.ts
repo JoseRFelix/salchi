@@ -25,7 +25,9 @@ const clientSettings: ClientSettings = {
   diffIgnoreWhitespace: true,
   diffWordWrap: true,
   favorites: [],
+  hasSeenInboxIntroduction: true,
   providerModelPreferences: {},
+  sidebarNavigationMode: "inbox",
   sidebarProjectGroupingMode: "repository_path",
   sidebarProjectGroupingOverrides: {
     "environment-1:/tmp/project-a": "separate",
@@ -34,6 +36,7 @@ const clientSettings: ClientSettings = {
   sidebarAutoSettleAfterDays: 3,
   sidebarAutoSettleOnMerge: true,
   sidebarThreadSortOrder: "created_at",
+  sidebarThreadPreviewCount: 8,
   timestampFormat: "24-hour",
   colorThemeLight: "default",
   colorThemeDark: "default",

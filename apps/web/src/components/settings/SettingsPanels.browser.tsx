@@ -25,6 +25,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { __resetLocalApiForTests } from "../../localApi";
+import { readBrowserClientSettings } from "../../clientPersistenceStorage";
+import { __resetClientSettingsPersistenceForTests } from "../../hooks/useSettings";
 import { AppAtomRegistryProvider, resetAppAtomRegistryForTests } from "../../rpc/atomRegistry";
 import { resetServerStateForTests, setServerConfigSnapshot } from "../../rpc/serverState";
 import { useUiStateStore } from "../../uiStateStore";
@@ -32,7 +34,7 @@ import { ConnectionsSettings } from "./ConnectionsSettings";
 import { DiagnosticsSettingsPanel } from "./DiagnosticsSettings";
 import { GeneralSettingsPanel, ProviderSettingsPanel } from "./SettingsPanels";
 import { SourceControlSettingsPanel } from "./SourceControlSettings";
-import { ChatSettingsPanel } from "./ThreadExperienceSettings";
+import { ChatSettingsPanel, InboxSettingsPanel } from "./ThreadExperienceSettings";
 import { toastManager } from "../ui/toast";
 
 vi.mock("./PushNotificationSettings", () => ({
@@ -490,6 +492,7 @@ describe("GeneralSettingsPanel observability", () => {
   beforeEach(async () => {
     resetServerStateForTests();
     await __resetLocalApiForTests();
+    __resetClientSettingsPersistenceForTests();
     localStorage.clear();
     useUiStateStore.setState({ defaultAdvertisedEndpointKey: null });
     authAccessHarness.reset();
@@ -508,6 +511,7 @@ describe("GeneralSettingsPanel observability", () => {
     document.body.innerHTML = "";
     resetServerStateForTests();
     await __resetLocalApiForTests();
+    __resetClientSettingsPersistenceForTests();
     authAccessHarness.reset();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -774,7 +778,7 @@ describe("GeneralSettingsPanel observability", () => {
       .toBeInTheDocument();
   });
 
-  it("does not expose the retired project and inbox mode setting", async () => {
+  it("keeps sidebar view settings out of General", async () => {
     setServerConfigSnapshot(createBaseServerConfig());
 
     mounted = await render(
@@ -793,6 +797,29 @@ describe("GeneralSettingsPanel observability", () => {
       .not.toBeInTheDocument();
     await expect.element(page.getByText("Sidebar mode", { exact: true })).not.toBeInTheDocument();
     await expect.element(page.getByLabelText("Use Inbox mode")).not.toBeInTheDocument();
+  });
+
+  it("switches sidebar view from the Inbox settings page and persists the choice", async () => {
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <InboxSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    const sidebarView = page.getByLabelText("Sidebar view", { exact: true });
+    await expect.element(sidebarView).toHaveTextContent("Project");
+    await sidebarView.click();
+    await page.getByRole("option", { name: "Inbox", exact: true }).click();
+
+    await expect.element(sidebarView).toHaveTextContent("Inbox");
+    await vi.waitFor(() => {
+      expect(readBrowserClientSettings()).toMatchObject({
+        hasSeenInboxIntroduction: true,
+        sidebarNavigationMode: "inbox",
+      });
+    });
   });
 
   it("shows local dictation model sizes and supported choices", async () => {
