@@ -971,12 +971,12 @@ export default function InboxSidebar() {
   );
   const createThread = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
-      if (isMobile) {
-        setOpenMobile(false);
-      }
       if (!shouldCreateNewThreadInCurrentProject(event.shiftKey, projectGroups.length)) {
         openNewThreadIn();
         return;
+      }
+      if (isMobile) {
+        setOpenMobile(false);
       }
       void startNewThreadFromContext({
         activeDraftThread: newThreadContext.activeDraftThread,

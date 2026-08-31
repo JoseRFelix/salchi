@@ -9050,6 +9050,39 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("opens the new-thread palette from the mobile inbox without closing the sidebar", async () => {
+    localStorage.setItem(
+      CLIENT_SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        ...DEFAULT_CLIENT_SETTINGS,
+        sidebarNavigationMode: "inbox",
+      }),
+    );
+    const mounted = await mountChatView({
+      viewport: COMPACT_FOOTER_VIEWPORT,
+      snapshot: createSnapshotWithSecondaryProject(),
+    });
+
+    try {
+      await openMobileSidebarFromTrigger();
+      const mobileSidebar = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-mobile="true"][data-sidebar="sidebar"]'),
+        "Mobile inbox sidebar should remain mounted while the command palette is open.",
+      );
+      const trigger = page.getByRole("button", { name: "New thread", exact: true });
+      await expect.element(trigger).toBeInTheDocument();
+      await trigger.click();
+
+      const palette = page.getByTestId("command-palette");
+      await expect.element(palette).toBeInTheDocument();
+      await expect.element(palette.getByText("Docs Portal", { exact: true })).toBeInTheDocument();
+      await waitForLayout();
+      expect(mobileSidebar).toHaveAttribute("data-open", "");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("filters command palette results as the user types", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
