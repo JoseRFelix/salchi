@@ -1,6 +1,11 @@
 import { pathToFileURL } from "node:url";
 
-import type { ChatAttachment, ProviderApprovalDecision, RuntimeMode } from "@salchi/contracts";
+import type {
+  ChatAttachment,
+  ProviderApprovalDecision,
+  RuntimeMode,
+  ThreadId,
+} from "@salchi/contracts";
 import {
   createOpencodeClient,
   type Agent,
@@ -32,8 +37,10 @@ import { isWindowsCommandNotFound } from "../processRunner.ts";
 import { collectStreamAsString } from "./providerSnapshot.ts";
 import * as NetService from "@salchi/shared/Net";
 import { resolveSpawnCommand } from "@salchi/shared/shell";
+import { mergeBrowserAgentEnvironment } from "../browser/BrowserAgentAccess.ts";
+import type { PreparedBrowserMcpServer } from "../browser/BrowserMcp.ts";
+import { registerBrowserProviderProcess } from "../browser/BrowserProviderProcessRegistry.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
-const OPENCODE_EMPTY_CONFIG_CONTENT = "{}";
 
 const OPENCODE_SERVER_READY_PREFIX = "opencode server listening";
 const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 5_000;
@@ -115,7 +122,10 @@ export interface OpenCodeRuntimeShape {
    */
   readonly startOpenCodeServerProcess: (input: {
     readonly binaryPath: string;
+    readonly threadId?: ThreadId;
     readonly environment?: NodeJS.ProcessEnv;
+    readonly browserEnvironment?: NodeJS.ProcessEnv;
+    readonly browserMcpServer?: PreparedBrowserMcpServer;
     readonly port?: number;
     readonly hostname?: string;
     readonly timeoutMs?: number;
@@ -127,8 +137,11 @@ export interface OpenCodeRuntimeShape {
    */
   readonly connectToOpenCodeServer: (input: {
     readonly binaryPath: string;
+    readonly threadId?: ThreadId;
     readonly serverUrl?: string | null;
     readonly environment?: NodeJS.ProcessEnv;
+    readonly browserEnvironment?: NodeJS.ProcessEnv;
+    readonly browserMcpServer?: PreparedBrowserMcpServer;
     readonly port?: number;
     readonly hostname?: string;
     readonly timeoutMs?: number;
@@ -146,6 +159,25 @@ export interface OpenCodeRuntimeShape {
   readonly loadOpenCodeInventory: (
     client: OpencodeClient,
   ) => Effect.Effect<OpenCodeInventory, OpenCodeRuntimeError>;
+}
+
+export function makeOpenCodeConfigContent(
+  browserMcpServer: PreparedBrowserMcpServer | undefined,
+): string {
+  return JSON.stringify(
+    browserMcpServer
+      ? {
+          mcp: {
+            [browserMcpServer.name]: {
+              type: "local",
+              command: [browserMcpServer.command, ...browserMcpServer.args],
+              environment: { ...browserMcpServer.environment },
+              enabled: true,
+            },
+          },
+        }
+      : {},
+  );
 }
 
 function parseServerUrlFromOutput(output: string): string | null {
@@ -340,8 +372,8 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       const timeoutMs = input.timeoutMs ?? DEFAULT_OPENCODE_SERVER_TIMEOUT_MS;
       const args = ["serve", `--hostname=${hostname}`, `--port=${port}`];
       const environment = {
-        ...(input.environment ?? process.env),
-        OPENCODE_CONFIG_CONTENT: OPENCODE_EMPTY_CONFIG_CONTENT,
+        ...mergeBrowserAgentEnvironment(input.environment ?? process.env, input.browserEnvironment),
+        OPENCODE_CONFIG_CONTENT: makeOpenCodeConfigContent(input.browserMcpServer),
       };
       const spawnCommand = resolveSpawnCommand(input.binaryPath, args, {
         env: environment,
@@ -366,6 +398,13 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
               }),
           ),
         );
+      if (input.threadId !== undefined) {
+        const unregisterProviderProcess = registerBrowserProviderProcess({
+          pid: Number(child.pid),
+          threadId: input.threadId,
+        });
+        yield* Scope.addFinalizer(runtimeScope, Effect.sync(unregisterProviderProcess));
+      }
 
       const killOpenCodeProcessGroup = (signal: NodeJS.Signals) =>
         process.platform === "win32"
@@ -490,7 +529,12 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
 
     return startOpenCodeServerProcess({
       binaryPath: input.binaryPath,
+      ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
       ...(input.environment !== undefined ? { environment: input.environment } : {}),
+      ...(input.browserEnvironment !== undefined
+        ? { browserEnvironment: input.browserEnvironment }
+        : {}),
+      ...(input.browserMcpServer !== undefined ? { browserMcpServer: input.browserMcpServer } : {}),
       ...(input.port !== undefined ? { port: input.port } : {}),
       ...(input.hostname !== undefined ? { hostname: input.hostname } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),

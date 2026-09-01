@@ -36,6 +36,14 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
+import {
+  SALCHI_BROWSER_CDP_URL_ENV,
+  type AcquireBrowserAgentSessionAccess,
+} from "../../browser/BrowserAgentAccess.ts";
+import {
+  BROWSER_MCP_SERVER_NAME,
+  BROWSER_MCP_USAGE_INSTRUCTION,
+} from "../../browser/BrowserMcp.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
@@ -199,6 +207,7 @@ function makeHarness(config?: {
   readonly enableOAuthUsage?: boolean;
   readonly enableStatuslineUsage?: boolean;
   readonly fetchOAuthUsage?: ClaudeAdapterLiveOptions["fetchOAuthUsage"];
+  readonly acquireBrowserAgentSessionAccess?: AcquireBrowserAgentSessionAccess;
 }) {
   const query = new FakeClaudeQuery();
   let createInput:
@@ -217,6 +226,9 @@ function makeHarness(config?: {
       ? { enableStatuslineUsage: config.enableStatuslineUsage }
       : {}),
     ...(config?.fetchOAuthUsage ? { fetchOAuthUsage: config.fetchOAuthUsage } : {}),
+    ...(config?.acquireBrowserAgentSessionAccess
+      ? { acquireBrowserAgentSessionAccess: config.acquireBrowserAgentSessionAccess }
+      : {}),
     createQuery: (input) => {
       createInput = input;
       return query;
@@ -599,6 +611,86 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       assert.equal(createInput?.options.env?.HOME, path.join(os.homedir(), ".claude-work"));
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("registers browser MCP with the injected CDP URL and revokes it on stop", () => {
+    const releases: Array<ThreadId> = [];
+    const browserAccessToken = "b".repeat(64);
+    const harness = makeHarness({
+      acquireBrowserAgentSessionAccess: (threadId) =>
+        Effect.succeed({
+          environment: {
+            [SALCHI_BROWSER_CDP_URL_ENV]: `ws://127.0.0.1:43124/internal/browser/cdp/thread-claude-1/${browserAccessToken}`,
+          },
+          release: Effect.sync(() => releases.push(threadId)).pipe(Effect.asVoid),
+        }),
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(
+        createInput?.options.env?.SALCHI_BROWSER_CDP_URL,
+        `ws://127.0.0.1:43124/internal/browser/cdp/thread-claude-1/${browserAccessToken}`,
+      );
+      const browserServer = createInput?.options.mcpServers?.[BROWSER_MCP_SERVER_NAME] as
+        | {
+            readonly type?: string;
+            readonly command?: string;
+            readonly args?: ReadonlyArray<string>;
+            readonly env?: Readonly<Record<string, string>>;
+          }
+        | undefined;
+      assert.equal(browserServer?.type, "stdio");
+      assert.equal(browserServer?.command, process.execPath);
+      assert.equal(browserServer?.args?.at(-2), "--cdp-endpoint");
+      assert.equal(
+        browserServer?.args?.at(-1),
+        `ws://127.0.0.1:43124/internal/browser/cdp/thread-claude-1/${browserAccessToken}`,
+      );
+      assert.equal(browserServer?.env?.[SALCHI_BROWSER_CDP_URL_ENV], browserServer?.args?.at(-1));
+      assert.ok(createInput?.options.mcpServers?.[INDEPENDENT_THREAD_MCP_SERVER_NAME]);
+      assert.deepEqual(createInput?.options.systemPrompt, {
+        type: "preset",
+        preset: "claude_code",
+        append: BROWSER_MCP_USAGE_INSTRUCTION,
+      });
+      yield* adapter.stopSession(THREAD_ID);
+      assert.deepEqual(releases, [THREAD_ID]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("omits browser MCP and browser instructions when agent access is disabled", () => {
+    const harness = makeHarness({
+      acquireBrowserAgentSessionAccess: () =>
+        Effect.succeed({ environment: {}, release: Effect.void }),
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.mcpServers?.[BROWSER_MCP_SERVER_NAME], undefined);
+      assert.deepEqual(createInput?.options.systemPrompt, {
+        type: "preset",
+        preset: "claude_code",
+      });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

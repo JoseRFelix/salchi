@@ -3,7 +3,24 @@ import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
-import { AuthAccessStreamEvent } from "./auth.ts";
+import { AuthAccessStreamEvent, EnvironmentAuthorizationError } from "./auth.ts";
+import {
+  BrowserAgentActivity,
+  BrowserCloseTabInput,
+  BrowserDispatchInput,
+  BrowserInstallInput,
+  BrowserInstallProgress,
+  BrowserInstallState,
+  BrowserNavigateHistoryInput,
+  BrowserNavigateInput,
+  BrowserOpenTabInput,
+  BrowserRpcError,
+  BrowserSessionState,
+  BrowserSetActiveTabInput,
+  BrowserSetViewportSizeInput,
+  BrowserThreadInput,
+  BrowserViewportEvent,
+} from "./browser.ts";
 import {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
@@ -181,6 +198,23 @@ export const WS_METHODS = {
   terminalSnapshot: "terminal.snapshot",
   terminalRestart: "terminal.restart",
   terminalClose: "terminal.close",
+
+  // Browser methods
+  browserStart: "browser.start",
+  browserStop: "browser.stop",
+  browserGetState: "browser.getState",
+  browserGetInstallState: "browser.getInstallState",
+  browserInstall: "browser.install",
+  browserCancelInstall: "browser.cancelInstall",
+  browserSetActiveTab: "browser.setActiveTab",
+  browserSetViewportSize: "browser.setViewportSize",
+  browserOpenTab: "browser.openTab",
+  browserNavigate: "browser.navigate",
+  browserNavigateHistory: "browser.navigateHistory",
+  browserCloseTab: "browser.closeTab",
+  browserDispatchInput: "browser.dispatchInput",
+  browserSubscribeViewport: "browser.subscribeViewport",
+  browserSubscribeAgentActivity: "browser.subscribeAgentActivity",
 
   // Server meta
   serverGetConfig: "server.getConfig",
@@ -576,6 +610,103 @@ export const WsTerminalCloseRpc = Rpc.make(WS_METHODS.terminalClose, {
   error: TerminalError,
 });
 
+const BrowserAuthorizedRpcError = Schema.Union([BrowserRpcError, EnvironmentAuthorizationError]);
+
+export const WsBrowserStartRpc = Rpc.make(WS_METHODS.browserStart, {
+  payload: BrowserThreadInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserStopRpc = Rpc.make(WS_METHODS.browserStop, {
+  payload: BrowserThreadInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserGetStateRpc = Rpc.make(WS_METHODS.browserGetState, {
+  payload: BrowserThreadInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserGetInstallStateRpc = Rpc.make(WS_METHODS.browserGetInstallState, {
+  payload: BrowserThreadInput,
+  success: BrowserInstallState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserInstallRpc = Rpc.make(WS_METHODS.browserInstall, {
+  payload: BrowserInstallInput,
+  success: BrowserInstallProgress,
+  error: BrowserAuthorizedRpcError,
+  stream: true,
+});
+
+export const WsBrowserCancelInstallRpc = Rpc.make(WS_METHODS.browserCancelInstall, {
+  payload: BrowserThreadInput,
+  success: BrowserInstallState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserSetActiveTabRpc = Rpc.make(WS_METHODS.browserSetActiveTab, {
+  payload: BrowserSetActiveTabInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserSetViewportSizeRpc = Rpc.make(WS_METHODS.browserSetViewportSize, {
+  payload: BrowserSetViewportSizeInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserOpenTabRpc = Rpc.make(WS_METHODS.browserOpenTab, {
+  payload: BrowserOpenTabInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserNavigateRpc = Rpc.make(WS_METHODS.browserNavigate, {
+  payload: BrowserNavigateInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserNavigateHistoryRpc = Rpc.make(WS_METHODS.browserNavigateHistory, {
+  payload: BrowserNavigateHistoryInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserCloseTabRpc = Rpc.make(WS_METHODS.browserCloseTab, {
+  payload: BrowserCloseTabInput,
+  success: BrowserSessionState,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserDispatchInputRpc = Rpc.make(WS_METHODS.browserDispatchInput, {
+  payload: BrowserDispatchInput,
+  error: BrowserAuthorizedRpcError,
+});
+
+export const WsBrowserSubscribeViewportRpc = Rpc.make(WS_METHODS.browserSubscribeViewport, {
+  payload: BrowserThreadInput,
+  success: BrowserViewportEvent,
+  error: BrowserAuthorizedRpcError,
+  stream: true,
+});
+
+export const WsBrowserSubscribeAgentActivityRpc = Rpc.make(
+  WS_METHODS.browserSubscribeAgentActivity,
+  {
+    payload: BrowserThreadInput,
+    success: BrowserAgentActivity,
+    error: BrowserAuthorizedRpcError,
+    stream: true,
+  },
+);
+
 export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.dispatchCommand,
   {
@@ -737,6 +868,21 @@ export const WsRpcGroup = RpcGroup.make(
   WsTerminalSnapshotRpc,
   WsTerminalRestartRpc,
   WsTerminalCloseRpc,
+  WsBrowserStartRpc,
+  WsBrowserStopRpc,
+  WsBrowserGetStateRpc,
+  WsBrowserGetInstallStateRpc,
+  WsBrowserInstallRpc,
+  WsBrowserCancelInstallRpc,
+  WsBrowserSetActiveTabRpc,
+  WsBrowserSetViewportSizeRpc,
+  WsBrowserOpenTabRpc,
+  WsBrowserNavigateRpc,
+  WsBrowserNavigateHistoryRpc,
+  WsBrowserCloseTabRpc,
+  WsBrowserDispatchInputRpc,
+  WsBrowserSubscribeViewportRpc,
+  WsBrowserSubscribeAgentActivityRpc,
   WsSubscribeTerminalEventsRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,

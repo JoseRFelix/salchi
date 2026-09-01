@@ -865,6 +865,48 @@ describe("GeneralSettingsPanel observability", () => {
     expect(updateSettings).toHaveBeenCalledWith({ transcriptionModel: "tiny.en" });
   });
 
+  it("keeps browser controls in Chat settings", async () => {
+    const setClientSettings = vi.fn().mockResolvedValue(undefined);
+    const updateSettings = vi.fn<LocalApi["server"]["updateSettings"]>().mockResolvedValue({
+      ...DEFAULT_SERVER_SETTINGS,
+      browserViewportFollowsPanel: false,
+    });
+    window.nativeApi = {
+      persistence: {
+        getClientSettings: vi.fn().mockResolvedValue(null),
+        setClientSettings,
+      },
+      server: {
+        updateSettings,
+      },
+    } as unknown as LocalApi;
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ChatSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect
+      .element(page.getByRole("heading", { name: "Browser", exact: true }))
+      .toBeInTheDocument();
+
+    const previewSwitch = page.getByLabelText("Show browser preview while agent browses");
+    await expect.element(previewSwitch).toBeChecked();
+    await previewSwitch.click();
+    await vi.waitFor(() => {
+      expect(setClientSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ showBrowserAgentPreview: false }),
+      );
+    });
+
+    const viewportSwitch = page.getByLabelText("Fit browser viewport to panel");
+    await expect.element(viewportSwitch).toBeChecked();
+    await viewportSwitch.click();
+    expect(updateSettings).toHaveBeenCalledWith({ browserViewportFollowsPanel: false });
+  });
+
   it("creates and shows a pairing link when network access is enabled", async () => {
     window.desktopBridge = createDesktopBridgeStub({
       serverExposureState: {

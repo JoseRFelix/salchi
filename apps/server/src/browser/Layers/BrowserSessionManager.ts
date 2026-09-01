@@ -1,0 +1,1537 @@
+import {
+  BrowserCrashed,
+  type BrowserHistoryAction,
+  BrowserOperationError,
+  BrowserUnavailable,
+  ThreadNotFound,
+  type BrowserExecutableInfo,
+  type BrowserInputEvent,
+  type BrowserManagedVariant,
+  type BrowserOperationError as BrowserOperationErrorType,
+  type BrowserRpcError,
+  type BrowserSessionState,
+  type BrowserSessionStatus,
+  type BrowserTab,
+  type BrowserViewportEvent,
+  type BrowserViewportFrame,
+  type BrowserViewportSize,
+  ThreadId,
+} from "@salchi/contracts";
+import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as Scope from "effect/Scope";
+import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
+import * as SynchronizedRef from "effect/SynchronizedRef";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import * as NetService from "@salchi/shared/Net";
+
+import { ServerConfig } from "../../config.ts";
+import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { readProcessRows } from "../../diagnostics/ProcessDiagnostics.ts";
+import { reapManagedChildProcesses } from "../../process/ManagedChildProcessRegistry.ts";
+import { terminateProcessTree } from "../../process/ProcessTree.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  makeBrowserAgentActivityController,
+  type BrowserAgentActivityController,
+} from "../BrowserAgentActivity.ts";
+import { makeBrowserIdleController, type BrowserIdleController } from "../BrowserIdle.ts";
+import {
+  browserProfileDirectoryName,
+  browserProfileRoot,
+  browserProfileThreadIdFromDirectory,
+} from "../BrowserProfiles.ts";
+import { listBrowserProviderProcesses } from "../BrowserProviderProcessRegistry.ts";
+import {
+  browserMonotonicMillis,
+  browserStreamDebugEnabled,
+  getBrowserFrameTiming,
+  installBrowserEventLoopLagMonitor,
+  logBrowserHandlerTiming,
+  recordBrowserFrameTiming,
+} from "../BrowserStreamDiagnostics.ts";
+import { isBrowserRootThread, resolveBrowserRootThreadId } from "../BrowserThreadRoot.ts";
+import {
+  findRogueBrowserProcesses,
+  ROGUE_BROWSER_VIEWPORT_NOTICE,
+  ROGUE_BROWSER_WATCHDOG_INTERVAL_MILLIS,
+  type RogueBrowserProcess,
+} from "../RogueBrowserWatchdog.ts";
+import {
+  launchPlaywrightBrowser,
+  type BrowserRuntime,
+  type BrowserRuntimeCallbacks,
+  type PlaywrightBrowserLaunchInput,
+} from "../PlaywrightBrowserRuntime.ts";
+import { makeLatestViewportMailbox, type LatestViewportMailbox } from "../LatestViewportMailbox.ts";
+import type {
+  BrowserBinaryViewportEvent,
+  BrowserBinaryViewportFrame,
+} from "../LatestViewportMailbox.ts";
+import { BrowserInstaller } from "../Services/BrowserInstaller.ts";
+import {
+  BrowserSessionManager,
+  type BrowserSessionManagerShape,
+  type BrowserViewportLeaseKind,
+} from "../Services/BrowserSessionManager.ts";
+import {
+  initialBrowserViewportLeaseInvariantState,
+  updateBrowserViewportLeaseInvariant,
+  type BrowserViewportLeaseInvariantState,
+} from "../BrowserViewportLeaseInvariant.ts";
+import {
+  DEFAULT_BROWSER_VIEWPORT_SIZE,
+  initialBrowserViewportPolicyState,
+  setBrowserViewportAgentActive,
+  setBrowserViewportFollowingEnabled,
+  type BrowserViewportPolicyState,
+  type BrowserViewportPolicyTransition,
+  updateBrowserViewportRequest,
+} from "../BrowserViewportSize.ts";
+
+export interface BrowserManagerLaunchConfig {
+  readonly idleTimeoutMillis: number;
+  readonly screencastQuality: number;
+  readonly screencastEveryNthFrame: number;
+  readonly userDataDirectory: string;
+  readonly processRegistryDirectory: string;
+  readonly environmentExecutablePath?: string | undefined;
+  readonly settingExecutablePath?: string | undefined;
+  readonly managedExecutablePath?: string | undefined;
+  readonly managedVariant?: BrowserManagedVariant | undefined;
+  readonly noSandbox: boolean;
+  readonly stealthMode: boolean;
+  readonly serverHost?: string | undefined;
+  readonly serverPort: number;
+}
+
+export interface BrowserSessionManagerOptions {
+  readonly resolveRootThreadId?: (threadId: ThreadId) => Effect.Effect<ThreadId, BrowserRpcError>;
+  readonly threadExists: (threadId: ThreadId) => Effect.Effect<boolean, BrowserOperationErrorType>;
+  readonly getLaunchConfig: (
+    threadId: ThreadId,
+  ) => Effect.Effect<BrowserManagerLaunchConfig, BrowserOperationErrorType>;
+  readonly launchRuntime: (
+    input: PlaywrightBrowserLaunchInput,
+  ) => Effect.Effect<BrowserRuntime, BrowserUnavailable | BrowserOperationErrorType, Scope.Scope>;
+  readonly viewportFollowsPanel?: boolean;
+  readonly rogueBrowserWatchdog?: {
+    readonly intervalMillis?: number;
+    readonly scan: Effect.Effect<{
+      readonly killEnabled: boolean;
+      readonly processes: ReadonlyArray<RogueBrowserProcess>;
+    }>;
+    readonly terminate: (process: RogueBrowserProcess) => Effect.Effect<void>;
+  };
+}
+
+interface SessionLifecycle {
+  active: boolean;
+  frameSequence: number;
+}
+
+interface StartingBrowserSession {
+  readonly id: number;
+  readonly scope: Scope.Closeable;
+  readonly deferred: Deferred.Deferred<BrowserSessionState, BrowserRpcError>;
+  readonly lifecycle: SessionLifecycle;
+  readonly launchFiber: Fiber.Fiber<void, never> | undefined;
+}
+
+interface RunningBrowserSession {
+  readonly id: number;
+  readonly scope: Scope.Closeable;
+  readonly runtime: BrowserRuntime;
+  readonly idle: BrowserIdleController;
+  readonly lifecycle: SessionLifecycle;
+}
+
+interface BrowserEntry {
+  readonly threadId: ThreadId;
+  readonly status: BrowserSessionStatus;
+  readonly tabs: ReadonlyArray<BrowserTab>;
+  readonly executable: BrowserExecutableInfo | null;
+  readonly error: string | undefined;
+  readonly mailbox: LatestViewportMailbox;
+  readonly agentActivity: BrowserAgentActivityController;
+  readonly subscriberCount: number;
+  readonly viewportLeases: ReadonlyMap<number, BrowserViewportLeaseKind>;
+  readonly viewportPolicy: BrowserViewportPolicyState;
+  readonly agentConnectionIds: ReadonlySet<string>;
+  readonly starting: StartingBrowserSession | undefined;
+  readonly session: RunningBrowserSession | undefined;
+}
+
+const isBrowserUnavailable = Schema.is(BrowserUnavailable);
+const isBrowserOperationError = Schema.is(BrowserOperationError);
+
+type StartDecision =
+  | { readonly _tag: "Immediate"; readonly state: BrowserSessionState }
+  | {
+      readonly _tag: "Await";
+      readonly deferred: Deferred.Deferred<BrowserSessionState, BrowserRpcError>;
+    };
+
+function snapshot(
+  entry: BrowserEntry,
+  options?: { readonly includeCdpWebSocketUrl?: boolean },
+): BrowserSessionState {
+  return {
+    threadId: entry.threadId,
+    status: entry.status,
+    tabs: entry.tabs,
+    executable: entry.executable,
+    viewport: entry.viewportPolicy.appliedSize,
+    ...(options?.includeCdpWebSocketUrl === true && entry.session !== undefined
+      ? { cdpWebSocketUrl: entry.session.runtime.cdpWebSocketUrl }
+      : {}),
+    ...(entry.error === undefined ? {} : { error: entry.error }),
+  };
+}
+
+function stateForRequestedThread(
+  state: BrowserSessionState,
+  requestedThreadId: ThreadId,
+): BrowserSessionState {
+  return state.threadId === requestedThreadId ? state : { ...state, threadId: requestedThreadId };
+}
+
+function binaryViewportEventForRequestedThread(
+  event: BrowserBinaryViewportEvent,
+  requestedThreadId: ThreadId,
+): BrowserBinaryViewportEvent {
+  if (event.threadId === requestedThreadId) return event;
+  switch (event._tag) {
+    case "Frame": {
+      const requestedFrame: BrowserBinaryViewportFrame = {
+        ...event,
+        threadId: requestedThreadId,
+      };
+      const timing = getBrowserFrameTiming(event);
+      if (timing !== undefined) recordBrowserFrameTiming(requestedFrame, timing);
+      return requestedFrame;
+    }
+    case "Tabs":
+      return { ...event, threadId: requestedThreadId };
+    case "Status":
+      return { ...event, threadId: requestedThreadId };
+  }
+}
+
+function legacyViewportEvent(event: BrowserBinaryViewportEvent): BrowserViewportEvent {
+  if (event._tag !== "Frame") return event;
+  const frame: BrowserViewportFrame = {
+    _tag: "Frame",
+    threadId: event.threadId,
+    targetId: event.targetId,
+    dataBase64: Buffer.from(event.jpegBytes).toString("base64"),
+    width: event.width,
+    height: event.height,
+    seq: event.seq,
+    capturedAt: event.capturedAt,
+  };
+  const timing = getBrowserFrameTiming(event);
+  if (timing !== undefined) recordBrowserFrameTiming(frame, timing);
+  return frame;
+}
+
+function makeOperationError(threadId: ThreadId, message: string, cause?: unknown) {
+  return new BrowserOperationError({
+    threadId,
+    message,
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+function launchFailureFromCause(
+  threadId: ThreadId,
+  cause: Cause.Cause<BrowserUnavailable | BrowserOperationErrorType>,
+): BrowserUnavailable | BrowserOperationErrorType {
+  const error = Cause.squash(cause);
+  if (isBrowserUnavailable(error) || isBrowserOperationError(error)) return error;
+  return makeOperationError(
+    threadId,
+    Cause.hasInterruptsOnly(cause) ? "Browser start was interrupted." : "Browser start failed.",
+    cause,
+  );
+}
+
+export const makeBrowserSessionManagerWithOptions = Effect.fn(
+  "browserSessionManager.makeWithOptions",
+)(function* (options: BrowserSessionManagerOptions) {
+  const managerScope = yield* Scope.Scope;
+  const runtimeContext = yield* Effect.context<never>();
+  const runFork = Effect.runForkWith(runtimeContext);
+  const entriesRef = yield* SynchronizedRef.make(new Map<string, BrowserEntry>());
+  const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
+  const resolvedThreadIds = new Map<string, ThreadId>();
+  const streamDebug = browserStreamDebugEnabled();
+  let nextSessionId = 0;
+  let nextViewportLeaseId = 0;
+  let viewportFollowsPanel = options.viewportFollowsPanel ?? true;
+  const viewportLeaseInvariantStates = new Map<string, BrowserViewportLeaseInvariantState>();
+
+  const resolveThreadId = (
+    requestedThreadId: ThreadId,
+  ): Effect.Effect<ThreadId, BrowserRpcError> => {
+    const cached = resolvedThreadIds.get(requestedThreadId);
+    if (cached !== undefined) return Effect.succeed(cached);
+    const resolve =
+      options.resolveRootThreadId ?? ((threadId: ThreadId) => Effect.succeed(threadId));
+    return resolve(requestedThreadId).pipe(
+      Effect.tap((rootThreadId) =>
+        Effect.sync(() => {
+          resolvedThreadIds.set(requestedThreadId, rootThreadId);
+          resolvedThreadIds.set(rootThreadId, rootThreadId);
+        }),
+      ),
+    );
+  };
+
+  const runStateOperation = (
+    requestedThreadId: ThreadId,
+    operation: (rootThreadId: ThreadId) => Effect.Effect<BrowserSessionState, BrowserRpcError>,
+  ): Effect.Effect<BrowserSessionState, BrowserRpcError> =>
+    Effect.flatMap(resolveThreadId(requestedThreadId), operation).pipe(
+      Effect.map((state) => stateForRequestedThread(state, requestedThreadId)),
+    );
+
+  const scheduleInManager = <A, E>(effect: Effect.Effect<A, E>) => {
+    void runFork(effect.pipe(Effect.ignoreCause({ log: true }), Effect.forkIn(managerScope)));
+  };
+
+  const getThreadSemaphore = (threadId: ThreadId) =>
+    SynchronizedRef.modifyEffect(threadLocksRef, (locks) => {
+      const current = locks.get(threadId);
+      if (current !== undefined) return Effect.succeed([current, locks] as const);
+      return Semaphore.make(1).pipe(
+        Effect.map((semaphore) => {
+          const next = new Map(locks);
+          next.set(threadId, semaphore);
+          return [semaphore, next] as const;
+        }),
+      );
+    });
+
+  const withThreadLock = <A, E, R>(
+    threadId: ThreadId,
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, R> =>
+    Effect.flatMap(getThreadSemaphore(threadId), (semaphore) => semaphore.withPermit(effect));
+
+  const getEntry = (threadId: ThreadId) =>
+    SynchronizedRef.get(entriesRef).pipe(Effect.map((entries) => entries.get(threadId)));
+
+  const setEntry = (entry: BrowserEntry) =>
+    SynchronizedRef.update(entriesRef, (entries) => {
+      const next = new Map(entries);
+      next.set(entry.threadId, entry);
+      return next;
+    });
+
+  const applyViewportTransition = Effect.fn("browserSessionManager.applyViewportTransition")(
+    function* (entry: BrowserEntry, transition: BrowserViewportPolicyTransition) {
+      if (transition.apply !== null && entry.session !== undefined) {
+        yield* entry.session.runtime.setViewportSize(transition.apply);
+      }
+      const next = { ...entry, viewportPolicy: transition.state };
+      yield* setEntry(next);
+      return next;
+    },
+  );
+
+  const handleAgentViewportTransition = (
+    threadId: ThreadId,
+    active: boolean,
+  ): Effect.Effect<void> =>
+    withThreadLock(
+      threadId,
+      Effect.gen(function* () {
+        const entry = yield* getEntry(threadId);
+        if (entry === undefined) return;
+        const currentActive = yield* entry.agentActivity.getActive;
+        yield* applyViewportTransition(
+          entry,
+          setBrowserViewportAgentActive(entry.viewportPolicy, currentActive),
+        );
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Failed to apply a queued browser viewport size", {
+          threadId,
+          active,
+          cause,
+        }),
+      ),
+    );
+
+  const getOrCreateEntry = Effect.fn("browserSessionManager.getOrCreateEntry")(function* (
+    threadId: ThreadId,
+  ) {
+    const current = yield* getEntry(threadId);
+    if (current !== undefined) return current;
+    const mailbox = yield* makeLatestViewportMailbox(threadId).pipe(
+      Effect.provideService(Scope.Scope, managerScope),
+    );
+    const agentActivity = yield* makeBrowserAgentActivityController(threadId, {
+      onTransition: (active) =>
+        Effect.sync(() => scheduleInManager(handleAgentViewportTransition(threadId, active))),
+    }).pipe(Effect.provideService(Scope.Scope, managerScope));
+    const entry: BrowserEntry = {
+      threadId,
+      status: "stopped",
+      tabs: [],
+      executable: null,
+      error: undefined,
+      mailbox,
+      agentActivity,
+      subscriberCount: 0,
+      viewportLeases: new Map(),
+      viewportPolicy: initialBrowserViewportPolicyState(viewportFollowsPanel),
+      agentConnectionIds: new Set(),
+      starting: undefined,
+      session: undefined,
+    };
+    yield* setEntry(entry);
+    return entry;
+  });
+
+  const requireThread = Effect.fn("browserSessionManager.requireThread")(function* (
+    threadId: ThreadId,
+  ) {
+    if (yield* options.threadExists(threadId)) return;
+    return yield* new ThreadNotFound({
+      threadId,
+      message: `Thread ${threadId} was not found.`,
+    });
+  });
+
+  const closeScope = (scope: Scope.Closeable, exit: Exit.Exit<unknown, unknown> = Exit.void) =>
+    Scope.close(scope, exit).pipe(Effect.ignore);
+
+  const stopMatchingSession = Effect.fn("browserSessionManager.stopMatching")(function* (
+    threadId: ThreadId,
+    expectedSessionId?: number,
+  ) {
+    return yield* withThreadLock(
+      threadId,
+      Effect.gen(function* () {
+        const entry = yield* getEntry(threadId);
+        if (entry === undefined) return undefined;
+        const currentId = entry.session?.id ?? entry.starting?.id;
+        if (expectedSessionId !== undefined && currentId !== expectedSessionId) return undefined;
+        if (entry.session !== undefined) entry.session.lifecycle.active = false;
+        if (entry.starting !== undefined) {
+          entry.starting.lifecycle.active = false;
+          Deferred.doneUnsafe(
+            entry.starting.deferred,
+            Effect.fail(makeOperationError(threadId, "Browser start was stopped.")),
+          );
+        }
+        const next: BrowserEntry = {
+          ...entry,
+          status: "stopped",
+          tabs: [],
+          executable: null,
+          error: undefined,
+          starting: undefined,
+          session: undefined,
+        };
+        yield* setEntry(next);
+        yield* next.agentActivity.reset;
+        next.mailbox.publishTabs([]);
+        next.mailbox.publishStatus("stopped");
+        const launchFiber = entry.starting?.launchFiber;
+        if (launchFiber !== undefined) {
+          yield* Fiber.interrupt(launchFiber).pipe(Effect.ignore);
+        }
+        const sessionScope = entry.session?.scope ?? entry.starting?.scope;
+        if (sessionScope !== undefined) yield* closeScope(sessionScope);
+        return snapshot(next);
+      }),
+    );
+  });
+
+  const handleCrashed = Effect.fn("browserSessionManager.handleCrashed")(function* (
+    threadId: ThreadId,
+    sessionId: number,
+    message: string,
+  ) {
+    yield* withThreadLock(
+      threadId,
+      Effect.gen(function* () {
+        const entry = yield* getEntry(threadId);
+        if (entry?.session?.id !== sessionId || entry.status !== "running") return undefined;
+        entry.session.lifecycle.active = false;
+        for (const _connectionId of entry.agentConnectionIds) {
+          yield* entry.session.idle.agentConnectionRemoved;
+        }
+        const next: BrowserEntry = {
+          ...entry,
+          status: "crashed",
+          error: message,
+          agentConnectionIds: new Set(),
+          session: undefined,
+        };
+        yield* setEntry(next);
+        yield* next.agentActivity.reset;
+        next.mailbox.publishStatus("crashed", message);
+        yield* closeScope(entry.session.scope);
+      }),
+    );
+  });
+
+  const completeLaunchFailure = Effect.fn("browserSessionManager.completeLaunchFailure")(function* (
+    threadId: ThreadId,
+    sessionId: number,
+    scope: Scope.Closeable,
+    deferred: Deferred.Deferred<BrowserSessionState, BrowserRpcError>,
+    error: BrowserUnavailable | BrowserOperationErrorType,
+  ) {
+    yield* withThreadLock(
+      threadId,
+      Effect.gen(function* () {
+        const entry = yield* getEntry(threadId);
+        if (entry?.starting?.id === sessionId) {
+          entry.starting.lifecycle.active = false;
+          const next: BrowserEntry = {
+            ...entry,
+            status: "stopped",
+            tabs: [],
+            executable: null,
+            error: error.message,
+            starting: undefined,
+          };
+          yield* setEntry(next);
+          next.mailbox.publishTabs([]);
+          next.mailbox.publishStatus("stopped", error.message);
+          yield* closeScope(scope, Exit.fail(error));
+        }
+        Deferred.doneUnsafe(deferred, Effect.fail(error));
+      }),
+    );
+  });
+
+  const launchSession = Effect.fn("browserSessionManager.launchSession")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly sessionId: number;
+    readonly scope: Scope.Closeable;
+    readonly deferred: Deferred.Deferred<BrowserSessionState, BrowserRpcError>;
+    readonly lifecycle: SessionLifecycle;
+    readonly mailbox: LatestViewportMailbox;
+  }) {
+    const launchConfig = yield* options.getLaunchConfig(input.threadId);
+    const launchEntry = yield* getEntry(input.threadId);
+    const initialViewportSize =
+      launchEntry?.viewportPolicy.appliedSize ?? DEFAULT_BROWSER_VIEWPORT_SIZE;
+    const idle = yield* makeBrowserIdleController({
+      idleTimeoutMillis: launchConfig.idleTimeoutMillis,
+    }).pipe(Effect.provideService(Scope.Scope, input.scope));
+    const callbacks: BrowserRuntimeCallbacks = {
+      onCdpActivity: () => {
+        if (!input.lifecycle.active) return;
+        scheduleInManager(idle.recordCdpActivity);
+      },
+      onFrame: (frame) => {
+        if (!input.lifecycle.active) return;
+        input.lifecycle.frameSequence += 1;
+        const viewportFrame = {
+          _tag: "Frame",
+          threadId: input.threadId,
+          targetId: frame.targetId,
+          jpegBytes: frame.jpegBytes,
+          width: frame.width,
+          height: frame.height,
+          seq: input.lifecycle.frameSequence,
+          capturedAt: DateTime.nowUnsafe(),
+        } satisfies BrowserBinaryViewportFrame;
+        const mailboxPublishedAtMonotonicMillis = streamDebug ? browserMonotonicMillis() : 0;
+        if (streamDebug) {
+          recordBrowserFrameTiming(viewportFrame, {
+            cdpReceivedAtMonotonicMillis: frame.receivedAtMonotonicMillis,
+            mailboxPublishedAtMonotonicMillis,
+          });
+        }
+        input.mailbox.publishFrame(viewportFrame);
+        if (streamDebug) {
+          scheduleInManager(
+            logBrowserHandlerTiming(
+              "browser.frame.cdp-receive-to-mailbox-publish",
+              frame.receivedAtMonotonicMillis,
+              {
+                threadId: input.threadId,
+                targetId: frame.targetId,
+                seq: input.lifecycle.frameSequence,
+              },
+            ),
+          );
+        }
+      },
+      onTabs: (tabs) => {
+        if (!input.lifecycle.active) return;
+        input.mailbox.publishTabs(tabs);
+        scheduleInManager(
+          withThreadLock(
+            input.threadId,
+            Effect.gen(function* () {
+              const entry = yield* getEntry(input.threadId);
+              if (
+                entry?.session?.id !== input.sessionId &&
+                entry?.starting?.id !== input.sessionId
+              ) {
+                return;
+              }
+              yield* setEntry({ ...entry, tabs });
+            }),
+          ),
+        );
+      },
+      onCrashed: (message) => {
+        if (!input.lifecycle.active) return;
+        input.lifecycle.active = false;
+        scheduleInManager(handleCrashed(input.threadId, input.sessionId, message));
+      },
+    };
+    const runtime = yield* options
+      .launchRuntime({
+        threadId: input.threadId,
+        userDataDirectory: launchConfig.userDataDirectory,
+        processRegistryDirectory: launchConfig.processRegistryDirectory,
+        environmentExecutablePath: launchConfig.environmentExecutablePath,
+        settingExecutablePath: launchConfig.settingExecutablePath,
+        managedExecutablePath: launchConfig.managedExecutablePath,
+        managedVariant: launchConfig.managedVariant,
+        noSandbox: launchConfig.noSandbox,
+        stealthMode: launchConfig.stealthMode,
+        screencastQuality: launchConfig.screencastQuality,
+        screencastEveryNthFrame: launchConfig.screencastEveryNthFrame,
+        viewportSize: initialViewportSize,
+        serverHost: launchConfig.serverHost,
+        serverPort: launchConfig.serverPort,
+        callbacks,
+      })
+      .pipe(Effect.provideService(Scope.Scope, input.scope));
+    const tabs = yield* runtime.getTabs;
+
+    const installed = yield* withThreadLock(
+      input.threadId,
+      Effect.gen(function* () {
+        const entry = yield* getEntry(input.threadId);
+        if (entry?.starting?.id !== input.sessionId) return undefined;
+        for (let index = 0; index < entry.subscriberCount; index += 1) {
+          yield* idle.subscriberAdded;
+        }
+        for (const _connectionId of entry.agentConnectionIds) {
+          yield* idle.agentConnectionAdded;
+        }
+        yield* runtime.setViewportSize(entry.viewportPolicy.appliedSize);
+        if (entry.subscriberCount > 0) yield* runtime.setScreencastEnabled(true);
+        yield* idle.recordCdpActivity;
+        const next: BrowserEntry = {
+          ...entry,
+          status: "running",
+          tabs,
+          executable: runtime.executable,
+          error: undefined,
+          starting: undefined,
+          session: {
+            id: input.sessionId,
+            scope: input.scope,
+            runtime,
+            idle,
+            lifecycle: input.lifecycle,
+          },
+        };
+        yield* setEntry(next);
+        next.mailbox.publishTabs(tabs);
+        next.mailbox.publishStatus("running");
+        const state = snapshot(next);
+        Deferred.doneUnsafe(input.deferred, Effect.succeed(state));
+        return state;
+      }),
+    );
+    if (installed === undefined) return;
+
+    yield* idle.awaitIdle.pipe(
+      Effect.andThen(
+        Effect.forkIn(stopMatchingSession(input.threadId, input.sessionId), managerScope),
+      ),
+      Effect.asVoid,
+      Effect.forkIn(input.scope),
+    );
+  });
+
+  const startResolved: BrowserSessionManagerShape["start"] = (threadId) =>
+    withThreadLock(
+      threadId,
+      Effect.gen(function* (): Effect.fn.Return<StartDecision, BrowserRpcError> {
+        yield* requireThread(threadId);
+        const entry = yield* getOrCreateEntry(threadId);
+        if (entry.status === "running") {
+          return { _tag: "Immediate", state: snapshot(entry) };
+        }
+        if (entry.starting !== undefined) {
+          return { _tag: "Await", deferred: entry.starting.deferred };
+        }
+
+        const sessionId = ++nextSessionId;
+        const scope = yield* Scope.fork(managerScope, "sequential");
+        const deferred = yield* Deferred.make<BrowserSessionState, BrowserRpcError>();
+        const lifecycle: SessionLifecycle = { active: true, frameSequence: 0 };
+        const starting: StartingBrowserSession = {
+          id: sessionId,
+          scope,
+          deferred,
+          lifecycle,
+          launchFiber: undefined,
+        };
+        const startingEntry: BrowserEntry = {
+          ...entry,
+          status: "starting",
+          tabs: [],
+          executable: null,
+          error: undefined,
+          session: undefined,
+          starting,
+        };
+        yield* setEntry(startingEntry);
+        entry.mailbox.publishTabs([]);
+        entry.mailbox.publishStatus("starting");
+
+        const launchEffect = launchSession({
+          threadId,
+          sessionId,
+          scope,
+          deferred,
+          lifecycle,
+          mailbox: entry.mailbox,
+        }).pipe(
+          Effect.matchCauseEffect({
+            onFailure: (cause) => {
+              if (Cause.hasInterruptsOnly(cause)) {
+                return Effect.sync(() => {
+                  Deferred.doneUnsafe(
+                    deferred,
+                    Effect.fail(makeOperationError(threadId, "Browser start was interrupted.")),
+                  );
+                });
+              }
+              return completeLaunchFailure(
+                threadId,
+                sessionId,
+                scope,
+                deferred,
+                launchFailureFromCause(threadId, cause),
+              );
+            },
+            onSuccess: () => Effect.void,
+          }),
+        );
+        const launchFiber = yield* Effect.forkIn(launchEffect, managerScope);
+        yield* setEntry({
+          ...startingEntry,
+          starting: { ...starting, launchFiber },
+        });
+        return { _tag: "Await", deferred };
+      }),
+    ).pipe(
+      Effect.flatMap((decision) =>
+        decision._tag === "Immediate"
+          ? Effect.succeed(decision.state)
+          : Deferred.await(decision.deferred),
+      ),
+    );
+
+  const start: BrowserSessionManagerShape["start"] = (threadId) =>
+    runStateOperation(threadId, startResolved);
+
+  const stopResolved: BrowserSessionManagerShape["stop"] = (threadId) =>
+    Effect.gen(function* () {
+      const entry = yield* withThreadLock(
+        threadId,
+        Effect.gen(function* () {
+          const current = yield* getEntry(threadId);
+          if (current !== undefined) return current;
+          yield* requireThread(threadId);
+          return yield* getOrCreateEntry(threadId);
+        }),
+      );
+      const existing = yield* stopMatchingSession(threadId);
+      if (existing !== undefined) return existing;
+      return snapshot(entry);
+    });
+
+  const stop: BrowserSessionManagerShape["stop"] = (threadId) =>
+    runStateOperation(threadId, stopResolved);
+
+  const getStateResolved: BrowserSessionManagerShape["getState"] = (threadId) =>
+    withThreadLock(
+      threadId,
+      Effect.gen(function* () {
+        yield* requireThread(threadId);
+        return snapshot(yield* getOrCreateEntry(threadId), { includeCdpWebSocketUrl: true });
+      }),
+    );
+
+  const getState: BrowserSessionManagerShape["getState"] = (threadId) =>
+    runStateOperation(threadId, getStateResolved);
+
+  const getCdpWebSocketUrlResolved: BrowserSessionManagerShape["getCdpWebSocketUrl"] = (threadId) =>
+    withThreadLock(
+      threadId,
+      Effect.gen(function* () {
+        yield* requireThread(threadId);
+        const entry = yield* getOrCreateEntry(threadId);
+        if (entry?.status === "crashed") {
+          return yield* new BrowserCrashed({
+            threadId,
+            message: entry.error ?? "Chromium exited unexpectedly.",
+          });
+        }
+        if (entry?.session === undefined || entry.status !== "running") {
+          return yield* makeOperationError(threadId, "Browser session is not running.");
+        }
+        return entry.session.runtime.cdpWebSocketUrl;
+      }),
+    );
+
+  const getCdpWebSocketUrl: BrowserSessionManagerShape["getCdpWebSocketUrl"] = (threadId) =>
+    Effect.flatMap(resolveThreadId(threadId), getCdpWebSocketUrlResolved);
+
+  const agentConnectionOpenedResolved: BrowserSessionManagerShape["agentConnectionOpened"] = (
+    threadId,
+    connectionId,
+  ) =>
+    withThreadLock(
+      threadId,
+      Effect.gen(function* () {
+        yield* requireThread(threadId);
+        const entry = yield* getOrCreateEntry(threadId);
+        if (entry.session === undefined || entry.status !== "running") {
+          return yield* makeOperationError(threadId, "Browser session is not running.");
+        }
+        if (entry.agentConnectionIds.has(connectionId)) return;
+        const agentConnectionIds = new Set(entry.agentConnectionIds);
+        agentConnectionIds.add(connectionId);
+        yield* setEntry({ ...entry, agentConnectionIds });
+        yield* entry.session.idle.agentConnectionAdded;
+        yield* entry.session.idle.recordCdpActivity;
+      }),
+    );
+
+  const agentConnectionOpened: BrowserSessionManagerShape["agentConnectionOpened"] = (
+    threadId,
+    connectionId,
+  ) =>
+    Effect.flatMap(resolveThreadId(threadId), (rootThreadId) =>
+      agentConnectionOpenedResolved(rootThreadId, connectionId),
+    );
+
+  const recordAgentCdpActivityResolved: BrowserSessionManagerShape["recordAgentCdpActivity"] = (
+    threadId,
+    connectionId,
+  ) =>
+    Effect.flatMap(getEntry(threadId), (entry) =>
+      entry?.session !== undefined && entry.agentConnectionIds.has(connectionId)
+        ? entry.session.idle.recordCdpActivity
+        : Effect.void,
+    );
+
+  const recordAgentCdpActivity: BrowserSessionManagerShape["recordAgentCdpActivity"] = (
+    threadId,
+    connectionId,
+  ) =>
+    Effect.flatMap(resolveThreadId(threadId), (rootThreadId) =>
+      recordAgentCdpActivityResolved(rootThreadId, connectionId),
+    ).pipe(Effect.ignore);
+
+  const recordAgentCdpCommandResolved: BrowserSessionManagerShape["recordAgentCdpCommand"] = (
+    threadId,
+    connectionId,
+    originThreadId = threadId,
+  ) =>
+    Effect.flatMap(getEntry(threadId), (entry) =>
+      entry?.session !== undefined && entry.agentConnectionIds.has(connectionId)
+        ? Effect.all([
+            entry.session.idle.recordCdpActivity,
+            entry.agentActivity.recordCommand(originThreadId),
+          ]).pipe(Effect.asVoid)
+        : Effect.void,
+    );
+
+  const recordAgentCdpCommand: BrowserSessionManagerShape["recordAgentCdpCommand"] = (
+    threadId,
+    connectionId,
+    originThreadId = threadId,
+  ) =>
+    Effect.flatMap(resolveThreadId(threadId), (rootThreadId) =>
+      recordAgentCdpCommandResolved(rootThreadId, connectionId, originThreadId),
+    ).pipe(Effect.ignore);
+
+  const recordAgentBrowserRequest: BrowserSessionManagerShape["recordAgentBrowserRequest"] = (
+    threadId,
+    originThreadId = threadId,
+  ) =>
+    Effect.flatMap(resolveThreadId(threadId), (rootThreadId) =>
+      requireThread(rootThreadId).pipe(
+        Effect.andThen(getOrCreateEntry(rootThreadId)),
+        Effect.flatMap((entry) => entry.agentActivity.recordCommand(originThreadId)),
+      ),
+    ).pipe(Effect.ignore);
+
+  const agentConnectionClosedResolved: BrowserSessionManagerShape["agentConnectionClosed"] = (
+    threadId,
+    connectionId,
+  ) =>
+    withThreadLock(
+      threadId,
+      Effect.gen(function* () {
+        const entry = yield* getEntry(threadId);
+        if (entry === undefined || !entry.agentConnectionIds.has(connectionId)) return;
+        const agentConnectionIds = new Set(entry.agentConnectionIds);
+        agentConnectionIds.delete(connectionId);
+        yield* setEntry({ ...entry, agentConnectionIds });
+        if (entry.session !== undefined) yield* entry.session.idle.agentConnectionRemoved;
+      }),
+    ).pipe(Effect.ignore);
+
+  const agentConnectionClosed: BrowserSessionManagerShape["agentConnectionClosed"] = (
+    threadId,
+    connectionId,
+  ) =>
+    Effect.flatMap(resolveThreadId(threadId), (rootThreadId) =>
+      agentConnectionClosedResolved(rootThreadId, connectionId),
+    ).pipe(Effect.ignore);
+
+  const withRunningSession = <A>(
+    threadId: ThreadId,
+    operation: (runtime: BrowserRuntime) => Effect.Effect<A, BrowserRpcError>,
+  ): Effect.Effect<BrowserSessionState, BrowserRpcError> =>
+    withThreadLock(
+      threadId,
+      Effect.gen(function* () {
+        yield* requireThread(threadId);
+        const entry = yield* getOrCreateEntry(threadId);
+        if (entry?.status === "crashed") {
+          return yield* new BrowserCrashed({
+            threadId,
+            message: entry.error ?? "Chromium exited unexpectedly.",
+          });
+        }
+        if (entry?.session === undefined || entry.status !== "running") {
+          return yield* makeOperationError(threadId, "Browser session is not running.");
+        }
+        yield* operation(entry.session.runtime);
+        const tabs = yield* entry.session.runtime.getTabs;
+        const next = { ...entry, tabs };
+        yield* setEntry(next);
+        next.mailbox.publishTabs(tabs);
+        return snapshot(next);
+      }),
+    );
+
+  const setActiveTab: BrowserSessionManagerShape["setActiveTab"] = (threadId, targetId) =>
+    runStateOperation(threadId, (rootThreadId) =>
+      withRunningSession(rootThreadId, (runtime) => runtime.setActiveTab(targetId)),
+    );
+
+  const openTab: BrowserSessionManagerShape["openTab"] = (threadId, url) =>
+    runStateOperation(threadId, (rootThreadId) =>
+      withRunningSession(rootThreadId, (runtime) => runtime.openTab(url)),
+    );
+
+  const navigate: BrowserSessionManagerShape["navigate"] = (threadId, targetId, url) =>
+    runStateOperation(threadId, (rootThreadId) =>
+      withRunningSession(rootThreadId, (runtime) => runtime.navigate(targetId, url)),
+    );
+
+  const navigateHistory: BrowserSessionManagerShape["navigateHistory"] = (
+    threadId,
+    targetId,
+    action: BrowserHistoryAction,
+  ) =>
+    runStateOperation(threadId, (rootThreadId) =>
+      withRunningSession(rootThreadId, (runtime) => runtime.navigateHistory(targetId, action)),
+    );
+
+  const closeTab: BrowserSessionManagerShape["closeTab"] = (threadId, targetId) =>
+    runStateOperation(threadId, (rootThreadId) =>
+      withRunningSession(rootThreadId, (runtime) => runtime.closeTab(targetId)),
+    );
+
+  const dispatchInput: BrowserSessionManagerShape["dispatchInput"] = (
+    threadId,
+    targetId,
+    event: BrowserInputEvent,
+  ) =>
+    Effect.flatMap(resolveThreadId(threadId), (rootThreadId) =>
+      Effect.gen(function* () {
+        const inputReceivedAt = streamDebug ? browserMonotonicMillis() : 0;
+        const entry = yield* getEntry(rootThreadId);
+        if (entry?.status === "crashed") {
+          return yield* new BrowserCrashed({
+            threadId: rootThreadId,
+            message: entry.error ?? "Chromium exited unexpectedly.",
+          });
+        }
+        if (entry?.session === undefined || entry.status !== "running") {
+          return yield* makeOperationError(rootThreadId, "Browser session is not running.");
+        }
+        yield* entry.session.runtime.dispatchInput(targetId, event);
+        if (streamDebug) {
+          yield* logBrowserHandlerTiming("browser.input.manager-to-cdp-complete", inputReceivedAt, {
+            threadId: rootThreadId,
+            targetId,
+            inputType: event._tag,
+          });
+        }
+      }),
+    );
+
+  const updateViewportRequestResolved = (
+    threadId: ThreadId,
+    ownerId: string,
+    size: BrowserViewportSize | null,
+  ): Effect.Effect<BrowserSessionState, BrowserRpcError> =>
+    withThreadLock(
+      threadId,
+      Effect.gen(function* () {
+        yield* requireThread(threadId);
+        const entry = yield* getOrCreateEntry(threadId);
+        const agentActive = yield* entry.agentActivity.getActive;
+        const policy =
+          entry.viewportPolicy.agentActive === agentActive
+            ? entry.viewportPolicy
+            : { ...entry.viewportPolicy, agentActive };
+        const next = yield* applyViewportTransition(
+          entry,
+          updateBrowserViewportRequest(policy, ownerId, size),
+        );
+        return snapshot(next);
+      }),
+    );
+
+  const setViewportSize: BrowserSessionManagerShape["setViewportSize"] = (
+    threadId,
+    width,
+    height,
+    ownerId = "direct",
+  ) =>
+    runStateOperation(threadId, (rootThreadId) =>
+      updateViewportRequestResolved(rootThreadId, ownerId, { width, height }),
+    );
+
+  const releaseViewportSize: BrowserSessionManagerShape["releaseViewportSize"] = (
+    threadId,
+    ownerId = "direct",
+  ) =>
+    runStateOperation(threadId, (rootThreadId) =>
+      updateViewportRequestResolved(rootThreadId, ownerId, null),
+    );
+
+  const releaseViewportSizeOwner: BrowserSessionManagerShape["releaseViewportSizeOwner"] = (
+    ownerId,
+  ) =>
+    Effect.gen(function* () {
+      const entries = yield* SynchronizedRef.get(entriesRef);
+      yield* Effect.forEach(
+        [...entries.values()].filter((entry) => entry.viewportPolicy.requests.has(ownerId)),
+        (knownEntry) =>
+          withThreadLock(
+            knownEntry.threadId,
+            Effect.gen(function* () {
+              const entry = yield* getEntry(knownEntry.threadId);
+              if (entry === undefined || !entry.viewportPolicy.requests.has(ownerId)) return;
+              const agentActive = yield* entry.agentActivity.getActive;
+              const policy =
+                entry.viewportPolicy.agentActive === agentActive
+                  ? entry.viewportPolicy
+                  : { ...entry.viewportPolicy, agentActive };
+              yield* applyViewportTransition(
+                entry,
+                updateBrowserViewportRequest(policy, ownerId, null),
+              );
+            }),
+          ).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Failed to release a browser viewport size owner", {
+                threadId: knownEntry.threadId,
+                ownerId,
+                cause,
+              }),
+            ),
+          ),
+        { concurrency: "unbounded", discard: true },
+      );
+    });
+
+  const setViewportFollowingEnabled: BrowserSessionManagerShape["setViewportFollowingEnabled"] = (
+    enabled,
+  ) =>
+    Effect.gen(function* () {
+      viewportFollowsPanel = enabled;
+      const entries = yield* SynchronizedRef.get(entriesRef);
+      yield* Effect.forEach(
+        entries.values(),
+        (knownEntry) =>
+          withThreadLock(
+            knownEntry.threadId,
+            Effect.gen(function* () {
+              const entry = yield* getEntry(knownEntry.threadId);
+              if (entry === undefined) return;
+              const agentActive = yield* entry.agentActivity.getActive;
+              const policy =
+                entry.viewportPolicy.agentActive === agentActive
+                  ? entry.viewportPolicy
+                  : { ...entry.viewportPolicy, agentActive };
+              yield* applyViewportTransition(
+                entry,
+                setBrowserViewportFollowingEnabled(policy, enabled),
+              );
+            }),
+          ).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Failed to update browser viewport-following policy", {
+                threadId: knownEntry.threadId,
+                enabled,
+                cause,
+              }),
+            ),
+          ),
+        { concurrency: "unbounded", discard: true },
+      );
+    });
+
+  const releaseSubscriber = (threadId: ThreadId, leaseId: number) =>
+    withThreadLock(
+      threadId,
+      Effect.gen(function* () {
+        const entry = yield* getEntry(threadId);
+        if (entry === undefined || !entry.viewportLeases.has(leaseId)) return;
+        const viewportLeases = new Map(entry.viewportLeases);
+        viewportLeases.delete(leaseId);
+        const subscriberCount = viewportLeases.size;
+        const next = { ...entry, subscriberCount, viewportLeases };
+        yield* setEntry(next);
+        if (entry.session !== undefined) {
+          yield* entry.session.idle.subscriberRemoved;
+          if (subscriberCount === 0) {
+            yield* entry.session.runtime.setScreencastEnabled(false).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Failed to stop browser screencast after unsubscribe", {
+                  threadId,
+                  error: error.message,
+                }),
+              ),
+            );
+          }
+        }
+      }),
+    );
+
+  const acquireSubscriber = (threadId: ThreadId, leaseKind: BrowserViewportLeaseKind) =>
+    Effect.suspend(() => {
+      const leaseId = ++nextViewportLeaseId;
+      let leaseAcquired = false;
+      return withThreadLock(
+        threadId,
+        Effect.gen(function* () {
+          yield* requireThread(threadId);
+          const entry = yield* getOrCreateEntry(threadId);
+          const viewportLeases = new Map(entry.viewportLeases);
+          viewportLeases.set(leaseId, leaseKind);
+          const subscriberCount = viewportLeases.size;
+          yield* setEntry({ ...entry, subscriberCount, viewportLeases });
+          leaseAcquired = true;
+          if (entry.session !== undefined) {
+            yield* entry.session.idle.subscriberAdded;
+            if (entry.subscriberCount === 0) {
+              yield* entry.session.runtime.setScreencastEnabled(true);
+            }
+          }
+          return { leaseId, mailbox: entry.mailbox };
+        }),
+      ).pipe(
+        Effect.onError(() => (leaseAcquired ? releaseSubscriber(threadId, leaseId) : Effect.void)),
+      );
+    });
+
+  const subscribeViewportBinary: BrowserSessionManagerShape["subscribeViewportBinary"] = (
+    threadId,
+    leaseKind = "legacy-rpc-surface",
+  ) =>
+    Stream.scoped(
+      Stream.fromEffect(
+        Effect.acquireRelease(
+          Effect.flatMap(resolveThreadId(threadId), (rootThreadId) =>
+            acquireSubscriber(rootThreadId, leaseKind).pipe(
+              Effect.map(({ leaseId, mailbox }) => ({ leaseId, mailbox, rootThreadId })),
+            ),
+          ),
+          ({ leaseId, rootThreadId }) => releaseSubscriber(rootThreadId, leaseId),
+        ),
+      ).pipe(Stream.flatMap(({ mailbox }) => mailbox.stream)),
+    ).pipe(Stream.map((event) => binaryViewportEventForRequestedThread(event, threadId)));
+
+  const subscribeViewport: BrowserSessionManagerShape["subscribeViewport"] = (
+    threadId,
+    leaseKind = "legacy-rpc-surface",
+  ) => subscribeViewportBinary(threadId, leaseKind).pipe(Stream.map(legacyViewportEvent));
+
+  const checkViewportLeaseInvariants = Effect.gen(function* () {
+    const now = browserMonotonicMillis();
+    const entries = yield* SynchronizedRef.get(entriesRef);
+    yield* Effect.forEach(
+      entries.values(),
+      (entry) => {
+        const previous =
+          viewportLeaseInvariantStates.get(entry.threadId) ??
+          initialBrowserViewportLeaseInvariantState;
+        const result = updateBrowserViewportLeaseInvariant(previous, {
+          now,
+          subscriberCount: entry.subscriberCount,
+          visibleLeaseCount: entry.viewportLeases.size,
+        });
+        viewportLeaseInvariantStates.set(entry.threadId, result.state);
+        return result.shouldLog
+          ? Effect.logWarning("Browser viewport lease invariant violated", {
+              threadId: entry.threadId,
+              subscriberCount: entry.subscriberCount,
+              visibleLeaseCount: entry.viewportLeases.size,
+            })
+          : Effect.void;
+      },
+      { discard: true },
+    );
+  });
+
+  if (streamDebug) {
+    scheduleInManager(
+      Effect.forever(Effect.sleep("5 seconds").pipe(Effect.andThen(checkViewportLeaseInvariants))),
+    );
+  }
+
+  if (options.rogueBrowserWatchdog !== undefined) {
+    const watchdog = options.rogueBrowserWatchdog;
+    const checkRogueBrowsers = Effect.flatMap(watchdog.scan, ({ killEnabled, processes }) =>
+      Effect.forEach(
+        processes,
+        (rogueProcess) =>
+          resolveThreadId(rogueProcess.threadId).pipe(
+            Effect.flatMap((rootThreadId) =>
+              options.threadExists(rootThreadId).pipe(
+                Effect.flatMap((exists) =>
+                  exists
+                    ? withThreadLock(
+                        rootThreadId,
+                        Effect.gen(function* () {
+                          const entry = yield* getOrCreateEntry(rootThreadId);
+                          entry.mailbox.publishStatus(
+                            entry.status,
+                            entry.error ?? ROGUE_BROWSER_VIEWPORT_NOTICE,
+                          );
+                          yield* Effect.logWarning("Agent launched an external browser", {
+                            threadId: rootThreadId,
+                            pid: rogueProcess.pid,
+                            providerPid: rogueProcess.providerPid,
+                            command: rogueProcess.command,
+                            killEnabled,
+                          });
+                        }),
+                      ).pipe(
+                        Effect.andThen(
+                          killEnabled ? watchdog.terminate(rogueProcess) : Effect.void,
+                        ),
+                      )
+                    : Effect.void,
+                ),
+              ),
+            ),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Rogue browser watchdog could not inspect a process", {
+                pid: rogueProcess.pid,
+                cause,
+              }),
+            ),
+          ),
+        { discard: true },
+      ),
+    );
+    scheduleInManager(
+      Effect.forever(
+        Effect.sleep(watchdog.intervalMillis ?? ROGUE_BROWSER_WATCHDOG_INTERVAL_MILLIS).pipe(
+          Effect.andThen(checkRogueBrowsers),
+        ),
+      ),
+    );
+  }
+
+  const subscribeAgentActivity: BrowserSessionManagerShape["subscribeAgentActivity"] = (threadId) =>
+    Stream.unwrap(
+      resolveThreadId(threadId).pipe(
+        Effect.flatMap((rootThreadId) =>
+          requireThread(rootThreadId).pipe(
+            Effect.andThen(getOrCreateEntry(rootThreadId)),
+            Effect.map((entry) => entry.agentActivity.changes),
+          ),
+        ),
+      ),
+    );
+
+  return {
+    resolveRootThreadId: resolveThreadId,
+    start,
+    stop,
+    getState,
+    getCdpWebSocketUrl,
+    agentConnectionOpened,
+    recordAgentCdpActivity,
+    recordAgentCdpCommand,
+    recordAgentBrowserRequest,
+    agentConnectionClosed,
+    setActiveTab,
+    openTab,
+    navigate,
+    navigateHistory,
+    closeTab,
+    dispatchInput,
+    setViewportSize,
+    releaseViewportSize,
+    releaseViewportSizeOwner,
+    setViewportFollowingEnabled,
+    subscribeViewport,
+    subscribeViewportBinary,
+    subscribeAgentActivity,
+  } satisfies BrowserSessionManagerShape;
+});
+
+const makeLive = Effect.gen(function* () {
+  const config = yield* ServerConfig;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const serverSettings = yield* ServerSettingsService;
+  const netService = yield* NetService.NetService;
+  const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const browserInstaller = yield* BrowserInstaller;
+  const profileRoot = browserProfileRoot(config.baseDir, path);
+  const processRegistryDirectory = path.join(config.providerStatusCacheDir, "browser-processes");
+
+  yield* Effect.all([
+    fileSystem.makeDirectory(profileRoot, { recursive: true }),
+    fileSystem.makeDirectory(processRegistryDirectory, { recursive: true }),
+  ]).pipe(Effect.orDie);
+  yield* installBrowserEventLoopLagMonitor();
+
+  const profileDirectories = yield* fileSystem
+    .readDirectory(profileRoot, { recursive: false })
+    .pipe(Effect.orElseSucceed(() => []));
+  yield* Effect.forEach(
+    profileDirectories,
+    (profileDirectory) =>
+      Effect.gen(function* () {
+        const profileThreadId = browserProfileThreadIdFromDirectory(profileDirectory);
+        const thread =
+          profileThreadId === undefined
+            ? Option.none()
+            : yield* projectionSnapshotQuery.getThreadShellById(profileThreadId).pipe(
+                Effect.catch((cause) =>
+                  Effect.logWarning("Failed to inspect an existing browser profile owner", {
+                    profileDirectory,
+                    cause,
+                  }).pipe(Effect.as(Option.none())),
+                ),
+              );
+        if (Option.isSome(thread) && isBrowserRootThread(thread.value)) return;
+        yield* Effect.logWarning("Browser profile directory has no real root thread", {
+          profileDirectory,
+          ...(profileThreadId === undefined ? {} : { threadId: profileThreadId }),
+        });
+      }),
+    { discard: true },
+  );
+  if (process.platform === "linux") {
+    yield* reapManagedChildProcesses({ registryDirectory: processRegistryDirectory }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Failed to reconcile orphaned Chromium processes", { cause }),
+      ),
+    );
+  }
+
+  const startupSettings = yield* serverSettings.getSettings.pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Failed to inspect browser availability at startup", { cause }).pipe(
+        Effect.as(undefined),
+      ),
+    ),
+  );
+  if (
+    startupSettings?.browserAgentAccessEnabled === true &&
+    (yield* browserInstaller.getInstallState(startupSettings.browserManagedVariant)).status !==
+      "installed"
+  ) {
+    const browserExecutableNames = [
+      "google-chrome",
+      "google-chrome-stable",
+      "chrome",
+      "chromium",
+      "chromium-browser",
+      "microsoft-edge",
+      "microsoft-edge-stable",
+    ];
+    const searchDirectories = [
+      ...(process.env.PATH ?? "").split(process.platform === "win32" ? ";" : ":"),
+      "/snap/bin",
+      "/opt/google/chrome",
+    ].filter((directory) => directory.length > 0);
+    const explicitBrowserPaths = [
+      process.env.SALCHI_BROWSER_PATH?.trim(),
+      startupSettings.browserExecutablePath.trim(),
+    ].filter((candidate): candidate is string => candidate !== undefined && candidate.length > 0);
+    const candidatePaths = [
+      ...explicitBrowserPaths,
+      ...searchDirectories.flatMap((directory) =>
+        browserExecutableNames.map((name) => path.join(directory, name)),
+      ),
+    ];
+    const systemBrowserFound = (yield* Effect.all(
+      candidatePaths.map((candidate) => fileSystem.exists(candidate)),
+      {
+        concurrency: "unbounded",
+      },
+    )).some(Boolean);
+    if (!systemBrowserFound) {
+      yield* Effect.logInfo(
+        "No Chromium browser was found. Open a thread's Browser panel to install one, or run `salchi browser install --yes`.",
+      );
+    }
+  }
+
+  const manager = yield* makeBrowserSessionManagerWithOptions({
+    viewportFollowsPanel: startupSettings?.browserViewportFollowsPanel ?? true,
+    resolveRootThreadId: (threadId) =>
+      resolveBrowserRootThreadId(projectionSnapshotQuery, threadId),
+    threadExists: (threadId) =>
+      projectionSnapshotQuery.getThreadShellById(threadId).pipe(
+        Effect.map((thread) => Option.isSome(thread) && isBrowserRootThread(thread.value)),
+        Effect.mapError((cause) =>
+          makeOperationError(threadId, "Failed to look up the browser thread.", cause),
+        ),
+      ),
+    getLaunchConfig: (threadId) =>
+      Effect.gen(function* () {
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.mapError((cause) =>
+            makeOperationError(threadId, "Failed to load browser settings.", cause),
+          ),
+        );
+        const userDataDirectory = path.join(profileRoot, browserProfileDirectoryName(threadId));
+        yield* fileSystem
+          .makeDirectory(userDataDirectory, { recursive: true })
+          .pipe(
+            Effect.mapError((cause) =>
+              makeOperationError(
+                threadId,
+                "Failed to create the browser profile directory.",
+                cause,
+              ),
+            ),
+          );
+        return {
+          idleTimeoutMillis: Duration.toMillis(settings.browserIdleTimeout),
+          screencastQuality: settings.browserScreencastQuality,
+          screencastEveryNthFrame: settings.browserScreencastEveryNthFrame,
+          userDataDirectory,
+          processRegistryDirectory,
+          environmentExecutablePath: process.env.SALCHI_BROWSER_PATH,
+          settingExecutablePath: settings.browserExecutablePath,
+          managedExecutablePath: yield* browserInstaller.getManagedExecutablePath(
+            settings.browserManagedVariant,
+          ),
+          managedVariant: settings.browserManagedVariant,
+          noSandbox: process.env.SALCHI_BROWSER_NO_SANDBOX === "1",
+          stealthMode: settings.browserStealthMode,
+          serverHost: config.host,
+          serverPort: config.port,
+        };
+      }),
+    launchRuntime: (input) =>
+      launchPlaywrightBrowser(input).pipe(Effect.provideService(NetService.NetService, netService)),
+    rogueBrowserWatchdog: {
+      scan: Effect.gen(function* () {
+        const settings = yield* serverSettings.getSettings;
+        const processRows = yield* readProcessRows().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+        );
+        return {
+          killEnabled: settings.browserKillRogueBrowsers,
+          processes: findRogueBrowserProcesses({
+            processRows,
+            profileRoot,
+            providerProcesses: listBrowserProviderProcesses(),
+          }),
+        };
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Rogue browser watchdog scan failed", { cause }).pipe(
+            Effect.as({ killEnabled: false, processes: [] }),
+          ),
+        ),
+      ),
+      terminate: (rogueProcess) =>
+        terminateProcessTree({
+          rootPid: rogueProcess.pid,
+          label: `rogue browser for ${rogueProcess.threadId}`,
+        }),
+    },
+  });
+  const installStateForThread = (threadId: ThreadId) =>
+    serverSettings.getSettings.pipe(
+      Effect.flatMap((settings) =>
+        browserInstaller.getInstallState(settings.browserManagedVariant),
+      ),
+      Effect.mapError((cause) =>
+        makeOperationError(threadId, "Failed to load managed browser settings.", cause),
+      ),
+    );
+  const withInstallState = (
+    threadId: ThreadId,
+    effect: Effect.Effect<BrowserSessionState, BrowserRpcError>,
+  ) =>
+    Effect.zipWith(effect, installStateForThread(threadId), (state, installState) => ({
+      ...state,
+      installState,
+    }));
+  return {
+    ...manager,
+    start: (threadId) => withInstallState(threadId, manager.start(threadId)),
+    stop: (threadId) => withInstallState(threadId, manager.stop(threadId)),
+    getState: (threadId) => withInstallState(threadId, manager.getState(threadId)),
+    setActiveTab: (threadId, targetId) =>
+      withInstallState(threadId, manager.setActiveTab(threadId, targetId)),
+    openTab: (threadId, url) => withInstallState(threadId, manager.openTab(threadId, url)),
+    navigate: (threadId, targetId, url) =>
+      withInstallState(threadId, manager.navigate(threadId, targetId, url)),
+    navigateHistory: (threadId, targetId, action) =>
+      withInstallState(threadId, manager.navigateHistory(threadId, targetId, action)),
+    closeTab: (threadId, targetId) =>
+      withInstallState(threadId, manager.closeTab(threadId, targetId)),
+    setViewportSize: (threadId, width, height, ownerId) =>
+      withInstallState(threadId, manager.setViewportSize(threadId, width, height, ownerId)),
+    releaseViewportSize: (threadId, ownerId) =>
+      withInstallState(threadId, manager.releaseViewportSize(threadId, ownerId)),
+  } satisfies BrowserSessionManagerShape;
+});
+
+export const BrowserSessionManagerLive = Layer.effect(BrowserSessionManager, makeLive);

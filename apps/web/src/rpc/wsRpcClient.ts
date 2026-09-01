@@ -224,6 +224,28 @@ export interface WsRpcClient {
     readonly close: RpcUnaryMethod<typeof WS_METHODS.terminalClose>;
     readonly onEvent: RpcStreamMethod<typeof WS_METHODS.subscribeTerminalEvents>;
   };
+  readonly browser: {
+    readonly start: RpcUnaryMethod<typeof WS_METHODS.browserStart>;
+    readonly stop: RpcUnaryMethod<typeof WS_METHODS.browserStop>;
+    readonly getState: RpcUnaryMethod<typeof WS_METHODS.browserGetState>;
+    readonly getInstallState: RpcUnaryMethod<typeof WS_METHODS.browserGetInstallState>;
+    readonly install: (
+      input: RpcInput<typeof WS_METHODS.browserInstall>,
+      onProgress: (progress: import("@salchi/contracts").BrowserInstallProgress) => void,
+    ) => Promise<void>;
+    readonly cancelInstall: RpcUnaryMethod<typeof WS_METHODS.browserCancelInstall>;
+    readonly setActiveTab: RpcUnaryMethod<typeof WS_METHODS.browserSetActiveTab>;
+    readonly setViewportSize: RpcUnaryMethod<typeof WS_METHODS.browserSetViewportSize>;
+    readonly openTab: RpcUnaryMethod<typeof WS_METHODS.browserOpenTab>;
+    readonly navigate: RpcUnaryMethod<typeof WS_METHODS.browserNavigate>;
+    readonly navigateHistory: RpcUnaryMethod<typeof WS_METHODS.browserNavigateHistory>;
+    readonly closeTab: RpcUnaryMethod<typeof WS_METHODS.browserCloseTab>;
+    readonly dispatchInput: RpcUnaryMethod<typeof WS_METHODS.browserDispatchInput>;
+    readonly subscribeViewport: RpcInputStreamMethod<typeof WS_METHODS.browserSubscribeViewport>;
+    readonly subscribeAgentActivity: RpcInputStreamMethod<
+      typeof WS_METHODS.browserSubscribeAgentActivity
+    >;
+  };
   readonly projects: {
     readonly searchEntries: RpcUnaryMethod<typeof WS_METHODS.projectsSearchEntries>;
     readonly listDirectoryEntries: RpcUnaryMethod<typeof WS_METHODS.projectsListDirectoryEntries>;
@@ -375,6 +397,40 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
           ...options,
           tag: options?.tag ?? WS_METHODS.subscribeTerminalEvents,
         }),
+    },
+    browser: {
+      start: (input) => transport.request((client) => client[WS_METHODS.browserStart](input)),
+      stop: (input) => transport.request((client) => client[WS_METHODS.browserStop](input)),
+      getState: (input) => transport.request((client) => client[WS_METHODS.browserGetState](input)),
+      getInstallState: (input) =>
+        transport.request((client) => client[WS_METHODS.browserGetInstallState](input)),
+      install: (input, onProgress) =>
+        transport.requestStream((client) => client[WS_METHODS.browserInstall](input), onProgress),
+      cancelInstall: (input) =>
+        transport.request((client) => client[WS_METHODS.browserCancelInstall](input)),
+      setActiveTab: (input) =>
+        transport.request((client) => client[WS_METHODS.browserSetActiveTab](input)),
+      setViewportSize: (input) =>
+        transport.request((client) => client[WS_METHODS.browserSetViewportSize](input)),
+      openTab: (input) => transport.request((client) => client[WS_METHODS.browserOpenTab](input)),
+      navigate: (input) => transport.request((client) => client[WS_METHODS.browserNavigate](input)),
+      navigateHistory: (input) =>
+        transport.request((client) => client[WS_METHODS.browserNavigateHistory](input)),
+      closeTab: (input) => transport.request((client) => client[WS_METHODS.browserCloseTab](input)),
+      dispatchInput: (input) =>
+        transport.request((client) => client[WS_METHODS.browserDispatchInput](input)),
+      subscribeViewport: (input, listener, options) =>
+        transport.subscribe(
+          (client) => client[WS_METHODS.browserSubscribeViewport](input),
+          listener,
+          { ...options, tag: options?.tag ?? WS_METHODS.browserSubscribeViewport },
+        ),
+      subscribeAgentActivity: (input, listener, options) =>
+        transport.subscribe(
+          (client) => client[WS_METHODS.browserSubscribeAgentActivity](input),
+          listener,
+          { ...options, tag: options?.tag ?? WS_METHODS.browserSubscribeAgentActivity },
+        ),
     },
     projects: {
       searchEntries: (input) =>

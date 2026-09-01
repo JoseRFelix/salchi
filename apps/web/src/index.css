@@ -295,6 +295,24 @@ code {
   display: none;
 }
 
+.browser-tab-strip {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--border) 78%, transparent) transparent;
+}
+
+.browser-tab-strip::-webkit-scrollbar {
+  height: 6px;
+}
+
+.browser-tab-strip::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.browser-tab-strip::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border) 78%, transparent);
+}
+
 /* Terminal drawer scrollbar parity with chat */
 .thread-terminal-drawer .xterm .xterm-scrollable-element > .scrollbar.vertical {
   width: 6px !important;

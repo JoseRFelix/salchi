@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import type { ThreadId } from "@salchi/contracts";
+
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -16,6 +18,12 @@ import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@salchi/shared/shell";
+import { mergeBrowserAgentEnvironment } from "../../browser/BrowserAgentAccess.ts";
+import { registerBrowserProviderProcess } from "../../browser/BrowserProviderProcessRegistry.ts";
+import {
+  BROWSER_MCP_USAGE_INSTRUCTION,
+  prepareBrowserMcpServer,
+} from "../../browser/BrowserMcp.ts";
 
 import { ACP_PROCESS_TERMINATE_GRACE, terminateAcpProcessTree } from "./AcpProcessCleanup.ts";
 import {
@@ -44,6 +52,8 @@ export interface AcpSpawnInput {
 
 export interface AcpSessionRuntimeOptions {
   readonly spawn: AcpSpawnInput;
+  readonly threadId?: ThreadId;
+  readonly browserEnvironment?: NodeJS.ProcessEnv;
   readonly cwd: string;
   readonly resumeSessionId?: string;
   readonly clientCapabilities?: EffectAcpSchema.InitializeRequest["clientCapabilities"];
@@ -174,7 +184,25 @@ const makeAcpSessionRuntime = (
     const loadReplayRef = yield* Ref.make(false);
     const configOptionsRef = yield* Ref.make(sessionConfigOptionsFromSetup(undefined));
     const startStateRef = yield* Ref.make<AcpStartState>({ _tag: "NotStarted" });
-    const mcpServers = makeSalchiAcpMcpServers();
+    const browserMcpServer = yield* prepareBrowserMcpServer(options.browserEnvironment);
+    const mcpServers: ReadonlyArray<EffectAcpSchema.McpServer> = [
+      ...makeSalchiAcpMcpServers(
+        browserMcpServer ? { additionalInstructions: BROWSER_MCP_USAGE_INSTRUCTION } : undefined,
+      ),
+      ...(browserMcpServer
+        ? [
+            {
+              name: browserMcpServer.name,
+              command: browserMcpServer.command,
+              args: [...browserMcpServer.args],
+              env: Object.entries(browserMcpServer.environment).map(([name, value]) => ({
+                name,
+                value,
+              })),
+            } satisfies EffectAcpSchema.McpServer,
+          ]
+        : []),
+    ];
     const runtimeEpoch = randomUUID().slice(0, 8);
     const processScope = yield* Scope.make("sequential");
     let processScopeTransferred = false;
@@ -215,7 +243,11 @@ const makeAcpSessionRuntime = (
         ),
       );
 
-    const spawnEnv = options.spawn.env ? { ...process.env, ...options.spawn.env } : undefined;
+    const baseSpawnEnvironment =
+      options.spawn.env !== undefined || options.browserEnvironment !== undefined
+        ? { ...process.env, ...options.spawn.env }
+        : undefined;
+    const spawnEnv = mergeBrowserAgentEnvironment(baseSpawnEnvironment, options.browserEnvironment);
     const spawnCommand = resolveSpawnCommand(
       options.spawn.command,
       options.spawn.args,
@@ -242,6 +274,13 @@ const makeAcpSessionRuntime = (
             }),
         ),
       );
+    if (options.threadId !== undefined) {
+      const unregisterProviderProcess = registerBrowserProviderProcess({
+        pid: Number(child.pid),
+        threadId: options.threadId,
+      });
+      yield* Scope.addFinalizer(runtimeScope, Effect.sync(unregisterProviderProcess));
+    }
     yield* Scope.addFinalizer(
       runtimeScope,
       terminateAcpProcessTree({ child, label: options.clientInfo.name }).pipe(

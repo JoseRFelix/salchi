@@ -14,14 +14,22 @@ const EMPTY_REGISTRATION: RightPanelContentRegistration = {
   render: () => null,
 };
 
-let planRegistration = EMPTY_REGISTRATION;
+type RegisteredContentKind = "browser" | "plan";
+
+const registrations: Record<RegisteredContentKind, RightPanelContentRegistration> = {
+  browser: EMPTY_REGISTRATION,
+  plan: EMPTY_REGISTRATION,
+};
 const listeners = new Set<() => void>();
 
-function publishPlanRegistration(registration: RightPanelContentRegistration): void {
-  if (planRegistration === registration) {
+function publishRegistration(
+  kind: RegisteredContentKind,
+  registration: RightPanelContentRegistration,
+): void {
+  if (registrations[kind] === registration) {
     return;
   }
-  planRegistration = registration;
+  registrations[kind] = registration;
   for (const listener of listeners) {
     listener();
   }
@@ -32,27 +40,49 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-function getSnapshot(): RightPanelContentRegistration {
-  return planRegistration;
+function getPlanSnapshot(): RightPanelContentRegistration {
+  return registrations.plan;
+}
+
+function getBrowserSnapshot(): RightPanelContentRegistration {
+  return registrations.browser;
 }
 
 export function usePlanRightPanelContent(): RightPanelContentRegistration {
-  return useSyncExternalStore(subscribe, getSnapshot, () => EMPTY_REGISTRATION);
+  return useSyncExternalStore(subscribe, getPlanSnapshot, () => EMPTY_REGISTRATION);
+}
+
+export function useBrowserRightPanelContent(): RightPanelContentRegistration {
+  return useSyncExternalStore(subscribe, getBrowserSnapshot, () => EMPTY_REGISTRATION);
 }
 
 export function useRegisterPlanRightPanelContent(
   registration: RightPanelContentRegistration,
 ): void {
   useLayoutEffect(() => {
-    publishPlanRegistration(registration);
+    publishRegistration("plan", registration);
     return () => {
-      if (planRegistration === registration) {
-        publishPlanRegistration(EMPTY_REGISTRATION);
+      if (registrations.plan === registration) {
+        publishRegistration("plan", EMPTY_REGISTRATION);
+      }
+    };
+  }, [registration]);
+}
+
+export function useRegisterBrowserRightPanelContent(
+  registration: RightPanelContentRegistration,
+): void {
+  useLayoutEffect(() => {
+    publishRegistration("browser", registration);
+    return () => {
+      if (registrations.browser === registration) {
+        publishRegistration("browser", EMPTY_REGISTRATION);
       }
     };
   }, [registration]);
 }
 
 export function __resetRightPanelContentRegistryForTests(): void {
-  publishPlanRegistration(EMPTY_REGISTRATION);
+  publishRegistration("browser", EMPTY_REGISTRATION);
+  publishRegistration("plan", EMPTY_REGISTRATION);
 }

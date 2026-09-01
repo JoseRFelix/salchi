@@ -25,6 +25,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { makeOpenCodeTextGeneration } from "../../textGeneration/OpenCodeTextGeneration.ts";
 import { ServerConfig } from "../../config.ts";
+import { BrowserAgentBroker } from "../../browser/Services/BrowserAgentBroker.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeOpenCodeAdapter } from "../Layers/OpenCodeAdapter.ts";
 import {
@@ -79,6 +80,7 @@ export type OpenCodeDriverEnv =
   | HttpClient.HttpClient
   | OpenCodeRuntime
   | Path.Path
+  | BrowserAgentBroker
   | ProviderEventLoggers
   | ServerConfig;
 
@@ -112,6 +114,7 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
       const serverConfig = yield* ServerConfig;
       const httpClient = yield* HttpClient.HttpClient;
       const eventLoggers = yield* ProviderEventLoggers;
+      const browserAgentBroker = yield* BrowserAgentBroker;
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
@@ -132,6 +135,8 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
       const adapter = yield* makeOpenCodeAdapter(effectiveConfig, {
         instanceId,
         environment: processEnv,
+        acquireBrowserAgentSessionAccess: browserAgentBroker.acquireSessionAccess,
+        browserAgentAccessEnabled: browserAgentBroker.isAccessEnabled,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       });
       const textGeneration = yield* makeOpenCodeTextGeneration(effectiveConfig, processEnv);

@@ -24,6 +24,7 @@ const clientSettings: ClientSettings = {
   dismissedProviderUpdateNotificationKeys: [],
   diffIgnoreWhitespace: true,
   diffWordWrap: true,
+  showBrowserAgentPreview: true,
   favorites: [],
   hasSeenInboxIntroduction: true,
   providerModelPreferences: {},

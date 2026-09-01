@@ -293,9 +293,9 @@ function DraftChatThreadRouteView() {
     activeRightPanelView === "files" ||
     (!shouldUseRightPanelSheet &&
       (filePanel.target !== null || filePanel.explorerContext !== null));
-  // See the thread route: keeping the diff panel (and its worker pool) mounted
-  // after it closes is a memory win for inline layout switches but a crash risk
-  // on the mobile sheet, so tear it down on dismiss there.
+  // See the thread route: mobile releases the expensive parsed/rendered diff
+  // tree on dismiss while the panel shell briefly retains only its bounded,
+  // cacheless worker for a rapid reopen.
   const shouldRenderDiffContent = diffOpen || (!shouldUseRightPanelSheet && hasOpenedDiff);
   const reopenRightPanel =
     activeRightPanelView === "diff"

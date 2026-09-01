@@ -1,8 +1,20 @@
-import { Suspense, lazy, useCallback, type CSSProperties, type ReactNode } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 
 import { cn } from "~/lib/utils";
 
-import { usePlanRightPanelContent } from "../../rightPanelContentRegistry";
+import type { DiffWorkerPoolProfile } from "../../diffWorkerPoolConfig";
+import {
+  useBrowserRightPanelContent,
+  usePlanRightPanelContent,
+} from "../../rightPanelContentRegistry";
 import type { WorkspaceFilePreviewDiffReturnTarget } from "../../workspaceFilePreview";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 import {
@@ -22,6 +34,7 @@ const RIGHT_INLINE_PANEL_DEFAULT_WIDTH = "clamp(24rem,34vw,36rem)";
 const RIGHT_INLINE_PANEL_MIN_WIDTH = 22 * 16;
 const RIGHT_INLINE_PANEL_MAX_WIDTH = 256 * 16;
 const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 208;
+export const MOBILE_WORKER_POOL_IDLE_GRACE_MS = 10_000;
 
 const rightPanelSidebarStyle = {
   "--sidebar-width": RIGHT_INLINE_PANEL_DEFAULT_WIDTH,
@@ -43,7 +56,53 @@ const LazyDiffPanel = (props: { mode: DiffPanelMode }) => {
   );
 };
 
-export type ChatRightPanelView = "diff" | "files" | "plan";
+function useRetainedMobileWorkerPool(active: boolean, enabled: boolean): boolean {
+  const [retained, setRetained] = useState(active && enabled);
+
+  useEffect(() => {
+    if (!enabled) {
+      setRetained(false);
+      return;
+    }
+    if (active) {
+      setRetained(true);
+      return;
+    }
+    if (!retained) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setRetained(false);
+    }, MOBILE_WORKER_POOL_IDLE_GRACE_MS);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [active, enabled, retained]);
+
+  return enabled && (active || retained);
+}
+
+function useSettledWorkerPoolProfile(useSheet: boolean): {
+  readonly profile: DiffWorkerPoolProfile;
+  readonly settled: boolean;
+} {
+  const requestedProfile: DiffWorkerPoolProfile = useSheet ? "memory-constrained" : "standard";
+  const [profile, setProfile] = useState(requestedProfile);
+
+  useEffect(() => {
+    if (profile !== requestedProfile) {
+      setProfile(requestedProfile);
+    }
+  }, [profile, requestedProfile]);
+
+  return {
+    profile,
+    settled: profile === requestedProfile,
+  };
+}
+
+export type ChatRightPanelView = "browser" | "diff" | "files" | "plan";
 
 const RightPanelInlineSidebar = (props: {
   activeView: ChatRightPanelView | null;
@@ -52,6 +111,7 @@ const RightPanelInlineSidebar = (props: {
   onReturnToDiff: (target: WorkspaceFilePreviewDiffReturnTarget) => void;
   renderDiffContent: boolean;
   renderFileContent: boolean;
+  renderBrowserContent: ReactNode;
   renderPlanContent: ReactNode;
 }) => {
   const {
@@ -61,6 +121,7 @@ const RightPanelInlineSidebar = (props: {
     onReturnToDiff,
     renderDiffContent,
     renderFileContent,
+    renderBrowserContent,
     renderPlanContent,
   } = props;
   const open = activeView !== null;
@@ -164,6 +225,11 @@ const RightPanelInlineSidebar = (props: {
             {renderPlanContent}
           </div>
         ) : null}
+        {renderBrowserContent ? (
+          <div className={cn("h-full min-h-0", activeView !== "browser" && "hidden")}>
+            {renderBrowserContent}
+          </div>
+        ) : null}
         <SidebarRail />
       </Sidebar>
     </SidebarProvider>
@@ -189,20 +255,39 @@ export function ChatRightPanels(props: {
     useSheet,
   } = props;
   const plan = usePlanRightPanelContent();
-  const effectiveActiveView: ChatRightPanelView | null = plan.open ? "plan" : activeView;
-  const effectiveOnClose = plan.open ? plan.onClose : onClose;
+  const browser = useBrowserRightPanelContent();
+  const registeredPanel = browser.open ? browser : plan.open ? plan : null;
+  const effectiveActiveView: ChatRightPanelView | null = browser.open
+    ? "browser"
+    : plan.open
+      ? "plan"
+      : activeView;
+  const effectiveOnClose = registeredPanel?.onClose ?? onClose;
+  const hasSheetWorkerContent = renderDiffContent || renderFileContent;
+  const retainSheetWorkerPool = useRetainedMobileWorkerPool(hasSheetWorkerContent, useSheet);
+  const workerPoolProfile = useSettledWorkerPoolProfile(useSheet);
 
-  // The worker-pool provider eagerly allocates WASM workers on mount, so it must
-  // stay gated behind whether any panel content actually renders. It is wrapped
-  // around the panel *content* (not the Sheet/Sidebar shells) so the shells stay
-  // mounted across open/close — otherwise mounting them already-open skips the
-  // enter animation. The pool itself is a refcounted singleton, so the separate
-  // providers below share one underlying pool.
+  // The dependency owns one module-level worker-pool singleton and applies the
+  // options from its first mounted provider. Render an empty commit across the
+  // responsive boundary so the old profile is fully terminated before another
+  // provider can create the replacement pool with different sizing.
+  if (!workerPoolProfile.settled) {
+    return null;
+  }
+
   if (useSheet) {
     return (
-      <RightPanelSheet open={effectiveActiveView !== null} onClose={effectiveOnClose}>
+      <RightPanelSheet
+        closedChildren={
+          retainSheetWorkerPool ? (
+            <DiffWorkerPoolProvider profile={workerPoolProfile.profile} />
+          ) : null
+        }
+        open={effectiveActiveView !== null}
+        onClose={effectiveOnClose}
+      >
         {renderDiffContent || renderFileContent ? (
-          <DiffWorkerPoolProvider>
+          <DiffWorkerPoolProvider profile={workerPoolProfile.profile}>
             {renderDiffContent ? (
               <div className={cn("h-full min-h-0", effectiveActiveView !== "diff" && "hidden")}>
                 <LazyDiffPanel mode="sheet" />
@@ -220,7 +305,8 @@ export function ChatRightPanels(props: {
             ) : null}
           </DiffWorkerPoolProvider>
         ) : null}
-        {plan.open ? plan.render("sheet") : null}
+        {effectiveActiveView === "plan" ? plan.render("sheet") : null}
+        {effectiveActiveView === "browser" ? browser.render("sheet") : null}
       </RightPanelSheet>
     );
   }
@@ -233,7 +319,8 @@ export function ChatRightPanels(props: {
       onReturnToDiff={onReturnFromFileToDiff}
       renderDiffContent={renderDiffContent}
       renderFileContent={renderFileContent}
-      renderPlanContent={plan.open ? plan.render("sidebar") : null}
+      renderBrowserContent={effectiveActiveView === "browser" ? browser.render("sidebar") : null}
+      renderPlanContent={effectiveActiveView === "plan" ? plan.render("sidebar") : null}
     />
   );
 }

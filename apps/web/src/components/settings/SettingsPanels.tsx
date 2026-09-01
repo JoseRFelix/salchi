@@ -391,6 +391,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.autoOpenPlanSidebar !== DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar
         ? ["Auto-open task panel"]
         : []),
+      ...(settings.showBrowserAgentPreview !== DEFAULT_UNIFIED_SETTINGS.showBrowserAgentPreview
+        ? ["Browser agent preview"]
+        : []),
       ...(settings.enableAssistantStreaming !== DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming
         ? ["Assistant output"]
         : []),
@@ -421,6 +424,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     [
       isTextGenerationModelDirty,
       settings.autoOpenPlanSidebar,
+      settings.showBrowserAgentPreview,
       settings.confirmThreadArchive,
       settings.confirmThreadUnpin,
       settings.confirmThreadDelete,
@@ -464,6 +468,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
+      showBrowserAgentPreview: DEFAULT_UNIFIED_SETTINGS.showBrowserAgentPreview,
       enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
       transcriptionModel: DEFAULT_UNIFIED_SETTINGS.transcriptionModel,
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,

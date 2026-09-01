@@ -462,6 +462,63 @@ export function ChatSettingsPanel() {
         />
       </SettingsSection>
 
+      <SettingsSection title="Browser">
+        <SettingsRow
+          title="Show browser preview while agent browses"
+          description="Show a small live, view-only browser preview over the chat while the agent is browsing."
+          resetAction={
+            settings.showBrowserAgentPreview !==
+            DEFAULT_UNIFIED_SETTINGS.showBrowserAgentPreview ? (
+              <SettingResetButton
+                label="browser agent preview"
+                onClick={() =>
+                  updateSettings({
+                    showBrowserAgentPreview: DEFAULT_UNIFIED_SETTINGS.showBrowserAgentPreview,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.showBrowserAgentPreview}
+              onCheckedChange={(checked) =>
+                updateSettings({ showBrowserAgentPreview: Boolean(checked) })
+              }
+              aria-label="Show browser preview while agent browses"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Fit browser viewport to panel"
+          description="Resize the server browser to the visible Browser panel. Turn this off to keep the fixed 800×600 viewport."
+          resetAction={
+            settings.browserViewportFollowsPanel !==
+            DEFAULT_UNIFIED_SETTINGS.browserViewportFollowsPanel ? (
+              <SettingResetButton
+                label="browser viewport sizing"
+                onClick={() =>
+                  updateSettings({
+                    browserViewportFollowsPanel:
+                      DEFAULT_UNIFIED_SETTINGS.browserViewportFollowsPanel,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.browserViewportFollowsPanel}
+              onCheckedChange={(checked) =>
+                updateSettings({ browserViewportFollowsPanel: Boolean(checked) })
+              }
+              aria-label="Fit browser viewport to panel"
+            />
+          }
+        />
+      </SettingsSection>
+
       <SettingsSection title="Input">
         <SettingsRow
           title="Dictation model"

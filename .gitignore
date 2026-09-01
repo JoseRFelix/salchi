@@ -17,6 +17,7 @@ release-mock/
 .salchi
 .idea/
 apps/web/.playwright
+.playwright-mcp/
 apps/web/playwright-report
 apps/web/src/components/__screenshots__
 .vitest-*

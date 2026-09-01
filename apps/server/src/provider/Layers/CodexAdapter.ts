@@ -94,6 +94,7 @@ import {
   extractCodexThreadSpawnMetadata,
 } from "./CodexChildThreads.ts";
 import { INDEPENDENT_THREAD_TOOL_METHOD } from "../IndependentThreadTool.ts";
+import type { AcquireBrowserAgentSessionAccess } from "../../browser/BrowserAgentAccess.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -122,6 +123,7 @@ export interface CodexAdapterLiveOptions {
   >;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  readonly acquireBrowserAgentSessionAccess?: AcquireBrowserAgentSessionAccess;
 }
 
 interface CodexAdapterRootSessionContext {
@@ -2630,6 +2632,18 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           yield* Effect.suspend(() => stopSessionInternal(existing));
         }
 
+        const sessionScope = yield* Scope.make("sequential");
+        let sessionScopeTransferred = false;
+        yield* Effect.addFinalizer(() =>
+          sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
+        );
+        const browserAgentAccess = options?.acquireBrowserAgentSessionAccess
+          ? yield* options.acquireBrowserAgentSessionAccess(input.threadId)
+          : undefined;
+        if (browserAgentAccess !== undefined) {
+          yield* Scope.addFinalizer(sessionScope, browserAgentAccess.release);
+        }
+
         const approvalsReviewer = resolveCodexApprovalsReviewer(
           input.modelSelection,
           boundInstanceId,
@@ -2645,6 +2659,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           binaryPath: codexConfig.binaryPath,
           processRegistryDirectory,
           ...(options?.environment ? { environment: options.environment } : {}),
+          ...(browserAgentAccess !== undefined
+            ? { browserEnvironment: browserAgentAccess.environment }
+            : {}),
           ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
           ...(isCodexResumeCursorSchema(input.resumeCursor)
             ? { resumeCursor: input.resumeCursor }
@@ -2661,11 +2678,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               }
             : {}),
         };
-        const sessionScope = yield* Scope.make("sequential");
-        let sessionScopeTransferred = false;
-        yield* Effect.addFinalizer(() =>
-          sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
-        );
         const createRuntime = options?.makeRuntime ?? makeCodexSessionRuntime;
         const runtime = yield* createRuntime(runtimeInput).pipe(
           Effect.provideService(Scope.Scope, sessionScope),

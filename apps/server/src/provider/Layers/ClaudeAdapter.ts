@@ -6,6 +6,9 @@
  *
  * @module ClaudeAdapterLive
  */
+// @effect-diagnostics nodeBuiltinImport:off
+import { spawn } from "node:child_process";
+
 import {
   type CanUseTool,
   createSdkMcpServer,
@@ -22,6 +25,8 @@ import {
   type SettingSource,
   type SDKUserMessage,
   type ModelUsage,
+  type SpawnOptions,
+  type SpawnedProcess,
 } from "@anthropic-ai/claude-agent-sdk";
 import { parseCliArgs } from "@salchi/shared/cliArgs";
 import {
@@ -79,6 +84,16 @@ import * as Stream from "effect/Stream";
 import * as Clock from "effect/Clock";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import {
+  mergeBrowserAgentEnvironment,
+  type AcquireBrowserAgentSessionAccess,
+} from "../../browser/BrowserAgentAccess.ts";
+import {
+  BROWSER_MCP_SERVER_NAME,
+  BROWSER_MCP_USAGE_INSTRUCTION,
+  prepareBrowserMcpServer,
+} from "../../browser/BrowserMcp.ts";
+import { registerBrowserProviderProcess } from "../../browser/BrowserProviderProcessRegistry.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   formatPdfAttachmentReferenceText,
@@ -129,6 +144,22 @@ const CLAUDE_AUTH_FAILURE_MESSAGE =
 // is more aggressively rate-limited for non-Claude-Code user agents.
 const CLAUDE_OAUTH_USAGE_USER_AGENT = "claude-code/2.1.80";
 const CLAUDE_OAUTH_REFRESH_SKEW_MS = 60 * 1000;
+
+function spawnTrackedClaudeCodeProcess(threadId: ThreadId, options: SpawnOptions): SpawnedProcess {
+  const child = spawn(options.command, options.args, {
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+    env: options.env,
+    signal: options.signal,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const unregisterProviderProcess = registerBrowserProviderProcess({
+    pid: child.pid ?? -1,
+    threadId,
+  });
+  child.once("error", unregisterProviderProcess);
+  child.once("exit", unregisterProviderProcess);
+  return child;
+}
 const CLAUDE_STATUSLINE_CAPTURE_ENV = "SALCHI_CLAUDE_STATUSLINE_CAPTURE_PATH";
 const CLAUDE_OAUTH_DEFAULT_SCOPES = [
   "user:profile",
@@ -319,6 +350,7 @@ interface ClaudeSessionContext {
   lastThreadStartedId: string | undefined;
   terminalTurnFailure: string | undefined;
   stopped: boolean;
+  readonly browserAgentAccessRelease: Effect.Effect<void> | undefined;
 }
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
@@ -346,6 +378,7 @@ export interface ClaudeAdapterLiveOptions {
   }) => Promise<unknown>;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  readonly acquireBrowserAgentSessionAccess?: AcquireBrowserAgentSessionAccess;
 }
 
 interface ClaudeOAuthCredentials {
@@ -3990,6 +4023,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     if (context.stopped) return;
 
     context.stopped = true;
+    yield* context.browserAgentAccessRelease ?? Effect.void;
 
     for (const [requestId, pending] of context.pendingApprovals) {
       yield* Deferred.succeed(pending.decision, "cancel");
@@ -4507,12 +4541,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             }
           : {}),
       };
-      const queryEnvironment = {
-        ...claudeEnvironment,
-        ...(statuslineCapturePath
-          ? { [CLAUDE_STATUSLINE_CAPTURE_ENV]: statuslineCapturePath }
-          : {}),
-      };
       const additionalDirectories = Array.from(
         new Set(
           [input.cwd, serverConfig.attachmentsDir].filter((entry): entry is string =>
@@ -4596,11 +4624,32 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ),
         ],
       });
+      const browserAgentAccess = options?.acquireBrowserAgentSessionAccess
+        ? yield* options.acquireBrowserAgentSessionAccess(threadId)
+        : undefined;
+      const releaseBrowserAgentAccess = browserAgentAccess?.release ?? Effect.void;
+      const browserMcpServer = yield* prepareBrowserMcpServer(browserAgentAccess?.environment);
+      const queryEnvironment = {
+        ...mergeBrowserAgentEnvironment(claudeEnvironment, browserAgentAccess?.environment),
+        ...(statuslineCapturePath
+          ? { [CLAUDE_STATUSLINE_CAPTURE_ENV]: statuslineCapturePath }
+          : {}),
+      };
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
         pathToClaudeCodeExecutable: claudeBinaryPath,
-        systemPrompt: { type: "preset", preset: "claude_code" },
+        ...(options?.createQuery === undefined
+          ? {
+              spawnClaudeCodeProcess: (spawnOptions) =>
+                spawnTrackedClaudeCodeProcess(threadId, spawnOptions),
+            }
+          : {}),
+        systemPrompt: {
+          type: "preset",
+          preset: "claude_code",
+          ...(browserMcpServer ? { append: BROWSER_MCP_USAGE_INSTRUCTION } : {}),
+        },
         settingSources: [...CLAUDE_SETTING_SOURCES],
         // The SDK type lags the CLI here: Opus 4.7+ accepts `xhigh` even though
         // the published `Options["effort"]` union currently stops at `max`.
@@ -4620,6 +4669,16 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         canUseTool,
         mcpServers: {
           [INDEPENDENT_THREAD_MCP_SERVER_NAME]: salchiMcpServer,
+          ...(browserMcpServer
+            ? {
+                [BROWSER_MCP_SERVER_NAME]: {
+                  type: "stdio" as const,
+                  command: browserMcpServer.command,
+                  args: [...browserMcpServer.args],
+                  env: { ...browserMcpServer.environment },
+                },
+              }
+            : {}),
         },
         env: queryEnvironment,
         ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
@@ -4649,7 +4708,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         "claude.query.settings_json": encodeJsonStringForDiagnostics(settings) ?? "",
         "claude.query.extra_args_json": encodeJsonStringForDiagnostics(extraArgs) ?? "",
         "claude.query.path_to_executable": claudeBinaryPath,
-      });
+      }).pipe(Effect.onError(() => releaseBrowserAgentAccess));
 
       const queryRuntime = yield* Effect.try({
         try: () =>
@@ -4664,7 +4723,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             detail: toMessage(cause, "Failed to start Claude runtime session."),
             cause,
           }),
-      });
+      }).pipe(Effect.onError(() => releaseBrowserAgentAccess));
 
       const session: ProviderSession = {
         threadId,
@@ -4713,8 +4772,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         lastThreadStartedId: undefined,
         terminalTurnFailure: undefined,
         stopped: false,
+        browserAgentAccessRelease: browserAgentAccess?.release,
       };
-      yield* Ref.set(contextRef, context);
+      yield* Ref.set(contextRef, context).pipe(Effect.onError(() => releaseBrowserAgentAccess));
       sessions.set(threadId, context);
 
       const sessionStartedStamp = yield* makeEventStamp();

@@ -45,6 +45,9 @@ function renderHeader(devServerLinks: ReadonlyArray<DevServerLink>) {
       availableEditors={[]}
       terminalAvailable={true}
       terminalOpen={false}
+      browserAvailable={true}
+      browserOpen={false}
+      browserRunning={false}
       terminalToggleShortcutLabel={null}
       diffToggleShortcutLabel={null}
       sourceControlToggleShortcutLabel={null}
@@ -61,6 +64,7 @@ function renderHeader(devServerLinks: ReadonlyArray<DevServerLink>) {
       onUpdateProjectScript={async () => undefined}
       onDeleteProjectScript={async () => undefined}
       onToggleFileExplorer={() => undefined}
+      onToggleBrowser={() => undefined}
       onToggleTerminal={() => undefined}
       onToggleDiff={() => undefined}
       onToggleSourceControl={() => undefined}

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-export type RightPanelKind = "diff" | "file" | "plan" | "source-control";
+export type RightPanelKind = "browser" | "diff" | "file" | "plan" | "source-control";
 
 export interface RightPanelRegistration {
   readonly close?: () => void;
@@ -49,7 +49,12 @@ export function openLastUsedRightPanel(): boolean {
     return true;
   }
 
-  return openRightPanel("diff") || openRightPanel("file") || openRightPanel("plan");
+  return (
+    openRightPanel("diff") ||
+    openRightPanel("file") ||
+    openRightPanel("plan") ||
+    openRightPanel("browser")
+  );
 }
 
 export function useRegisterRightPanel({

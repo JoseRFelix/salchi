@@ -39,6 +39,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { SALCHI_BROWSER_CDP_URL_ENV } from "../../browser/BrowserAgentAccess.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
@@ -643,6 +644,59 @@ validationLayer("CodexAdapterLive validation", (it) => {
         threadId: asThreadId("thread-1"),
         runtimeMode: "full-access",
       });
+    }),
+  );
+});
+
+const browserAccessRuntimeFactory = makeRuntimeFactory();
+const browserAccessReleases: Array<ThreadId> = [];
+const browserAccessToken = "a".repeat(64);
+const browserAccessLayer = it.layer(
+  Layer.effect(
+    CodexAdapter,
+    Effect.gen(function* () {
+      const codexConfig = decodeCodexSettings({});
+      return yield* makeCodexAdapter(codexConfig, {
+        makeRuntime: browserAccessRuntimeFactory.factory,
+        acquireBrowserAgentSessionAccess: (threadId) =>
+          Effect.succeed({
+            environment: {
+              [SALCHI_BROWSER_CDP_URL_ENV]: `ws://127.0.0.1:43123/internal/browser/cdp/${threadId}/${browserAccessToken}`,
+            },
+            release: Effect.sync(() => browserAccessReleases.push(threadId)).pipe(Effect.asVoid),
+          }),
+      });
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+browserAccessLayer("CodexAdapterLive browser agent access", (it) => {
+  it.effect("injects the browser CDP URL into the app-server process and revokes it on stop", () =>
+    Effect.gen(function* () {
+      browserAccessRuntimeFactory.factory.mockClear();
+      browserAccessReleases.length = 0;
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-codex-browser-access");
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      assert.deepStrictEqual(
+        browserAccessRuntimeFactory.factory.mock.calls[0]?.[0].browserEnvironment,
+        {
+          SALCHI_BROWSER_CDP_URL: `ws://127.0.0.1:43123/internal/browser/cdp/thread-codex-browser-access/${browserAccessToken}`,
+        },
+      );
+      yield* adapter.stopSession(threadId);
+      assert.deepStrictEqual(browserAccessReleases, [threadId]);
     }),
   );
 });
