@@ -1,4 +1,4 @@
-import type { EnvironmentId, VcsStatusResult } from "@salchi/contracts";
+import type { VcsStatusResult } from "@salchi/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -23,49 +23,7 @@ export interface InboxChangeRequestObservationBatch {
   readonly observedAt: string;
 }
 
-export interface InboxChangeRequestObservationTarget extends InboxChangeRequestObservedThread {
-  readonly environmentId: EnvironmentId;
-  readonly cwd: string;
-}
-
-export interface InboxChangeRequestObservationGroup {
-  readonly key: string;
-  readonly environmentId: EnvironmentId;
-  readonly cwd: string;
-  readonly threads: readonly InboxChangeRequestObservedThread[];
-}
-
 const EMPTY_INBOX_CHANGE_REQUEST_SNAPSHOTS: InboxChangeRequestSnapshots = {};
-
-export function groupInboxChangeRequestObservationTargets(
-  targets: readonly InboxChangeRequestObservationTarget[],
-): readonly InboxChangeRequestObservationGroup[] {
-  const groups = new Map<
-    string,
-    {
-      readonly key: string;
-      readonly environmentId: EnvironmentId;
-      readonly cwd: string;
-      readonly threads: InboxChangeRequestObservedThread[];
-    }
-  >();
-  for (const target of targets) {
-    const key = JSON.stringify([target.environmentId, target.cwd]);
-    const previous = groups.get(key);
-    const thread = { threadKey: target.threadKey, branch: target.branch };
-    if (previous) {
-      previous.threads.push(thread);
-    } else {
-      groups.set(key, {
-        key,
-        environmentId: target.environmentId,
-        cwd: target.cwd,
-        threads: [thread],
-      });
-    }
-  }
-  return [...groups.values()];
-}
 
 export function compactInboxChangeRequestSnapshots(
   snapshots: InboxChangeRequestSnapshots,
@@ -122,9 +80,9 @@ function readPersistedSnapshots(): InboxChangeRequestSnapshots {
 }
 
 /**
- * Owns the prototype PR cache above virtualized rows. Observations from every
- * git target in one commit are coalesced into one React update, then persisted
- * once after the burst instead of rewriting localStorage for every row mount.
+ * Owns the PR cache above virtualized rows. Observations from the currently
+ * mounted rows are coalesced into one React update, then persisted once after
+ * the burst instead of rewriting localStorage for every row mount.
  */
 export function useInboxChangeRequestSnapshots(): {
   readonly snapshots: InboxChangeRequestSnapshots;

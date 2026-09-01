@@ -27,6 +27,7 @@ import {
   useMemo,
   useRef,
   useState,
+  Fragment,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
@@ -58,11 +59,7 @@ import {
   type InboxLifecycleSection,
 } from "../inboxLifecycle";
 import { inboxChangeRequestSettleSource } from "../inboxChangeRequest";
-import {
-  groupInboxChangeRequestObservationTargets,
-  type InboxChangeRequestObservationTarget,
-  useInboxChangeRequestSnapshots,
-} from "../inboxChangeRequestState";
+import { useInboxChangeRequestSnapshots } from "../inboxChangeRequestState";
 import { classifyInboxBackgroundThread } from "../inboxThreadStatus";
 import {
   buildInboxSearchListItems,
@@ -143,7 +140,7 @@ import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "./ui/menu
 import { Input } from "./ui/input";
 import { useServerKeybindings } from "../rpc/serverState";
 import { VirtualizedList } from "./virtualization/VirtualizedList";
-import { InboxChangeRequestObservers } from "./inbox/InboxChangeRequestObservers";
+import { InboxChangeRequestObserver } from "./inbox/InboxChangeRequestObservers";
 import { InboxProjectPicker, ALL_PROJECTS_SCOPE } from "./inbox/InboxProjectPicker";
 import {
   InboxThreadRow,
@@ -490,22 +487,6 @@ export default function InboxSidebar() {
           ),
     [scopedProjectRefKeys, threads],
   );
-  const changeRequestObservationGroups = useMemo(() => {
-    const targets: InboxChangeRequestObservationTarget[] = [];
-    for (const thread of scopedThreads) {
-      if (thread.branch === null) continue;
-      const projectKey = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
-      const cwd = thread.worktreePath ?? projectIdentityByScopedKey.get(projectKey)?.cwd ?? null;
-      if (cwd === null) continue;
-      targets.push({
-        environmentId: thread.environmentId,
-        cwd,
-        threadKey: scopedThreadKey(threadRefFromSummary(thread)),
-        branch: thread.branch,
-      });
-    }
-    return groupInboxChangeRequestObservationTargets(targets);
-  }, [projectIdentityByScopedKey, scopedThreads]);
   const threadByKey = useMemo(
     () =>
       new Map(
@@ -1406,92 +1387,102 @@ export default function InboxSidebar() {
     const lifecycleThread = lifecycleThreadByThreadKey.get(threadKey) ?? thread;
     const rootIndex = effectivePinnedRootKeys.indexOf(lifecycleThreadKey);
     const projectKey = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+    const projectIdentity = projectIdentityByScopedKey.get(projectKey) ?? null;
     return (
-      <InboxThreadRow
-        key={threadKey}
-        thread={thread}
-        lifecycleThread={lifecycleThread}
-        depth={item.depth}
-        childCount={item.childCount}
-        section={section}
-        projectIdentity={projectIdentityByScopedKey.get(projectKey) ?? null}
-        lifecycleThreadKey={lifecycleThreadKey}
-        isLifecycleRoot={threadKey === lifecycleThreadKey}
-        isActive={routeThreadKey === threadKey}
-        isDraft={draftThreadKeys.has(threadKey)}
-        draftId={draftIdByThreadKey.get(threadKey) ?? null}
-        isSelected={selectedThreadKeys.has(threadKey) || highlightedSearchKey === threadKey}
-        hasActiveLocalDispatch={activeLocalDispatchThreadKeys.has(threadKey)}
-        backgroundLiveness={backgroundLivenessByLifecycleKey.get(lifecycleThreadKey) ?? null}
-        isPending={pendingThreadKeys.has(threadKey)}
-        isThreadExpanded={threadExpandedById[threadKey] ?? true}
-        now={now}
-        timestampFormat={settings.timestampFormat}
-        lastVisitedAt={threadLastVisitedAtById[lifecycleThreadKey] ?? null}
-        canPin={supportsThreadLifecycleCapability(lifecycleThread.environmentId, "threadPinning")}
-        canSnooze={
-          supportsThreadLifecycleCapability(lifecycleThread.environmentId, "threadSnooze") &&
-          canSnoozeInboxThread(lifecycleThread, { now })
-        }
-        canSettle={
-          supportsThreadLifecycleCapability(lifecycleThread.environmentId, "threadSettlement") &&
-          (section === "settled" || canSettleInboxThread(lifecycleThread, { now }))
-        }
-        canReorderPinned={supportsThreadLifecycleCapability(
-          lifecycleThread.environmentId,
-          "threadPinReorder",
-        )}
-        canRegenerateTitle={supportsThreadLifecycleCapability(
-          thread.environmentId,
-          "threadTitleRegeneration",
-        )}
-        canMarkUnread={getAcknowledgedCompletionTurnId(thread) !== null}
-        canMovePinUp={rootIndex > 0}
-        canMovePinDown={rootIndex >= 0 && rootIndex < effectivePinnedRootKeys.length - 1}
-        changeRequestSnapshot={changeRequestSnapshots[threadKey] ?? null}
-        isRenaming={
-          renameTarget !== null && scopedThreadKey(threadRefFromSummary(renameTarget)) === threadKey
-        }
-        renameValue={renameValue}
-        isRegeneratingTitle={regeneratingTitleByThreadKey[threadKey] !== undefined}
-        onNavigate={navigateToThread}
-        onAction={runAction}
-        onToggleExpanded={toggleThreadExpanded}
-        onPinnedDragStart={(key) => {
-          draggedPinnedKeyRef.current = key;
-        }}
-        onPinnedDrop={(targetKey) => {
-          const movedKey = draggedPinnedKeyRef.current;
-          draggedPinnedKeyRef.current = null;
-          if (!movedKey || movedKey === targetKey) return;
-          const next = effectivePinnedRootKeys.filter((key) => key !== movedKey);
-          const targetIndex = next.indexOf(targetKey);
-          if (targetIndex < 0) return;
-          next.splice(targetIndex, 0, movedKey);
-          setOptimisticPinnedRootKeys(next);
-          void dispatchPinnedOrder(next, movedKey).catch((error) => {
-            setOptimisticPinnedRootKeys(null);
-            lifecycleErrorToast("Could not reorder pinned threads", error);
-          });
-        }}
-        onAcknowledgeWoke={(wokeAt) =>
-          useUiStateStore.getState().markThreadVisited(lifecycleThreadKey, wokeAt)
-        }
-        onStartRename={() => {
-          setRenameTarget(thread);
-          setRenameValue(resolveSidebarThreadDisplayTitle(thread));
-        }}
-        onRenameValueChange={setRenameValue}
-        onCommitRename={commitRename}
-        onCancelRename={() => setRenameTarget(null)}
-        {...(listPosition
-          ? {
-              virtualized: true,
-              listPosition: listPosition.index + 1,
-              listSize: listPosition.size,
-            }
-          : {})}
-      />
+      <Fragment key={threadKey}>
+        <InboxChangeRequestObserver
+          environmentId={thread.environmentId}
+          cwd={thread.worktreePath ?? projectIdentity?.cwd ?? null}
+          threadKey={threadKey}
+          branch={thread.branch}
+          onObservation={recordChangeRequestObservation}
+        />
+        <InboxThreadRow
+          thread={thread}
+          lifecycleThread={lifecycleThread}
+          depth={item.depth}
+          childCount={item.childCount}
+          section={section}
+          projectIdentity={projectIdentity}
+          lifecycleThreadKey={lifecycleThreadKey}
+          isLifecycleRoot={threadKey === lifecycleThreadKey}
+          isActive={routeThreadKey === threadKey}
+          isDraft={draftThreadKeys.has(threadKey)}
+          draftId={draftIdByThreadKey.get(threadKey) ?? null}
+          isSelected={selectedThreadKeys.has(threadKey) || highlightedSearchKey === threadKey}
+          hasActiveLocalDispatch={activeLocalDispatchThreadKeys.has(threadKey)}
+          backgroundLiveness={backgroundLivenessByLifecycleKey.get(lifecycleThreadKey) ?? null}
+          isPending={pendingThreadKeys.has(threadKey)}
+          isThreadExpanded={threadExpandedById[threadKey] ?? true}
+          now={now}
+          timestampFormat={settings.timestampFormat}
+          lastVisitedAt={threadLastVisitedAtById[lifecycleThreadKey] ?? null}
+          canPin={supportsThreadLifecycleCapability(lifecycleThread.environmentId, "threadPinning")}
+          canSnooze={
+            supportsThreadLifecycleCapability(lifecycleThread.environmentId, "threadSnooze") &&
+            canSnoozeInboxThread(lifecycleThread, { now })
+          }
+          canSettle={
+            supportsThreadLifecycleCapability(lifecycleThread.environmentId, "threadSettlement") &&
+            (section === "settled" || canSettleInboxThread(lifecycleThread, { now }))
+          }
+          canReorderPinned={supportsThreadLifecycleCapability(
+            lifecycleThread.environmentId,
+            "threadPinReorder",
+          )}
+          canRegenerateTitle={supportsThreadLifecycleCapability(
+            thread.environmentId,
+            "threadTitleRegeneration",
+          )}
+          canMarkUnread={getAcknowledgedCompletionTurnId(thread) !== null}
+          canMovePinUp={rootIndex > 0}
+          canMovePinDown={rootIndex >= 0 && rootIndex < effectivePinnedRootKeys.length - 1}
+          changeRequestSnapshot={changeRequestSnapshots[threadKey] ?? null}
+          isRenaming={
+            renameTarget !== null &&
+            scopedThreadKey(threadRefFromSummary(renameTarget)) === threadKey
+          }
+          renameValue={renameValue}
+          isRegeneratingTitle={regeneratingTitleByThreadKey[threadKey] !== undefined}
+          onNavigate={navigateToThread}
+          onAction={runAction}
+          onToggleExpanded={toggleThreadExpanded}
+          onPinnedDragStart={(key) => {
+            draggedPinnedKeyRef.current = key;
+          }}
+          onPinnedDrop={(targetKey) => {
+            const movedKey = draggedPinnedKeyRef.current;
+            draggedPinnedKeyRef.current = null;
+            if (!movedKey || movedKey === targetKey) return;
+            const next = effectivePinnedRootKeys.filter((key) => key !== movedKey);
+            const targetIndex = next.indexOf(targetKey);
+            if (targetIndex < 0) return;
+            next.splice(targetIndex, 0, movedKey);
+            setOptimisticPinnedRootKeys(next);
+            void dispatchPinnedOrder(next, movedKey).catch((error) => {
+              setOptimisticPinnedRootKeys(null);
+              lifecycleErrorToast("Could not reorder pinned threads", error);
+            });
+          }}
+          onAcknowledgeWoke={(wokeAt) =>
+            useUiStateStore.getState().markThreadVisited(lifecycleThreadKey, wokeAt)
+          }
+          onStartRename={() => {
+            setRenameTarget(thread);
+            setRenameValue(resolveSidebarThreadDisplayTitle(thread));
+          }}
+          onRenameValueChange={setRenameValue}
+          onCommitRename={commitRename}
+          onCancelRename={() => setRenameTarget(null)}
+          {...(listPosition
+            ? {
+                virtualized: true,
+                listPosition: listPosition.index + 1,
+                listSize: listPosition.size,
+              }
+            : {})}
+        />
+      </Fragment>
     );
   };
 
@@ -1504,31 +1495,40 @@ export default function InboxSidebar() {
     const lifecycleKey = lifecycleThreadKeyByThreadKey.get(threadKey) ?? threadKey;
     const lifecycleThread = lifecycleThreadByThreadKey.get(threadKey) ?? thread;
     const projectKey = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+    const projectIdentity = projectIdentityByScopedKey.get(projectKey) ?? null;
     return (
-      <InboxSearchResultRow
-        key={item.key}
-        optionId={`inbox-search-option-${item.index}`}
-        thread={thread}
-        lifecycleThread={lifecycleThread}
-        projectIdentity={projectIdentityByScopedKey.get(projectKey) ?? null}
-        isDraft={draftThreadKeys.has(threadKey)}
-        isActive={routeThreadKey === threadKey}
-        isHighlighted={highlightedSearchKey === threadKey}
-        hasActiveLocalDispatch={activeLocalDispatchThreadKeys.has(threadKey)}
-        backgroundLiveness={backgroundLivenessByLifecycleKey.get(lifecycleKey) ?? null}
-        now={now}
-        lastVisitedAt={threadLastVisitedAtById[lifecycleKey] ?? null}
-        changeRequestSnapshot={changeRequestSnapshots[threadKey] ?? null}
-        onNavigate={navigateToThread}
-        onHighlight={() => setSearchHighlightIndex(item.index)}
-        {...(listPosition
-          ? {
-              virtualized: true,
-              listPosition: listPosition.index + 1,
-              listSize: listPosition.size,
-            }
-          : {})}
-      />
+      <Fragment key={item.key}>
+        <InboxChangeRequestObserver
+          environmentId={thread.environmentId}
+          cwd={thread.worktreePath ?? projectIdentity?.cwd ?? null}
+          threadKey={threadKey}
+          branch={thread.branch}
+          onObservation={recordChangeRequestObservation}
+        />
+        <InboxSearchResultRow
+          optionId={`inbox-search-option-${item.index}`}
+          thread={thread}
+          lifecycleThread={lifecycleThread}
+          projectIdentity={projectIdentity}
+          isDraft={draftThreadKeys.has(threadKey)}
+          isActive={routeThreadKey === threadKey}
+          isHighlighted={highlightedSearchKey === threadKey}
+          hasActiveLocalDispatch={activeLocalDispatchThreadKeys.has(threadKey)}
+          backgroundLiveness={backgroundLivenessByLifecycleKey.get(lifecycleKey) ?? null}
+          now={now}
+          lastVisitedAt={threadLastVisitedAtById[lifecycleKey] ?? null}
+          changeRequestSnapshot={changeRequestSnapshots[threadKey] ?? null}
+          onNavigate={navigateToThread}
+          onHighlight={() => setSearchHighlightIndex(item.index)}
+          {...(listPosition
+            ? {
+                virtualized: true,
+                listPosition: listPosition.index + 1,
+                listSize: listPosition.size,
+              }
+            : {})}
+        />
+      </Fragment>
     );
   };
 
@@ -1587,10 +1587,6 @@ export default function InboxSidebar() {
   return (
     <>
       <SidebarUsageBackgroundRefresh />
-      <InboxChangeRequestObservers
-        groups={changeRequestObservationGroups}
-        onObservation={recordChangeRequestObservation}
-      />
       <SidebarChromeHeader isElectron={isElectron} />
       <div className="flex min-h-0 flex-1 flex-col">
         <SidebarGroup className="px-2 pt-2 pb-1">

@@ -4,15 +4,14 @@ import {
   useEffect,
   useMemo,
   useLayoutEffect,
+  lazy,
   useReducer,
   useRef,
   useState,
+  Suspense,
   type ReactNode,
 } from "react";
 
-import { BrowserPanel } from "../components/BrowserPanel";
-import { BrowserInstallPictureInPicture } from "../components/BrowserInstallPictureInPicture";
-import { BrowserPictureInPicture } from "../components/BrowserPictureInPicture";
 import {
   readEnvironmentConnection,
   subscribeEnvironmentConnections,
@@ -39,7 +38,18 @@ import {
   resolveBrowserViewportSurface,
 } from "./browserSurfaceStreamLease";
 
-const HIDDEN_BROWSER_STATE_REFRESH_INTERVAL_MS = 15_000;
+const BrowserPanel = lazy(async () => {
+  const module = await import("../components/BrowserPanel");
+  return { default: module.BrowserPanel };
+});
+const BrowserInstallPictureInPicture = lazy(async () => {
+  const module = await import("../components/BrowserInstallPictureInPicture");
+  return { default: module.BrowserInstallPictureInPicture };
+});
+const BrowserPictureInPicture = lazy(async () => {
+  const module = await import("../components/BrowserPictureInPicture");
+  return { default: module.BrowserPictureInPicture };
+});
 
 export interface BrowserPanelController {
   readonly close: () => void;
@@ -158,7 +168,7 @@ export function useBrowserPanelController(input: {
   }, [state.status]);
 
   useEffect(() => {
-    if (!input.enabled || !input.showAgentPreview || state.authorization !== "granted") return;
+    if (!input.enabled || !input.showAgentPreview || state.authorization === "denied") return;
     let currentClient = readEnvironmentConnection(input.environmentId)?.client.browser ?? null;
     let unsubscribeActivity: (() => void) | null = null;
 
@@ -249,7 +259,7 @@ export function useBrowserPanelController(input: {
   }, [pipState.phase]);
 
   useEffect(() => {
-    if (!input.enabled) return;
+    if (!input.enabled || !open) return;
 
     let disposed = false;
     let currentClient = readEnvironmentConnection(input.environmentId)?.client.browser ?? null;
@@ -291,21 +301,11 @@ export function useBrowserPanelController(input: {
 
     if (currentClient) refresh(currentClient);
     const unsubscribeConnections = subscribeEnvironmentConnections(syncConnection);
-    const intervalId = window.setInterval(() => {
-      if (open || document.visibilityState !== "visible") return;
-      const latestClient = readEnvironmentConnection(input.environmentId)?.client.browser ?? null;
-      if (latestClient !== currentClient) {
-        syncConnection();
-        return;
-      }
-      if (currentClient) refresh(currentClient);
-    }, HIDDEN_BROWSER_STATE_REFRESH_INTERVAL_MS);
 
     return () => {
       disposed = true;
       requestGeneration += 1;
       unsubscribeConnections();
-      window.clearInterval(intervalId);
     };
   }, [input.enabled, input.environmentId, input.threadId, open]);
 
@@ -314,17 +314,19 @@ export function useBrowserPanelController(input: {
       open: input.enabled && open,
       onClose: close,
       render: (mode: "sheet" | "sidebar") => (
-        <BrowserPanel
-          agentAccessNotice={input.agentAccessNotice}
-          environmentId={input.environmentId}
-          mode={mode}
-          onClose={close}
-          onStateAction={onStateAction}
-          state={state}
-          streamLease={streamLease}
-          threadId={input.threadId}
-          visible={input.enabled && open}
-        />
+        <Suspense fallback={null}>
+          <BrowserPanel
+            agentAccessNotice={input.agentAccessNotice}
+            environmentId={input.environmentId}
+            mode={mode}
+            onClose={close}
+            onStateAction={onStateAction}
+            state={state}
+            streamLease={streamLease}
+            threadId={input.threadId}
+            visible={input.enabled && open}
+          />
+        </Suspense>
       ),
     }),
     [
@@ -370,25 +372,29 @@ export function useBrowserPanelController(input: {
     !agentInstallPrompt.dismissed &&
     !open;
   const pictureInPicture = showAgentInstallPrompt ? (
-    <BrowserInstallPictureInPicture
-      environmentId={input.environmentId}
-      onClose={() => setAgentInstallPrompt((current) => ({ ...current, dismissed: true }))}
-      onOpenPanel={() => openRightPanel("browser")}
-      onStateAction={onStateAction}
-      state={state}
-      threadId={input.threadId}
-    />
+    <Suspense fallback={null}>
+      <BrowserInstallPictureInPicture
+        environmentId={input.environmentId}
+        onClose={() => setAgentInstallPrompt((current) => ({ ...current, dismissed: true }))}
+        onOpenPanel={() => openRightPanel("browser")}
+        onStateAction={onStateAction}
+        state={state}
+        threadId={input.threadId}
+      />
+    </Suspense>
   ) : pipState.threadId !== input.threadId || pipState.phase === "hidden" || open ? null : (
-    <BrowserPictureInPicture
-      onClose={() => dispatchPip({ type: "close" })}
-      onOpenPanel={() => {
-        dispatchPip({ type: "panelVisibility", open: true });
-        openRightPanel("browser");
-      }}
-      phase={pipState.phase}
-      resetKey={input.threadId}
-      streamLease={streamLease}
-    />
+    <Suspense fallback={null}>
+      <BrowserPictureInPicture
+        onClose={() => dispatchPip({ type: "close" })}
+        onOpenPanel={() => {
+          dispatchPip({ type: "panelVisibility", open: true });
+          openRightPanel("browser");
+        }}
+        phase={pipState.phase}
+        resetKey={input.threadId}
+        streamLease={streamLease}
+      />
+    </Suspense>
   );
 
   return {

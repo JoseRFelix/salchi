@@ -1,11 +1,10 @@
-import { EnvironmentId, type VcsStatusResult } from "@salchi/contracts";
+import type { VcsStatusResult } from "@salchi/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { InboxChangeRequestSnapshots } from "./inboxChangeRequest";
 import {
   INBOX_CHANGE_REQUEST_SNAPSHOTS_KEY,
   compactInboxChangeRequestSnapshots,
-  groupInboxChangeRequestObservationTargets,
   mergeInboxChangeRequestObservationBatches,
 } from "./inboxChangeRequestState";
 import {
@@ -44,30 +43,6 @@ const status = {
 afterEach(() => removeLocalStorageItem(INBOX_CHANGE_REQUEST_SNAPSHOTS_KEY));
 
 describe("inbox change-request observation state", () => {
-  it("observes all threads sharing a Git target through one group", () => {
-    const environmentId = EnvironmentId.make("environment-local");
-    const groups = groupInboxChangeRequestObservationTargets([
-      ...Array.from({ length: 160 }, (_, index) => ({
-        environmentId,
-        cwd: "/repo",
-        threadKey: `thread-${index}`,
-        branch: "feature/inbox",
-      })),
-      {
-        environmentId,
-        cwd: "/repo/worktree",
-        threadKey: "worktree-thread",
-        branch: "feature/worktree",
-      },
-    ]);
-
-    expect(groups).toHaveLength(2);
-    expect(groups[0]?.threads).toHaveLength(160);
-    expect(groups[1]?.threads).toEqual([
-      { threadKey: "worktree-thread", branch: "feature/worktree" },
-    ]);
-  });
-
   it("merges a target-wide observation in one immutable update", () => {
     const threads = Array.from({ length: 160 }, (_, index) => ({
       threadKey: `thread-${index}`,
