@@ -1438,14 +1438,19 @@ function createSnapshotWithActivePlan(): OrchestrationReadModel {
   };
 }
 
-function enableAutoOpenPlanSidebarForTest(): void {
+function persistClientSettingsForTest(patch: Partial<typeof DEFAULT_CLIENT_SETTINGS> = {}): void {
   localStorage.setItem(
     CLIENT_SETTINGS_STORAGE_KEY,
     JSON.stringify({
       ...DEFAULT_CLIENT_SETTINGS,
-      autoOpenPlanSidebar: true,
+      hasSeenInboxIntroduction: true,
+      ...patch,
     }),
   );
+}
+
+function enableAutoOpenPlanSidebarForTest(): void {
+  persistClientSettingsForTest({ autoOpenPlanSidebar: true });
 }
 
 function createSnapshotWithPlanFollowUpPrompt(options?: {
@@ -2500,6 +2505,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     await setViewport(DEFAULT_VIEWPORT);
     await clearPendingNotificationClick();
     localStorage.clear();
+    persistClientSettingsForTest();
     await clearOrchestrationStartupCacheDurableForTests();
     document.body.innerHTML = "";
     wsRequests.length = 0;
@@ -5768,13 +5774,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("shows the confirm archive action after clicking the archive button", async () => {
-    localStorage.setItem(
-      "salchi:client-settings:v1",
-      JSON.stringify({
-        ...DEFAULT_CLIENT_SETTINGS,
-        confirmThreadArchive: true,
-      }),
-    );
+    persistClientSettingsForTest({ confirmThreadArchive: true });
 
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -9019,6 +9019,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("opens and closes the command palette without closing the mobile sidebar", async () => {
+    persistClientSettingsForTest({ sidebarNavigationMode: "inbox" });
     const mounted = await mountChatView({
       viewport: COMPACT_FOOTER_VIEWPORT,
       snapshot: createSnapshotWithSecondaryProject(),
@@ -9061,7 +9062,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   }, 45_000);
 
-  it("opens the default mobile inbox with content and keeps it open for new-thread palette", async () => {
+  it("opens the mobile inbox with content and keeps it open for new-thread palette", async () => {
+    persistClientSettingsForTest({ sidebarNavigationMode: "inbox" });
     const mounted = await mountChatView({
       viewport: COMPACT_FOOTER_VIEWPORT,
       snapshot: createSnapshotWithSecondaryProject(),
