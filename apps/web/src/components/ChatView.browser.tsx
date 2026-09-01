@@ -9062,6 +9062,43 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   }, 45_000);
 
+  it("closes the mobile sidebar after selecting a project for a new thread", async () => {
+    const mounted = await mountChatView({
+      viewport: COMPACT_FOOTER_VIEWPORT,
+      snapshot: createSnapshotWithSecondaryProject(),
+    });
+
+    try {
+      await openMobileSidebarFromTrigger();
+      const mobileSidebar = await waitForElement(
+        () =>
+          document.querySelector<HTMLElement>(
+            '[data-mobile="true"][data-sidebar="sidebar"][data-open]',
+          ),
+        "Mobile sidebar should have opened.",
+      );
+      useCommandPaletteStore.getState().openNewThreadIn();
+
+      const palette = page.getByTestId("command-palette");
+      await expect.element(palette).toBeInTheDocument();
+      await expect.element(palette.getByText("Docs Portal", { exact: true })).toBeInTheDocument();
+      expect(mobileSidebar).toHaveAttribute("data-open", "");
+
+      await palette.getByText("Docs Portal", { exact: true }).click();
+
+      await vi.waitFor(
+        () => {
+          expect(
+            document.querySelector('[data-mobile="true"][data-sidebar="sidebar"][data-open]'),
+          ).toBeNull();
+        },
+        { interval: 16, timeout: 8_000 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("opens the mobile inbox with content and keeps it open for new-thread palette", async () => {
     persistClientSettingsForTest({ sidebarNavigationMode: "inbox" });
     const mounted = await mountChatView({

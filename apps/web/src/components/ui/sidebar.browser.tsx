@@ -5,6 +5,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { Sidebar, SidebarProvider, SidebarTrigger } from "./sidebar";
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuSub,
+  MenuSubPopup,
+  MenuSubTrigger,
+  MenuTrigger,
+} from "./menu";
 import { ToastProvider, toastManager } from "./toast";
 import { usePwaServiceWorkerUpdateStore } from "../../pwa/serviceWorkerUpdateState";
 
@@ -35,6 +44,17 @@ function MobileSidebarHarness() {
             >
               Show toast
             </button>
+            <Menu>
+              <MenuTrigger>Thread options</MenuTrigger>
+              <MenuPopup>
+                <MenuSub>
+                  <MenuSubTrigger>Copy</MenuSubTrigger>
+                  <MenuSubPopup>
+                    <MenuItem>Thread ID</MenuItem>
+                  </MenuSubPopup>
+                </MenuSub>
+              </MenuPopup>
+            </Menu>
           </div>
         </Sidebar>
         <SidebarTrigger />
@@ -175,6 +195,24 @@ describe("mobile Sidebar", () => {
       await expect.element(page.getByText("Sidebar toast")).toBeVisible();
 
       await page.getByRole("button", { name: "Dismiss notification" }).click();
+
+      await expect.element(page.getByText("Mobile sidebar content")).toBeVisible();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps the mobile sidebar open when selecting copy from a thread options menu", async () => {
+    await page.viewport(390, 700);
+    const screen = await render(<MobileSidebarHarness />);
+
+    try {
+      await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+      await expect.element(page.getByText("Mobile sidebar content")).toBeVisible();
+
+      await page.getByRole("button", { name: "Thread options" }).click();
+      await page.getByRole("menuitem", { name: "Copy" }).click();
+      await page.getByRole("menuitem", { name: "Thread ID" }).click();
 
       await expect.element(page.getByText("Mobile sidebar content")).toBeVisible();
     } finally {

@@ -6,6 +6,7 @@ import { useSidebarNavigationMode } from "../hooks/useSettings";
 import InboxSidebar from "./InboxSidebar";
 import ThreadSidebar from "./Sidebar";
 import { resolveAppSidebarVariant } from "./appSidebarVariant";
+import { CommandPaletteOverlay } from "./CommandPaletteBoundary";
 import { InboxIntroductionDialog } from "./inbox/InboxIntroductionDialog";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
@@ -89,6 +90,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         <SidebarRail />
       </Sidebar>
       {children}
+      <CommandPaletteOverlay />
       <InboxIntroductionDialog />
     </SidebarProvider>
   );

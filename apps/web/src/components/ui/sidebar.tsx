@@ -24,6 +24,7 @@ import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorag
 import * as Schema from "effect/Schema";
 import {
   isCommandDialogPortalDismissalRequest,
+  isMenuPortalDismissalRequest,
   isToastPortalDismissalRequest,
 } from "./sheetDismissal";
 
@@ -255,7 +256,8 @@ function Sidebar({
             if (
               !open &&
               (isToastPortalDismissalRequest(eventDetails) ||
-                isCommandDialogPortalDismissalRequest(eventDetails))
+                isCommandDialogPortalDismissalRequest(eventDetails) ||
+                isMenuPortalDismissalRequest(eventDetails))
             ) {
               eventDetails.cancel();
               return;

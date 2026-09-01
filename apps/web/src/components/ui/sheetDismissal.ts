@@ -5,6 +5,8 @@ import { Sheet } from "./sheet";
 const TOAST_PORTAL_SELECTOR = '[data-slot="toast-portal"], [data-slot="toast-portal-anchored"]';
 const COMMAND_DIALOG_PORTAL_SELECTOR =
   '[data-slot="command-dialog-backdrop"], [data-slot="command-dialog-viewport"], [data-slot="command-dialog-popup"]';
+const MENU_PORTAL_SELECTOR =
+  '[data-slot="menu-positioner"], [data-slot="menu-popup"], [data-slot="menu-sub-content"]';
 
 type SheetOpenChangeDetails = Parameters<
   NonNullable<ComponentProps<typeof Sheet>["onOpenChange"]>
@@ -37,4 +39,8 @@ export function isCommandDialogPortalDismissalRequest(
   eventDetails: SheetOpenChangeDetails,
 ): boolean {
   return isPortalDismissalRequest(eventDetails, COMMAND_DIALOG_PORTAL_SELECTOR);
+}
+
+export function isMenuPortalDismissalRequest(eventDetails: SheetOpenChangeDetails): boolean {
+  return isPortalDismissalRequest(eventDetails, MENU_PORTAL_SELECTOR);
 }

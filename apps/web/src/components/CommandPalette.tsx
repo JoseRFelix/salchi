@@ -43,7 +43,6 @@ import {
   useSavedEnvironmentRuntimeStore,
 } from "../environments/runtime";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
-import { useIsMobile } from "../hooks/useMediaQuery";
 import { useSettings } from "../hooks/useSettings";
 import { readLocalApi } from "../localApi";
 import {
@@ -109,6 +108,7 @@ import {
 } from "./ui/command";
 import { Button } from "./ui/button";
 import { Kbd, KbdGroup } from "./ui/kbd";
+import { useSidebar } from "./ui/sidebar";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { useComposerHandleContext } from "../composerHandleContext";
@@ -349,7 +349,7 @@ export function CommandPaletteDialog() {
 }
 
 function OpenCommandPaletteDialog() {
-  const isMobile = useIsMobile();
+  const { isMobile, setOpenMobile } = useSidebar();
   const navigate = useNavigate();
   const setOpen = useCommandPaletteStore((store) => store.setOpen);
   const openIntent = useCommandPaletteStore((store) => store.openIntent);
@@ -617,6 +617,9 @@ function OpenCommandPaletteDialog() {
         shortcutCommand: "chat.new",
         icon: renderProjectFaviconIcon,
         runProject: async (project) => {
+          if (isMobile) {
+            setOpenMobile(false);
+          }
           await startNewThreadInProjectFromContext(
             {
               activeDraftThread,
@@ -634,7 +637,9 @@ function OpenCommandPaletteDialog() {
       activeThread,
       defaultProjectRef,
       handleNewThread,
+      isMobile,
       projects,
+      setOpenMobile,
       settings.defaultThreadEnvMode,
     ],
   );
