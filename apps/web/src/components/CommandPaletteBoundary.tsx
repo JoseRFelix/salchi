@@ -73,16 +73,20 @@ export function CommandPaletteBoundary({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [keybindings, terminalOpen, toggleOpen]);
 
+  return <ComposerHandleContext value={composerHandleRef}>{children}</ComposerHandleContext>;
+}
+
+export function CommandPaletteOverlay() {
+  const open = useCommandPaletteStore((store) => store.open);
+  const setOpen = useCommandPaletteStore((store) => store.setOpen);
+
   return (
-    <ComposerHandleContext value={composerHandleRef}>
-      {children}
-      <CommandDialog open={open} onOpenChange={setOpen}>
-        {open ? (
-          <Suspense fallback={null}>
-            <LazyCommandPaletteDialog />
-          </Suspense>
-        ) : null}
-      </CommandDialog>
-    </ComposerHandleContext>
+    <CommandDialog open={open} onOpenChange={setOpen}>
+      {open ? (
+        <Suspense fallback={null}>
+          <LazyCommandPaletteDialog />
+        </Suspense>
+      ) : null}
+    </CommandDialog>
   );
 }
