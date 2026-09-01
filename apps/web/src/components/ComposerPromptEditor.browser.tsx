@@ -11,6 +11,7 @@ const IOS_USER_AGENT =
 type EditorHarnessHandle = {
   setCursor: (cursor: number) => void;
   setIdentity: (identity: string) => void;
+  setSkills: (skills: Parameters<typeof ComposerPromptEditor>[0]["skills"]) => void;
 };
 
 function EditorHarness(props: {
@@ -24,8 +25,9 @@ function EditorHarness(props: {
   const [value, setValue] = useState(props.initialValue ?? "");
   const [cursor, setCursor] = useState(props.initialCursor ?? 0);
   const [identity, setIdentity] = useState(props.initialIdentity ?? "native-ios-input");
+  const [skills, setSkills] = useState<Parameters<typeof ComposerPromptEditor>[0]["skills"]>([]);
 
-  useImperativeHandle(props.controlsRef, () => ({ setCursor, setIdentity }), []);
+  useImperativeHandle(props.controlsRef, () => ({ setCursor, setIdentity, setSkills }), []);
 
   return (
     <ComposerPromptEditor
@@ -33,7 +35,7 @@ function EditorHarness(props: {
       value={value}
       cursor={cursor}
       terminalContexts={[]}
-      skills={[]}
+      skills={skills}
       disabled={false}
       placeholder="Ask anything"
       onRemoveTerminalContext={() => undefined}
@@ -189,6 +191,42 @@ describe("ComposerPromptEditor native iOS input", () => {
         });
         expect(readDomSelectionOffset(editor!)).toBe("the heck".length);
       });
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("preserves a focused browser-owned cursor when skill metadata changes", async () => {
+    const editorRef = createRef<ComposerPromptEditorHandle>();
+    const controlsRef = createRef<EditorHarnessHandle>();
+    const screen = await render(
+      <EditorHarness
+        controlsRef={controlsRef}
+        editorRef={editorRef}
+        initialIdentity="desktop-skill-refresh"
+      />,
+    );
+
+    try {
+      const editor = document.querySelector<HTMLElement>('[data-testid="composer-editor"]');
+      expect(editor).not.toBeNull();
+      editor?.focus();
+      await userEvent.keyboard("abcdef");
+      await userEvent.keyboard("{ArrowLeft}{ArrowLeft}{ArrowLeft}");
+      await vi.waitFor(() => expect(readDomSelectionOffset(editor!)).toBe(3));
+
+      controlsRef.current?.setSkills([
+        {
+          name: "regression-test",
+          path: "/skills/regression-test/SKILL.md",
+          enabled: true,
+        },
+      ]);
+
+      await waitForAnimationFrame();
+      await waitForAnimationFrame();
+      expect(editorRef.current?.readSnapshot().cursor).toBe(3);
+      expect(readDomSelectionOffset(editor!)).toBe(3);
     } finally {
       await screen.unmount();
     }

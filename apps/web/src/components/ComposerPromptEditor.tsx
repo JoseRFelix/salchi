@@ -1614,10 +1614,19 @@ function ComposerPromptEditorInner({
       return;
     }
 
+    // The isolated composer intentionally lets its controlled cursor lag browser-owned selection
+    // so ordinary typing does not rerender the full composer. Structural metadata changes still
+    // need to rebuild Lexical, but an unchanged controlled cursor must not replace the live cursor
+    // while the same editor owns focus.
+    const reconciledCursor =
+      isFocused && !editorIdentityChanged && !controlledCursorChanged
+        ? clampCollapsedComposerCursor(value, previousSnapshot.cursor)
+        : normalizedCursor;
+
     snapshotRef.current = {
       value,
-      cursor: normalizedCursor,
-      expandedCursor: expandCollapsedComposerCursor(value, normalizedCursor),
+      cursor: reconciledCursor,
+      expandedCursor: expandCollapsedComposerCursor(value, reconciledCursor),
       terminalContextIds: terminalContexts.map((context) => context.id),
     };
     terminalContextsSignatureRef.current = terminalContextsSignature;
@@ -1640,7 +1649,7 @@ function ComposerPromptEditorInner({
           $setComposerEditorPrompt(value, terminalContexts, skillMetadataRef.current);
         }
         if (shouldRewriteEditorState || isFocused) {
-          $setSelectionAtComposerOffset(normalizedCursor);
+          $setSelectionAtComposerOffset(reconciledCursor);
         }
       },
       editorIdentityChanged
