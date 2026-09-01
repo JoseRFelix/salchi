@@ -683,7 +683,7 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
   );
   const statusSlot = (
     <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1">
-      <span className="flex min-w-0 items-center gap-1 group-hover/inbox-row:hidden group-focus-within/inbox-row:hidden max-sm:hidden">
+      <span className="flex min-w-0 items-center gap-1 group-hover/inbox-row:hidden group-focus-within/inbox-row:hidden">
         {isPinned ? (
           <PinIcon aria-label="Pinned" className="size-3 text-muted-foreground/65" />
         ) : null}
