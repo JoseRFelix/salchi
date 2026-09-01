@@ -101,6 +101,13 @@ export function applyThreadDetailEvent(
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
           archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          unsettledAt: null,
+          snoozedUntil: null,
+          snoozedAt: null,
+          pinnedAt: null,
+          pinOrderKey: null,
           deletedAt: null,
           messages: [],
           queuedTurns: [],
@@ -129,6 +136,92 @@ export function applyThreadDetailEvent(
         kind: "updated",
         thread: { ...thread, archivedAt: null, updatedAt: event.payload.updatedAt },
       };
+
+    case "thread.settled":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          settledOverride: "settled",
+          settledAt: event.payload.settledAt,
+          unsettledAt: null,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    case "thread.unsettled":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          settledOverride: event.payload.reason === "user" ? "active" : null,
+          settledAt: null,
+          unsettledAt:
+            thread.settledOverride === "active"
+              ? (thread.unsettledAt ?? null)
+              : event.payload.updatedAt,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    case "thread.snoozed":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          snoozedUntil: event.payload.snoozedUntil,
+          snoozedAt: event.payload.snoozedAt,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    case "thread.unsnoozed":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          snoozedUntil: null,
+          snoozedAt: null,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    case "thread.pinned":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          pinnedAt: event.payload.pinnedAt,
+          ...(event.payload.pinOrderKey !== undefined
+            ? { pinOrderKey: event.payload.pinOrderKey }
+            : {}),
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    case "thread.unpinned":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          pinnedAt: null,
+          pinOrderKey: null,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    case "thread.pin-reordered":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          pinOrderKey: event.payload.orderKey,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    case "thread.title-regeneration-requested":
+      return { kind: "unchanged" };
 
     // ── Thread metadata ─────────────────────────────────────────────
     case "thread.meta-updated":

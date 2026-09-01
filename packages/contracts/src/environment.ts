@@ -23,6 +23,14 @@ export type ExecutionEnvironmentPlatform = typeof ExecutionEnvironmentPlatform.T
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   completionAttention: Schema.optionalKey(Schema.Boolean),
+  /** Server understands the inbox lifecycle commands. Each capability stays
+      optional so clients connected to an older Salchi server never dispatch
+      a command that server cannot decode. */
+  threadSettlement: Schema.optionalKey(Schema.Boolean),
+  threadSnooze: Schema.optionalKey(Schema.Boolean),
+  threadPinning: Schema.optionalKey(Schema.Boolean),
+  threadPinReorder: Schema.optionalKey(Schema.Boolean),
+  threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

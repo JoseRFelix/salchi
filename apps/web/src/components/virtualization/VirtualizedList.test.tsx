@@ -28,6 +28,10 @@ interface MockLegendListProps {
   readonly onItemSizeChanged?: (info: MockItemSizeChange) => void;
   readonly estimatedItemSize?: number;
   readonly drawDistance?: number;
+  readonly id?: string;
+  readonly role?: string;
+  readonly className?: string;
+  readonly "aria-label"?: string;
   readonly "data-testid"?: string;
 }
 
@@ -43,7 +47,13 @@ vi.mock("@legendapp/list/react", () => ({
   LegendList: (props: MockLegendListProps) => {
     mockState.latestProps = props;
     return (
-      <div data-testid={props["data-testid"]}>
+      <div
+        id={props.id}
+        role={props.role}
+        aria-label={props["aria-label"]}
+        className={props.className}
+        data-testid={props["data-testid"]}
+      >
         {props.ListHeaderComponent}
         {props.data?.map((item, index) => {
           const key = props.keyExtractor?.(item, index) ?? index;
@@ -92,6 +102,25 @@ describe("VirtualizedList", () => {
     expect(markup).toContain("Footer");
     expect(markup).toContain('data-key="item-alpha"');
     expect(markup).toContain('data-key="item-beta"');
+  });
+
+  it("forwards list accessibility and layout attributes", () => {
+    const markup = renderToStaticMarkup(
+      <VirtualizedList
+        id="inbox-thread-list"
+        role="list"
+        aria-label="Inbox threads"
+        className="min-h-0 flex-1"
+        data={["alpha"]}
+        keyExtractor={(item) => item}
+        renderItem={({ item }) => item}
+      />,
+    );
+
+    expect(markup).toContain('id="inbox-thread-list"');
+    expect(markup).toContain('role="list"');
+    expect(markup).toContain('aria-label="Inbox threads"');
+    expect(markup).toContain('class="min-h-0 flex-1"');
   });
 
   it("passes initialScrollAtEnd through to LegendList", () => {

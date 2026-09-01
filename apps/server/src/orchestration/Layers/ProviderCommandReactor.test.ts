@@ -2146,6 +2146,62 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.title).toBe("Generated title");
   });
 
+  it("regenerates a custom title from persisted conversation context", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.make("thread-1");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-title-before-regeneration"),
+        threadId,
+        title: "Original custom title",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-before-regeneration"),
+        threadId,
+        message: {
+          messageId: asMessageId("message-before-regeneration"),
+          role: "user",
+          text: "Investigate the mobile sidebar rendering slowdown.",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
+
+    harness.generateThreadTitle.mockReturnValue(
+      Effect.succeed({ title: "Mobile sidebar performance" }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-regenerate-title"),
+        threadId,
+        regenerateTitle: true,
+      }),
+    );
+
+    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+    expect(harness.generateThreadTitle.mock.calls[0]?.[0]).toMatchObject({
+      message: "User: Investigate the mobile sidebar rendering slowdown.",
+    });
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return (
+        readModel.threads.find((thread) => thread.id === threadId)?.title ===
+        "Mobile sidebar performance"
+      );
+    });
+  });
+
   it("does not overwrite an existing custom thread title on the first turn", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

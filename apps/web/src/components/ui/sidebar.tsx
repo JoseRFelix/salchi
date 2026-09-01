@@ -269,7 +269,7 @@ function Sidebar({
           <SheetPopup
             allowOutsidePointerEvents
             className={cn(
-              "w-(--sidebar-width) max-w-none bg-sidebar p-0 text-sidebar-foreground",
+              "w-(--sidebar-width) max-w-none bg-sidebar p-0 text-sidebar-foreground outline-none",
               className,
             )}
             data-mobile="true"
@@ -827,15 +827,17 @@ function SidebarMenu({ className, ...props }: React.ComponentProps<"ul">) {
   );
 }
 
-function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
-  return (
-    <li
-      className={cn("group/menu-item relative", className)}
-      data-sidebar="menu-item"
-      data-slot="sidebar-menu-item"
-      {...props}
-    />
-  );
+function SidebarMenuItem({ className, render, ...props }: useRender.ComponentProps<"li">) {
+  const defaultProps = {
+    className: cn("group/menu-item relative", className),
+    "data-sidebar": "menu-item",
+    "data-slot": "sidebar-menu-item",
+  };
+  return useRender({
+    defaultTagName: "li",
+    props: mergeProps<"li">(defaultProps, props),
+    render,
+  });
 }
 
 const sidebarMenuButtonVariants = cva(

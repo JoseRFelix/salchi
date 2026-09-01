@@ -340,13 +340,6 @@ function renderThreadTrailingStatus(thread: SidebarThreadSummary): ReactNode {
 
 export function CommandPaletteDialog() {
   const open = useCommandPaletteStore((store) => store.open);
-  const setOpen = useCommandPaletteStore((store) => store.setOpen);
-
-  useEffect(() => {
-    return () => {
-      setOpen(false);
-    };
-  }, [setOpen]);
 
   if (!open) {
     return null;
@@ -926,13 +919,24 @@ function OpenCommandPaletteDialog() {
     startAddProjectSourceSelection,
   ]);
 
+  const openNewThreadInFlow = useCallback(() => {
+    pushPaletteView({
+      addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
+      groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
+    });
+  }, [projectThreadItems]);
+
   useLayoutEffect(() => {
-    if (openIntent?.kind !== "add-project") {
+    if (!openIntent) {
       return;
     }
     clearOpenIntent();
-    openAddProjectFlow();
-  }, [clearOpenIntent, openAddProjectFlow, openIntent]);
+    if (openIntent.kind === "add-project") {
+      openAddProjectFlow();
+      return;
+    }
+    openNewThreadInFlow();
+  }, [clearOpenIntent, openAddProjectFlow, openIntent, openNewThreadInFlow]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 

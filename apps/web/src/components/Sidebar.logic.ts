@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { ScopedProjectRef } from "@salchi/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@salchi/contracts/settings";
 import {
   getThreadSortTimestamp,
@@ -34,7 +35,6 @@ type SidebarProject = {
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
 };
-
 export type ThreadTraversalDirection = "previous" | "next";
 
 export interface ThreadStatusPill {
@@ -166,6 +166,13 @@ export function shouldClearThreadSelectionOnMouseDown(target: HTMLElement | null
   return !target.closest(THREAD_SELECTION_SAFE_SELECTOR);
 }
 
+export function shouldCreateNewThreadInCurrentProject(
+  shiftKey: boolean,
+  projectGroupCount: number,
+): boolean {
+  return shiftKey || projectGroupCount <= 1;
+}
+
 export function resolveSidebarNewThreadEnvMode(input: {
   requestedEnvMode?: SidebarNewThreadEnvMode;
   defaultEnvMode: SidebarNewThreadEnvMode;
@@ -245,6 +252,67 @@ export function orderItemsByPreferredIds<TItem, TId>(input: {
   });
   const remaining = items.filter((item) => !preferredIdSet.has(getId(item)));
   return [...ordered, ...remaining];
+}
+
+export function sortLogicalProjectsForSidebar<
+  TProject extends {
+    readonly projectKey: string;
+    readonly displayName: string;
+    readonly createdAt?: string | undefined;
+    readonly updatedAt?: string | undefined;
+    readonly memberProjectRefs: readonly ScopedProjectRef[];
+  },
+  TThread extends {
+    readonly environmentId: string;
+    readonly projectId: string;
+    readonly archivedAt: string | null;
+    readonly createdAt: string;
+    readonly updatedAt?: string | undefined;
+  },
+>(
+  projects: readonly TProject[],
+  threads: readonly TThread[],
+  sortOrder: SidebarProjectSortOrder,
+): TProject[] {
+  if (sortOrder === "manual") return [...projects];
+
+  const projectKeyByRef = new Map<string, string>(
+    projects.flatMap((project) =>
+      project.memberProjectRefs.map(
+        (ref) => [`${ref.environmentId}\0${ref.projectId}`, project.projectKey] as const,
+      ),
+    ),
+  );
+  const latestTimestampByProjectKey = new Map<string, number>();
+  for (const thread of threads) {
+    if (thread.archivedAt !== null) continue;
+    const projectKey = projectKeyByRef.get(`${thread.environmentId}\0${thread.projectId}`);
+    if (!projectKey) continue;
+    const candidate = Date.parse(
+      sortOrder === "created_at" ? thread.createdAt : (thread.updatedAt ?? thread.createdAt),
+    );
+    if (Number.isNaN(candidate)) continue;
+    latestTimestampByProjectKey.set(
+      projectKey,
+      Math.max(latestTimestampByProjectKey.get(projectKey) ?? Number.NEGATIVE_INFINITY, candidate),
+    );
+  }
+
+  const projectFallback = (project: TProject) => {
+    const value =
+      sortOrder === "created_at" ? project.createdAt : (project.updatedAt ?? project.createdAt);
+    const parsed = value === undefined ? Number.NaN : Date.parse(value);
+    return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+  };
+  return [...projects].toSorted((left, right) => {
+    const leftAt = latestTimestampByProjectKey.get(left.projectKey) ?? projectFallback(left);
+    const rightAt = latestTimestampByProjectKey.get(right.projectKey) ?? projectFallback(right);
+    return (
+      rightAt - leftAt ||
+      left.displayName.localeCompare(right.displayName) ||
+      left.projectKey.localeCompare(right.projectKey)
+    );
+  });
 }
 
 export function getVisibleSidebarThreadIds<TThreadId>(
@@ -613,6 +681,7 @@ export function getFallbackThreadIdAfterDelete<
     )[0]?.id ?? null
   );
 }
+
 export function getProjectSortTimestamp(
   project: SidebarProject,
   projectThreads: readonly ThreadSortInput[],

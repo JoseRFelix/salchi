@@ -4,6 +4,7 @@ import {
   useImperativeHandle,
   useRef,
   type CSSProperties,
+  type AriaRole,
   type ForwardedRef,
   type Key,
   type ReactElement,
@@ -84,6 +85,9 @@ export interface VirtualizedListProps<T> {
   readonly onItemSizeChanged?: (info: VirtualizedListItemSizeChange<T>) => void;
   readonly className?: string;
   readonly style?: CSSProperties;
+  readonly id?: string;
+  readonly role?: AriaRole;
+  readonly "aria-label"?: string;
   readonly ListHeaderComponent?: ReactNode;
   readonly ListFooterComponent?: ReactNode;
   readonly increaseViewportBy?: number | { top: number; bottom: number };
@@ -169,6 +173,9 @@ function VirtualizedListInner<T>(
     onItemSizeChanged,
     className,
     style,
+    id,
+    role,
+    "aria-label": ariaLabel,
     ListHeaderComponent,
     ListFooterComponent,
     increaseViewportBy,
@@ -283,6 +290,9 @@ function VirtualizedListInner<T>(
       ListFooterComponent={ListFooterComponent ? <>{ListFooterComponent}</> : null}
       {...(className !== undefined ? { className } : {})}
       {...(style !== undefined ? { style } : {})}
+      {...(id !== undefined ? { id } : {})}
+      {...(role !== undefined ? { role } : {})}
+      {...(ariaLabel !== undefined ? { "aria-label": ariaLabel } : {})}
       {...(onEndReached ? { onEndReached: () => onEndReached() } : {})}
       {...(onItemSizeChanged ? { onItemSizeChanged: handleItemSizeChanged } : {})}
       {...(dataTestId !== undefined ? { "data-testid": dataTestId } : {})}

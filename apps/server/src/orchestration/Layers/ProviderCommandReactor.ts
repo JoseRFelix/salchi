@@ -72,6 +72,7 @@ type ProviderIntentEvent = Extract<
 
 type ProviderCommandReactorDomainEvent =
   | ProviderIntentEvent
+  | Extract<OrchestrationEvent, { type: "thread.title-regeneration-requested" }>
   | Extract<OrchestrationEvent, { type: "thread.activity-appended" }>
   | Extract<OrchestrationEvent, { type: "thread.session-set" }>;
 
@@ -133,6 +134,34 @@ function canReplaceThreadTitle(currentTitle: string, titleSeed?: string): boolea
   return trimmedTitleSeed !== undefined && trimmedTitleSeed.length > 0
     ? trimmedCurrentTitle === trimmedTitleSeed
     : false;
+}
+
+function formatThreadTitleRegenerationContext(
+  messages: ReadonlyArray<{
+    readonly role: "user" | "assistant" | "system";
+    readonly text: string;
+    readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
+  }>,
+): { readonly message: string; readonly attachments: ReadonlyArray<ChatAttachment> } {
+  const maxCharacters = 12_000;
+  const sections: string[] = [];
+  const attachments: ChatAttachment[] = [];
+  let usedCharacters = 0;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const entry = messages[index];
+    if (!entry) continue;
+    const text = entry.text.trim();
+    if (text.length === 0 && (entry.attachments?.length ?? 0) === 0) continue;
+    const role =
+      entry.role === "user" ? "User" : entry.role === "assistant" ? "Assistant" : "System";
+    const section = `${role}: ${text}`;
+    const remaining = maxCharacters - usedCharacters;
+    if (remaining <= 0) break;
+    sections.unshift(section.length > remaining ? section.slice(0, remaining) : section);
+    usedCharacters += Math.min(section.length, remaining);
+    attachments.unshift(...(entry.attachments ?? []));
+  }
+  return { message: sections.join("\n\n"), attachments: attachments.slice(-4) };
 }
 
 function findProviderAdapterRequestError(
@@ -1081,6 +1110,36 @@ const make = Effect.gen(function* () {
     yield* startNextAvailableTurnForThread(event.payload.threadId);
   });
 
+  const processThreadTitleRegenerationRequested = Effect.fn(
+    "processThreadTitleRegenerationRequested",
+  )(function* (
+    event: Extract<OrchestrationEvent, { type: "thread.title-regeneration-requested" }>,
+  ) {
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread || thread.title !== event.payload.previousTitle) return;
+    const context = formatThreadTitleRegenerationContext(thread.messages);
+    if (context.message.length === 0) return;
+    const project = yield* resolveProject(thread.projectId);
+    const cwd =
+      resolveThreadWorkspaceCwd({ thread, projects: project ? [project] : [] }) ?? process.cwd();
+    const { textGenerationModelSelection: modelSelection } =
+      yield* serverSettingsService.getSettings;
+    const generated = yield* textGeneration.generateThreadTitle({
+      cwd,
+      message: context.message,
+      ...(context.attachments.length > 0 ? { attachments: context.attachments } : {}),
+      modelSelection,
+    });
+    const current = yield* resolveThread(event.payload.threadId);
+    if (!current || current.title !== event.payload.previousTitle) return;
+    yield* orchestrationEngine.dispatch({
+      type: "thread.meta.update",
+      commandId: yield* serverCommandId("thread-title-regenerate"),
+      threadId: event.payload.threadId,
+      title: generated.title,
+    });
+  });
+
   const processTurnQueued = Effect.fn("processTurnQueued")(function* (
     event: Extract<
       ProviderIntentEvent,
@@ -1358,6 +1417,9 @@ const make = Effect.gen(function* () {
       case "thread.activity-appended":
         yield* processThreadActivityAppended(event);
         return;
+      case "thread.title-regeneration-requested":
+        yield* processThreadTitleRegenerationRequested(event);
+        return;
       case "thread.session-set":
         yield* processThreadSessionSet(event);
         return;
@@ -1577,6 +1639,7 @@ const make = Effect.gen(function* () {
         event.type === "thread.queued-turn-steer-failed" ||
         event.type === "thread.queued-turn-steer-requested" ||
         event.type === "thread.turn-start-requested" ||
+        event.type === "thread.title-regeneration-requested" ||
         event.type === "thread.activity-appended" ||
         event.type === "thread.session-set" ||
         event.type === "thread.turn-interrupt-requested" ||

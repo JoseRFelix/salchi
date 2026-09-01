@@ -68,6 +68,63 @@ describe("ServerSettings browser defaults", () => {
     expect(patch.browserScreencastQuality).toBe(60);
     expect(patch.browserScreencastEveryNthFrame).toBe(3);
   });
+
+  it("defaults inbox lifecycle automation to t3code's policy", () => {
+    expect(DEFAULT_CLIENT_SETTINGS.sidebarAutoSettleAfterDays).toBe(3);
+    expect(DEFAULT_CLIENT_SETTINGS.sidebarAutoSettleOnMerge).toBe(true);
+    expect(DEFAULT_CLIENT_SETTINGS.confirmThreadUnpin).toBe(false);
+
+    const decoded = decodeClientSettings({
+      sidebarAutoSettleAfterDays: null,
+      sidebarAutoSettleOnMerge: false,
+      confirmThreadUnpin: true,
+    });
+    expect(decoded.sidebarAutoSettleAfterDays).toBeNull();
+    expect(decoded.sidebarAutoSettleOnMerge).toBe(false);
+    expect(decoded.confirmThreadUnpin).toBe(true);
+  });
+
+  it("accepts only whole-day auto-settle windows from 1 through 90", () => {
+    for (const value of [1, 3, 90]) {
+      expect(
+        decodeClientSettings({ sidebarAutoSettleAfterDays: value }).sidebarAutoSettleAfterDays,
+      ).toBe(value);
+    }
+    for (const value of [0, 3.5, 91]) {
+      expect(() => decodeClientSettings({ sidebarAutoSettleAfterDays: value })).toThrow();
+    }
+  });
+
+  it("defaults to Project view and preserves an explicit Inbox choice", () => {
+    expect(DEFAULT_CLIENT_SETTINGS.sidebarNavigationMode).toBe("project");
+    expect(DEFAULT_CLIENT_SETTINGS.hasSeenInboxIntroduction).toBe(false);
+    expect(DEFAULT_CLIENT_SETTINGS.sidebarProjectSortOrder).toBe("updated_at");
+    expect(DEFAULT_CLIENT_SETTINGS.sidebarThreadPreviewCount).toBe(6);
+
+    const decoded = decodeClientSettings({
+      hasSeenInboxIntroduction: true,
+      sidebarNavigationMode: "inbox",
+      sidebarProjectSortOrder: "manual",
+      sidebarThreadPreviewCount: 8,
+    });
+    expect(decoded.sidebarNavigationMode).toBe("inbox");
+    expect(decoded.hasSeenInboxIntroduction).toBe(true);
+    expect(decoded.sidebarProjectSortOrder).toBe("manual");
+    expect(decoded.sidebarThreadPreviewCount).toBe(8);
+
+    expect(() => decodeClientSettings({ sidebarNavigationMode: "global" })).toThrow();
+    expect(() => decodeClientSettings({ sidebarThreadPreviewCount: 0 })).toThrow();
+    expect(() => decodeClientSettings({ sidebarThreadPreviewCount: 16 })).toThrow();
+  });
+
+  it("accepts every project order and rejects unknown values", () => {
+    for (const sidebarProjectSortOrder of ["updated_at", "created_at", "manual"] as const) {
+      expect(decodeClientSettings({ sidebarProjectSortOrder }).sidebarProjectSortOrder).toBe(
+        sidebarProjectSortOrder,
+      );
+    }
+    expect(() => decodeClientSettings({ sidebarProjectSortOrder: "alphabetical" })).toThrow();
+  });
 });
 
 describe("ServerSettings.transcriptionModel", () => {

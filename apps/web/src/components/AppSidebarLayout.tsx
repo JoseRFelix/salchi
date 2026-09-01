@@ -1,7 +1,14 @@
 import { useEffect, type ReactNode } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 
+import { isElectron } from "../env";
+import { useSidebarNavigationMode } from "../hooks/useSettings";
+import InboxSidebar from "./InboxSidebar";
 import ThreadSidebar from "./Sidebar";
+import { resolveAppSidebarVariant } from "./appSidebarVariant";
+import { InboxIntroductionDialog } from "./inbox/InboxIntroductionDialog";
+import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
+import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Sidebar, SidebarProvider, SidebarRail } from "./ui/sidebar";
 import {
   clearShortcutModifierState,
@@ -13,6 +20,9 @@ const THREAD_SIDEBAR_MIN_WIDTH = 13 * 16;
 const THREAD_MAIN_CONTENT_MIN_WIDTH = 40 * 16;
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const sidebarNavigationMode = useSidebarNavigationMode();
+  const sidebarVariant = resolveAppSidebarVariant({ pathname, sidebarNavigationMode });
 
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
@@ -66,10 +76,20 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
         }}
       >
-        <ThreadSidebar />
+        {sidebarVariant === "settings" ? (
+          <>
+            <SidebarChromeHeader isElectron={isElectron} />
+            <SettingsSidebarNav pathname={pathname} />
+          </>
+        ) : sidebarVariant === "project" ? (
+          <ThreadSidebar />
+        ) : (
+          <InboxSidebar />
+        )}
         <SidebarRail />
       </Sidebar>
       {children}
+      <InboxIntroductionDialog />
     </SidebarProvider>
   );
 }

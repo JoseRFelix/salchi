@@ -381,6 +381,13 @@ function mapThread(
     error: sanitizeThreadErrorMessage(thread.session?.lastError),
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt,
+    settledOverride: thread.settledOverride ?? null,
+    settledAt: thread.settledAt ?? null,
+    unsettledAt: thread.unsettledAt ?? null,
+    snoozedUntil: thread.snoozedUntil ?? null,
+    snoozedAt: thread.snoozedAt ?? null,
+    pinnedAt: thread.pinnedAt ?? null,
+    pinOrderKey: thread.pinOrderKey ?? null,
     updatedAt: thread.updatedAt,
     latestTurn: thread.latestTurn,
     seenCompletionTurnId,
@@ -421,6 +428,13 @@ function mapThreadShell(
     error: sanitizeThreadErrorMessage(thread.session?.lastError),
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt,
+    settledOverride: thread.settledOverride ?? null,
+    settledAt: thread.settledAt ?? null,
+    unsettledAt: thread.unsettledAt ?? null,
+    snoozedUntil: thread.snoozedUntil ?? null,
+    snoozedAt: thread.snoozedAt ?? null,
+    pinnedAt: thread.pinnedAt ?? null,
+    pinOrderKey: thread.pinOrderKey ?? null,
     updatedAt: thread.updatedAt,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
@@ -436,6 +450,7 @@ function mapThreadShell(
     environmentId,
     projectId: thread.projectId,
     title: thread.title,
+    modelSelection: normalizeModelSelection(thread.modelSelection),
     interactionMode: thread.interactionMode,
     parentThreadId: thread.parentThreadId ?? null,
     createdByThreadId: thread.createdByThreadId ?? null,
@@ -446,6 +461,13 @@ function mapThreadShell(
     session,
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt,
+    settledOverride: thread.settledOverride ?? null,
+    settledAt: thread.settledAt ?? null,
+    unsettledAt: thread.unsettledAt ?? null,
+    snoozedUntil: thread.snoozedUntil ?? null,
+    snoozedAt: thread.snoozedAt ?? null,
+    pinnedAt: thread.pinnedAt ?? null,
+    pinOrderKey: thread.pinOrderKey ?? null,
     updatedAt: thread.updatedAt,
     latestTurn: thread.latestTurn,
     seenCompletionTurnId,
@@ -483,6 +505,13 @@ function toThreadShell(thread: Thread): ThreadShell {
     error: thread.error,
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt,
+    settledOverride: thread.settledOverride ?? null,
+    settledAt: thread.settledAt ?? null,
+    unsettledAt: thread.unsettledAt ?? null,
+    snoozedUntil: thread.snoozedUntil ?? null,
+    snoozedAt: thread.snoozedAt ?? null,
+    pinnedAt: thread.pinnedAt ?? null,
+    pinOrderKey: thread.pinOrderKey ?? null,
     updatedAt: thread.updatedAt,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
@@ -565,6 +594,14 @@ function modelSelectionsEqual(left: ModelSelection, right: ModelSelection): bool
   );
 }
 
+function optionalModelSelectionsEqual(
+  left: ModelSelection | undefined,
+  right: ModelSelection | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return modelSelectionsEqual(left, right);
+}
+
 function sidebarThreadSummariesEqual(
   left: SidebarThreadSummary | undefined,
   right: SidebarThreadSummary,
@@ -574,6 +611,7 @@ function sidebarThreadSummariesEqual(
     left.id === right.id &&
     left.projectId === right.projectId &&
     left.title === right.title &&
+    optionalModelSelectionsEqual(left.modelSelection, right.modelSelection) &&
     left.interactionMode === right.interactionMode &&
     (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
     (left.createdByThreadId ?? null) === (right.createdByThreadId ?? null) &&
@@ -584,6 +622,13 @@ function sidebarThreadSummariesEqual(
     threadSessionsEqual(left.session, right.session) &&
     left.createdAt === right.createdAt &&
     left.archivedAt === right.archivedAt &&
+    left.settledOverride === right.settledOverride &&
+    left.settledAt === right.settledAt &&
+    (left.unsettledAt ?? null) === (right.unsettledAt ?? null) &&
+    (left.snoozedUntil ?? null) === (right.snoozedUntil ?? null) &&
+    (left.snoozedAt ?? null) === (right.snoozedAt ?? null) &&
+    (left.pinnedAt ?? null) === (right.pinnedAt ?? null) &&
+    (left.pinOrderKey ?? null) === (right.pinOrderKey ?? null) &&
     left.updatedAt === right.updatedAt &&
     latestTurnsEqual(left.latestTurn, right.latestTurn) &&
     left.seenCompletionTurnId === right.seenCompletionTurnId &&
@@ -616,6 +661,13 @@ function threadShellsEqual(left: ThreadShell | undefined, right: ThreadShell): b
     left.error === right.error &&
     left.createdAt === right.createdAt &&
     left.archivedAt === right.archivedAt &&
+    left.settledOverride === right.settledOverride &&
+    left.settledAt === right.settledAt &&
+    (left.unsettledAt ?? null) === (right.unsettledAt ?? null) &&
+    (left.snoozedUntil ?? null) === (right.snoozedUntil ?? null) &&
+    (left.snoozedAt ?? null) === (right.snoozedAt ?? null) &&
+    (left.pinnedAt ?? null) === (right.pinnedAt ?? null) &&
+    (left.pinOrderKey ?? null) === (right.pinOrderKey ?? null) &&
     left.updatedAt === right.updatedAt &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath
@@ -1586,6 +1638,7 @@ function syncSidebarThreadSummaryFromThreadState(
     environmentId,
     projectId: shell.projectId,
     title: shell.title,
+    modelSelection: shell.modelSelection,
     interactionMode: shell.interactionMode,
     parentThreadId: shell.parentThreadId ?? null,
     createdByThreadId: shell.createdByThreadId ?? null,
@@ -1596,6 +1649,13 @@ function syncSidebarThreadSummaryFromThreadState(
     session: state.threadSessionById[threadId] ?? null,
     createdAt: shell.createdAt,
     archivedAt: shell.archivedAt,
+    settledOverride: shell.settledOverride ?? null,
+    settledAt: shell.settledAt ?? null,
+    unsettledAt: shell.unsettledAt ?? null,
+    snoozedUntil: shell.snoozedUntil ?? null,
+    snoozedAt: shell.snoozedAt ?? null,
+    pinnedAt: shell.pinnedAt ?? null,
+    pinOrderKey: shell.pinOrderKey ?? null,
     updatedAt: shell.updatedAt,
     latestTurn: state.threadTurnStateById[threadId]?.latestTurn ?? null,
     seenCompletionTurnId: state.threadTurnStateById[threadId]?.seenCompletionTurnId,
@@ -2458,6 +2518,9 @@ function applyEnvironmentOrchestrationEventUnchecked(
         }),
         options,
       );
+
+    case "thread.title-regeneration-requested":
+      return state;
 
     case "thread.meta-updated":
       return updateThreadState(

@@ -12,7 +12,6 @@ import {
   resolveAdjacentThreadId,
   getFallbackThreadIdAfterDelete,
   getVisibleThreadsForProject,
-  getProjectSortTimestamp,
   hasUnseenCompletion,
   isContextMenuPointerDown,
   orderItemsByPreferredIds,
@@ -21,10 +20,11 @@ import {
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
-  shouldEnableSidebarListAnimations,
+  sortLogicalProjectsForSidebar,
   shouldClearThreadSelectionOnMouseDown,
+  shouldCreateNewThreadInCurrentProject,
+  shouldEnableSidebarListAnimations,
   shouldShowProjectDraftBadge,
-  sortProjectsForSidebar,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
 import {
@@ -34,14 +34,90 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@salchi/contracts";
-import {
-  DEFAULT_INTERACTION_MODE,
-  DEFAULT_RUNTIME_MODE,
-  type Project,
-  type Thread,
-} from "../types";
+import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "../types";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
+
+describe("sortLogicalProjectsForSidebar", () => {
+  const projects = [
+    {
+      projectKey: "project-alpha",
+      displayName: "Alpha",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      memberProjectRefs: [
+        {
+          environmentId: EnvironmentId.make("environment-local"),
+          projectId: ProjectId.make("project-alpha"),
+        },
+      ],
+    },
+    {
+      projectKey: "project-beta",
+      displayName: "Beta",
+      createdAt: "2026-02-01T00:00:00.000Z",
+      updatedAt: "2026-02-02T00:00:00.000Z",
+      memberProjectRefs: [
+        {
+          environmentId: EnvironmentId.make("environment-local"),
+          projectId: ProjectId.make("project-beta"),
+        },
+      ],
+    },
+  ] as const;
+
+  it("preserves configured manual order", () => {
+    expect(
+      sortLogicalProjectsForSidebar(projects, [], "manual").map((project) => project.projectKey),
+    ).toEqual(["project-alpha", "project-beta"]);
+  });
+
+  it("uses the latest thread activity for updated ordering", () => {
+    const ordered = sortLogicalProjectsForSidebar(
+      projects,
+      [
+        {
+          environmentId: "environment-local",
+          projectId: "project-alpha",
+          archivedAt: null,
+          createdAt: "2026-01-03T00:00:00.000Z",
+          updatedAt: "2026-03-01T00:00:00.000Z",
+        },
+        {
+          environmentId: "environment-local",
+          projectId: "project-beta",
+          archivedAt: null,
+          createdAt: "2026-02-03T00:00:00.000Z",
+          updatedAt: "2026-02-04T00:00:00.000Z",
+        },
+      ],
+      "updated_at",
+    );
+    expect(ordered.map((project) => project.projectKey)).toEqual(["project-alpha", "project-beta"]);
+  });
+
+  it("uses thread creation time and ignores archived threads for created ordering", () => {
+    const ordered = sortLogicalProjectsForSidebar(
+      projects,
+      [
+        {
+          environmentId: "environment-local",
+          projectId: "project-alpha",
+          archivedAt: null,
+          createdAt: "2026-04-01T00:00:00.000Z",
+        },
+        {
+          environmentId: "environment-local",
+          projectId: "project-beta",
+          archivedAt: "2026-06-01T00:00:00.000Z",
+          createdAt: "2026-05-01T00:00:00.000Z",
+        },
+      ],
+      "created_at",
+    );
+    expect(ordered.map((project) => project.projectKey)).toEqual(["project-alpha", "project-beta"]);
+  });
+});
 
 describe("shouldEnableSidebarListAnimations", () => {
   it("keeps animations disabled while cached environments are reconciling", () => {
@@ -216,6 +292,21 @@ describe("resolveSidebarNewThreadEnvMode", () => {
         defaultEnvMode: "worktree",
       }),
     ).toBe("local");
+  });
+});
+
+describe("shouldCreateNewThreadInCurrentProject", () => {
+  it("creates immediately when there is no project choice", () => {
+    expect(shouldCreateNewThreadInCurrentProject(false, 0)).toBe(true);
+    expect(shouldCreateNewThreadInCurrentProject(false, 1)).toBe(true);
+  });
+
+  it("opens the project picker for a plain click with multiple projects", () => {
+    expect(shouldCreateNewThreadInCurrentProject(false, 2)).toBe(false);
+  });
+
+  it("lets shift-click bypass the project picker", () => {
+    expect(shouldCreateNewThreadInCurrentProject(true, 2)).toBe(true);
   });
 });
 
@@ -1095,25 +1186,6 @@ describe("getVisibleThreadsForProject", () => {
   });
 });
 
-function makeProject(overrides: Partial<Project> = {}): Project {
-  const { defaultModelSelection, ...rest } = overrides;
-  return {
-    id: ProjectId.make("project-1"),
-    environmentId: localEnvironmentId,
-    name: "Project",
-    cwd: "/tmp/project",
-    defaultModelSelection: {
-      instanceId: ProviderInstanceId.make("codex"),
-      model: "gpt-5.4",
-      ...defaultModelSelection,
-    },
-    createdAt: "2026-03-09T10:00:00.000Z",
-    updatedAt: "2026-03-09T10:00:00.000Z",
-    scripts: [],
-    ...rest,
-  };
-}
-
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
     id: ThreadId.make("thread-1"),
@@ -1209,162 +1281,5 @@ describe("getFallbackThreadIdAfterDelete", () => {
     });
 
     expect(fallbackThreadId).toBe(ThreadId.make("thread-next"));
-  });
-});
-describe("sortProjectsForSidebar", () => {
-  it("sorts projects by the most recent user message across their threads", () => {
-    const projects = [
-      makeProject({ id: ProjectId.make("project-1"), name: "Older project" }),
-      makeProject({ id: ProjectId.make("project-2"), name: "Newer project" }),
-    ];
-    const threads = [
-      makeThread({
-        projectId: ProjectId.make("project-1"),
-        updatedAt: "2026-03-09T10:20:00.000Z",
-        messages: [
-          {
-            id: "message-1" as never,
-            role: "user",
-            text: "older project user message",
-            createdAt: "2026-03-09T10:01:00.000Z",
-            streaming: false,
-            completedAt: "2026-03-09T10:01:00.000Z",
-          },
-        ],
-      }),
-      makeThread({
-        id: ThreadId.make("thread-2"),
-        projectId: ProjectId.make("project-2"),
-        updatedAt: "2026-03-09T10:05:00.000Z",
-        messages: [
-          {
-            id: "message-2" as never,
-            role: "user",
-            text: "newer project user message",
-            createdAt: "2026-03-09T10:05:00.000Z",
-            streaming: false,
-            completedAt: "2026-03-09T10:05:00.000Z",
-          },
-        ],
-      }),
-    ];
-
-    const sorted = sortProjectsForSidebar(projects, threads, "updated_at");
-
-    expect(sorted.map((project) => project.id)).toEqual([
-      ProjectId.make("project-2"),
-      ProjectId.make("project-1"),
-    ]);
-  });
-
-  it("falls back to project timestamps when a project has no threads", () => {
-    const sorted = sortProjectsForSidebar(
-      [
-        makeProject({
-          id: ProjectId.make("project-1"),
-          name: "Older project",
-          updatedAt: "2026-03-09T10:01:00.000Z",
-        }),
-        makeProject({
-          id: ProjectId.make("project-2"),
-          name: "Newer project",
-          updatedAt: "2026-03-09T10:05:00.000Z",
-        }),
-      ],
-      [],
-      "updated_at",
-    );
-
-    expect(sorted.map((project) => project.id)).toEqual([
-      ProjectId.make("project-2"),
-      ProjectId.make("project-1"),
-    ]);
-  });
-
-  it("falls back to name and id ordering when projects have no sortable timestamps", () => {
-    const sorted = sortProjectsForSidebar(
-      [
-        makeProject({
-          id: ProjectId.make("project-2"),
-          name: "Beta",
-          createdAt: undefined,
-          updatedAt: undefined,
-        }),
-        makeProject({
-          id: ProjectId.make("project-1"),
-          name: "Alpha",
-          createdAt: undefined,
-          updatedAt: undefined,
-        }),
-      ],
-      [],
-      "updated_at",
-    );
-
-    expect(sorted.map((project) => project.id)).toEqual([
-      ProjectId.make("project-1"),
-      ProjectId.make("project-2"),
-    ]);
-  });
-
-  it("preserves manual project ordering", () => {
-    const projects = [
-      makeProject({ id: ProjectId.make("project-2"), name: "Second" }),
-      makeProject({ id: ProjectId.make("project-1"), name: "First" }),
-    ];
-
-    const sorted = sortProjectsForSidebar(projects, [], "manual");
-
-    expect(sorted.map((project) => project.id)).toEqual([
-      ProjectId.make("project-2"),
-      ProjectId.make("project-1"),
-    ]);
-  });
-
-  it("ignores archived threads when sorting projects", () => {
-    const sorted = sortProjectsForSidebar(
-      [
-        makeProject({
-          id: ProjectId.make("project-1"),
-          name: "Visible project",
-          updatedAt: "2026-03-09T10:01:00.000Z",
-        }),
-        makeProject({
-          id: ProjectId.make("project-2"),
-          name: "Archived-only project",
-          updatedAt: "2026-03-09T10:00:00.000Z",
-        }),
-      ],
-      [
-        makeThread({
-          id: ThreadId.make("thread-visible"),
-          projectId: ProjectId.make("project-1"),
-          updatedAt: "2026-03-09T10:02:00.000Z",
-          archivedAt: null,
-        }),
-        makeThread({
-          id: ThreadId.make("thread-archived"),
-          projectId: ProjectId.make("project-2"),
-          updatedAt: "2026-03-09T10:10:00.000Z",
-          archivedAt: "2026-03-09T10:11:00.000Z",
-        }),
-      ].filter((thread) => thread.archivedAt === null),
-      "updated_at",
-    );
-
-    expect(sorted.map((project) => project.id)).toEqual([
-      ProjectId.make("project-1"),
-      ProjectId.make("project-2"),
-    ]);
-  });
-
-  it("returns the project timestamp when no threads are present", () => {
-    const timestamp = getProjectSortTimestamp(
-      makeProject({ updatedAt: "2026-03-09T10:10:00.000Z" }),
-      [],
-      "updated_at",
-    );
-
-    expect(timestamp).toBe(Date.parse("2026-03-09T10:10:00.000Z"));
   });
 });
