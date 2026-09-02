@@ -2,6 +2,7 @@ import type { EnvironmentId, ThreadId } from "@salchi/contracts";
 
 import { readEnvironmentConnection } from "../environments/runtime";
 import {
+  clearTurnCompletionAlerts,
   requestServiceWorkerBadgeSync,
   syncServiceWorkerUnreadCompletions,
   type UnreadCompletionServiceWorkerSnapshot,
@@ -35,6 +36,15 @@ let observedEnvironmentIds = new Set<string>();
 let pendingRemovedEnvironmentIds = new Set<EnvironmentId>();
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let removeLifecycleListeners: (() => void) | null = null;
+let badgeOperationGeneration = 0;
+let visibleAlertClearTimerIds: Array<ReturnType<typeof setTimeout>> = [];
+
+// Chrome can focus/show a page before it dispatches the service worker's
+// notificationclick event. Closing displayed notifications in that window can
+// delete the notification Chrome is still trying to activate. Clear the app
+// badge immediately, but give notification activation time to finish before
+// closing the displayed completion alerts and clearing the worker ledger.
+const VISIBLE_ALERT_CLEAR_RETRY_DELAYS_MS = [5_000, 1_000, 3_000] as const;
 
 function defaultIsEnvironmentAuthoritative(environmentId: EnvironmentId): boolean {
   return readEnvironmentConnection(environmentId)?.client.isHeartbeatFresh() === true;
@@ -113,10 +123,78 @@ export function deriveUnreadCompletionState(
   return { count, snapshots, allEnvironmentStateAuthoritative };
 }
 
+function isDocumentVisible(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "visible";
+}
+
+function clearVisibleAlertClearTimers(): void {
+  for (const timerId of visibleAlertClearTimerIds) {
+    clearTimeout(timerId);
+  }
+  visibleAlertClearTimerIds = [];
+}
+
+function removeVisibleAlertClearTimer(timerId: ReturnType<typeof setTimeout>): void {
+  visibleAlertClearTimerIds = visibleAlertClearTimerIds.filter(
+    (candidate) => candidate !== timerId,
+  );
+}
+
+function scheduleVisibleAlertClearAttempt(generation: number, attemptIndex: number): void {
+  const delay = VISIBLE_ALERT_CLEAR_RETRY_DELAYS_MS[attemptIndex];
+  if (delay === undefined) {
+    return;
+  }
+
+  const timerId = setTimeout(() => {
+    removeVisibleAlertClearTimer(timerId);
+    if (generation !== badgeOperationGeneration || !isDocumentVisible()) {
+      return;
+    }
+
+    badgeWriteQueue = badgeWriteQueue.then(async () => {
+      if (generation !== badgeOperationGeneration || !isDocumentVisible()) {
+        return;
+      }
+      await clearTurnCompletionAlerts();
+      if (generation !== badgeOperationGeneration || !isDocumentVisible()) {
+        return;
+      }
+      await writeAppBadgeCount(0);
+      scheduleVisibleAlertClearAttempt(generation, attemptIndex + 1);
+    });
+  }, delay);
+  visibleAlertClearTimerIds.push(timerId);
+}
+
+function clearVisibleCompletionAlerts(): void {
+  clearVisibleAlertClearTimers();
+  const generation = ++badgeOperationGeneration;
+  forceNextSync = false;
+  lastSnapshotFingerprint = null;
+
+  // Do not wait for a service worker round trip before removing the launcher
+  // badge. A queued clear follows any in-flight worker sync so a stale response
+  // cannot repaint it after the app becomes active.
+  void writeAppBadgeCount(0);
+  badgeWriteQueue = badgeWriteQueue.then(async () => {
+    if (generation === badgeOperationGeneration && isDocumentVisible()) {
+      await writeAppBadgeCount(0);
+    }
+  });
+  scheduleVisibleAlertClearAttempt(generation, 0);
+}
+
 function syncAppBadge(): void {
   syncScheduled = false;
   const force = forceNextSync;
   forceNextSync = false;
+  if (isDocumentVisible()) {
+    clearVisibleCompletionAlerts();
+    return;
+  }
+
+  const generation = badgeOperationGeneration;
   const state = useStore.getState();
   const currentEnvironmentIds = new Set(Object.keys(state.environmentStateById));
   for (const environmentId of observedEnvironmentIds) {
@@ -129,7 +207,12 @@ function syncAppBadge(): void {
   const unreadState = deriveUnreadCompletionState(state, isEnvironmentAuthoritative);
   if (unreadState.snapshots.length === 0 && removedEnvironmentIds.length === 0) {
     if (force) {
-      void requestServiceWorkerBadgeSync();
+      badgeWriteQueue = badgeWriteQueue.then(async () => {
+        if (generation !== badgeOperationGeneration || isDocumentVisible()) {
+          return;
+        }
+        await requestServiceWorkerBadgeSync();
+      });
     }
     return;
   }
@@ -139,10 +222,16 @@ function syncAppBadge(): void {
     return;
   }
   badgeWriteQueue = badgeWriteQueue.then(async () => {
+    if (generation !== badgeOperationGeneration || isDocumentVisible()) {
+      return;
+    }
     const workerSynchronized = await syncServiceWorkerUnreadCompletions(
       unreadState.snapshots,
       removedEnvironmentIds,
     );
+    if (generation !== badgeOperationGeneration || isDocumentVisible()) {
+      return;
+    }
     if (workerSynchronized) {
       for (const environmentId of removedEnvironmentIds) {
         pendingRemovedEnvironmentIds.delete(environmentId);
@@ -153,6 +242,9 @@ function syncAppBadge(): void {
 
     if (unreadState.allEnvironmentStateAuthoritative) {
       const directlyWritten = await writeAppBadgeCount(unreadState.count);
+      if (generation !== badgeOperationGeneration || isDocumentVisible()) {
+        return;
+      }
       if (directlyWritten) {
         lastSnapshotFingerprint = fingerprint;
         if (removedEnvironmentIds.length === 0) {
@@ -209,12 +301,15 @@ export function installPwaAppBadgeSync(options: PwaAppBadgeSyncOptions = {}): vo
     typeof document.addEventListener === "function"
   ) {
     const handleResume = () => scheduleAppBadgeSync(true);
+    const handleFocus = () => clearVisibleCompletionAlerts();
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        handleResume();
+        clearVisibleCompletionAlerts();
+      } else {
+        clearVisibleAlertClearTimers();
       }
     };
-    window.addEventListener("focus", handleResume);
+    window.addEventListener("focus", handleFocus);
     window.addEventListener("online", handleResume);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     const serviceWorker =
@@ -223,13 +318,17 @@ export function installPwaAppBadgeSync(options: PwaAppBadgeSyncOptions = {}): vo
         : null;
     serviceWorker?.addEventListener?.("controllerchange", handleResume);
     removeLifecycleListeners = () => {
-      window.removeEventListener("focus", handleResume);
+      window.removeEventListener("focus", handleFocus);
       window.removeEventListener("online", handleResume);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       serviceWorker?.removeEventListener?.("controllerchange", handleResume);
     };
   }
-  scheduleAppBadgeSync(true);
+  if (isDocumentVisible()) {
+    clearVisibleCompletionAlerts();
+  } else {
+    scheduleAppBadgeSync(true);
+  }
 }
 
 export function __resetPwaAppBadgeSyncForTests(): void {
@@ -241,6 +340,8 @@ export function __resetPwaAppBadgeSyncForTests(): void {
     clearTimeout(retryTimer);
     retryTimer = null;
   }
+  clearVisibleAlertClearTimers();
+  badgeOperationGeneration += 1;
   badgeSyncInstalled = false;
   syncScheduled = false;
   forceNextSync = false;
