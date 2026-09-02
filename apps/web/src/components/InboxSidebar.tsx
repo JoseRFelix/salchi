@@ -322,6 +322,7 @@ export default function InboxSidebar() {
     draftThreadKeys,
     draftIdByThreadKey,
     activeLocalDispatchThreadKeys,
+    activeLocalDispatchStartedAtByThreadKey,
   } = useSidebarThreadPresentation(serverThreads);
   useSidebarLocalDispatchReconciliation(threads);
   const settings = useSettings();
@@ -1411,6 +1412,7 @@ export default function InboxSidebar() {
           draftId={draftIdByThreadKey.get(threadKey) ?? null}
           isSelected={selectedThreadKeys.has(threadKey) || highlightedSearchKey === threadKey}
           hasActiveLocalDispatch={activeLocalDispatchThreadKeys.has(threadKey)}
+          localDispatchStartedAt={activeLocalDispatchStartedAtByThreadKey.get(threadKey) ?? null}
           backgroundLiveness={backgroundLivenessByLifecycleKey.get(lifecycleThreadKey) ?? null}
           isPending={pendingThreadKeys.has(threadKey)}
           isThreadExpanded={threadExpandedById[threadKey] ?? true}

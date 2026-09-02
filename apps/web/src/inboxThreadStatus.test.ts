@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   ProjectId,
+  ProviderDriverKind,
   ThreadId,
   TurnId,
   type OrchestrationLatestTurn,
@@ -129,6 +130,25 @@ describe("inbox working duration", () => {
         makeThread({ latestTurn: { ...running, startedAt: "not-a-timestamp" } }),
       ),
     ).toBe(running.requestedAt);
+  });
+
+  it("prefers a local dispatch start while the server still has the previous turn", () => {
+    const localDispatchStartedAt = "2026-09-02T10:00:00.000Z";
+    expect(
+      resolveInboxWorkingStartedAt(
+        makeThread({
+          session: {
+            provider: ProviderDriverKind.make("codex"),
+            status: "ready",
+            orchestrationStatus: "ready",
+            createdAt: "2026-08-01T10:00:00.000Z",
+            updatedAt: "2026-08-01T10:00:00.000Z",
+          },
+          latestTurn: latestTurn("completed"),
+        }),
+        localDispatchStartedAt,
+      ),
+    ).toBe(localDispatchStartedAt);
   });
 
   it("formats the same compact elapsed labels as t3code", () => {

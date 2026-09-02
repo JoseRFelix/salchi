@@ -128,6 +128,7 @@ interface InboxThreadRowProps {
   readonly draftId: DraftId | null;
   readonly isSelected: boolean;
   readonly hasActiveLocalDispatch: boolean;
+  readonly localDispatchStartedAt: string | null;
   readonly backgroundLiveness: InboxBackgroundLiveness;
   readonly isPending: boolean;
   readonly isThreadExpanded: boolean;
@@ -691,6 +692,7 @@ export const InboxThreadRow = memo(function InboxThreadRow(props: InboxThreadRow
           <InboxThreadStatus
             activityAt={activityAt}
             hasActiveLocalDispatch={props.hasActiveLocalDispatch}
+            localDispatchStartedAt={props.localDispatchStartedAt}
             backgroundLiveness={props.backgroundLiveness}
             isActive={props.isActive}
             isWoke={isWoke}

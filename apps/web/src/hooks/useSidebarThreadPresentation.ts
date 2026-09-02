@@ -84,13 +84,26 @@ export function useSidebarThreadPresentation(
       serverThreadByKey,
       ...(projectRefs !== undefined ? { projectRefs } : {}),
     });
+    const activeLocalDispatchStartedAtByThreadKey = new Map(
+      Object.entries(localDispatchByThreadKey).flatMap(([threadKey, dispatch]) =>
+        dispatch === undefined ? [] : ([[threadKey, dispatch.startedAt]] as const),
+      ),
+    );
+    for (const { thread } of draftThreads) {
+      if (!thread.promotedTo) {
+        continue;
+      }
+      const draftThreadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.threadId));
+      const promotedThreadKey = scopedThreadKey(thread.promotedTo);
+      const startedAt = activeLocalDispatchStartedAtByThreadKey.get(draftThreadKey);
+      if (startedAt !== undefined) {
+        activeLocalDispatchStartedAtByThreadKey.set(promotedThreadKey, startedAt);
+      }
+    }
     return {
       ...presentation,
-      activeLocalDispatchThreadKeys: new Set(
-        Object.entries(localDispatchByThreadKey).flatMap(([threadKey, dispatch]) =>
-          dispatch === undefined ? [] : [threadKey],
-        ),
-      ),
+      activeLocalDispatchThreadKeys: new Set(activeLocalDispatchStartedAtByThreadKey.keys()),
+      activeLocalDispatchStartedAtByThreadKey,
     };
   }, [draftThreads, localDispatchByThreadKey, projectRefs, serverThreadByKey, serverThreads]);
 }
