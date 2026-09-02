@@ -12,7 +12,10 @@ import {
 
 const initialStoreState = useStore.getState();
 
-function installBadgeGlobals(responseOk = true) {
+function installBadgeGlobals(
+  responseOk = true,
+  visibilityState: DocumentVisibilityState = "hidden",
+) {
   const postMessage = vi.fn(
     (
       message: { readonly requestId?: string; readonly snapshots?: readonly unknown[] },
@@ -30,22 +33,43 @@ function installBadgeGlobals(responseOk = true) {
     waiting: null,
     installing: null,
   };
+  const serviceWorker = Object.assign(new EventTarget(), {
+    getRegistration: vi.fn(async () => registration),
+    ready: Promise.resolve(registration),
+  });
   const navigatorLike = {
     setAppBadge: vi.fn(async () => {}),
     clearAppBadge: vi.fn(async () => {}),
-    serviceWorker: {
-      getRegistration: vi.fn(async () => registration),
-      ready: Promise.resolve(registration),
-    },
+    serviceWorker,
   };
-  vi.stubGlobal("navigator", navigatorLike);
-  vi.stubGlobal("window", {
+  const windowLike = Object.assign(new EventTarget(), {
     isSecureContext: true,
     location: { origin: "https://salchi.example" },
     PushManager: function PushManager() {},
     Notification: function Notification() {},
   });
-  return { navigatorLike, postMessage };
+  const documentLike = new EventTarget() as EventTarget & {
+    visibilityState: DocumentVisibilityState;
+  };
+  Object.defineProperty(documentLike, "visibilityState", {
+    configurable: true,
+    value: visibilityState,
+  });
+  vi.stubGlobal("navigator", navigatorLike);
+  vi.stubGlobal("window", windowLike);
+  vi.stubGlobal("document", documentLike);
+  return {
+    documentLike,
+    navigatorLike,
+    postMessage,
+    setVisibilityState(nextVisibilityState: DocumentVisibilityState) {
+      Object.defineProperty(documentLike, "visibilityState", {
+        configurable: true,
+        value: nextVisibilityState,
+      });
+    },
+    windowLike,
+  };
 }
 
 function makeEnvironmentState(input: {
@@ -129,6 +153,12 @@ async function flushBadgeSync(): Promise<void> {
   }
 }
 
+async function flushBadgeMicrotasks(): Promise<void> {
+  for (let index = 0; index < 20; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 function installAuthoritativeBadgeSync(
   environmentIsAuthoritative: (environmentId: EnvironmentId) => boolean = () => true,
 ) {
@@ -144,6 +174,7 @@ afterEach(() => {
   __resetPwaAppBadgeSyncForTests();
   useStore.setState(initialStoreState, true);
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -171,6 +202,51 @@ describe("writeAppBadgeCount", () => {
 });
 
 describe("installPwaAppBadgeSync", () => {
+  it("clears completion alerts instead of restoring unread state when the app opens", async () => {
+    vi.useFakeTimers();
+    const { navigatorLike, postMessage } = installBadgeGlobals(true, "visible");
+    const environmentId = EnvironmentId.make("env-1");
+    setEnvironmentStates({
+      [environmentId]: makeEnvironmentState({ environmentId }),
+    });
+
+    installAuthoritativeBadgeSync();
+    await flushBadgeMicrotasks();
+
+    expect(navigatorLike.clearAppBadge).toHaveBeenCalled();
+    expect(postMessage).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushBadgeMicrotasks();
+
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "salchi.clear-turn-completion-notifications",
+    });
+    expect(postMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "salchi.sync-unread-completions" }),
+      expect.anything(),
+    );
+  });
+
+  it("clears completion alerts when a backgrounded app becomes visible", async () => {
+    const { documentLike, navigatorLike, postMessage, setVisibilityState } = installBadgeGlobals();
+    const environmentId = EnvironmentId.make("env-1");
+    setEnvironmentStates({
+      [environmentId]: makeEnvironmentState({ environmentId }),
+    });
+    installAuthoritativeBadgeSync();
+    await flushBadgeSync();
+    navigatorLike.clearAppBadge.mockClear();
+    postMessage.mockClear();
+
+    setVisibilityState("visible");
+    documentLike.dispatchEvent(new Event("visibilitychange"));
+    await flushBadgeMicrotasks();
+
+    expect(navigatorLike.clearAppBadge).toHaveBeenCalled();
+    expect(postMessage).not.toHaveBeenCalled();
+  });
+
   it("does not clear durable worker state before the server snapshot is ready", async () => {
     const { navigatorLike, postMessage } = installBadgeGlobals();
     const environmentId = EnvironmentId.make("env-1");
