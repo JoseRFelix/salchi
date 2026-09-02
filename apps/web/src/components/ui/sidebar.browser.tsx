@@ -81,13 +81,18 @@ describe("mobile Sidebar", () => {
     await page.viewport(1024, 768);
   });
 
-  it("uses a back chevron on mobile and preserves the sidebar icon on desktop", async () => {
+  it("uses the matching open and close sidebar icons on mobile and desktop", async () => {
     await page.viewport(390, 700);
     const mobileScreen = await render(<MobileSidebarHarness />);
 
     try {
-      expect(document.querySelector('[data-sidebar-trigger-icon="back"]')).not.toBeNull();
-      expect(document.querySelector('[data-sidebar-trigger-icon="sidebar"]')).toBeNull();
+      expect(document.querySelector('[data-sidebar-trigger-icon="open"]')).not.toBeNull();
+      expect(document.querySelector('[data-sidebar-trigger-icon="close"]')).toBeNull();
+
+      await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+
+      expect(document.querySelector('[data-sidebar-trigger-icon="close"]')).not.toBeNull();
+      expect(document.querySelector('[data-sidebar-trigger-icon="open"]')).toBeNull();
     } finally {
       await mobileScreen.unmount();
     }
@@ -96,8 +101,13 @@ describe("mobile Sidebar", () => {
     const desktopScreen = await render(<MobileSidebarHarness />);
 
     try {
-      expect(document.querySelector('[data-sidebar-trigger-icon="sidebar"]')).not.toBeNull();
-      expect(document.querySelector('[data-sidebar-trigger-icon="back"]')).toBeNull();
+      expect(document.querySelector('[data-sidebar-trigger-icon="close"]')).not.toBeNull();
+      expect(document.querySelector('[data-sidebar-trigger-icon="open"]')).toBeNull();
+
+      await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+
+      expect(document.querySelector('[data-sidebar-trigger-icon="open"]')).not.toBeNull();
+      expect(document.querySelector('[data-sidebar-trigger-icon="close"]')).toBeNull();
     } finally {
       await desktopScreen.unmount();
     }

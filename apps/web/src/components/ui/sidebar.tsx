@@ -1,7 +1,7 @@
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
 import { cva, type VariantProps } from "class-variance-authority";
-import { ChevronLeftIcon, Loader2Icon, PanelLeftIcon } from "lucide-react";
+import { Loader2Icon, PanelLeftCloseIcon, PanelLeftOpenIcon } from "lucide-react";
 import * as React from "react";
 import { cn } from "~/lib/utils";
 import { usePwaServiceWorkerUpdateStore } from "~/pwa/serviceWorkerUpdateState";
@@ -355,11 +355,12 @@ function Sidebar({
 }
 
 function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
-  const { isMobile, toggleSidebar } = useSidebar();
+  const { isMobile, open, openMobile, toggleSidebar } = useSidebar();
   const updateStatus = usePwaServiceWorkerUpdateStore((state) => state.status);
   const checkPhase = usePwaServiceWorkerUpdateStore((state) => state.checkPhase);
   const updateAvailable = updateStatus === "ready";
   const showCheckingIndicator = checkPhase !== "idle" && !updateAvailable;
+  const sidebarOpen = isMobile ? openMobile : open;
 
   return (
     <Button
@@ -374,10 +375,10 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       variant="ghost"
       {...props}
     >
-      {isMobile ? (
-        <ChevronLeftIcon data-sidebar-trigger-icon="back" />
+      {sidebarOpen ? (
+        <PanelLeftCloseIcon data-sidebar-trigger-icon="close" />
       ) : (
-        <PanelLeftIcon data-sidebar-trigger-icon="sidebar" />
+        <PanelLeftOpenIcon data-sidebar-trigger-icon="open" />
       )}
       {updateAvailable && (
         <span
