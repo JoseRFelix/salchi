@@ -65,6 +65,7 @@ function WorkingThreadRow() {
       draftId={null}
       isSelected={false}
       hasActiveLocalDispatch={false}
+      localDispatchStartedAt={null}
       backgroundLiveness={null}
       isPending={false}
       isThreadExpanded={false}

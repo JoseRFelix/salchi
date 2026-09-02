@@ -39,12 +39,18 @@ function firstValidTimestamp(
 
 export function resolveInboxWorkingStartedAt(
   thread: Pick<SidebarThreadSummary, "latestTurn" | "session">,
+  localDispatchStartedAt: string | null = null,
 ): string | null {
   const turn = thread.latestTurn;
   if (turn?.completedAt === null) {
-    return firstValidTimestamp(turn.startedAt, turn.requestedAt, thread.session?.updatedAt);
+    return firstValidTimestamp(
+      turn.startedAt,
+      turn.requestedAt,
+      localDispatchStartedAt,
+      thread.session?.updatedAt,
+    );
   }
-  return firstValidTimestamp(thread.session?.updatedAt);
+  return firstValidTimestamp(localDispatchStartedAt, thread.session?.updatedAt);
 }
 
 export function formatInboxWorkingDurationLabel(elapsedMs: number): string {

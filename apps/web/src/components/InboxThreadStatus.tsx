@@ -41,6 +41,7 @@ function WorkingDuration(props: { readonly startedAt: string | null }) {
 export function InboxThreadStatus(props: {
   readonly activityAt: string;
   readonly hasActiveLocalDispatch: boolean;
+  readonly localDispatchStartedAt: string | null;
   readonly isActive: boolean;
   readonly isWoke: boolean;
   readonly backgroundLiveness?: InboxBackgroundLiveness;
@@ -116,7 +117,9 @@ export function InboxThreadStatus(props: {
       {presentation.icon}
       <span role="status">{presentation.label}</span>
       {status === "working" ? (
-        <WorkingDuration startedAt={resolveInboxWorkingStartedAt(props.thread)} />
+        <WorkingDuration
+          startedAt={resolveInboxWorkingStartedAt(props.thread, props.localDispatchStartedAt)}
+        />
       ) : null}
     </>
   );
