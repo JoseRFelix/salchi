@@ -50,4 +50,35 @@ describe("ExpandedImageDialog", () => {
       await screen.unmount();
     }
   });
+
+  it("keeps the image actions inside the viewport safe area", async () => {
+    await page.viewport(390, 844);
+    const screen = await render(
+      <ExpandedImageDialog
+        preview={{
+          images: [{ src: previewScreenshotUrl, name: "salchi-web-app.png" }],
+          index: 0,
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    try {
+      const dialog = document.querySelector<HTMLElement>(
+        '[role="dialog"][aria-label="Expanded image preview"]',
+      );
+      const actions = document.querySelector<HTMLElement>("[data-slot='expanded-image-actions']");
+
+      expect(dialog).not.toBeNull();
+      expect(actions).not.toBeNull();
+      expect(dialog!.classList.contains("pt-[calc(env(safe-area-inset-top)+1.5rem)]")).toBe(true);
+
+      const dialogRect = dialog!.getBoundingClientRect();
+      const actionsRect = actions!.getBoundingClientRect();
+      const paddingTop = Number.parseFloat(getComputedStyle(dialog!).paddingTop);
+      expect(actionsRect.top).toBeGreaterThanOrEqual(dialogRect.top + paddingTop);
+    } finally {
+      await screen.unmount();
+    }
+  });
 });

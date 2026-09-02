@@ -61,7 +61,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex animate-expanded-image-backdrop items-center justify-center bg-black/75 px-4 py-6 [-webkit-app-region:no-drag] motion-reduce:animate-none"
+      className="fixed inset-0 z-50 flex animate-expanded-image-backdrop items-center justify-center bg-black/75 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] pl-[calc(env(safe-area-inset-left)+1rem)] pr-[calc(env(safe-area-inset-right)+1rem)] pt-[calc(env(safe-area-inset-top)+1.5rem)] [-webkit-app-region:no-drag] motion-reduce:animate-none"
       role="dialog"
       aria-modal="true"
       aria-label="Expanded image preview"
@@ -84,7 +84,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
           <ChevronLeftIcon className="size-5" />
         </Button>
       )}
-      <div className="relative isolate z-10 flex max-h-[92vh] max-w-[92vw] flex-col animate-expanded-image-open motion-reduce:animate-none">
+      <div className="relative isolate z-10 flex max-h-full min-h-0 max-w-full flex-col animate-expanded-image-open sm:max-w-[92vw] motion-reduce:animate-none">
         <div className="mb-2 flex shrink-0 justify-end gap-2" data-slot="expanded-image-actions">
           <Button
             render={<a href={buildAttachmentDownloadUrl(item.src)} download={item.name} />}
@@ -109,10 +109,10 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
         <img
           src={item.src}
           alt={item.name}
-          className="max-h-[calc(92vh-4.5rem)] max-w-[92vw] select-none rounded-lg border border-border/70 bg-background object-contain shadow-2xl"
+          className="max-h-[calc(92vh-4.5rem)] min-h-0 max-w-full select-none rounded-lg border border-border/70 bg-background object-contain shadow-2xl"
           draggable={false}
         />
-        <p className="mt-2 max-w-[92vw] truncate text-center text-xs text-muted-foreground/80">
+        <p className="mt-2 max-w-full truncate text-center text-xs text-muted-foreground/80">
           {item.name}
           {preview.images.length > 1 ? ` (${preview.index + 1}/${preview.images.length})` : ""}
         </p>
